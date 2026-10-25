@@ -45,7 +45,7 @@ final class ProfileTests: XCTestCase {
 
     func testSubmitURLCarriesProfile() {
         let u = Profiles.submitURL(sample()).absoluteString
-        XCTAssertTrue(u.hasPrefix("https://github.com/seastwood/Nokcandu/issues/new?template=game-profile.yml"))
+        XCTAssertTrue(u.hasPrefix("https://github.com/seastwood/Nokcandu-Profiles/issues/new?template=game-profile.yml"))
         XCTAssertTrue(u.contains("profile="))
     }
 
@@ -72,5 +72,11 @@ final class ProfileGroupTests: XCTestCase {
         XCTAssertEqual(g.map(\.title), ["Counter-Strike 2", "Portal"])
         XCTAssertEqual(g[0].entries.map(\.number), [2, 1, 3])
         XCTAssertEqual(Profiles.groups(g.flatMap(\.entries), sort: .recent).first?.title, "Portal")
+    }
+}
+
+final class MyProfilesTests: XCTestCase {
+    func testRejectsUnsafeImports() {
+        XCTAssertThrowsError(try MyProfiles.importText(#"{"schema":1,"title":"x","match":{"steamAppID":1},"source":"steam","rating":"works","environment":{"DYLD_INSERT_LIBRARIES":"x"}}"#))
     }
 }

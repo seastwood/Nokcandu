@@ -15,3 +15,5 @@ run.log
 sample.txt
 reference/
 .seed/
+profiles-repo/
+.moved/

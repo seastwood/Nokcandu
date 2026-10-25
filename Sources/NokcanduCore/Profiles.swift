@@ -202,8 +202,10 @@ public enum Profiles {
         return out
     }
 
-    public static let catalogURL = URL(string: "https://seastwood.github.io/Nokcandu/catalog.json")!
-    public static var catalogPage: URL { URL(string: "https://seastwood.github.io/Nokcandu/")! }
+    /// Profiles have their own repo, so Nokcandu's issue tracker stays for the app itself.
+    public static let repo = "seastwood/Nokcandu-Profiles"
+    public static let catalogURL = URL(string: "https://seastwood.github.io/Nokcandu-Profiles/catalog.json")!
+    public static var catalogPage: URL { URL(string: "https://seastwood.github.io/Nokcandu-Profiles/")! }
     static var cacheURL: URL { NokPaths.support.appendingPathComponent("profiles-catalog.json") }
 
     /// One bad entry must never hide the rest of the catalog, so entries are decoded one by one.
@@ -353,7 +355,7 @@ public enum Profiles {
 
     /// Opens a pre-filled "Game profile" issue on GitHub (the submitter just clicks Submit).
     public static func submitURL(_ p: GameProfile) -> URL {
-        var c = URLComponents(string: "https://github.com/\(AppUpdate.repo)/issues/new")!
+        var c = URLComponents(string: "https://github.com/\(repo)/issues/new")!
         c.queryItems = [
             URLQueryItem(name: "template", value: "game-profile.yml"),
             URLQueryItem(name: "title", value: "[Profile] \(p.title) — \(p.rating.title)"),

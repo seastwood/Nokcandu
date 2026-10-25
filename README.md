@@ -31,10 +31,11 @@ with tested settings, one-click fixes and safe updates. Think of it as a free al
 
 ## Game Profiles
 
-Stuck on a game? Open **Game Profiles** in Nokcandu (or the [website](https://seastwood.github.io/Nokcandu/)), search for it,
+Stuck on a game? Open **Game Profiles** in Nokcandu (or the [website](https://seastwood.github.io/Nokcandu-Profiles/)), search for it,
 and apply the settings someone else got working — or try a profile from a similar game, with one-click Undo.
 Got a game running? **Share This Setup…** on its page submits your settings in one click. Profiles are settings only
-(no files, paths or scripts), are checked automatically, and are ranked by 👍/👎 votes on their GitHub issue.
+(no files or scripts), are checked automatically, and are ranked by 👍/👎 votes. They live in their own repo,
+[Nokcandu-Profiles](https://github.com/seastwood/Nokcandu-Profiles) — this repo's Issues are for the app itself.
 
 ## Good to know
 

@@ -1,43 +1,35 @@
-name: Game profiles
-# Checks each profile issue automatically and publishes the catalog (catalog.json + website) to GitHub Pages.
-# Votes are 👍/👎 reactions — reactions don't trigger workflows, so the catalog also rebuilds hourly.
+name: Profiles mirror
+# Game profiles moved to github.com/seastwood/Nokcandu-Profiles. Nokcandu 0.9.1–0.9.2 read the catalog from this
+# repo's Pages site, so this keeps a copy of the new catalog here and redirects the old website.
 on:
-  issues:
-    types: [opened, edited, reopened, closed, labeled, unlabeled, deleted]
-  issue_comment:
-    types: [created, deleted]
   schedule:
-    - cron: '23 * * * *'
+    - cron: '41 * * * *'
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['site/**', 'scripts/profiles.py', '.github/workflows/profiles.yml']
+    paths: ['.github/workflows/profiles.yml']
 permissions:
   contents: read
-  issues: write
   pages: write
   id-token: write
 concurrency:
-  group: profiles-catalog
-  cancel-in-progress: false
+  group: profiles-mirror
+  cancel-in-progress: true
 jobs:
-  catalog:
+  mirror:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
     steps:
-      - uses: actions/checkout@v4
-      - name: Check the profile in this issue
-        if: github.event_name == 'issues' && (github.event.action == 'opened' || github.event.action == 'edited' || github.event.action == 'reopened' || github.event.action == 'labeled')
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: python3 scripts/profiles.py validate ${{ github.event.issue.number }}
-      - name: Build catalog
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+      - name: Copy the catalog and redirect the website
         run: |
-          mkdir -p public && cp -R site/. public/
-          python3 scripts/profiles.py build public
+          mkdir -p public
+          curl -fsSL https://seastwood.github.io/Nokcandu-Profiles/catalog.json -o public/catalog.json || echo '{"generated":"","profiles":[]}' > public/catalog.json
+          cat > public/index.html <<'HTML'
+          <!doctype html><meta charset="utf-8"><title>Nokcandu Game Profiles</title>
+          <meta http-equiv="refresh" content="0; url=https://seastwood.github.io/Nokcandu-Profiles/">
+          <p>Game profiles moved to <a href="https://seastwood.github.io/Nokcandu-Profiles/">seastwood.github.io/Nokcandu-Profiles</a>.</p>
+          HTML
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with: { path: public }

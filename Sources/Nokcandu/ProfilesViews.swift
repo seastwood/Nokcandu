@@ -36,6 +36,9 @@ struct ProfilesView: View {
     @State private var storeFilter = "all"
     @State private var selectedGroup: String?
     @State private var detail: CatalogEntry?
+    @State private var tab = "community"
+    @State private var mine: [MyProfile] = MyProfiles.all()
+    @State private var selectedMine: MyProfile.ID?
     var focusNumber: Int?
 
     var groups: [ProfileGroup] {
@@ -62,6 +65,31 @@ struct ProfilesView: View {
             Divider()
             HStack(spacing: 0) {
                 VStack(spacing: 8) {
+                    Picker("", selection: $tab) {
+                        Text("Community").tag("community")
+                        Text("My Profiles (\(mine.count))").tag("mine")
+                    }.pickerStyle(.segmented).labelsHidden()
+                    if tab == "mine" {
+                        List(selection: $selectedMine) {
+                            ForEach(mine) { m in
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(m.name).font(.headline).lineLimit(1)
+                                    HStack(spacing: 6) {
+                                        Text(m.profile.title)
+                                        Text("· \(m.updated.formatted(.relative(presentation: .named)))")
+                                        if m.sharedAt != nil { Image(systemName: "person.2").help("Shared with everyone") }
+                                    }.font(.caption).foregroundStyle(.secondary)
+                                }.tag(m.id)
+                            }
+                        }
+                        .listStyle(.sidebar)
+                        .overlay {
+                            if mine.isEmpty {
+                                ContentUnavailableView("No saved profiles", systemImage: "tray",
+                                                       description: Text("Use Save Setup as Profile… on a game's page, or Import File…. They stay on this Mac until you share them."))
+                            }
+                        }
+                    } else {
                     TextField("Search for a game", text: $query).textFieldStyle(.roundedBorder)
                     HStack {
                         Picker("", selection: $sort) { ForEach(Profiles.Sort.allCases) { Text($0.title).tag($0) } }.labelsHidden()
@@ -80,11 +108,18 @@ struct ProfilesView: View {
                         }
                     }
                     Text("\(groups.count) games · \(groups.reduce(0) { $0 + $1.entries.count }) profiles").font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 .padding(12)
                 .frame(width: 330)
                 Divider()
-                if let g = selected { GroupDetail(group: g, open: { detail = $0 }).id(g.id) }
+                if tab == "mine" {
+                    if let m = mine.first(where: { $0.id == selectedMine }) {
+                        MyProfileDetail(item: m, changed: reloadMine).id(m.id)
+                    } else {
+                        ContentUnavailableView("Choose a profile", systemImage: "tray").frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                } else if let g = selected { GroupDetail(group: g, open: { detail = $0 }).id(g.id) }
                 else { ContentUnavailableView("Choose a game", systemImage: "square.stack.3d.up").frame(maxWidth: .infinity, maxHeight: .infinity) }
             }
         }
@@ -123,15 +158,99 @@ struct ProfilesView: View {
         }.padding(.vertical, 2)
     }
 
+    func reloadMine() {
+        mine = MyProfiles.all()
+        if !mine.contains(where: { $0.id == selectedMine }) { selectedMine = mine.first?.id }
+    }
+
+    /// Imported profiles go to My Profiles (checked first — settings only).
     func importFile() {
-        let p = NSOpenPanel(); p.allowedContentTypes = [.json]
-        guard p.runModal() == .OK, let u = p.url, let text = try? String(contentsOf: u, encoding: .utf8) else { return }
-        do {
-            let prof = try GameProfile.parse(text)
-            let problems = prof.problems
-            guard problems.isEmpty else { throw NokError("This profile isn't safe to use: \(problems.joined(separator: "; "))") }
-            detail = CatalogEntry(number: 0, url: Profiles.catalogPage, author: "a file", up: 0, down: 0, comments: 0, updated: "", profile: prof)
-        } catch { model.fail(error) }
+        let p = NSOpenPanel(); p.allowedContentTypes = [.json]; p.allowsMultipleSelection = true
+        guard p.runModal() == .OK else { return }
+        var last: MyProfile?
+        for u in p.urls {
+            guard let text = try? String(contentsOf: u, encoding: .utf8) else { continue }
+            do { last = try MyProfiles.importText(text) } catch { model.fail(error) }
+        }
+        if let last { tab = "mine"; reloadMine(); selectedMine = last.id; model.say("Added to My Profiles.") }
+    }
+}
+
+/// One of your own profiles: rename, share, export, delete — and apply it below.
+struct MyProfileDetail: View {
+    @EnvironmentObject var model: AppModel
+    let item: MyProfile
+    let changed: () -> Void
+    @State private var name: String = ""
+    @State private var sharing = false
+    @State private var confirmDelete = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    TextField("Name", text: $name, onCommit: rename).textFieldStyle(.roundedBorder).font(.title3).frame(maxWidth: 360)
+                    Spacer()
+                    Button(item.sharedAt == nil ? "Share with Everyone…" : "Share Again…") { sharing = true }
+                    Button("Export…", action: export)
+                    Button("Delete…") { confirmDelete = true }
+                }
+                Text("Saved \(item.created.formatted(date: .abbreviated, time: .shortened))"
+                     + (item.updated.timeIntervalSince(item.created) > 60 ? " · changed \(item.updated.formatted(.relative(presentation: .named)))" : "")
+                     + (item.sharedAt.map { " · shared \($0.formatted(date: .abbreviated, time: .omitted))" } ?? " · only on this Mac"))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(16)
+            Divider()
+            ProfileDetail(entry: CatalogEntry(number: 0, url: Profiles.catalogPage, author: "you", up: 0, down: 0, comments: 0,
+                                              updated: "", profile: item.profile))
+        }
+        .onAppear { name = item.name }
+        .sheet(isPresented: $sharing) {
+            SubmitProfileSheet(profile: item.profile) { try? MyProfiles.markShared(item); changed() }.environmentObject(model)
+        }
+        .confirmationDialog("Delete “\(item.name)”?", isPresented: $confirmDelete) {
+            Button("Move to Trash", role: .destructive) {
+                do { try MyProfiles.delete(item); changed() } catch { model.fail(error) }
+            }
+        } message: { Text(item.sharedAt == nil ? "It's only on this Mac." : "The shared copy on GitHub stays; close its issue to remove it.") }
+    }
+
+    func rename() {
+        guard name != item.name, !name.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        do { try MyProfiles.rename(item, to: name); changed() } catch { model.fail(error) }
+    }
+
+    func export() {
+        let p = NSSavePanel(); p.nameFieldStringValue = "\(CustomGames.safeFolderName(item.name)).nokcandu-profile.json"
+        guard p.runModal() == .OK, let u = p.url else { return }
+        do { try Data(item.profile.json().utf8).write(to: u) } catch { model.fail(error) }
+    }
+}
+
+/// Review rating and notes, then open the pre-filled GitHub submission.
+struct SubmitProfileSheet: View {
+    @Environment(\.dismiss) var dismiss
+    @State var profile: GameProfile
+    let onShared: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Share “\(profile.title)” with Everyone").font(.title2.bold())
+            Text("It's published in the Game Profiles catalog after an automatic safety check; people vote and comment on GitHub.")
+                .font(.callout).foregroundStyle(.secondary)
+            Picker("How well does it run?", selection: $profile.rating) { ForEach(GameProfile.Rating.allCases) { Text($0.title).tag($0) } }
+            Text("Notes").font(.caption)
+            TextEditor(text: Binding(get: { profile.notes ?? "" }, set: { profile.notes = $0.isEmpty ? nil : $0 }))
+                .frame(height: 80).overlay(RoundedRectangle(cornerRadius: 5).stroke(.quaternary))
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                Button("Submit on GitHub…") { NSWorkspace.shared.open(Profiles.submitURL(profile)); onShared(); dismiss() }
+                    .buttonStyle(.borderedProminent).disabled(!profile.problems.isEmpty)
+            }
+        }
+        .padding(20).frame(width: 520)
     }
 }
 
@@ -354,7 +473,10 @@ struct ProfilesSection: View {
     @EnvironmentObject var model: AppModel
     let game: InstalledGame
     @State private var entries: [CatalogEntry] = []
+    @State private var mine: [MyProfile] = []
     @State private var sharing = false
+    @State private var saving = false
+    @State private var open: CatalogEntry?
 
     var body: some View {
         GroupBox {
@@ -372,10 +494,28 @@ struct ProfilesSection: View {
                         }
                     }
                 }
+                if !mine.isEmpty {
+                    Divider()
+                    Text("My profiles for this game").font(.caption.bold()).foregroundStyle(.secondary)
+                    ForEach(mine) { m in
+                        HStack {
+                            Image(systemName: m.sharedAt == nil ? "tray" : "person.2").foregroundStyle(.secondary)
+                            Text(m.name)
+                            Text(m.updated.formatted(.relative(presentation: .named))).font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Apply…") {
+                                open = CatalogEntry(number: 0, url: Profiles.catalogPage, author: "you", up: 0, down: 0, comments: 0, updated: "", profile: m.profile)
+                            }
+                        }
+                    }
+                }
                 HStack {
                     Button("Browse All Profiles…") { model.profileFocus = nil; model.showProfiles = true }
+                    Button("Save Setup as Profile…") { saving = true }
                     Button("Share This Setup…") { sharing = true }
                 }
+                Text("Saved profiles stay on this Mac; share any of them later from Game Profiles → My Profiles.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             .padding(6).frame(maxWidth: .infinity, alignment: .leading)
         } label: { Text("Shared Profiles").font(.headline) }
@@ -384,7 +524,16 @@ struct ProfilesSection: View {
             let r = await Profiles.fetch()
             entries = Profiles.forGame(game, in: r.entries)
         }
-        .sheet(isPresented: $sharing) { ShareProfileView(game: game).environmentObject(model) }
+        .onAppear { mine = MyProfiles.forGame(game) }
+        .sheet(isPresented: $sharing, onDismiss: { mine = MyProfiles.forGame(game) }) { ShareProfileView(game: game).environmentObject(model) }
+        .sheet(isPresented: $saving, onDismiss: { mine = MyProfiles.forGame(game) }) { ShareProfileView(game: game, saveOnly: true).environmentObject(model) }
+        .sheet(item: $open) { e in
+            VStack(spacing: 0) {
+                ProfileDetail(entry: e)
+                Divider()
+                HStack { Spacer(); Button("Close") { open = nil }.keyboardShortcut(.cancelAction) }.padding(12)
+            }.frame(width: 640, height: 560).environmentObject(model)
+        }
     }
 }
 
@@ -392,7 +541,9 @@ struct ShareProfileView: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) var dismiss
     let game: InstalledGame
+    var saveOnly = false
     @State private var rating: GameProfile.Rating = .works
+    @State private var name = ""
     @State private var notes = ""
     @State private var install = ""
 
@@ -400,9 +551,13 @@ struct ShareProfileView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Share This Setup").font(.title2.bold())
-            Text("Publishes \(game.name)'s working settings so anyone can apply them. Only settings are shared — no files, paths, accounts or personal details. It appears in Game Profiles after an automatic safety check; people vote and comment on GitHub.")
+            Text(saveOnly ? "Save Setup as Profile" : "Share This Setup").font(.title2.bold())
+            Text(saveOnly ? "Keeps \(game.name)'s current settings as a profile on this Mac only. Apply it again any time, to this or another game, and share it later if you want."
+                          : "Publishes \(game.name)'s working settings so anyone can apply them. Only settings are shared — no files, accounts or personal details. It appears in Game Profiles after an automatic safety check; people vote and comment on GitHub.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if saveOnly {
+                TextField("Name, e.g. \(game.name) — windowed", text: $name).textFieldStyle(.roundedBorder)
+            }
             Picker("How well does it run?", selection: $rating) { ForEach(GameProfile.Rating.allCases) { Text($0.title).tag($0) } }
             Text("Notes (what works, known issues, tips)").font(.caption)
             TextEditor(text: $notes).frame(height: 70).overlay(RoundedRectangle(cornerRadius: 5).stroke(.quaternary))
@@ -426,13 +581,32 @@ struct ShareProfileView: View {
                 Button("Save File…", action: save)
                 Spacer()
                 Button("Cancel") { dismiss() }
-                Button("Submit on GitHub…") { NSWorkspace.shared.open(Profiles.submitURL(profile)); dismiss() }
+                if saveOnly {
+                    Button("Save") { saveMine() }.buttonStyle(.borderedProminent).disabled(!profile.problems.isEmpty)
+                } else {
+                    Button("Save to My Profiles") { saveMine() }.disabled(!profile.problems.isEmpty)
+                }
+                if !saveOnly {
+                    Button("Submit on GitHub…") {
+                        if let item = try? MyProfiles.save(profile, name: name.isEmpty ? profile.title : name) { try? MyProfiles.markShared(item) }
+                        NSWorkspace.shared.open(Profiles.submitURL(profile)); dismiss()
+                    }
                     .buttonStyle(.borderedProminent).disabled(!profile.problems.isEmpty)
+                }
             }
-            Text("GitHub opens with everything filled in — sign in and click Submit.").font(.caption).foregroundStyle(.secondary)
+            Text(saveOnly ? "Saved profiles are in Game Profiles → My Profiles." : "GitHub opens with everything filled in — sign in and click Submit. A copy is kept in My Profiles.")
+                .font(.caption).foregroundStyle(.secondary)
         }
         .padding(20).frame(width: 560)
         .onAppear { if notes.isEmpty { notes = Profiles.suggestedNotes(for: game) } }
+    }
+
+    func saveMine() {
+        do {
+            let item = try MyProfiles.save(profile, name: name.isEmpty ? "\(game.name) — \(Date().formatted(date: .abbreviated, time: .omitted))" : name)
+            model.say("Saved “\(item.name)” to My Profiles.")
+            dismiss()
+        } catch { model.fail(error) }
     }
 
     func save() {
