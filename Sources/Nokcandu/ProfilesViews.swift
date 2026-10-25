@@ -26,73 +26,100 @@ struct RatingBadge: View {
     var color: Color { switch rating { case .works: .green; case .playable: .orange; case .broken: .red } }
 }
 
-/// Browse and search everyone's shared game profiles.
+/// Browse everyone's shared profiles, organized by game (most 👍 first).
 struct ProfilesView: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) var dismiss
     @StateObject private var store = ProfileStore()
     @State private var query = ""
-    @State private var selected: CatalogEntry?
-    @State private var showBroken = false
+    @State private var sort: Profiles.Sort = .liked
+    @State private var storeFilter = "all"
+    @State private var selectedGroup: String?
+    @State private var detail: CatalogEntry?
     var focusNumber: Int?
 
-    var filtered: [CatalogEntry] {
+    var groups: [ProfileGroup] {
         let q = query.lowercased().trimmingCharacters(in: .whitespaces)
-        return store.entries.filter { q.isEmpty || $0.profile.title.lowercased().contains(q) || ($0.profile.notes ?? "").lowercased().contains(q) }
-            .sorted { $0.score > $1.score }
+        return Profiles.groups(store.entries, sort: sort).filter { g in
+            let storeOK = storeFilter == "all" || (storeFilter == "other" ? !["steam", "battlenet"].contains(g.source) : g.source == storeFilter)
+            return storeOK && (q.isEmpty || g.title.lowercased().contains(q) || g.entries.contains { $0.profile.title.lowercased().contains(q) || ($0.profile.notes ?? "").lowercased().contains(q) })
+        }
     }
+    var selected: ProfileGroup? { groups.first { $0.id == selectedGroup } }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
                 Text("Game Profiles").font(.title2.bold())
+                if store.offline { Text("offline — last downloaded catalog").font(.caption).foregroundStyle(.orange) }
                 Spacer()
                 if store.loading { ProgressView().controlSize(.small) }
+                Button("Refresh") { store.load() }.disabled(store.loading)
                 Button("Import File…", action: importFile)
                 Button("Website") { NSWorkspace.shared.open(Profiles.catalogPage) }
                 Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
             }.padding(16)
-            TextField("Search for a game", text: $query).textFieldStyle(.roundedBorder).padding(.horizontal, 16)
-            if store.offline { Text("Offline — showing the last downloaded catalog.").font(.caption).foregroundStyle(.orange).padding(.top, 4) }
+            Divider()
             HStack(spacing: 0) {
-                List(selection: Binding(get: { selected?.number }, set: { n in selected = store.entries.first { $0.number == n } })) {
-                    ForEach(filtered.filter { !$0.reportedBroken }) { row($0).tag($0.number) }
-                    let broken = filtered.filter(\.reportedBroken)
-                    if !broken.isEmpty {
-                        DisclosureGroup("Reported not working (\(broken.count))", isExpanded: $showBroken) {
-                            ForEach(broken) { row($0).tag($0.number) }
+                VStack(spacing: 8) {
+                    TextField("Search for a game", text: $query).textFieldStyle(.roundedBorder)
+                    HStack {
+                        Picker("", selection: $sort) { ForEach(Profiles.Sort.allCases) { Text($0.title).tag($0) } }.labelsHidden()
+                        Picker("", selection: $storeFilter) {
+                            Text("All").tag("all"); Text("Steam").tag("steam"); Text("Battle.net").tag("battlenet"); Text("Other").tag("other")
+                        }.labelsHidden()
+                    }
+                    List(selection: $selectedGroup) {
+                        ForEach(groups) { g in groupRow(g).tag(g.id) }
+                    }
+                    .listStyle(.sidebar)
+                    .overlay {
+                        if groups.isEmpty && !store.loading {
+                            ContentUnavailableView(query.isEmpty ? "No profiles yet" : "No profile for “\(query)” yet", systemImage: "square.stack.3d.up.slash",
+                                                   description: Text("When you get a game working, use Share This Setup on its page."))
                         }
                     }
+                    Text("\(groups.count) games · \(groups.reduce(0) { $0 + $1.entries.count }) profiles").font(.caption).foregroundStyle(.secondary)
                 }
-                .frame(width: 300)
-                .overlay {
-                    if filtered.isEmpty && !store.loading {
-                        ContentUnavailableView(query.isEmpty ? "No profiles yet" : "No profile for “\(query)” yet", systemImage: "square.stack.3d.up.slash",
-                                               description: Text("When you get a game working, use Share This Setup on its page so others can play it too."))
-                    }
-                }
+                .padding(12)
+                .frame(width: 330)
                 Divider()
-                if let e = selected { ProfileDetail(entry: e).id(e.number) }
-                else { ContentUnavailableView("Choose a profile", systemImage: "square.stack.3d.up").frame(maxWidth: .infinity) }
+                if let g = selected { GroupDetail(group: g, open: { detail = $0 }).id(g.id) }
+                else { ContentUnavailableView("Choose a game", systemImage: "square.stack.3d.up").frame(maxWidth: .infinity, maxHeight: .infinity) }
             }
         }
-        .frame(width: 900, height: 620)
-        .onAppear {
-            store.load()
-            if let n = focusNumber { selected = store.entries.first { $0.number == n } }
+        .frame(width: 980, height: 660)
+        .onAppear { store.load(); focus() }
+        .onChange(of: store.entries) { focus() }
+        .sheet(item: $detail) { e in
+            VStack(spacing: 0) {
+                ProfileDetail(entry: e)
+                Divider()
+                HStack { Spacer(); Button("Close") { detail = nil }.keyboardShortcut(.cancelAction) }.padding(12)
+            }
+            .frame(width: 640, height: 600)
+            .environmentObject(model)
         }
-        .onChange(of: store.entries) { if let n = focusNumber, selected == nil { selected = store.entries.first { $0.number == n } } }
     }
 
-    func row(_ e: CatalogEntry) -> some View {
+    func focus() {
+        guard let n = focusNumber, let e = store.entries.first(where: { $0.number == n }) else {
+            if selectedGroup == nil { selectedGroup = groups.first?.id }
+            return
+        }
+        selectedGroup = Profiles.groupKey(e.profile)
+        if detail == nil { detail = e }
+    }
+
+    func groupRow(_ g: ProfileGroup) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(e.profile.title).font(.headline)
+            Text(g.title).font(.headline).lineLimit(1)
             HStack(spacing: 8) {
-                RatingBadge(rating: e.profile.rating)
-                Label("\(e.up)", systemImage: "hand.thumbsup").font(.caption)
-                Label("\(e.down)", systemImage: "hand.thumbsdown").font(.caption)
-                Label("\(e.comments)", systemImage: "bubble.left").font(.caption)
-            }.foregroundStyle(.secondary)
+                RatingBadge(rating: g.bestRating)
+                Text("\(g.entries.count) profile\(g.entries.count == 1 ? "" : "s")")
+                Label("\(g.totalUp)", systemImage: "hand.thumbsup")
+                if let d = g.newest { Text(d.formatted(.relative(presentation: .named))) }
+            }.font(.caption).foregroundStyle(.secondary)
         }.padding(.vertical, 2)
     }
 
@@ -103,8 +130,94 @@ struct ProfilesView: View {
             let prof = try GameProfile.parse(text)
             let problems = prof.problems
             guard problems.isEmpty else { throw NokError("This profile isn't safe to use: \(problems.joined(separator: "; "))") }
-            selected = CatalogEntry(number: 0, url: Profiles.catalogPage, author: "file", up: 0, down: 0, comments: 0, updated: "", profile: prof)
+            detail = CatalogEntry(number: 0, url: Profiles.catalogPage, author: "a file", up: 0, down: 0, comments: 0, updated: "", profile: prof)
         } catch { model.fail(error) }
+    }
+}
+
+/// One game's profiles, best first.
+struct GroupDetail: View {
+    let group: ProfileGroup
+    let open: (CatalogEntry) -> Void
+    @State private var showBroken = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(group.title).font(.title2.bold())
+                    Spacer()
+                    if let id = group.steamAppID {
+                        Link("Steam page", destination: URL(string: "https://store.steampowered.com/app/\(id)")!)
+                    }
+                }
+                Text("\(group.entries.count) profile\(group.entries.count == 1 ? "" : "s") · most 👍 first").font(.caption).foregroundStyle(.secondary)
+                ForEach(group.entries.filter { !$0.reportedBroken }) { ProfileCard(entry: $0, open: open) }
+                let broken = group.entries.filter(\.reportedBroken)
+                if !broken.isEmpty {
+                    DisclosureGroup("Reported not working (\(broken.count))", isExpanded: $showBroken) {
+                        ForEach(broken) { ProfileCard(entry: $0, open: open).opacity(0.7) }
+                    }
+                }
+            }
+            .padding(16).frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+struct ProfileCard: View {
+    let entry: CatalogEntry
+    let open: (CatalogEntry) -> Void
+    var p: GameProfile { entry.profile }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                RatingBadge(rating: p.rating)
+                Label("\(entry.up)", systemImage: "hand.thumbsup")
+                Label("\(entry.down)", systemImage: "hand.thumbsdown")
+                Label("\(entry.comments)", systemImage: "bubble.left")
+                Spacer()
+                Text(dates).foregroundStyle(.secondary)
+            }.font(.caption)
+            if let n = p.notes, !n.isEmpty { Text(n).lineLimit(4).fixedSize(horizontal: false, vertical: true) }
+            Text(ProfileText.summary(p)).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 6) {
+                if let t = p.tested { Text("Tested on " + [t.mac, t.macOS, t.engine].compactMap { $0 }.joined(separator: " · ")) }
+                if entry.testedOnOtherEngine { Label("different engine than today's", systemImage: "exclamationmark.triangle").foregroundStyle(.orange) }
+            }.font(.caption2).foregroundStyle(.secondary)
+            HStack {
+                Button("View & Apply…") { open(entry) }.buttonStyle(.borderedProminent)
+                Button("Vote or Comment") { NSWorkspace.shared.open(entry.url) }
+                Spacer()
+                Text("by \(entry.author)").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    var dates: String {
+        var parts: [String] = []
+        if let c = entry.createdDate { parts.append("shared \(c.formatted(date: .abbreviated, time: .omitted))") }
+        if let u = entry.updatedDate, u.timeIntervalSince(entry.createdDate ?? .distantPast) > 3600 { parts.append("updated \(u.formatted(.relative(presentation: .named)))") }
+        return parts.joined(separator: " · ")
+    }
+}
+
+enum ProfileText {
+    static func summary(_ p: GameProfile) -> String {
+        var s: [String] = []
+        if let g = p.graphics { s.append(g.title) }
+        if let prog = p.program { s.append(prog.split(separator: "\\").last.map(String.init) ?? prog) }
+        if let a = p.arguments, !a.isEmpty { s.append(a) }
+        if let a = p.hostArguments, !a.isEmpty { s.append("Battle.net: \(a)") }
+        if let e = p.environment, !e.isEmpty { s.append(e.keys.sorted().joined(separator: ", ")) }
+        if let r = p.rawMouse, r > 0 { s.append("raw mouse \(String(format: "%.2g", r))×") }
+        if p.fixes?.contains("cinematic") == true { s.append("cinematic fix") }
+        if let d = p.drives { s.append(d.map { "\($0):" }.joined(separator: " ")) }
+        if p.disc == true { s.append("disc image") }
+        return s.joined(separator: " · ")
     }
 }
 
@@ -143,7 +256,8 @@ struct ProfileDetail: View {
                         Label("Many people report this profile doesn't work. Read the comments first.", systemImage: "exclamationmark.triangle")
                             .foregroundStyle(.orange)
                     }
-                    Text("Shared by \(entry.author)").font(.caption).foregroundStyle(.secondary)
+                    Text("Shared by \(entry.author)" + (entry.createdDate.map { " on \($0.formatted(date: .long, time: .omitted))" } ?? "") + (entry.updatedDate.map { " · updated \($0.formatted(.relative(presentation: .named)))" } ?? ""))
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 if let t = p.tested {
                     Text("Tested on \([t.mac, t.macOS, t.engine, t.nokcandu.map { "Nokcandu \($0)" }].compactMap { $0 }.joined(separator: " · "))")
@@ -295,6 +409,16 @@ struct ShareProfileView: View {
             Text("How to install (optional)").font(.caption)
             TextEditor(text: $install).frame(height: 50).overlay(RoundedRectangle(cornerRadius: 5).stroke(.quaternary))
             DisclosureGroup("What will be shared") { Text(profile.json()).font(.caption.monospaced()).textSelection(.enabled) }
+            let left = Profiles.notShared(from: game)
+            if !left.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Not shared:").font(.caption.bold())
+                    ForEach(left, id: \.self) { Text("• " + $0).font(.caption) }
+                }.foregroundStyle(.secondary)
+            }
+            if profile.fixes?.contains("cinematic") == true {
+                Label("Includes the cinematic fix (LAV Filters) — Apply installs it for others.", systemImage: "film").font(.caption)
+            }
             if !profile.problems.isEmpty {
                 Text(profile.problems.joined(separator: "\n")).font(.caption).foregroundStyle(.orange)
             }
@@ -308,6 +432,7 @@ struct ShareProfileView: View {
             Text("GitHub opens with everything filled in — sign in and click Submit.").font(.caption).foregroundStyle(.secondary)
         }
         .padding(20).frame(width: 560)
+        .onAppear { if notes.isEmpty { notes = Profiles.suggestedNotes(for: game) } }
     }
 
     func save() {

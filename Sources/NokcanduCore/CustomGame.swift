@@ -85,6 +85,7 @@ public enum GraphicsPreset: String, Codable, CaseIterable, Identifiable {
             return [#"export WINEDLLPATH_D3DMETAL="$SUPPORT/renderer/d3dmetal/wine""#,
                     #"export CX_D3DMETALPATH="$SUPPORT/renderer/d3dmetal/external""#,
                     #"export DYLD_FALLBACK_FRAMEWORK_PATH="$SUPPORT/renderer/d3dmetal/external""#,
+                    #"[ -f "$SUPPORT/renderer/d3dmetal/external/libd3dshared.dylib" ] && export CX_APPLEGPTK_LIBD3DSHARED_PATH="$SUPPORT/renderer/d3dmetal/external/libd3dshared.dylib""#,
                     #"export WINEDLLOVERRIDES="dxgi,d3d11,d3d12,d3d12core=b""#]
         case .classic2D:
             return [#"export WINEDLLPATH_CNCD="$SUPPORT/renderer/cnc_ddraw/wine""#, #"export WINEDLLOVERRIDES="ddraw=b""#]

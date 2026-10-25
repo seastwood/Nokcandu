@@ -44,6 +44,17 @@ public struct GameProfile: Codable, Hashable {
     public var rating: Rating
     public var tested: Tested?
     public var notes: String?
+    /// The game's program as a Windows path (C:\Games\…\game.exe), so Apply picks the same one.
+    public var program: String? = nil
+    /// Battle.net games: Battle.net's own launch options.
+    public var hostArguments: String? = nil
+    /// Drive letters (besides C: and Z:) the game is installed on or reads from, e.g. ["D"].
+    public var drives: [String]? = nil
+    /// The game needs its disc image.
+    public var disc: Bool? = nil
+
+    /// Paths inside the game's own app are shared as `{app}/…` and expanded on the other Mac.
+    public static let appToken = "{app}"
 
     public static let sources = ["steam", "battlenet", "installer", "disc", "folder"]
     public static let knownFixes = ["cinematic"]
@@ -51,9 +62,16 @@ public struct GameProfile: Codable, Hashable {
     /// Settings a shared profile may never set: anything that loads code or files, or moves Wine.
     public static func envNameAllowed(_ k: String) -> Bool {
         guard k.range(of: #"^[A-Z][A-Z0-9_]{0,63}$"#, options: .regularExpression) != nil else { return false }
-        let banned = ["PATH", "HOME", "SHELL", "TMPDIR", "WINEPREFIX", "WINESERVER", "WINELOADER", "WINEARCH"]
-        let bannedParts = ["DYLD_", "LD_", "NOKCANDU", "WINEDLLPATH", "_PATH", "LIBRARY", "PRELOAD", "ICD", "LAYER", "DRIVER_FILES", "FRAMEWORK"]
+        let banned = ["PATH", "HOME", "SHELL", "TMPDIR", "WINEPREFIX", "WINESERVER", "WINELOADER", "WINEARCH", "VK_DRIVER_FILES"]
+        let bannedParts = ["DYLD_", "LD_", "NOKCANDU", "WINEDLLPATH", "PRELOAD", "ICD", "VK_LAYER", "VK_ADD_"]
         return !banned.contains(k) && !bannedParts.contains { k.hasPrefix($0) || k.contains($0) }
+    }
+
+    /// Values are one line; a path may only point inside the game's own app ({app}/…), never elsewhere.
+    public static func envValueAllowed(_ v: String) -> Bool {
+        if v.count > 300 || v.contains("\n") || v.contains("..") { return false }
+        if v.contains("/") { return v.hasPrefix(appToken + "/") && !v.dropFirst(appToken.count).contains("{") }
+        return true
     }
 
     /// Everything wrong with a profile (empty = safe to publish and apply).
@@ -71,11 +89,16 @@ public struct GameProfile: Codable, Hashable {
         if env.count > 30 { p.append("too many settings (max 30)") }
         for (k, v) in env {
             if !Self.envNameAllowed(k) { p.append("setting \(k) isn't allowed in shared profiles") }
-            if v.count > 300 || v.contains("\n") || v.contains("/") || v.contains("..") { p.append("setting \(k) has a value that isn't allowed (no paths, one line)") }
+            if !Self.envValueAllowed(v) { p.append("setting \(k) has a value that isn't allowed (one line; file paths only inside the game's app, as {app}/…)") }
         }
         if let s = rawMouse, s != 0 && !(0.1...10).contains(s) { p.append("rawMouse must be 0 (off) or 0.1–10") }
         if let perf = performance, !(perf.fpsLimit == 0 || (10...360).contains(perf.fpsLimit)) { p.append("fpsLimit must be 0 or 10–360") }
         for f in fixes ?? [] where !Self.knownFixes.contains(f) { p.append("unknown fix \(f)") }
+        if let prog = program, prog.range(of: #"^[A-Za-z]:\\[^\n:*?"<>|]{1,250}\.exe$"#, options: [.regularExpression, .caseInsensitive]) == nil || prog.contains("..") {
+            p.append("program must be a Windows path to an .exe")
+        }
+        if let a = hostArguments, a.count > 300 || a.contains("\n") { p.append("Battle.net launch options must be one line, ≤300 characters") }
+        for d in drives ?? [] where d.range(of: #"^[D-Yd-y]$"#, options: .regularExpression) == nil { p.append("drive \(d) isn't a letter from D to Y") }
         for (name, text) in [("install", install), ("notes", notes)] where (text?.count ?? 0) > 4000 { p.append("\(name) is too long") }
         return p
     }
@@ -108,17 +131,77 @@ public struct CatalogEntry: Codable, Identifiable, Hashable {
     public var down: Int
     public var comments: Int
     public var updated: String
+    /// When it was first shared (ISO 8601); older catalogs don't have it.
+    public var created: String?
     public var profile: GameProfile
-    public init(number: Int, url: URL, author: String, up: Int, down: Int, comments: Int, updated: String, profile: GameProfile) {
+    public init(number: Int, url: URL, author: String, up: Int, down: Int, comments: Int, updated: String, created: String? = nil, profile: GameProfile) {
         self.number = number; self.url = url; self.author = author; self.up = up; self.down = down
-        self.comments = comments; self.updated = updated; self.profile = profile
+        self.comments = comments; self.updated = updated; self.created = created; self.profile = profile
+    }
+    public var updatedDate: Date? { ISO8601DateFormatter().date(from: updated) }
+    public var createdDate: Date? { created.flatMap { ISO8601DateFormatter().date(from: $0) } }
+    /// Tested with a different engine than the one Nokcandu uses now (may need re-checking).
+    public var testedOnOtherEngine: Bool {
+        guard let e = profile.tested?.engine, let v = EngineVersion(versionString: e) else { return false }
+        return v != EngineVersion.tested
     }
     public var score: Int { up - down }
     /// Many more people say it doesn't work than that it does.
     public var reportedBroken: Bool { down >= 3 && down > up * 2 }
 }
 
+/// All profiles for one game, so the catalog stays tidy however many people share.
+public struct ProfileGroup: Identifiable, Hashable {
+    public var id: String                 // steam:730, bnet:osi, exe:war3.exe
+    public var title: String
+    public var source: String
+    public var entries: [CatalogEntry]    // best first; reported-broken last
+    public var steamAppID: Int?
+    public var totalUp: Int { entries.reduce(0) { $0 + $1.up } }
+    public var bestScore: Int { entries.map(\.score).max() ?? 0 }
+    public var bestRating: GameProfile.Rating {
+        let ok = entries.filter { !$0.reportedBroken }.map(\.profile.rating)
+        return ok.contains(.works) ? .works : ok.contains(.playable) ? .playable : .broken
+    }
+    public var newest: Date? { entries.compactMap(\.updatedDate).max() }
+}
+
 public enum Profiles {
+    public enum Sort: String, CaseIterable, Identifiable {
+        case liked, recent, name
+        public var id: String { rawValue }
+        public var title: String { switch self { case .liked: "Most liked"; case .recent: "Recently updated"; case .name: "A–Z" } }
+    }
+
+    public static func groupKey(_ p: GameProfile) -> String {
+        if let id = p.match.steamAppID { return "steam:\(id)" }
+        if let u = p.match.battleNetUID { return "bnet:\(u.lowercased())" }
+        return "exe:" + (p.match.exeName ?? p.title).lowercased()
+    }
+
+    /// Profiles grouped by game. Within a game: most 👍 first, then most recently updated; reported-broken last.
+    public static func groups(_ entries: [CatalogEntry], sort: Sort = .liked) -> [ProfileGroup] {
+        let byKey = Dictionary(grouping: entries, by: { groupKey($0.profile) })
+        var out: [ProfileGroup] = byKey.map { key, list in
+            let sorted = list.sorted {
+                if $0.reportedBroken != $1.reportedBroken { return !$0.reportedBroken }
+                if $0.score != $1.score { return $0.score > $1.score }
+                return ($0.updatedDate ?? .distantPast) > ($1.updatedDate ?? .distantPast)
+            }
+            // The title most profiles use (people type names differently).
+            let titles = Dictionary(grouping: list.map(\.profile.title), by: { $0 }).max { a, b in
+                a.value.count != b.value.count ? a.value.count < b.value.count : a.key > b.key }?.key ?? sorted[0].profile.title
+            return ProfileGroup(id: key, title: titles, source: sorted[0].profile.source, entries: sorted,
+                                steamAppID: sorted[0].profile.match.steamAppID)
+        }
+        switch sort {
+        case .liked: out.sort { ($0.totalUp, $0.bestScore, $1.title) > ($1.totalUp, $1.bestScore, $0.title) }
+        case .recent: out.sort { ($0.newest ?? .distantPast) > ($1.newest ?? .distantPast) }
+        case .name: out.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        }
+        return out
+    }
+
     public static let catalogURL = URL(string: "https://seastwood.github.io/Nokcandu/catalog.json")!
     public static var catalogPage: URL { URL(string: "https://seastwood.github.io/Nokcandu/")! }
     static var cacheURL: URL { NokPaths.support.appendingPathComponent("profiles-catalog.json") }
@@ -172,8 +255,32 @@ public enum Profiles {
 
     // MARK: Making a profile from a working game
 
+    /// The app whose Wine settings a game uses (Battle.net games use the Battle.net app's).
+    static func settingsApp(_ g: InstalledGame) -> InstalledGame {
+        g.battleNet.flatMap { GameLibrary.inspect(URL(fileURLWithPath: $0.hostApp)) } ?? g
+    }
+
+    /// `/…/Game.app/Contents/x` → `{app}/x`; any other path stays as is (and then can't be shared).
+    static func portable(_ v: String, contents: URL) -> String {
+        let base = contents.standardizedFileURL.path
+        return v.hasPrefix(base + "/") ? GameProfile.appToken + v.dropFirst(base.count) : v
+    }
+
+    /// A setting a profile can describe — so a profile without it means "not set". Settings that can't
+    /// be shared (local file paths, loader variables) stay as they are.
+    static func replaceable(_ k: String, _ v: String, _ host: InstalledGame) -> Bool {
+        GameProfile.envNameAllowed(k) && GameProfile.envValueAllowed(portable(v, contents: host.contents))
+    }
+
+    static func expand(_ v: String, contents: URL) -> String {
+        v.hasPrefix(GameProfile.appToken + "/") ? contents.standardizedFileURL.path + v.dropFirst(GameProfile.appToken.count) : v
+    }
+
+    /// Everything that makes this game work, as a shareable profile.
     public static func make(from g: InstalledGame, rating: GameProfile.Rating, notes: String?, install: String?) -> GameProfile {
         let c = g.custom
+        let host = settingsApp(g)
+        let hc = host.custom
         var source = "installer"
         var match = GameProfile.Match()
         if let id = c?.steamAppID, g.usesSharedSteam { source = "steam"; match.steamAppID = id }
@@ -182,22 +289,58 @@ public enum Profiles {
             source = c.source == .disc ? "disc" : c.source == .folder ? "folder" : "installer"
             match.exeName = c.exe.split(separator: "\\").last.map(String.init)
         }
-        // Battle.net games run with the Battle.net app's settings.
-        let settingsFrom = g.battleNet.flatMap { GameLibrary.inspect(URL(fileURLWithPath: $0.hostApp)) } ?? g
-        let sc = settingsFrom.custom
+        var env: [String: String] = [:]
+        for (k, v) in hc?.environment ?? [:] {
+            let pv = portable(v, contents: host.contents)
+            if GameProfile.envNameAllowed(k) && GameProfile.envValueAllowed(pv) { env[k] = pv }
+        }
         let raw = RawMouse.settings(for: g)
-        let perf = Performance.settings(for: g)
-        let env = (sc?.environment ?? [:]).filter { GameProfile.envNameAllowed($0.key) && !$0.value.contains("/") }
+        // Drive letters the game is installed on (or the game's program lives on), besides C:/Z:.
+        var drives = Set<String>()
+        if let exe = c?.exe, !g.usesSharedSteam, let l = exe.first, exe.dropFirst().hasPrefix(":"), !"CcZz".contains(l) { drives.insert(String(l).uppercased()) }
+        if let l = g.battleNet, let loc = BattleNet.installedGames(host: host).first(where: { $0.uid == l.uid })?.installLocation,
+           let d = loc.first, !"CcZz".contains(d) { drives.insert(String(d).uppercased()) }
+        if g.usesSharedSteam, let id = c?.steamAppID, let lib = SharedSteam.installedGames().first(where: { $0.appID == id })?.library,
+           lib.standardizedFileURL.path != SharedSteam.steamDir.standardizedFileURL.path {
+            for d in Drives.list(for: g) where !d.builtIn && lib.standardizedFileURL.path.hasPrefix(URL(fileURLWithPath: d.target).standardizedFileURL.path) { drives.insert(d.letter) }
+        }
         var p = GameProfile(title: g.battleNet?.name ?? c?.name ?? g.name, match: match, source: source, install: install,
-                            graphics: sc?.graphics, arguments: g.battleNet == nil ? (c?.arguments.isEmpty == false ? c?.arguments : nil) : nil,
-                            environment: env.isEmpty ? nil : env, rawMouse: raw.enabled ? raw.scale : 0,
-                            performance: perf.isDefault ? nil : perf, fixes: CinematicFix.isPresent(for: g) ? ["cinematic"] : nil,
-                            rating: rating, tested: GameProfile.Tested(mac: macModel, macOS: ProcessInfo.processInfo.operatingSystemVersionString,
-                                                                       engine: (WineTools.hostContents(for: g).flatMap { GameLibrary.inspect($0.deletingLastPathComponent())?.wineVersion }) ?? g.wineVersion,
-                                                                       nokcandu: AppUpdate.currentVersion),
+                            graphics: hc?.graphics,
+                            arguments: g.battleNet == nil ? c?.arguments : nil,
+                            environment: env.isEmpty ? nil : env,
+                            rawMouse: raw.enabled ? raw.scale : 0,
+                            performance: Performance.settings(for: g),
+                            fixes: CinematicFix.isPresent(for: g) ? ["cinematic"] : nil,
+                            rating: rating,
+                            tested: GameProfile.Tested(mac: macModel, macOS: ProcessInfo.processInfo.operatingSystemVersionString,
+                                                       engine: host.wineVersion ?? g.wineVersion, nokcandu: AppUpdate.currentVersion),
                             notes: notes)
-        if p.environment?.isEmpty == true { p.environment = nil }
+        if !g.usesSharedSteam, g.battleNet == nil, let exe = c?.exe { p.program = exe }
+        if g.battleNet != nil, let a = hc?.arguments, !a.isEmpty { p.hostArguments = a }
+        if !drives.isEmpty { p.drives = drives.sorted() }
+        if c?.disc != nil { p.disc = true }
+        if p.arguments?.isEmpty == true { p.arguments = nil }
         return p
+    }
+
+    /// Your notes marked "Works" or "Info" for this game, to start the shared notes from.
+    public static func suggestedNotes(for g: InstalledGame) -> String {
+        GameNotes.load(for: g).filter { $0.kind == .works || $0.kind == .info }.map(\.text).joined(separator: "\n")
+    }
+
+    /// Settings a profile can't carry, by name and reason (normally none).
+    public static func notShared(from g: InstalledGame) -> [String] {
+        let host = settingsApp(g)
+        var out: [String] = []
+        for (k, v) in (host.custom?.environment ?? [:]).sorted(by: { $0.key < $1.key }) {
+            let pv = portable(v, contents: host.contents)
+            if !GameProfile.envNameAllowed(k) {
+                out.append("\(k) — this setting makes Wine load code, so it can't be shared safely")
+            } else if !GameProfile.envValueAllowed(pv) {
+                out.append("\(k) — it points at a file outside the game's app (\(v)), which wouldn't exist on other Macs")
+            }
+        }
+        return out
     }
 
     static var macModel: String {
@@ -231,15 +374,34 @@ public enum Profiles {
     /// What applying would change, in plain words.
     public static func plan(_ p: GameProfile, for g: InstalledGame) -> Plan {
         var plan = Plan()
+        let host = settingsApp(g)
         let shared = g.usesSharedSteam ? " (all Steam games)" : g.battleNet != nil ? " (all Battle.net games)" : ""
-        if let gr = p.graphics { plan.gameSettings.append("Graphics: \(gr.title)\(g.battleNet != nil ? shared : "")") }
-        if let a = p.arguments, !a.isEmpty {
-            if g.battleNet != nil { plan.skipped.append("Launch options (Battle.net games take options in Battle.net's own settings)") }
-            else { plan.gameSettings.append("Launch options: \(a)") }
+        if let prog = p.program, g.custom != nil, !g.usesSharedSteam, g.battleNet == nil {
+            if BattleNet.unixPath(prog, prefix: g.prefix).map({ FileManager.default.fileExists(atPath: $0.path) }) == true {
+                plan.gameSettings.append("Program: \(prog)")
+            } else {
+                plan.skipped.append("Program \(prog) — not found in this game, so the current program is kept")
+            }
         }
-        if let env = p.environment, !env.isEmpty {
-            if g.usesSharedSteam { plan.skipped.append("Extra settings \(env.keys.sorted().joined(separator: ", ")) (Steam games share Steam's environment)") }
-            else { plan.gameSettings.append("Extra settings: " + env.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " ") + (g.battleNet != nil ? shared : "")) }
+        if let gr = p.graphics { plan.gameSettings.append("Graphics: \(gr.title)\(g.battleNet != nil ? shared : "")") }
+        let a = p.arguments ?? ""
+        if g.battleNet != nil {
+            if !a.isEmpty { plan.skipped.append("Launch options \(a) (Battle.net games take launch options in Battle.net's game settings)") }
+        } else if let mine = g.custom?.arguments, a != mine {
+            plan.gameSettings.append(a.isEmpty ? "Launch options: none (removes \(mine))" : "Launch options: \(a)" + (mine.isEmpty ? "" : " (instead of \(mine))"))
+        } else if !a.isEmpty {
+            plan.gameSettings.append("Launch options: \(a) (same as now)")
+        }
+        if let a = p.hostArguments, g.battleNet != nil { plan.gameSettings.append("Battle.net launch options: \(a)") }
+        let env = p.environment ?? [:]
+        let text = env.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
+        if g.usesSharedSteam {
+            if !env.isEmpty { plan.skipped.append("Extra settings \(text) (Steam games share Steam's environment — add them to a non-Steam copy if needed)") }
+        } else {
+            let removed = (host.custom?.environment ?? [:]).filter { env[$0.key] == nil && replaceable($0.key, $0.value, host) }.keys.sorted()
+            if !env.isEmpty || !removed.isEmpty {
+                plan.gameSettings.append("Extra settings: " + (env.isEmpty ? "none" : text) + (removed.isEmpty ? "" : " (removes \(removed.joined(separator: ", ")))") + (g.battleNet != nil ? shared : ""))
+            }
         }
         if let r = p.rawMouse { plan.sharedSettings.append(r == 0 ? "Raw mouse: off\(shared)" : "Raw mouse: on at \(String(format: "%.2f", r))×\(shared)") }
         if let perf = p.performance {
@@ -247,9 +409,18 @@ public enum Profiles {
             if perf.fpsCounter { parts.append("FPS counter") }
             if perf.vsync { parts.append("vsync") }
             if perf.fpsLimit > 0 { parts.append("\(perf.fpsLimit) FPS limit") }
-            plan.sharedSettings.append("Performance: \(parts.isEmpty ? "defaults" : parts.joined(separator: ", "))\(shared)")
+            plan.sharedSettings.append("Performance: \(parts.isEmpty ? "all off" : parts.joined(separator: ", "))\(shared)")
         }
-        if p.fixes?.contains("cinematic") == true && !CinematicFix.isPresent(for: g) { plan.needsCinematicFix = true }
+        if p.fixes?.contains("cinematic") == true {
+            if CinematicFix.isPresent(for: g) { plan.gameSettings.append("Cinematic fix (LAV Filters): already installed") }
+            else { plan.needsCinematicFix = true }
+        }
+        let have = Set(Drives.list(for: host).map(\.letter))
+        for d in p.drives ?? [] {
+            if have.contains(d.uppercased()) { plan.gameSettings.append("Uses drive \(d.uppercased()): (you have it)") }
+            else { plan.skipped.append("Uses drive \(d.uppercased()): — you don't have it yet; add it in Files & Tools → Drives if your copy lives there") }
+        }
+        if p.disc == true && g.custom?.disc == nil { plan.skipped.append("Needs the game's disc image — add it in Settings → Disc image") }
         return plan
     }
 
@@ -285,11 +456,19 @@ public enum Profiles {
         let snapshot = Snapshot(target: target, config: target.custom, game: g, raw: RawMouse.settings(for: g), perf: Performance.settings(for: g))
         if var c = target.custom {
             if let gr = p.graphics { c.graphics = gr }
-            if g.battleNet == nil, let a = p.arguments { c.arguments = a }
-            if !g.usesSharedSteam, let env = p.environment, !env.isEmpty {
-                var merged = c.environment ?? [:]
-                for (k, v) in env where GameProfile.envNameAllowed(k) { merged[k] = v }
-                c.environment = merged
+            if g.battleNet == nil { c.arguments = p.arguments ?? "" }
+            if g.battleNet != nil, let a = p.hostArguments { c.arguments = a }
+            if let prog = p.program, g.battleNet == nil, !g.usesSharedSteam,
+               BattleNet.unixPath(prog, prefix: g.prefix).map({ FileManager.default.fileExists(atPath: $0.path) }) == true {
+                c.exe = prog
+            }
+            if !g.usesSharedSteam {
+                // The profile is the complete set of shareable settings; local-only ones are kept.
+                var merged = (c.environment ?? [:]).filter { !replaceable($0.key, $0.value, target) }
+                for (k, v) in p.environment ?? [:] where GameProfile.envNameAllowed(k) && GameProfile.envValueAllowed(v) {
+                    merged[k] = expand(v, contents: target.contents)
+                }
+                c.environment = merged.isEmpty ? nil : merged
             }
             if c != target.custom { try CustomGames.saveAll(c, to: target) }
         }

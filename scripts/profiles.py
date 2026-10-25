@@ -17,8 +17,9 @@ SOURCES = {"steam", "battlenet", "installer", "disc", "folder"}
 GRAPHICS = {"dx9", "dx11", "d3dmetal", "ddraw", "wined3d"}
 RATINGS = {"works", "playable", "broken"}
 FIXES = {"cinematic"}
-BANNED = {"PATH", "HOME", "SHELL", "TMPDIR", "WINEPREFIX", "WINESERVER", "WINELOADER", "WINEARCH"}
-BANNED_PARTS = ["DYLD_", "LD_", "NOKCANDU", "WINEDLLPATH", "_PATH", "LIBRARY", "PRELOAD", "ICD", "LAYER", "DRIVER_FILES", "FRAMEWORK"]
+BANNED = {"PATH", "HOME", "SHELL", "TMPDIR", "WINEPREFIX", "WINESERVER", "WINELOADER", "WINEARCH", "VK_DRIVER_FILES"}
+BANNED_PARTS = ["DYLD_", "LD_", "NOKCANDU", "WINEDLLPATH", "PRELOAD", "ICD", "VK_LAYER", "VK_ADD_"]
+APP = "{app}"
 MARK = "<!-- nokcandu-profile-check -->"
 
 
@@ -36,6 +37,14 @@ def api(path, method="GET", data=None):
 
 def env_name_allowed(k):
     return bool(re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", k)) and k not in BANNED and not any(p in k for p in BANNED_PARTS)
+
+
+def env_value_allowed(v):
+    if not isinstance(v, str) or len(v) > 300 or "\n" in v or ".." in v:
+        return False
+    if "/" in v:
+        return v.startswith(APP + "/") and "{" not in v[len(APP):]
+    return True
 
 
 def parse(body):
@@ -97,8 +106,8 @@ def normalize(p):
         else:
             for k, v in env.items():
                 if not env_name_allowed(k): probs.append(f"setting {k} isn't allowed in shared profiles")
-                if not isinstance(v, str) or len(v) > 300 or "\n" in v or "/" in v or ".." in v:
-                    probs.append(f"setting {k} has a value that isn't allowed (no paths, one line)")
+                if not env_value_allowed(v):
+                    probs.append(f"setting {k} has a value that isn't allowed (one line; file paths only inside the game's app, as {{app}}/…)")
             if env: out["environment"] = env
     r = p.get("rawMouse")
     if r is not None:
@@ -116,6 +125,21 @@ def normalize(p):
     if fx is not None:
         if isinstance(fx, list) and all(f in FIXES for f in fx): out["fixes"] = fx
         else: probs.append("unknown fix")
+    prog = p.get("program")
+    if prog is not None:
+        if isinstance(prog, str) and re.fullmatch(r'[A-Za-z]:\\[^\n:*?"<>|]{1,250}\.exe', prog, re.I) and ".." not in prog: out["program"] = prog
+        else: probs.append("program must be a Windows path to an .exe")
+    ha = p.get("hostArguments")
+    if ha is not None:
+        if isinstance(ha, str) and len(ha) <= 300 and "\n" not in ha: out["hostArguments"] = ha
+        else: probs.append("Battle.net launch options must be one line, ≤300 characters")
+    dr = p.get("drives")
+    if dr is not None:
+        if isinstance(dr, list) and all(isinstance(d, str) and re.fullmatch(r"[D-Yd-y]", d) for d in dr): out["drives"] = [d.upper() for d in dr]
+        else: probs.append("drives must be letters D–Y")
+    if p.get("disc") is not None:
+        if isinstance(p["disc"], bool): out["disc"] = p["disc"]
+        else: probs.append("disc must be true or false")
     t = p.get("tested")
     if isinstance(t, dict):
         out["tested"] = {k: str(v)[:120] for k, v in t.items() if k in ("mac", "macOS", "engine", "nokcandu") and isinstance(v, str)}
@@ -169,7 +193,7 @@ def build(out_dir):
             rx = i.get("reactions") or {}
             entries.append({"number": i["number"], "url": i["html_url"], "author": i["user"]["login"],
                             "up": rx.get("+1", 0), "down": rx.get("-1", 0), "comments": i.get("comments", 0),
-                            "updated": i["updated_at"], "profile": prof})
+                            "updated": i["updated_at"], "created": i["created_at"], "profile": prof})
         page += 1
     entries.sort(key=lambda e: (-(e["up"] - e["down"]), e["profile"]["title"].lower()))
     os.makedirs(out_dir, exist_ok=True)

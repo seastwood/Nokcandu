@@ -30,6 +30,17 @@
   .actions { margin-top: 12px; display: flex; gap: 14px; flex-wrap: wrap; font-size: 14px; }
   details summary { cursor: pointer; color: var(--muted); font-size: 14px; margin: 16px 0 8px; }
   .empty { color: var(--muted); text-align: center; padding: 40px 0; }
+  .controls { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+  select { font: inherit; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--text); }
+  details.game { background: var(--card); border: 1px solid var(--line); border-radius: 12px; margin-bottom: 10px; }
+  details.game > summary { list-style: none; cursor: pointer; padding: 14px 16px; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  details.game > summary::-webkit-details-marker { display: none; }
+  details.game > summary::before { content: "▸"; color: var(--muted); }
+  details.game[open] > summary::before { content: "▾"; }
+  details.game .inner { padding: 0 12px 12px; }
+  details.game .card { margin-bottom: 8px; }
+  .more { display: block; margin: 16px auto; font: inherit; padding: 8px 16px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--text); cursor: pointer; }
+  .warn { color: var(--playable); }
 </style>
 </head>
 <body>
@@ -39,9 +50,13 @@
     <a href="https://github.com/seastwood/Nokcandu/releases/latest">Nokcandu</a> to apply it in one click.
     Got a game working? Use <b>Share This Setup…</b> on its page.</p>
   <input id="q" type="search" placeholder="Search for a game…" autofocus aria-label="Search for a game">
+  <div class="controls">
+    <select id="sort" aria-label="Sort"><option value="liked">Most liked</option><option value="recent">Recently updated</option><option value="name">A–Z</option></select>
+    <select id="store" aria-label="Store"><option value="all">All stores</option><option value="steam">Steam</option><option value="battlenet">Battle.net</option><option value="other">Other</option></select>
+  </div>
   <div class="meta" id="meta">Loading…</div>
   <div id="list"></div>
-  <details id="brokenWrap" hidden><summary id="brokenSum"></summary><div id="broken"></div></details>
+  <button class="more" id="more" hidden>Show more games</button>
 </main>
 <script>
 const GRAPHICS = { dx9: "Classic 3D", dx11: "Modern 3D", d3dmetal: "Apple Metal", ddraw: "Classic 2D", wined3d: "Compatibility" };
@@ -51,44 +66,85 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": 
 const reportedBroken = e => e.down >= 3 && e.down > e.up * 2;
 function settings(p) {
   const s = [];
+  if (p.program) s.push("Program: " + p.program);
   if (p.graphics) s.push("Graphics: " + (GRAPHICS[p.graphics] || p.graphics));
+  if (p.hostArguments) s.push("Battle.net options: " + p.hostArguments);
   if (p.arguments) s.push("Options: " + p.arguments);
   if (p.environment) s.push(Object.entries(p.environment).map(([k, v]) => k + "=" + v).join(" "));
   if (p.rawMouse) s.push("Raw mouse " + p.rawMouse + "×");
-  if (p.fixes && p.fixes.includes("cinematic")) s.push("Cinematic fix");
+  if (p.fixes && p.fixes.includes("cinematic")) s.push("Cinematic fix (LAV Filters)");
+  if (p.performance && (p.performance.fpsCounter || p.performance.vsync || p.performance.fpsLimit))
+    s.push("Performance: " + [p.performance.fpsCounter && "FPS counter", p.performance.vsync && "vsync", p.performance.fpsLimit && p.performance.fpsLimit + " FPS limit"].filter(Boolean).join(", "));
+  if (p.drives) s.push("Drive " + p.drives.map(d => d + ":").join(", "));
+  if (p.disc) s.push("Needs disc image");
   return s.join(" · ");
+}
+const TESTED_ENGINE = "wine sikarugir 10.0 (revision 8)";
+const PAGE = 60; let shown = PAGE;
+const keyOf = p => p.match.steamAppID ? "steam:" + p.match.steamAppID : p.match.battleNetUID ? "bnet:" + p.match.battleNetUID.toLowerCase() : "exe:" + (p.match.exeName || p.title).toLowerCase();
+const score = e => e.up - e.down;
+const fmtDate = s => s ? new Date(s).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "";
+function ago(s) {
+  if (!s) return "";
+  const d = (Date.now() - new Date(s)) / 86400000;
+  return d < 1 ? "today" : d < 2 ? "yesterday" : d < 60 ? Math.round(d) + " days ago" : d < 730 ? Math.round(d / 30) + " months ago" : Math.round(d / 365) + " years ago";
 }
 function card(e) {
   const p = e.profile, blob = "data:application/json," + encodeURIComponent(JSON.stringify(p, null, 2));
-  const tested = p.tested ? [p.tested.mac, p.tested.macOS, p.tested.engine].filter(Boolean).join(" · ") : "";
+  const tested = p.tested ? [p.tested.mac, p.tested.macOS, p.tested.engine, p.tested.nokcandu && "Nokcandu " + p.tested.nokcandu].filter(Boolean).join(" · ") : "";
+  const oldEngine = p.tested && p.tested.engine && p.tested.engine !== TESTED_ENGINE;
   return `<div class="card ${reportedBroken(e) ? "dim" : ""}">
-    <div class="row"><span class="title">${esc(p.title)}</span><span class="badge ${esc(p.rating)}">${esc(RATING[p.rating])}</span>
-      <span class="votes">👍 ${e.up} · 👎 ${e.down} · 💬 ${e.comments}</span></div>
+    <div class="row"><span class="badge ${esc(p.rating)}">${esc(RATING[p.rating])}</span>
+      <span class="votes">👍 ${e.up} · 👎 ${e.down} · 💬 ${e.comments}</span>
+      <span class="votes">shared ${esc(fmtDate(e.created))}${e.updated && e.created && (new Date(e.updated) - new Date(e.created)) > 3600e3 ? " · updated " + esc(ago(e.updated)) : ""} by ${esc(e.author)}</span></div>
     ${p.notes ? `<p class="notes">${esc(p.notes)}</p>` : ""}
     ${p.install ? `<p class="notes"><b>Install:</b> ${esc(p.install)}</p>` : ""}
-    <div class="settings">${esc(settings(p))}${tested ? "<br>Tested on " + esc(tested) : ""} · shared by ${esc(e.author)}</div>
+    <div class="settings">${esc(settings(p))}${tested ? "<br>Tested on " + esc(tested) : ""}${oldEngine ? ' · <span class="warn">different engine than today\'s</span>' : ""}</div>
     <div class="actions"><a href="nokcandu://profile/${e.number}">Open in Nokcandu</a>
       <a href="${esc(e.url)}">Vote &amp; comment</a>
       <a href="${blob}" download="${esc(p.title).replace(/[^\w\- ]+/g, "")}.nokcandu-profile.json">Download</a></div>
   </div>`;
 }
+function groups() {
+  const map = new Map();
+  for (const e of all) { const k = keyOf(e.profile); if (!map.has(k)) map.set(k, []); map.get(k).push(e); }
+  return [...map.entries()].map(([key, list]) => {
+    list.sort((a, b) => (reportedBroken(a) - reportedBroken(b)) || (score(b) - score(a)) || (new Date(b.updated) - new Date(a.updated)));
+    const counts = {}; list.forEach(e => counts[e.profile.title] = (counts[e.profile.title] || 0) + 1);
+    const title = Object.entries(counts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0];
+    const ok = list.filter(e => !reportedBroken(e)).map(e => e.profile.rating);
+    return { key, title, list, source: list[0].profile.source, up: list.reduce((n, e) => n + e.up, 0),
+             best: Math.max(...list.map(score)), newest: list.map(e => e.updated).sort().pop(),
+             rating: ok.includes("works") ? "works" : ok.includes("playable") ? "playable" : "broken" };
+  });
+}
 function render() {
   const q = document.getElementById("q").value.trim().toLowerCase();
-  const hits = all.filter(e => !q || e.profile.title.toLowerCase().includes(q) || (e.profile.notes || "").toLowerCase().includes(q));
-  const good = hits.filter(e => !reportedBroken(e)), bad = hits.filter(reportedBroken);
-  document.getElementById("list").innerHTML = good.map(card).join("") ||
-    `<div class="empty">No profile for that game yet. If you get it working, share it from Nokcandu so others can play too.</div>`;
-  const wrap = document.getElementById("brokenWrap");
-  wrap.hidden = !bad.length;
-  document.getElementById("brokenSum").textContent = `Reported not working (${bad.length})`;
-  document.getElementById("broken").innerHTML = bad.map(card).join("");
+  const sort = document.getElementById("sort").value, store = document.getElementById("store").value;
+  let gs = groups().filter(g => (store === "all" || (store === "other" ? !["steam", "battlenet"].includes(g.source) : g.source === store)) &&
+    (!q || g.title.toLowerCase().includes(q) || g.list.some(e => e.profile.title.toLowerCase().includes(q) || (e.profile.notes || "").toLowerCase().includes(q))));
+  if (sort === "liked") gs.sort((a, b) => b.up - a.up || b.best - a.best || a.title.localeCompare(b.title));
+  if (sort === "recent") gs.sort((a, b) => (b.newest || "").localeCompare(a.newest || ""));
+  if (sort === "name") gs.sort((a, b) => a.title.localeCompare(b.title));
+  const page = gs.slice(0, shown), single = gs.length === 1;
+  document.getElementById("list").innerHTML = page.map(g => {
+    const good = g.list.filter(e => !reportedBroken(e)), bad = g.list.filter(reportedBroken);
+    return `<details class="game" ${single ? "open" : ""}><summary><span class="title">${esc(g.title)}</span>
+      <span class="badge ${g.rating}">${RATING[g.rating]}</span>
+      <span class="votes">${g.list.length} profile${g.list.length === 1 ? "" : "s"} · 👍 ${g.up} · updated ${esc(ago(g.newest))}</span></summary>
+      <div class="inner">${good.map(card).join("")}${bad.length ? `<details><summary>Reported not working (${bad.length})</summary>${bad.map(card).join("")}</details>` : ""}</div></details>`;
+  }).join("") || `<div class="empty">No profile for that game yet. If you get it working, share it from Nokcandu so others can play too.</div>`;
+  document.getElementById("more").hidden = gs.length <= shown;
+  document.getElementById("meta").textContent = `${gs.length} game${gs.length === 1 ? "" : "s"} · ${all.length} profile${all.length === 1 ? "" : "s"}` + (window.generated ? ` · catalog updated ${new Date(window.generated).toLocaleString()}` : "");
 }
 fetch("catalog.json", { cache: "no-store" }).then(r => r.json()).then(c => {
-  all = c.profiles || [];
-  document.getElementById("meta").textContent = `${all.length} profile${all.length === 1 ? "" : "s"} · updated ${new Date(c.generated).toLocaleString()}`;
+  all = c.profiles || []; window.generated = c.generated;
   render();
 }).catch(() => { document.getElementById("meta").textContent = "Couldn't load the catalog."; });
-document.getElementById("q").addEventListener("input", render);
+document.getElementById("q").addEventListener("input", () => { shown = PAGE; render(); });
+document.getElementById("sort").addEventListener("change", render);
+document.getElementById("store").addEventListener("change", () => { shown = PAGE; render(); });
+document.getElementById("more").addEventListener("click", () => { shown += PAGE; render(); });
 </script>
 </body>
 </html>

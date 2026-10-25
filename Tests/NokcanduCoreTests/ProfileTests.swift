@@ -27,6 +27,20 @@ final class ProfileTests: XCTestCase {
         XCTAssertTrue(GameProfile.envNameAllowed("WINEDLLOVERRIDES"))
         XCTAssertTrue(GameProfile.envNameAllowed("ROSETTA_ADVERTISE_AVX"))
         XCTAssertFalse(GameProfile.envNameAllowed("NOKCANDU_RAW_MOUSE_SCALE"))
+        // Paths inside the game's own app are shared portably; anything else isn't.
+        XCTAssertTrue(GameProfile.envNameAllowed("CX_APPLEGPTK_LIBD3DSHARED_PATH"))
+        XCTAssertTrue(GameProfile.envValueAllowed("{app}/SharedSupport/renderer/d3dmetal/external/libd3dshared.dylib"))
+        XCTAssertFalse(GameProfile.envValueAllowed("/Users/x/evil.dylib"))
+        XCTAssertFalse(GameProfile.envValueAllowed("{app}/../../evil.dylib"))
+        let c = URL(fileURLWithPath: "/Users/x/Applications/Games/Battle.net.app/Contents")
+        let portable = Profiles.portable(c.path + "/SharedSupport/renderer/d3dmetal/external/libd3dshared.dylib", contents: c)
+        XCTAssertEqual(portable, "{app}/SharedSupport/renderer/d3dmetal/external/libd3dshared.dylib")
+        let other = URL(fileURLWithPath: "/Users/y/Applications/Nokcandu Games/Battle.net.app/Contents")
+        XCTAssertEqual(Profiles.expand(portable, contents: other), other.path + "/SharedSupport/renderer/d3dmetal/external/libd3dshared.dylib")
+        var q = sample(); q.program = #"C:\Games\Warcraft III\Frozen Throne.exe"#; q.drives = ["D"]; q.disc = true; q.hostArguments = "--x"
+        XCTAssertEqual(q.problems, [])
+        q.program = #"C:\Games\..\x.exe"#
+        XCTAssertFalse(q.problems.isEmpty)
     }
 
     func testSubmitURLCarriesProfile() {
@@ -38,5 +52,25 @@ final class ProfileTests: XCTestCase {
     func testBrokenReports() {
         let e = CatalogEntry(number: 1, url: URL(string: "https://x")!, author: "a", up: 1, down: 4, comments: 0, updated: "", profile: sample())
         XCTAssertTrue(e.reportedBroken)
+    }
+}
+
+final class ProfileGroupTests: XCTestCase {
+    func entry(_ n: Int, _ title: String, steam: Int, up: Int, down: Int, updated: String) -> CatalogEntry {
+        CatalogEntry(number: n, url: URL(string: "https://x/\(n)")!, author: "a", up: up, down: down, comments: 0, updated: updated,
+                     profile: GameProfile(title: title, match: .init(steamAppID: steam), source: "steam", install: nil, graphics: nil, arguments: nil,
+                                          environment: nil, rawMouse: nil, performance: nil, fixes: nil, rating: .works, tested: nil, notes: nil))
+    }
+
+    func testGroupsByGameMostLikedFirst() {
+        let g = Profiles.groups([
+            entry(1, "CS2", steam: 730, up: 1, down: 0, updated: "2026-10-01T00:00:00Z"),
+            entry(2, "Counter-Strike 2", steam: 730, up: 9, down: 0, updated: "2026-10-02T00:00:00Z"),
+            entry(3, "Counter-Strike 2", steam: 730, up: 0, down: 5, updated: "2026-10-03T00:00:00Z"),
+            entry(4, "Portal", steam: 400, up: 3, down: 0, updated: "2026-10-04T00:00:00Z"),
+        ])
+        XCTAssertEqual(g.map(\.title), ["Counter-Strike 2", "Portal"])
+        XCTAssertEqual(g[0].entries.map(\.number), [2, 1, 3])
+        XCTAssertEqual(Profiles.groups(g.flatMap(\.entries), sort: .recent).first?.title, "Portal")
     }
 }
