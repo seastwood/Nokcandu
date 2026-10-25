@@ -87,6 +87,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <array><dict>
     <key>CFBundleURLName</key><string>Battle.net sign-in return (forwarded to Battle.net in Wine)</string>
     <key>CFBundleURLSchemes</key><array><string>battlenet</string><string>blizzard</string></array>
+  </dict><dict>
+    <key>CFBundleURLName</key><string>Nokcandu game profiles</string>
+    <key>CFBundleURLSchemes</key><array><string>nokcandu</string></array>
   </dict></array>
   <key>NSMicrophoneUsageDescription</key><string>Games started from Nokcandu can use your microphone for voice chat.</string>
   <key>NSDocumentsFolderUsageDescription</key><string>Nokcandu reads and adjusts Zero Hour's display settings in your Documents folder.</string>

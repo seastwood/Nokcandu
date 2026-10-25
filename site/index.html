@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nokcandu Game Profiles</title>
+<meta name="description" content="Search shared settings that make Windows games run on Apple silicon Macs with Nokcandu.">
+<style>
+  :root { --bg:#f6f6f4; --card:#fff; --text:#1d1d1f; --muted:#6e6e73; --line:#e3e3e0; --accent:#0a66d8;
+          --works:#1f8a3b; --playable:#b26a00; --broken:#c42b1c; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#161617; --card:#1f1f21; --text:#f2f2f2; --muted:#a1a1a6; --line:#323235; --accent:#4c9bff;
+          --works:#4cc46b; --playable:#f0a33a; --broken:#ff6b5c; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 28px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .sub a, a { color: var(--accent); }
+  input { width: 100%; font: inherit; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--text); }
+  .meta { color: var(--muted); font-size: 13px; margin: 10px 2px 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+  .card.dim { opacity: .6; }
+  .row { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  .title { font-weight: 650; font-size: 18px; }
+  .badge { font-size: 12px; font-weight: 650; padding: 2px 8px; border-radius: 99px; border: 1px solid currentColor; }
+  .works { color: var(--works); } .playable { color: var(--playable); } .broken { color: var(--broken); }
+  .votes { color: var(--muted); font-size: 14px; }
+  .notes { margin: 8px 0 0; white-space: pre-wrap; }
+  .settings { color: var(--muted); font-size: 13px; margin-top: 8px; }
+  .actions { margin-top: 12px; display: flex; gap: 14px; flex-wrap: wrap; font-size: 14px; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 14px; margin: 16px 0 8px; }
+  .empty { color: var(--muted); text-align: center; padding: 40px 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Nokcandu Game Profiles</h1>
+  <p class="sub">Settings people shared to make their Windows games run on Apple silicon Macs. Open one in
+    <a href="https://github.com/seastwood/Nokcandu/releases/latest">Nokcandu</a> to apply it in one click.
+    Got a game working? Use <b>Share This Setup…</b> on its page.</p>
+  <input id="q" type="search" placeholder="Search for a game…" autofocus aria-label="Search for a game">
+  <div class="meta" id="meta">Loading…</div>
+  <div id="list"></div>
+  <details id="brokenWrap" hidden><summary id="brokenSum"></summary><div id="broken"></div></details>
+</main>
+<script>
+const GRAPHICS = { dx9: "Classic 3D", dx11: "Modern 3D", d3dmetal: "Apple Metal", ddraw: "Classic 2D", wined3d: "Compatibility" };
+const RATING = { works: "Works great", playable: "Playable with issues", broken: "Doesn't work" };
+let all = [];
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const reportedBroken = e => e.down >= 3 && e.down > e.up * 2;
+function settings(p) {
+  const s = [];
+  if (p.graphics) s.push("Graphics: " + (GRAPHICS[p.graphics] || p.graphics));
+  if (p.arguments) s.push("Options: " + p.arguments);
+  if (p.environment) s.push(Object.entries(p.environment).map(([k, v]) => k + "=" + v).join(" "));
+  if (p.rawMouse) s.push("Raw mouse " + p.rawMouse + "×");
+  if (p.fixes && p.fixes.includes("cinematic")) s.push("Cinematic fix");
+  return s.join(" · ");
+}
+function card(e) {
+  const p = e.profile, blob = "data:application/json," + encodeURIComponent(JSON.stringify(p, null, 2));
+  const tested = p.tested ? [p.tested.mac, p.tested.macOS, p.tested.engine].filter(Boolean).join(" · ") : "";
+  return `<div class="card ${reportedBroken(e) ? "dim" : ""}">
+    <div class="row"><span class="title">${esc(p.title)}</span><span class="badge ${esc(p.rating)}">${esc(RATING[p.rating])}</span>
+      <span class="votes">👍 ${e.up} · 👎 ${e.down} · 💬 ${e.comments}</span></div>
+    ${p.notes ? `<p class="notes">${esc(p.notes)}</p>` : ""}
+    ${p.install ? `<p class="notes"><b>Install:</b> ${esc(p.install)}</p>` : ""}
+    <div class="settings">${esc(settings(p))}${tested ? "<br>Tested on " + esc(tested) : ""} · shared by ${esc(e.author)}</div>
+    <div class="actions"><a href="nokcandu://profile/${e.number}">Open in Nokcandu</a>
+      <a href="${esc(e.url)}">Vote &amp; comment</a>
+      <a href="${blob}" download="${esc(p.title).replace(/[^\w\- ]+/g, "")}.nokcandu-profile.json">Download</a></div>
+  </div>`;
+}
+function render() {
+  const q = document.getElementById("q").value.trim().toLowerCase();
+  const hits = all.filter(e => !q || e.profile.title.toLowerCase().includes(q) || (e.profile.notes || "").toLowerCase().includes(q));
+  const good = hits.filter(e => !reportedBroken(e)), bad = hits.filter(reportedBroken);
+  document.getElementById("list").innerHTML = good.map(card).join("") ||
+    `<div class="empty">No profile for that game yet. If you get it working, share it from Nokcandu so others can play too.</div>`;
+  const wrap = document.getElementById("brokenWrap");
+  wrap.hidden = !bad.length;
+  document.getElementById("brokenSum").textContent = `Reported not working (${bad.length})`;
+  document.getElementById("broken").innerHTML = bad.map(card).join("");
+}
+fetch("catalog.json", { cache: "no-store" }).then(r => r.json()).then(c => {
+  all = c.profiles || [];
+  document.getElementById("meta").textContent = `${all.length} profile${all.length === 1 ? "" : "s"} · updated ${new Date(c.generated).toLocaleString()}`;
+  render();
+}).catch(() => { document.getElementById("meta").textContent = "Couldn't load the catalog."; });
+document.getElementById("q").addEventListener("input", render);
+</script>
+</body>
+</html>

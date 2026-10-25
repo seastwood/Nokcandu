@@ -1,0 +1,23 @@
+name: Game profile
+description: Share settings that make a game work in Nokcandu (use "Share This Setup…" on the game's page to fill this in).
+title: "[Profile] "
+labels: [profile]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for sharing! An automatic check publishes valid profiles to the **Game Profiles** catalog within an hour — no approval needed.
+        Others vote with 👍 (works for me) / 👎 (doesn't) on this issue and discuss below. Edit this issue to update your profile; close it to remove it.
+  - type: textarea
+    id: profile
+    attributes:
+      label: Profile
+      description: Created by Nokcandu. Settings only — profiles can't contain files, paths or scripts.
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Screenshots, what you tried, which store edition you have…

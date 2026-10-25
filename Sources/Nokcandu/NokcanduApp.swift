@@ -62,6 +62,9 @@ struct LibraryView: View {
                     Button { model.showInstaller = true } label: {
                         Label("Install a Game…", systemImage: "plus.circle")
                     }
+                    Button { model.profileFocus = nil; model.showProfiles = true } label: {
+                        Label("Game Profiles…", systemImage: "square.stack.3d.up")
+                    }
                     Button { model.showStorage = true } label: {
                         Label("Storage…", systemImage: "internaldrive")
                     }
@@ -91,6 +94,9 @@ struct LibraryView: View {
         }
         .sheet(isPresented: $model.showWelcome) {
             WelcomeView().environmentObject(model)
+        }
+        .sheet(isPresented: $model.showProfiles) {
+            ProfilesView(focusNumber: model.profileFocus).environmentObject(model)
         }
         .sheet(isPresented: $model.showStorage) {
             StorageView().environmentObject(model)

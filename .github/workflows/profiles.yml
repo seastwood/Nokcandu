@@ -1,0 +1,44 @@
+name: Game profiles
+# Checks each profile issue automatically and publishes the catalog (catalog.json + website) to GitHub Pages.
+# Votes are 👍/👎 reactions — reactions don't trigger workflows, so the catalog also rebuilds hourly.
+on:
+  issues:
+    types: [opened, edited, reopened, closed, labeled, unlabeled, deleted]
+  issue_comment:
+    types: [created, deleted]
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['site/**', 'scripts/profiles.py', '.github/workflows/profiles.yml']
+permissions:
+  contents: read
+  issues: write
+  pages: write
+  id-token: write
+concurrency:
+  group: profiles-catalog
+  cancel-in-progress: false
+jobs:
+  catalog:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the profile in this issue
+        if: github.event_name == 'issues' && (github.event.action == 'opened' || github.event.action == 'edited' || github.event.action == 'reopened' || github.event.action == 'labeled')
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/profiles.py validate ${{ github.event.issue.number }}
+      - name: Build catalog
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p public && cp -R site/. public/
+          python3 scripts/profiles.py build public
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: public }
+      - uses: actions/deploy-pages@v4

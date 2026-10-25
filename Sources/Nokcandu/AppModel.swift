@@ -14,6 +14,8 @@ final class AppModel: ObservableObject {
     @Published var installerStartsSteamHost = false
     @Published var showUpdates = false
     @Published var showStorage = false
+    @Published var showProfiles = false
+    @Published var profileFocus: Int?
     @Published var showWelcome = Setup.needsAttention
     /// A newer Nokcandu on GitHub Releases, if any.
     @Published var appUpdate: AppUpdate.Release?
@@ -92,6 +94,12 @@ final class AppModel: ObservableObject {
 
     /// battlenet:// / blizzard:// links from the browser (e.g. after a passkey sign-in) go back to Battle.net in Wine.
     func openURL(_ url: URL) {
+        // nokcandu://profile/123 from the profiles website
+        if url.scheme == "nokcandu" {
+            if url.host == "profile", let n = Int(url.lastPathComponent) { profileFocus = n } else { profileFocus = nil }
+            showProfiles = true
+            return
+        }
         guard BattleNetBridge.canHandle(url) else { return }
         do {
             let host = try BattleNetBridge.forward(url, games: games.isEmpty ? GameLibrary.scan() : games)

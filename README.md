@@ -29,6 +29,13 @@ with tested settings, one-click fixes and safe updates. Think of it as a free al
 - **Stays current** — checks this repo for new Nokcandu releases and the Sikarugir/LAV projects for new components. New engines are self-tested before they're offered, each game tries them separately, and you can roll back.
 - **Safe by design** — every file Nokcandu changes is backed up and journaled; your saves and game files are never touched by repairs or updates.
 
+## Game Profiles
+
+Stuck on a game? Open **Game Profiles** in Nokcandu (or the [website](https://seastwood.github.io/Nokcandu/)), search for it,
+and apply the settings someone else got working — or try a profile from a similar game, with one-click Undo.
+Got a game running? **Share This Setup…** on its page submits your settings in one click. Profiles are settings only
+(no files, paths or scripts), are checked automatically, and are ranked by 👍/👎 votes on their GitHub issue.
+
 ## Good to know
 
 - Only use games you own. Nokcandu doesn't include or download games.

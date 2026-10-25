@@ -72,6 +72,7 @@ struct GameDetailView: View {
                 checkSection
                 if !WineTools.places(for: game).isEmpty { FilesToolsSection(game: game) }
                 if WineTools.hostContents(for: game) != nil { FixesSection(game: game).id("\(game.id)-\(fixVersion)") }
+                if game.custom != nil || game.battleNet != nil { ProfilesSection(game: game).id("profiles-\(game.id)") }
                 if game.isManaged { NotesSection(game: game).id(game.id) }
                 aboutSection
             }

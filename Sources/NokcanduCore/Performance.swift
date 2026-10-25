@@ -4,7 +4,7 @@ import Foundation
 /// small shell file (SharedSupport/nokcandu/perf.env) that the game's launcher — or for Steam games the
 /// shared Steam — reads after the graphics mode. Takes effect the next time the game (or Steam) starts.
 public enum Performance {
-    public struct Settings: Codable, Equatable {
+    public struct Settings: Codable, Hashable {
         public var fpsCounter = false
         public var vsync = false
         public var fpsLimit = 0                      // 0 = no limit
