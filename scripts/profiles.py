@@ -157,6 +157,10 @@ def build(out_dir):
         if not batch: break
         for i in batch:
             if i.get("pull_request"): continue
+            names = {l["name"] for l in i.get("labels", [])}
+            if TOKEN and not names & {"profile-valid", "profile-invalid"}:
+                try: validate(i["number"])   # e.g. a check that was skipped while another run was queued
+                except Exception as e: print(f"#{i['number']}: couldn't label ({e})")
             try:
                 prof, probs = normalize(parse(i.get("body")))
             except Exception:
