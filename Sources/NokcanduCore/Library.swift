@@ -1,0 +1,129 @@
+import Foundation
+
+/// A game app found on disk, matched to a shipped recipe (or not).
+public struct InstalledGame: Identifiable, Hashable {
+    public var id: String { appURL.path }
+    public var appURL: URL
+    public var name: String
+    public var recipe: GameRecipe?
+    /// Settings of a general game added through Nokcandu (nil for shipped recipes and unmanaged apps).
+    public var custom: CustomGameConfig?
+    public var bundleIdentifier: String?
+    public var executableName: String?
+    public var iconURL: URL?
+    public var wineVersion: String?
+    public var renderer: String?
+    /// A Blizzard game started through the shared Battle.net app.
+    public var battleNet: BattleNetLink? = nil
+
+    public var contents: URL { appURL.appendingPathComponent("Contents", isDirectory: true) }
+    public var support: URL { contents.appendingPathComponent("SharedSupport", isDirectory: true) }
+    public var prefix: URL { support.appendingPathComponent("prefix", isDirectory: true) }
+    public var logs: URL { support.appendingPathComponent("Logs", isDirectory: true) }
+    public var launcherURL: URL? { executableName.map { contents.appendingPathComponent("MacOS/\($0)") } }
+    public var nokcanduState: URL { support.appendingPathComponent("nokcandu", isDirectory: true) }
+    public var gameDirectory: URL? { recipe.map { contents.appendingPathComponent($0.gameDirectory) } }
+
+    /// Short, jargon-free status for the library row.
+    public var isManaged: Bool { recipe != nil }
+    public var isSteamHost: Bool { recipe?.id == SharedSteam.recipeID }
+    /// A Steam game that starts through the shared Steam app (no Wine inside this app).
+    public var usesSharedSteam: Bool { custom?.source == .steamLibrary }
+    public var journalScope: String { "game-" + (bundleIdentifier ?? name).replacingOccurrences(of: "/", with: "_") }
+}
+
+public enum GameLibrary {
+    /// Scans the Sikarugir apps folder (and any extra folders) for game apps.
+    public static func scan(folders: [URL] = [NokPaths.gameAppsFolder]) -> [InstalledGame] {
+        let fm = FileManager.default
+        var found: [InstalledGame] = []
+        for folder in folders {
+            guard let items = try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { continue }
+            for app in items where app.pathExtension == "app" {
+                if let g = inspect(app) { found.append(g) }
+            }
+        }
+        return found.sorted { ($0.recipe == nil ? 1 : 0, $0.name) < ($1.recipe == nil ? 1 : 0, $1.name) }
+    }
+
+    public static func inspect(_ app: URL) -> InstalledGame? {
+        let contents = app.appendingPathComponent("Contents")
+        guard let info = NSDictionary(contentsOf: contents.appendingPathComponent("Info.plist")) as? [String: Any] else { return nil }
+        // Wine-wrapper apps carry SharedSupport/prefix; Steam-library game apps carry only their Nokcandu settings.
+        let hasPrefix = FileManager.default.fileExists(atPath: contents.appendingPathComponent("SharedSupport/prefix").path)
+        let bnet = BattleNetLink.load(contents: contents)
+        guard hasPrefix || bnet != nil || FileManager.default.fileExists(atPath: CustomGameConfig.url(in: contents).path) else { return nil }
+        let exe = info["CFBundleExecutable"] as? String
+        let name = (info["CFBundleName"] as? String) ?? app.deletingPathExtension().lastPathComponent
+        var recipe = RecipeCatalog.all.first { r in
+            exe == r.launcherExecutable || app.lastPathComponent == r.appBundleName
+        }
+        let custom = CustomGameConfig.load(contents: contents)
+        if let custom { recipe = custom.recipe }
+        let isSteamHost = SharedSteam.isHost(contents: contents)
+        if isSteamHost { recipe = SharedSteam.hostRecipe(wineVersion: nil) }
+        var icon: URL?
+        if var iconName = info["CFBundleIconFile"] as? String, !iconName.isEmpty {
+            if !iconName.hasSuffix(".icns") { iconName += ".icns" }
+            let u = contents.appendingPathComponent("Resources/\(iconName)")
+            if FileManager.default.fileExists(atPath: u.path) { icon = u }
+        }
+        let version = (try? String(contentsOf: contents.appendingPathComponent("SharedSupport/wine/version"), encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        var renderer: String?
+        if (info["D9VK"] as? Int) == 1 { renderer = "D9VK" }
+        else if (info["DXVK"] as? Int) == 1 { renderer = "DXVK" }
+        else if (info["D3DMETAL"] as? Int) == 1 { renderer = "D3DMetal" }
+        if let r = recipe?.runtime.renderer { renderer = r }
+        if let custom { renderer = custom.graphics.technical }
+        return InstalledGame(appURL: app, name: name, recipe: recipe, custom: custom,
+                             bundleIdentifier: info["CFBundleIdentifier"] as? String,
+                             executableName: exe, iconURL: icon, wineVersion: version, renderer: renderer, battleNet: bnet)
+    }
+}
+
+// MARK: - Launching and run state
+
+public enum RunState: Equatable {
+    case notRunning
+    /// The launcher process is alive. This is NOT proof the game is playable.
+    case launcherRunning(pid: Int32)
+}
+
+public enum GameLauncher {
+    /// Reads the launcher's single-instance lock (Logs/game.lock/pid).
+    public static func runState(of game: InstalledGame) -> RunState {
+        if game.isSteamHost {
+            let f = game.logs.appendingPathComponent("steam.lock/pid")
+            if let s = try? String(contentsOf: f, encoding: .utf8), let pid = Int32(s.trimmingCharacters(in: .whitespacesAndNewlines)), kill(pid, 0) == 0 {
+                return .launcherRunning(pid: pid)
+            }
+            return .notRunning
+        }
+        let pidFile = game.logs.appendingPathComponent("game.lock/pid")
+        guard let s = try? String(contentsOf: pidFile, encoding: .utf8),
+              let pid = Int32(s.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 0 else { return .notRunning }
+        return kill(pid, 0) == 0 ? .launcherRunning(pid: pid) : .notRunning
+    }
+
+    /// Opens the game's own app through LaunchServices so it behaves exactly like a Finder double-click.
+    /// `arguments` are passed through to the launcher (e.g. ["--windowed"]).
+    public static func launch(_ game: InstalledGame, arguments: [String] = []) throws {
+        var args = [game.appURL.path]
+        if !arguments.isEmpty { args += ["--args"] + arguments }
+        let r = try Shell.run("/usr/bin/open", args, timeout: 30)
+        if !r.ok { throw NokError("macOS could not open \(game.name): \(r.combined)") }
+    }
+
+    /// The launcher's own preflight (`--check`): validates game files, engine, and (Worms) the disc.
+    public static func preflight(_ game: InstalledGame) async -> ShellResult {
+        guard let launcher = game.launcherURL else {
+            return ShellResult(status: -1, stdout: "", stderr: "No launcher found in the app.")
+        }
+        do {
+            return try await Shell.runAsync("/bin/bash", [launcher.path, "--check"], timeout: 120)
+        } catch {
+            return ShellResult(status: -1, stdout: "", stderr: error.localizedDescription)
+        }
+    }
+}

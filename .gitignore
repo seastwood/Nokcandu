@@ -1,0 +1,16 @@
+.build/
+build/
+build.log
+.rebuild
+.relaunch
+run.sh
+run.log
+.DS_Store
+.watch.lock
+.e2e*
+.sample
+.run
+.install-agent
+*.log
+sample.txt
+reference/

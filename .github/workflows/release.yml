@@ -1,0 +1,29 @@
+name: Release
+# Push a tag like v0.9.0 (matching the VERSION file) to build the DMG and publish a GitHub Release.
+# Nokcandu's built-in updater picks up the newest non-draft release and its .dmg asset.
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Check tag matches VERSION
+        run: |
+          V="$(tr -d '[:space:]' < VERSION)"
+          [ "v$V" = "${GITHUB_REF_NAME}" ] || { echo "Tag ${GITHUB_REF_NAME} doesn't match VERSION $V"; exit 1; }
+      - name: Build, test and package
+        run: ./make-dmg.sh
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="$(tr -d '[:space:]' < VERSION)"
+          NOTES="release-notes/v$V.md"
+          [ -f "$NOTES" ] || NOTES=/dev/null
+          gh release create "${GITHUB_REF_NAME}" "build/Nokcandu-$V.dmg" "build/Nokcandu-$V.dmg.sha256" \
+            --title "Nokcandu $V" --notes-file "$NOTES" --verify-tag

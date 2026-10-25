@@ -1,0 +1,19 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  build-and-test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Toolchain
+        run: swift --version && xcodebuild -version
+      - name: Test
+        run: swift test
+      - name: Build app
+        run: ./build-app.sh
+      - name: Check shell scripts
+        run: bash -n build-app.sh make-dmg.sh dev-watch-agent.sh

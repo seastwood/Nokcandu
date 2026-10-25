@@ -1,0 +1,54 @@
+# Nokcandu
+
+![Nokcandu: your game library on the left, a game's page with Play, screen, mouse and health tools on the right](docs/screenshot.png)
+
+**Play the Windows games you own on an Apple silicon Mac — free.** Nokcandu turns each game into its own
+Mac app, built on [Wine](https://www.winehq.org) via the open-source [Sikarugir](https://github.com/Sikarugir-App) engines,
+with tested settings, one-click fixes and safe updates. Think of it as a free alternative to CrossOver.
+
+[**Download the latest release →**](https://github.com/seastwood/Nokcandu/releases/latest)
+
+## Install
+
+1. Download `Nokcandu-<version>.dmg` from [Releases](https://github.com/seastwood/Nokcandu/releases/latest), open it and drag **Nokcandu** into **Applications**.
+2. Open Nokcandu. It isn't signed with a paid Apple Developer certificate yet, so the first time macOS says it can't verify the app:
+   click **Done**, open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**. You only do this once.
+3. The setup checklist installs **Rosetta 2** (Apple's Intel translator, which Wine needs) and downloads the tested Wine engine (about 260 MB).
+4. Click **Install a Game…** or **Set Up Steam**.
+
+**Requirements:** Mac with Apple silicon (M1 or later) · macOS 14 Sonoma or newer · space for your games (external SSDs work).
+
+## What it does
+
+- **Any Windows game you own** — run its installer, install from a disc image (.iso, mounted automatically), add an existing game folder, or download with Steam. Nokcandu picks the game's program, suggests a graphics mode from what the game uses, and extracts its icon.
+- **Shared Steam & Battle.net** — sign in once; every Steam or Blizzard game gets its own Mac app with its icon. Steam libraries and Battle.net installs on external drives are supported.
+- **Graphics modes** — Classic 3D (DirectX 8/9 → Vulkan), Modern 3D (DirectX 10/11), Apple Metal (DirectX 11/12, 64-bit), Classic 2D, Compatibility.
+- **Raw mouse for aiming** — reads your mouse directly while you aim (hundreds of updates a second, no macOS acceleration), fixing the choppy aim Wine has on Macs.
+- **Performance** — FPS counter, vsync, frame limit. **Drives** — map D:, E:… to external SSDs. **Storage** — see and free space.
+- **Fixes & health** — Fix cinematic playback (LAV Filters), Repair, Diagnostics, crash recognition with suggested fixes, notes per game.
+- **Stays current** — checks this repo for new Nokcandu releases and the Sikarugir/LAV projects for new components. New engines are self-tested before they're offered, each game tries them separately, and you can roll back.
+- **Safe by design** — every file Nokcandu changes is backed up and journaled; your saves and game files are never touched by repairs or updates.
+
+## Good to know
+
+- Only use games you own. Nokcandu doesn't include or download games.
+- Games with kernel-level anti-cheat (Valorant, many competitive shooters) generally can't run under Wine. Online play in games with anti-cheat is at your own risk.
+- Apple has announced that full Rosetta ends with macOS 28. All Wine engines are Intel code today; Nokcandu watches for an Apple-silicon engine. Check this page before upgrading to macOS 28.
+- Problems? Open the game's **Diagnostics**, save the report, and [open an issue](https://github.com/seastwood/Nokcandu/issues).
+
+## Credits & licenses
+
+Nokcandu's own code is MIT licensed (see [LICENSE](LICENSE)). At runtime it downloads, from their official releases:
+Wine and the Sikarugir engine/wrapper (LGPL-2.1+, [Sikarugir-App](https://github.com/Sikarugir-App)), which bundle DXVK (zlib),
+Mesa KosmicKrisp (MIT), MoltenVK (Apache-2.0) and Apple's D3DMetal (Apple's license), and LAV Filters (GPL-2.0, on request).
+Nokcandu isn't affiliated with Apple, Microsoft, Valve, Blizzard, CodeWeavers or the Wine project.
+
+## Build from source
+
+```
+./build-app.sh --test --install   # test, build, install to ~/Applications/Nokcandu.app
+./make-dmg.sh                     # release DMG in build/
+```
+
+Needs Xcode or the Command Line Tools (Swift 5.9+). To release: bump `VERSION`, add `release-notes/v<version>.md`,
+then push a tag `v<version>` — GitHub Actions builds, tests and publishes the DMG. More in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).

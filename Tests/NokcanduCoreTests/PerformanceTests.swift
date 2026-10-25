@@ -1,0 +1,31 @@
+import XCTest
+@testable import NokcanduCore
+
+final class PerformanceTests: XCTestCase {
+    func testPerfEnvComposesWithGraphicsMode() throws {
+        var s = Performance.Settings(); s.fpsCounter = true; s.vsync = true; s.fpsLimit = 60
+        let env = Performance.envText(s)
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("perf-\(UUID().uuidString.prefix(4))")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let f = dir.appendingPathComponent("perf.env"); try Data(env.utf8).write(to: f)
+        let script = #"set -euo pipefail; export DXVK_CONFIG="d3d9.maxFrameLatency = 1"; . "$1"; echo "$DXVK_CONFIG|${DXVK_HUD:-}|${DXVK_FRAME_RATE:-}|${MTL_HUD_ENABLED:-}""#
+        let r = try Shell.run("/bin/bash", ["-c", script, "x", f.path])
+        XCTAssertTrue(r.ok, r.combined)
+        XCTAssertEqual(r.stdout.trimmingCharacters(in: .whitespacesAndNewlines),
+                       "d3d9.maxFrameLatency = 1; d3d9.presentInterval = 1; dxgi.syncInterval = 1|fps,frametimes|60|")
+        let metal = try Shell.run("/bin/bash", ["-c", #"set -u; export WINEDLLPATH_D3DMETAL=x; . "$1"; echo "${MTL_HUD_ENABLED:-}|${DXVK_HUD:-}""#, "x", f.path])
+        XCTAssertEqual(metal.stdout.trimmingCharacters(in: .whitespacesAndNewlines), "1|")
+        XCTAssertTrue(Performance.Settings().isDefault)
+    }
+
+    func testLogFilterDropsFloodAndKeepsStatus() throws {
+        let input = String(repeating: "msync: warn: node memory pool exhausted\n", count: 1000) + "hello\nnokcandu: game exited with status 0\n"
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("log-\(UUID().uuidString.prefix(4))")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let inF = dir.appendingPathComponent("in.txt"); try Data(input.utf8).write(to: inF)
+        let r = try Shell.run("/bin/bash", ["-c", "\(CustomGames.logFilter) < \"$1\"", "x", inF.path])
+        XCTAssertEqual(r.stdout, "hello\nnokcandu: game exited with status 0\n")
+    }
+}
