@@ -81,9 +81,7 @@ public enum BattleNet {
     public static func addGame(_ game: BlizzardGame, host: InstalledGame) throws -> URL {
         let fm = FileManager.default
         let name = CustomGames.safeFolderName(game.name)
-        var target = NokPaths.gameAppsFolder.appendingPathComponent("\(name).app")
-        var n = 2
-        while fm.fileExists(atPath: target.path) { target = NokPaths.gameAppsFolder.appendingPathComponent("\(name) \(n).app"); n += 1 }
+        let target = try CustomGames.freeAppURL(name)
         let c = target.appendingPathComponent("Contents")
         for d in ["MacOS", "Resources", "SharedSupport/nokcandu", "SharedSupport/Logs"] {
             try fm.createDirectory(at: c.appendingPathComponent(d), withIntermediateDirectories: true)
@@ -112,6 +110,43 @@ public enum BattleNet {
         return target
     }
 
+    /// Rewrites Battle.net game launchers made by an older Nokcandu (they're generated, never hand-edited).
+    public static func refreshLaunchers(_ games: [InstalledGame]) {
+        for g in games {
+            guard let l = g.battleNet else { continue }
+            let f = g.appURL.appendingPathComponent("Contents/MacOS/\(CustomGames.launcherName)")
+            let want = launcherScript(l)
+            if (try? String(contentsOf: f, encoding: .utf8)) == want { continue }
+            if (try? Data(want.utf8).write(to: f, options: .atomic)) != nil {
+                try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: f.path)
+            }
+        }
+    }
+
+    /// Rewrites Steam game launchers made by an older Nokcandu (skips any launcher edited by hand).
+    public static func refreshSteamLaunchers(_ games: [InstalledGame]) {
+        for g in games {
+            guard let c = g.custom, c.source == .steamLibrary else { continue }
+            let f = g.appURL.appendingPathComponent("Contents/MacOS/\(CustomGames.launcherName)")
+            if (try? String(contentsOf: f, encoding: .utf8)) == CustomGames.launcherScript(for: c) { continue }
+            try? CustomGames.saveAll(c, to: g, force: false)
+        }
+    }
+
+    /// "Close Battle.net when its game quits" (on unless the keep-open file exists in the Battle.net app).
+    public static func closesWithGame(host: InstalledGame) -> Bool {
+        !FileManager.default.fileExists(atPath: keepOpenFile(host).path)
+    }
+    public static func setClosesWithGame(_ on: Bool, host: InstalledGame) {
+        let f = keepOpenFile(host)
+        if on { try? FileManager.default.removeItem(at: f) }
+        else { try? FileManager.default.createDirectory(at: f.deletingLastPathComponent(), withIntermediateDirectories: true)
+               FileManager.default.createFile(atPath: f.path, contents: Data()) }
+    }
+    static func keepOpenFile(_ host: InstalledGame) -> URL {
+        host.appURL.appendingPathComponent("Contents/SharedSupport/nokcandu/keep-open")
+    }
+
     /// Starts Battle.net (with its own settings) if needed, waits until it has signed in, then asks it
     /// to launch the game.
     public static func launcherScript(_ l: BattleNetLink) -> String {
@@ -136,6 +171,41 @@ public enum BattleNet {
          local p; p=$(cat "$SUPPORT/Logs/game.lock/pid" 2>/dev/null || true)
          [[ "$p" =~ ^[0-9]+$ ]] && kill -0 "$p" 2>/dev/null
         }
+        STATE="$SUPPORT/nokcandu"
+        GAME=\(q(l.name))
+        bnet_up() { local c; c=$(/bin/ps -axo command= 2>/dev/null || true); /usr/bin/grep -qi 'Battle\\.net\\.exe' <<<"$c"; }
+        # Is this game (any of its programs, as listed for Dock names) still running?
+        game_up() {
+         local c exes e
+         c=$(/bin/ps -axo command= 2>/dev/null | /usr/bin/tr '[:upper:]' '[:lower:]' || true)
+         exes=$(/usr/bin/awk -F '\\t' -v n="$GAME" '$2 == n { print $1 }' "$STATE/app-names.tsv" 2>/dev/null || true)
+         if [ -n "$exes" ]; then
+          while IFS= read -r e; do [ -n "$e" ] && /usr/bin/grep -qF "\\\\$e" <<<"$c" && return 0; done <<<"$exes"
+          return 1
+         fi
+         # Not listed yet: any Windows program that isn't Battle.net's own or Windows'.
+         /usr/bin/grep -E '^[a-z]:\\\\' <<<"$c" | /usr/bin/grep -viE '\\\\battle\\.net\\\\|blizzard entertainment|\\\\windows\\\\|\\\\steam\\\\|steamapps' | /usr/bin/grep -q .
+        }
+        # Battle.net started for this game closes once the game has quit (~30 s with none of its programs).
+        watch_game() {
+         local seen=0 gone=0
+         while bnet_up; do
+          if [ ! -f "$STATE/started-for-game" ] || [ -f "$STATE/keep-open" ]; then return 0; fi
+          if game_up; then seen=1; gone=0
+          elif [ "$seen" = 1 ]; then gone=$((gone + 1)); [ "$gone" -ge 6 ] && break
+          fi
+          sleep 5
+         done
+         if [ "$seen" != 1 ] || [ "$gone" -lt 6 ] || [ ! -f "$STATE/started-for-game" ] || [ -f "$STATE/keep-open" ]; then return 0; fi
+         echo "nokcandu: $GAME closed; closing Battle.net (it was started for the game) $(date)" >>"$SUPPORT/Logs/launch.log"
+         rm -f "$STATE/started-for-game"
+         # Like signing out of Windows: programs get to save and exit; anything left is stopped after 30 s.
+         "$SUPPORT/wine/bin/wine" wineboot --end-session --force >/dev/null 2>&1 || true
+         for _ in $(seq 1 30); do bnet_up || break; sleep 1; done
+         bnet_up && "$SUPPORT/wine/bin/wineserver" -k >/dev/null 2>&1 || true
+        }
+        STARTED=0
+        if ! bnet_up; then STARTED=1; mkdir -p "$STATE"; touch "$STATE/started-for-game"; fi
         newest_log() { ls -t "$WINEPREFIX"/drive_c/users/*/AppData/Local/Battle.net/Logs/battle.net-*.log 2>/dev/null | head -n 1 || true; }
         if ! running; then
          STAMP="$(/usr/bin/mktemp -t nokcandu-bnet)"
@@ -153,6 +223,10 @@ public enum BattleNet {
         trap '' HUP
         "$SUPPORT/wine/bin/wine" "$BNET" --in-process-gpu --use-gl=swiftshader --exec="launch $CODE" >/dev/null 2>&1 </dev/null &
         disown $! 2>/dev/null || true
+        if [ "$STARTED" = 1 ] && [ ! -f "$STATE/keep-open" ]; then
+         ( trap '' HUP; sleep 10; watch_game ) </dev/null >/dev/null 2>&1 &
+         disown $! 2>/dev/null || true
+        fi
         """
     }
 }

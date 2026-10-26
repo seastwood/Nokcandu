@@ -267,6 +267,12 @@ extension RuntimeManager {
             try ChangeJournal.encoder.encode(m).write(to: folder(for: id).appendingPathComponent("manifest.json"))
             EngineSelfTests.record(id, passed: true)
             log("Self-test passed: \(r.stdout.trimmingCharacters(in: .whitespacesAndNewlines))")
+            // Nokcandu's audio fixes find exact bytes in Wine's audio driver; say so if a new engine changed them.
+            switch AudioBuffer.status(host: c) {
+            case .needsFix, .fixed: log("Audio driver recognized: microphone fix and audio buffer will apply.")
+            case .unrecognized: log("⚠︎ This engine's audio driver isn't one Nokcandu knows: microphones may not work in games that switch to it, and the audio buffer setting won't be available. Please report it on GitHub.")
+            case .missing: log("⚠︎ This engine has no Mac audio driver where Nokcandu expects it.")
+            }
         } else {
             EngineSelfTests.record(id, passed: false)
             try? fm.removeItem(at: folder(for: id))

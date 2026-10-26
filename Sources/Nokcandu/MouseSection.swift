@@ -8,6 +8,7 @@ struct MouseSection: View {
     let game: InstalledGame
     @State private var enabled = false
     @State private var scale = 1.0
+    @State private var smooth = false
     @State private var mice: [String] = []
     @State private var status: String?
     @State private var loaded = false
@@ -33,6 +34,10 @@ struct MouseSection: View {
                         Text(String(format: "%.2f×", scale)).monospacedDigit().frame(width: 52, alignment: .trailing)
                         Button("Reset") { scale = 1; save() }.buttonStyle(.link)
                     }
+                    Toggle("Smooth movement", isOn: Binding(get: { smooth }, set: { smooth = $0; save() }))
+                        .help("Spreads each mouse report evenly over the time until the next one, so every frame turns the same amount. Helps basic 125 Hz mice; adds at most one report interval (8 ms) of delay.")
+                    Text("Smooth movement evens out basic (125 Hz) mice, which otherwise move the view unevenly from frame to frame; it adds up to ~8 ms of delay. Gaming mice (500–1000 Hz) don't need it.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     Text("1× matches a Windows PC at the same in-game sensitivity. Raw movement isn't accelerated, so it may feel slower than your Mac pointer at first — adjust here or with the game's sensitivity.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
@@ -59,7 +64,7 @@ struct MouseSection: View {
 
     func load() {
         let s = RawMouse.settings(for: game)
-        enabled = s.enabled; scale = s.scale; loaded = true
+        enabled = s.enabled; scale = s.scale; smooth = s.smooth; loaded = true
         status = RawMouse.lastStatus(for: game)
         readMice()
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { readMice() }   // GameController finds mice shortly after start
@@ -70,7 +75,7 @@ struct MouseSection: View {
     func save() {
         guard loaded else { return }
         do {
-            try RawMouse.apply(RawMouse.Settings(enabled: enabled, scale: scale), for: game)
+            try RawMouse.apply(RawMouse.Settings(enabled: enabled, scale: scale, smooth: smooth), for: game)
             model.say(enabled ? "Raw mouse on (\(String(format: "%.2f", scale))×). \(steam ? "Restart Steam" : "Restart the game") to use it." : "Raw mouse off.")
         } catch { model.fail(error) }
     }

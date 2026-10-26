@@ -199,6 +199,7 @@ public enum Diagnostics {
                 if let t = tailOfFile(g.logs.appendingPathComponent(n), maxLines: 40) { logs.append((n, t)) }
             }
         }
+        c.append(contentsOf: audioDriverChecks(g))
         return DiagReport(game: g, checks: c, logs: logs)
     }
 
@@ -227,6 +228,7 @@ public enum Diagnostics {
         var logs: [(String, String)] = []
         let steamLog = SharedSteam.contents.appendingPathComponent("SharedSupport/Logs/steam.log")
         if let t = tailOfFile(steamLog, maxLines: 40) { logs.append(("steam.log (shared Steam)", t)) }
+        c.append(contentsOf: audioDriverChecks(g))
         return DiagReport(game: g, checks: c, logs: logs)
     }
 
@@ -251,5 +253,20 @@ public enum Diagnostics {
             add(.rendering, "Graphics", .info, "Uses Battle.net's: \(h.custom?.graphics.title ?? "?")")
         }
         return DiagReport(game: g, checks: c, logs: [])
+    }
+
+    /// Nokcandu's fixes to Wine's audio driver (microphone input, buffer size) still apply to this engine?
+    static func audioDriverChecks(_ g: InstalledGame) -> [DiagCheck] {
+        guard let h = WineTools.hostContents(for: g) else { return [] }
+        switch AudioBuffer.status(host: h) {
+        case .fixed:
+            return [DiagCheck(layer: .runtime, title: "Audio driver", status: .ok, detail: "Microphone fix and audio buffer setting apply to this engine")]
+        case .needsFix:
+            return [DiagCheck(layer: .runtime, title: "Audio driver", status: .warning, detail: "Microphone fix not applied yet — it's applied when Nokcandu next starts")]
+        case .unrecognized:
+            return [DiagCheck(layer: .runtime, title: "Audio driver", status: .warning, detail: "This engine's audio driver isn't the version Nokcandu knows: microphones may not work and the audio buffer setting is unavailable. Report it on GitHub so Nokcandu can be updated.")]
+        case .missing:
+            return []
+        }
     }
 }

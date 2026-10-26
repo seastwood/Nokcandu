@@ -67,11 +67,15 @@ public enum SharedSteam {
         export WINEDEBUG=-all
         export WINEMSYNC=1
         export PATH="$SUPPORT/wine/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        # Raw mouse for aiming (Nokcandu switch): reads the mouse directly while a game is in mouse-look.
-        if [ -f "$SUPPORT/nokcandu/raw-mouse" ] && [ -f "$SUPPORT/nokcandu/nokcandu-rawmouse.dylib" ]; then
+        # Nokcandu's helper library: real app names in the Dock, and raw mouse for aiming when it's switched on.
+        if [ -f "$SUPPORT/nokcandu/nokcandu-rawmouse.dylib" ]; then
          export DYLD_INSERT_LIBRARIES="$SUPPORT/nokcandu/nokcandu-rawmouse.dylib"
+         export NOKCANDU_APP_NAMES="$SUPPORT/nokcandu/app-names.tsv"
+        fi
+        if [ -f "$SUPPORT/nokcandu/raw-mouse" ] && [ -f "$SUPPORT/nokcandu/nokcandu-rawmouse.dylib" ]; then
          export NOKCANDU_RAW_MOUSE_SCALE="$(head -n 1 "$SUPPORT/nokcandu/raw-mouse")"
          [ -f "$SUPPORT/nokcandu/raw-mouse-debug" ] && export NOKCANDU_RAW_MOUSE_DEBUG=1
+         [ "$(/usr/bin/sed -n 2p "$SUPPORT/nokcandu/raw-mouse")" = smooth ] && export NOKCANDU_RAW_MOUSE_SMOOTH=1
         fi
         WINE="$SUPPORT/wine/bin/wine"
         STEAM_EXE='C:\\Program Files (x86)\\Steam\\steam.exe'
@@ -124,12 +128,42 @@ public enum SharedSteam {
          for _ in $(seq 1 90); do running || break; sleep 1; done
          "$SUPPORT/wine/bin/wineserver" -w >/dev/null 2>&1 || true
         }
-        if [ "$SHUTDOWN" = 1 ]; then running && stop_steam; exit 0; fi
+        # Steam started for a game closes with that game (once no Steam game is running for ~30 s), so the
+        # next game can start Steam with its own graphics settings. Steam opened by itself stays open.
+        watch_game() {
+         local pid seen=0 gone=0 cmds
+         sleep 5
+         pid=$(cat "$LOG_DIR/steam.lock/pid" 2>/dev/null || true)
+         while running && [ "$(cat "$LOG_DIR/steam.lock/pid" 2>/dev/null || true)" = "$pid" ]; do
+          if [ ! -f "$STATE/started-for-game" ] || [ -f "$STATE/keep-steam-open" ]; then return 0; fi
+          cmds=$(/bin/ps -axo command= 2>/dev/null || true)
+          if /usr/bin/grep -qiE 'steamapps[\\/]common' <<<"$cmds"; then seen=1; gone=0
+          elif [ "$seen" = 1 ]; then gone=$((gone + 1)); [ "$gone" -ge 6 ] && break
+          fi
+          sleep 5
+         done
+         if [ "$seen" != 1 ] || [ "$gone" -lt 6 ] || [ ! -f "$STATE/started-for-game" ] || [ -f "$STATE/keep-steam-open" ]; then return 0; fi
+         echo "== $(date) the game closed; closing Steam (it was started for the game)" >>"$LOG_DIR/steam.log"
+         rm -f "$STATE/started-for-game"
+         stop_steam
+        }
+        if [ "$SHUTDOWN" = 1 ]; then running && stop_steam; rm -f "$STATE/started-for-game"; exit 0; fi
         PASS=()
         [ -n "$APP" ] && PASS+=(-applaunch "$APP" ${EXTRA[@]+"${EXTRA[@]}"})
         [ -n "$URL" ] && PASS+=("$URL")
+        # What Steam's Wine was started with: graphics mode, Performance and Mouse settings, helper library.
+        # A game started later restarts Steam (after asking) when any of it changed since.
+        config_id() {
+         { echo "$MODE"; cat "$STATE/perf.env" "$STATE/raw-mouse" "$STATE/raw-mouse-debug" 2>/dev/null
+           /sbin/md5 -q "$STATE/nokcandu-rawmouse.dylib" 2>/dev/null || true; } | /sbin/md5 -q
+        }
         if running; then
          CURRENT="$(cat "$STATE/running-mode" 2>/dev/null || true)"
+         if [ -n "$APP" ] && [ "$CURRENT" = "$MODE" ] && [ "$(cat "$STATE/running-config" 2>/dev/null || true)" != "$(config_id)" ]; then
+          CURRENT="changed"
+         fi
+         # Opening Steam itself while it runs for a game: you're using Steam now, so it stays open.
+         [ -z "$APP" ] && [ -z "$URL" ] && rm -f "$STATE/started-for-game"
          if [ "$CURRENT" = "$MODE" ] || [ -z "$APP" ]; then
           # Hand the request to the Steam that's already running.
           # (with no request this just brings the running Steam's window forward)
@@ -137,7 +171,18 @@ public enum SharedSteam {
           exit 0
          fi
          if [ "$RESTART" != 1 ]; then
-          ANSWER=$(/usr/bin/osascript -e 'button returned of (display dialog "Steam is running with different graphics settings than this game uses. Restart Steam to play it?" buttons {"Cancel", "Restart Steam"} default button 2 with title "Nokcandu" with icon caution)' 2>/dev/null || echo Cancel)
+          GAMES=""
+          /usr/bin/grep -qiE 'steamapps[\\/]common' <<<"$(/bin/ps -axo command= 2>/dev/null || true)" && GAMES=" The Steam game that's running now will close."
+          if [ "$CURRENT" = changed ]; then
+           MSG="Steam is running with settings from before your last change in Nokcandu (graphics, performance or mouse). Restart Steam so this game uses the current ones?$GAMES"
+          else
+           MSG="Steam is running with different graphics settings than this game uses. Restart Steam to play it?$GAMES"
+          fi
+          ANSWER=$(/usr/bin/osascript -e "button returned of (display dialog \"$MSG\" buttons {\"Cancel\", \"Play Without Restarting\", \"Restart Steam\"} default button 3 with title \"Nokcandu\" with icon caution)" 2>/dev/null || echo Cancel)
+          if [ "$ANSWER" = "Play Without Restarting" ]; then
+           "$WINE" "$STEAM_EXE" ${PASS[@]+"${PASS[@]}"} >/dev/null 2>&1 &
+           exit 0
+          fi
           [ "$ANSWER" = "Restart Steam" ] || exit 0
          fi
          stop_steam
@@ -150,6 +195,8 @@ public enum SharedSteam {
          rm -f "$LOCK/pid"; rmdir "$LOCK" 2>/dev/null || exit 0; mkdir "$LOCK"
         fi
         echo "$MODE" > "$STATE/running-mode"
+        config_id > "$STATE/running-config"
+        if [ -n "$APP" ]; then touch "$STATE/started-for-game"; else rm -f "$STATE/started-for-game"; fi
         [ -f "$LOG_DIR/steam.log" ] && [ "$(stat -f %z "$LOG_DIR/steam.log")" -gt 5000000 ] && mv -f "$LOG_DIR/steam.log" "$LOG_DIR/steam.previous.log"
         echo "== $(date) mode=$MODE app=${APP:-none}" >>"$LOG_DIR/steam.log"
         cd "$STEAM_DIR"
@@ -158,6 +205,10 @@ public enum SharedSteam {
         "$WINE" "$STEAM_EXE" \(CustomGames.steamWineFlags) ${PASS[@]+"${PASS[@]}"} > >(\(CustomGames.logFilter) >>"$LOG_DIR/steam.log") 2>&1 </dev/null &
         echo $! > "$LOCK/pid"
         disown $! 2>/dev/null || true
+        if [ -n "$APP" ] && [ ! -f "$STATE/keep-steam-open" ]; then
+         ( trap '' HUP; watch_game ) </dev/null >/dev/null 2>&1 &
+         disown $! 2>/dev/null || true
+        fi
 
         """
     }
@@ -173,7 +224,8 @@ public enum SharedSteam {
     }
 
     /// A Steam game's own app launcher: hands off to the shared Steam.
-    public static func gameLauncherScript(appID: Int, name: String, graphics: GraphicsPreset, steamApp: URL, arguments: [String] = []) -> String {
+    public static func gameLauncherScript(appID: Int, name: String, graphics: GraphicsPreset, steamApp: URL, arguments: [String] = [],
+                                          displayPixels: [Int]? = nil) -> String {
         let extra = arguments.isEmpty ? "" : " -- " + arguments.map(CustomGames.shellQuote).joined(separator: " ")
         return """
         #!/bin/bash
@@ -188,7 +240,14 @@ public enum SharedSteam {
          exit 1
         fi
         if [ "${1:-}" = --check ]; then exec "$HELPER" --check --applaunch \(appID); fi
-        exec "$HELPER" --mode \(graphics.rawValue) --applaunch \(appID) ${1+"$@"}\(extra)
+        \(appID == 730 && arguments.contains("+engine_low_latency_sleep_after_client_tick") ? """
+        # Low-latency aiming: CS2 resets its video settings after a crash, so keep its vsync off every start.
+        for f in "$STEAM_APP/Contents/SharedSupport/prefix/drive_c/Program Files (x86)/Steam/userdata/"*/730/local/cfg/cs2_video.txt; do
+         [ -f "$f" ] && /usr/bin/sed -i '' -E 's/("setting\\.mat_vsync"[[:space:]]+")1"/\\10"/' "$f" || true
+        done
+
+        """ : "")\(GameDisplay.launcherLines(displayPixels, tool: #""$STEAM_APP/Contents/SharedSupport/nokcandu/screen-size""#,
+                                     log: #""$STEAM_APP/Contents/SharedSupport/Logs/display.log""#, pattern: GameDisplay.steamGamePattern))exec "$HELPER" --mode \(graphics.rawValue) --applaunch \(appID) ${1+"$@"}\(extra)
 
         """
     }
@@ -426,6 +485,25 @@ public enum SharedSteam {
     }
     public static func openSteam() throws { try openViaApp([]) }
     public static func install(appID: Int) throws { try openViaApp(["--url", "steam://install/\(appID)"]) }
+    /// Steam's in-game overlay setting for the signed-in account(s): true = off everywhere, nil = unknown.
+    public static var overlayDisabled: Bool? {
+        let users = steamDir.appendingPathComponent("userdata")
+        let files = ((try? FileManager.default.contentsOfDirectory(at: users, includingPropertiesForKeys: nil)) ?? [])
+            .map { $0.appendingPathComponent("config/localconfig.vdf") }
+            .compactMap { try? String(contentsOf: $0, encoding: .utf8) }
+        guard !files.isEmpty else { return nil }
+        return files.allSatisfy { $0.contains(#/"EnableGameOverlay"\s+"0"/#) }
+    }
+
+    /// "Close Steam when its game quits" (on unless the keep-open file exists).
+    public static var closesWithGame: Bool {
+        get { !FileManager.default.fileExists(atPath: contents.appendingPathComponent("SharedSupport/nokcandu/keep-steam-open").path) }
+        set {
+            let f = contents.appendingPathComponent("SharedSupport/nokcandu/keep-steam-open")
+            if newValue { try? FileManager.default.removeItem(at: f) } else { FileManager.default.createFile(atPath: f.path, contents: Data()) }
+        }
+    }
+
     public static func shutdown() async { _ = try? await Shell.runAsync("/bin/bash", [helper.path, "--shutdown"], timeout: 180) }
 
     /// Existing Nokcandu app for a Steam game, if any.
@@ -442,9 +520,7 @@ public enum SharedSteam {
         let probe = game.folder.flatMap { mainExecutable(in: $0, gameName: game.name) }
         let pe = probe.flatMap(PEFile.inspect)
         let name = CustomGames.safeFolderName(game.name)
-        var target = NokPaths.gameAppsFolder.appendingPathComponent("\(name).app")
-        var n = 2
-        while fm.fileExists(atPath: target.path) { target = NokPaths.gameAppsFolder.appendingPathComponent("\(name) \(n).app"); n += 1 }
+        let target = try CustomGames.freeAppURL(name)
         let c = target.appendingPathComponent("Contents")
         for d in ["MacOS", "Resources", "SharedSupport/nokcandu", "SharedSupport/Logs"] {
             try fm.createDirectory(at: c.appendingPathComponent(d), withIntermediateDirectories: true)

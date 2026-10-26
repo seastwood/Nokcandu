@@ -35,8 +35,8 @@ fi
 
 if [ "${1:-}" = --test ]; then swift test; shift || true; fi
 # Development only: `touch .e2e` to also run the end-to-end install test (creates and removes a test app).
-if [ -e .e2e-engine ]; then rm -f .e2e-engine; NOKCANDU_E2E=1 swift test --filter "$(cat .e2e-filter 2>/dev/null || echo EngineUpdateE2ETests)" 2>&1 | tee e2e-engine.log || true; fi
-if [ -e .e2e ]; then rm -f .e2e; NOKCANDU_E2E=1 swift test --filter E2ETests 2>&1 | tee e2e.log || true; fi
+if [ -e .e2e-engine ]; then rm -f .e2e-engine; NOKCANDU_E2E=1 /usr/bin/perl -e "alarm 900; exec @ARGV" swift test --filter "$(cat .e2e-filter 2>/dev/null || echo EngineUpdateE2ETests)" 2>&1 | tee e2e-engine.log || true; /usr/bin/pkill -f "xctest.*E2ETests" || true; fi
+if [ -e .e2e ]; then rm -f .e2e; NOKCANDU_E2E=1 /usr/bin/perl -e "alarm 900; exec @ARGV" swift test --filter E2ETests 2>&1 | tee e2e.log || true; /usr/bin/pkill -f "xctest.*E2ETests" || true; fi
 
 swift build -c release --product Nokcandu
 swift build -c release --product nokcandu-screen-size
@@ -51,7 +51,7 @@ cp Resources/refresh-generals-launcher.py Resources/build-icu-adapter.py Resourc
 chmod 755 "$APP/Contents/Resources/generals-launcher" "$APP/Contents/Resources/screen-size"
 # Raw mouse for aiming: x86_64 library loaded into Wine (which runs under Rosetta).
 xcrun clang -arch x86_64 -mmacosx-version-min=11.0 -dynamiclib -fobjc-arc -O2 -Wall \
-  -framework AppKit -framework GameController -framework CoreGraphics \
+  -framework AppKit -framework GameController -framework CoreGraphics -framework IOKit \
   -install_name @rpath/nokcandu-rawmouse.dylib \
   -o "$APP/Contents/Resources/nokcandu-rawmouse.dylib" Resources/rawmouse/rawmouse.m
 codesign --force --sign - "$APP/Contents/Resources/nokcandu-rawmouse.dylib"

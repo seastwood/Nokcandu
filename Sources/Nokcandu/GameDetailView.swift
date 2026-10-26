@@ -57,8 +57,12 @@ struct GameDetailView: View {
                         GraphicsPicker(game: game).padding(6).frame(maxWidth: .infinity, alignment: .leading)
                     } label: { Text("Graphics").font(.headline) }
                 }
+                if game.custom != nil, game.battleNet == nil, !BattleNet.isHost(game), !DisplayController.supports(game) {
+                    GameResolutionSection(game: game).id("res-\(game.id)-\(game.custom?.displayPixels ?? [])")
+                }
                 if game.battleNet != nil { BattleNetGameInfo(game: game) }
                 if game.isSteamHost { SteamGamesSection().id("steamgames-\(model.games.count)") }
+                if game.isSteamHost || game.usesSharedSteam { SteamTipsSection() }
                 if BattleNet.isHost(game) { BlizzardGamesSection(host: game).id("bnet-\(game.id)-\(model.games.count)") }
                 if game.custom != nil || game.isSteamHost {
                     PerformanceSection(game: game).id("perf-\(game.id)")

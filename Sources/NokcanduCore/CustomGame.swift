@@ -126,6 +126,8 @@ public struct CustomGameConfig: Codable, Hashable {
     public var launcherSHA: String?
     /// Extra environment variables for the game (advanced). Applied after the graphics mode, so they can override it.
     public var environment: [String: String]?
+    /// Game resolution: the Mac's screen switches to these pixels while the game runs (nil = leave it).
+    public var displayPixels: [Int]?
 
     public static let fileName = "game.json"
     public static func url(in contents: URL) -> URL { contents.appendingPathComponent("SharedSupport/nokcandu/\(fileName)") }
@@ -210,9 +212,24 @@ public enum CustomGames {
         return "C:\\" + p.dropFirst(base.count + 1).replacingOccurrences(of: "/", with: "\\")
     }
 
+    /// "<name>.app" in the game apps folder, or "<name> (2).app"… when taken. Parentheses keep a suffix from
+    /// reading as part of the title ("StarCraft 2" is a different game). A leftover from a setup that never
+    /// finished (no Info.plist yet) is reported instead of silently taking the next name.
+    public static func freeAppURL(_ name: String, in folder: URL = NokPaths.gameAppsFolder) throws -> URL {
+        let fm = FileManager.default
+        let first = folder.appendingPathComponent("\(name).app")
+        if fm.fileExists(atPath: first.path), !fm.fileExists(atPath: first.appendingPathComponent("Contents/Info.plist").path) {
+            throw NokError("\(name).app is left over from a setup that didn't finish. Resume or remove it under Add Game → Unfinished setups (or move it to the Trash), then try again.")
+        }
+        var target = first, n = 2
+        while fm.fileExists(atPath: target.path) { target = folder.appendingPathComponent("\(name) (\(n)).app"); n += 1 }
+        return target
+    }
+
     public static func safeFolderName(_ name: String) -> String {
         let bad = CharacterSet(charactersIn: ":*?\"<>|/\\").union(.controlCharacters)
         let cleaned = name.unicodeScalars.map { bad.contains($0) ? " " : String($0) }.joined()
+            .replacing(#/ {2,}/#, with: " ")            // "Counter-Strike: Source" → "Counter-Strike Source"
             .trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ".")))
         return cleaned.isEmpty ? "Game" : String(cleaned.prefix(60))
     }
@@ -293,7 +310,7 @@ public enum CustomGames {
     public static func launcherScript(for c: CustomGameConfig) -> String {
         if c.source == .steamLibrary, let id = c.steamAppID {
             return SharedSteam.gameLauncherScript(appID: id, name: c.name, graphics: c.graphics, steamApp: SharedSteam.appURL,
-                                                  arguments: splitArguments(c.arguments))
+                                                  arguments: splitArguments(c.arguments), displayPixels: c.displayPixels)
         }
         let exeRel = driveCRelative(windowsPath: c.exe) ?? ""
         let dirRel = (exeRel as NSString).deletingLastPathComponent
@@ -311,12 +328,17 @@ public enum CustomGames {
         export WINEDEBUG=-all,err+quartz,err+strmbase
         export WINEMSYNC=1
         export PATH="$SUPPORT/wine/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        # Raw mouse for aiming (Nokcandu switch): reads the mouse directly while a game is in mouse-look.
-        if [ -f "$SUPPORT/nokcandu/raw-mouse" ] && [ -f "$SUPPORT/nokcandu/nokcandu-rawmouse.dylib" ]; then
+        # Nokcandu's helper library: real app names in the Dock, and raw mouse for aiming when it's switched on.
+        if [ -f "$SUPPORT/nokcandu/nokcandu-rawmouse.dylib" ]; then
          export DYLD_INSERT_LIBRARIES="$SUPPORT/nokcandu/nokcandu-rawmouse.dylib"
+         export NOKCANDU_APP_NAMES="$SUPPORT/nokcandu/app-names.tsv"
+        fi
+        if [ -f "$SUPPORT/nokcandu/raw-mouse" ] && [ -f "$SUPPORT/nokcandu/nokcandu-rawmouse.dylib" ]; then
          export NOKCANDU_RAW_MOUSE_SCALE="$(head -n 1 "$SUPPORT/nokcandu/raw-mouse")"
          [ -f "$SUPPORT/nokcandu/raw-mouse-debug" ] && export NOKCANDU_RAW_MOUSE_DEBUG=1
+         [ "$(/usr/bin/sed -n 2p "$SUPPORT/nokcandu/raw-mouse")" = smooth ] && export NOKCANDU_RAW_MOUSE_SMOOTH=1
         fi
+        export NOKCANDU_APP_NAME=\(shellQuote(c.name))
         # Graphics: \(c.graphics.title) (\(c.graphics.technical))
 
         """
@@ -377,7 +399,8 @@ public enum CustomGames {
         [ -x "$SUPPORT/wine/bin/wine" ]
         [ -f "$GAME_DIR/"\(shellQuote(exeName)) ]
         if [ "$CHECK_ONLY" = 1 ]; then printf 'Launcher check passed: game and engine are ready.\\n'; exit 0; fi
-        cd "$GAME_DIR"
+        \(GameDisplay.launcherLines(c.displayPixels, tool: #""$SUPPORT/nokcandu/screen-size""#, log: #""$LOG_DIR/display.log""#,
+                                     pattern: GameDisplay.watchPattern(exeName: exeName)))cd "$GAME_DIR"
         STATUS=0
         "$SUPPORT/wine/bin/wine" "$GAME_EXE"\(args.isEmpty ? "" : " " + args) || STATUS=$?
         echo "nokcandu: game exited with status $STATUS after ${SECONDS}s"

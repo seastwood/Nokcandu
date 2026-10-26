@@ -13,7 +13,7 @@ final class PerformanceTests: XCTestCase {
         let r = try Shell.run("/bin/bash", ["-c", script, "x", f.path])
         XCTAssertTrue(r.ok, r.combined)
         XCTAssertEqual(r.stdout.trimmingCharacters(in: .whitespacesAndNewlines),
-                       "d3d9.maxFrameLatency = 1; d3d9.presentInterval = 1; dxgi.syncInterval = 1|fps,frametimes|60|")
+                       "d3d9.maxFrameLatency = 1; d3d9.presentInterval = 1; dxgi.syncInterval = 1|fps,frametimes,scale=0.6|60|")
         let metal = try Shell.run("/bin/bash", ["-c", #"set -u; export WINEDLLPATH_D3DMETAL=x; . "$1"; echo "${MTL_HUD_ENABLED:-}|${DXVK_HUD:-}""#, "x", f.path])
         XCTAssertEqual(metal.stdout.trimmingCharacters(in: .whitespacesAndNewlines), "1|")
         XCTAssertTrue(Performance.Settings().isDefault)
@@ -27,5 +27,28 @@ final class PerformanceTests: XCTestCase {
         let inF = dir.appendingPathComponent("in.txt"); try Data(input.utf8).write(to: inF)
         let r = try Shell.run("/bin/bash", ["-c", "\(CustomGames.logFilter) < \"$1\"", "x", inF.path])
         XCTAssertEqual(r.stdout, "hello\nnokcandu: game exited with status 0\n")
+    }
+}
+
+final class HudStyleTests: XCTestCase {
+    func testCompactHud() throws {
+        var s = Performance.Settings(); s.fpsCounter = true; s.hud = "fps"
+        let env = Performance.envText(s)
+        XCTAssertTrue(env.contains(#"MTL_HUD_ELEMENTS="fps""#))
+        XCTAssertTrue(env.contains(#"DXVK_HUD="fps,scale=0.6""#))
+        XCTAssertTrue(env.contains("MTL_HUD_SCALE=0.1"))
+        let r = try Shell.run("/bin/bash", ["-n", "-c", env]); XCTAssertTrue(r.ok, r.combined)
+        s.hud = "full"
+        XCTAssertFalse(Performance.envText(s).contains("MTL_HUD_ELEMENTS"))
+    }
+}
+
+final class AudioBufferTests: XCTestCase {
+    func testFindsPeriodImmediates() {
+        // mov qword ptr [rcx], 100000 ; mov qword ptr [rax], 50000 (twice, like the real driver)
+        let chunk: [UInt8] = [0x48, 0xC7, 0x01, 0xA0, 0x86, 0x01, 0x00, 0x90, 0x48, 0xC7, 0x00, 0x50, 0xC3, 0x00, 0x00]
+        let d = Data(chunk + [0xC3] + chunk)
+        XCTAssertEqual(AudioBuffer.immediates(d, value: 100_000), [3, 19])
+        XCTAssertEqual(AudioBuffer.immediates(d, value: 50_000).count, 2)
     }
 }

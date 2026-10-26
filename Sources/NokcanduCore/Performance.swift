@@ -8,7 +8,13 @@ public enum Performance {
         public var fpsCounter = false
         public var vsync = false
         public var fpsLimit = 0                      // 0 = no limit
+        /// Overlay style: "fps" (one line), "graph" (FPS + frame-time graph) or "full". nil = "graph".
+        public var hud: String? = nil
+        /// Overlay size: "small", "medium" or "large" (nil = small).
+        public var hudSize: String? = nil
         public init() {}
+        public static let hudSizes = ["small", "medium", "large"]
+        public static let hudStyles = ["fps", "graph", "full"]
         public var isDefault: Bool { self == Settings() }
     }
 
@@ -26,7 +32,15 @@ public enum Performance {
     static func envText(_ s: Settings) -> String {
         var out = "# Written by Nokcandu → Performance. Change it there, not here.\n"
         if s.fpsCounter {
-            out += #"if [ -n "${WINEDLLPATH_D3DMETAL:-}" ]; then export MTL_HUD_ENABLED=1; else export DXVK_HUD="fps,frametimes"; fi"# + "\n"
+            let style = s.hud ?? "graph"
+            let metal = style == "fps" ? "fps" : style == "graph" ? "fps,frameinterval,frameintervalgraph,gputime" : ""
+            let dxvk = style == "fps" ? "fps" : style == "graph" ? "fps,frametimes" : "full"
+            let size = s.hudSize ?? "small"
+            let metalScale = size == "small" ? "0.1" : size == "medium" ? "0.15" : "0.25"
+            let dxvkScale = size == "small" ? "0.6" : size == "medium" ? "0.8" : "1.0"
+            out += #"if [ -n "${WINEDLLPATH_D3DMETAL:-}" ]; then export MTL_HUD_ENABLED=1; export MTL_HUD_SCALE=\#(metalScale)"#
+            if !metal.isEmpty { out += #"; export MTL_HUD_ELEMENTS="\#(metal)""# }
+            out += #"; else export DXVK_HUD="\#(dxvk),scale=\#(dxvkScale)"; fi"# + "\n"
         }
         if s.vsync {
             out += #"export DXVK_CONFIG="${DXVK_CONFIG:+$DXVK_CONFIG; }d3d9.presentInterval = 1; dxgi.syncInterval = 1""# + "\n"

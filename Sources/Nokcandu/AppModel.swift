@@ -45,7 +45,8 @@ final class AppModel: ObservableObject {
         games = GameLibrary.scan()
         for g in games { AppPrivacy.ensure(g.appURL) }
         CustomGames.upgradeLaunchers(games)
-        RawMouse.refreshLibraries(games)
+        let snapshot = games
+        Task.detached(priority: .utility) { RawMouse.refreshLibraries(snapshot); BattleNet.refreshLaunchers(snapshot); BattleNet.refreshSteamLaunchers(snapshot); AudioBuffer.fixMicrophones(snapshot) }
         if selection == nil || !games.contains(where: { $0.id == selection }) { selection = games.first?.id }
         refreshRunStates()
     }
@@ -75,7 +76,12 @@ final class AppModel: ObservableObject {
     func refreshRunStates() {
         var s: [InstalledGame.ID: RunState] = [:]
         for g in games { s[g.id] = GameLauncher.runState(of: g) }
-        if s != runStates { runStates = s }
+        if s != runStates {
+            runStates = s
+            // Something just started or stopped: if Steam is closed now, bring its helper up to date
+            // (it can only be replaced while Steam isn't running).
+            SharedSteam.refreshHostScriptsIfNeeded()
+        }
     }
 
     func play(_ g: InstalledGame) {

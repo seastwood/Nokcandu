@@ -52,6 +52,8 @@ public struct GameProfile: Codable, Hashable {
     public var drives: [String]? = nil
     /// The game needs its disc image.
     public var disc: Bool? = nil
+    /// Raw mouse "Smooth movement".
+    public var rawMouseSmooth: Bool? = nil
 
     /// Paths inside the game's own app are shared as `{app}/…` and expanded on the other Mac.
     public static let appToken = "{app}"
@@ -93,6 +95,8 @@ public struct GameProfile: Codable, Hashable {
         }
         if let s = rawMouse, s != 0 && !(0.1...10).contains(s) { p.append("rawMouse must be 0 (off) or 0.1–10") }
         if let perf = performance, !(perf.fpsLimit == 0 || (10...360).contains(perf.fpsLimit)) { p.append("fpsLimit must be 0 or 10–360") }
+        if let h = performance?.hud, !Performance.Settings.hudStyles.contains(h) { p.append("hud must be fps, graph or full") }
+        if let h = performance?.hudSize, !Performance.Settings.hudSizes.contains(h) { p.append("hudSize must be small, medium or large") }
         for f in fixes ?? [] where !Self.knownFixes.contains(f) { p.append("unknown fix \(f)") }
         if let prog = program, prog.range(of: #"^[A-Za-z]:\\[^\n:*?"<>|]{1,250}\.exe$"#, options: [.regularExpression, .caseInsensitive]) == nil || prog.contains("..") {
             p.append("program must be a Windows path to an .exe")
@@ -321,6 +325,7 @@ public enum Profiles {
         if g.battleNet != nil, let a = hc?.arguments, !a.isEmpty { p.hostArguments = a }
         if !drives.isEmpty { p.drives = drives.sorted() }
         if c?.disc != nil { p.disc = true }
+        if raw.enabled { p.rawMouseSmooth = raw.smooth }
         if p.arguments?.isEmpty == true { p.arguments = nil }
         return p
     }
@@ -405,7 +410,7 @@ public enum Profiles {
                 plan.gameSettings.append("Extra settings: " + (env.isEmpty ? "none" : text) + (removed.isEmpty ? "" : " (removes \(removed.joined(separator: ", ")))") + (g.battleNet != nil ? shared : ""))
             }
         }
-        if let r = p.rawMouse { plan.sharedSettings.append(r == 0 ? "Raw mouse: off\(shared)" : "Raw mouse: on at \(String(format: "%.2f", r))×\(shared)") }
+        if let r = p.rawMouse { plan.sharedSettings.append(r == 0 ? "Raw mouse: off\(shared)" : "Raw mouse: on at \(String(format: "%.2f", r))×\(p.rawMouseSmooth == true ? ", smooth movement" : "")\(shared)") }
         if let perf = p.performance {
             var parts: [String] = []
             if perf.fpsCounter { parts.append("FPS counter") }
@@ -475,7 +480,7 @@ public enum Profiles {
             if c != target.custom { try CustomGames.saveAll(c, to: target) }
         }
         if includeShared {
-            if let r = p.rawMouse { try RawMouse.apply(RawMouse.Settings(enabled: r > 0, scale: r > 0 ? r : 1), for: g) }
+            if let r = p.rawMouse { try RawMouse.apply(RawMouse.Settings(enabled: r > 0, scale: r > 0 ? r : 1, smooth: p.rawMouseSmooth ?? false), for: g) }
             if let perf = p.performance { try Performance.apply(perf, for: g) }
         }
         return snapshot

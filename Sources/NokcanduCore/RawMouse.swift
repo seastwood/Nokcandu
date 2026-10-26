@@ -10,7 +10,9 @@ public enum RawMouse {
     public struct Settings: Equatable {
         public var enabled: Bool
         public var scale: Double
-        public init(enabled: Bool, scale: Double) { self.enabled = enabled; self.scale = scale }
+        /// Spread each report over the time until the next (evens out 125 Hz mice; ≤1 report of delay).
+        public var smooth: Bool = false
+        public init(enabled: Bool, scale: Double, smooth: Bool = false) { self.enabled = enabled; self.scale = scale; self.smooth = smooth }
     }
 
     static func folder(_ host: URL) -> URL { host.appendingPathComponent("SharedSupport/nokcandu", isDirectory: true) }
@@ -19,8 +21,9 @@ public enum RawMouse {
     public static func settings(for g: InstalledGame) -> Settings {
         guard let h = WineTools.hostContents(for: g) else { return Settings(enabled: false, scale: 1) }
         guard let text = try? String(contentsOf: flag(h), encoding: .utf8) else { return Settings(enabled: false, scale: 1) }
-        let s = Double(text.split(separator: "\n").first.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? "") ?? 1
-        return Settings(enabled: true, scale: s)
+        let lines = text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        let s = Double(lines.first ?? "") ?? 1
+        return Settings(enabled: true, scale: s, smooth: lines.dropFirst().first == "smooth")
     }
 
     public static var bundledLibrary: URL? { NokPaths.bundledResource(dylibName) }
@@ -39,23 +42,68 @@ public enum RawMouse {
                 try fm.copyItem(at: lib, to: dst)
             }
             let scale = min(max(s.scale, 0.1), 10)
-            try Data(String(format: "%.2f\n", scale).utf8).write(to: flag(h), options: .atomic)
+            try Data((String(format: "%.2f\n", scale) + (s.smooth ? "smooth\n" : "")).utf8).write(to: flag(h), options: .atomic)
         } else {
             try? fm.removeItem(at: flag(h))
         }
     }
 
-    /// Keeps the copied library current after Nokcandu is rebuilt (called on refresh).
+    /// Puts Nokcandu's helper library (real app names in the Dock + raw mouse) into every app with a Wine
+    /// engine, keeps it current after Nokcandu updates, and writes each app's program → name list.
+    /// Called on refresh, off the main thread (it looks through game folders).
     public static func refreshLibraries(_ games: [InstalledGame]) {
-        guard let lib = bundledLibrary, let want = try? Hashing.sha256(file: lib) else { return }
-        for g in games where !g.usesSharedSteam {
-            guard let h = WineTools.hostContents(for: g), FileManager.default.fileExists(atPath: flag(h).path) else { continue }
-            let dst = folder(h).appendingPathComponent(dylibName)
-            if (try? Hashing.sha256(file: dst)) != want {
-                try? FileManager.default.removeItem(at: dst)
-                try? FileManager.default.copyItem(at: lib, to: dst)
+        let fm = FileManager.default
+        let lib = bundledLibrary
+        let want = lib.flatMap { try? Hashing.sha256(file: $0) }
+        var names: [URL: [String: String]] = [:]       // host Contents → exe → name
+        for g in games {
+            guard let h = WineTools.hostContents(for: g) else { continue }
+            var m = names[h] ?? [:]
+            if g.isSteamHost {
+                for e in ["steam.exe", "steamwebhelper.exe", "steamerrorreporter.exe", "steamservice.exe"] { m[e] = "Steam" }
+            } else if BattleNet.isHost(g) {
+                for e in ["battle.net.exe", "battle.net launcher.exe", "agent.exe", "blizzard battle.net app.exe"] { m[e] = "Battle.net" }
+            } else if g.usesSharedSteam, let id = g.custom?.steamAppID,
+                      let folder = SharedSteam.installedGames().first(where: { $0.appID == id })?.folder {
+                for e in exeNames(in: folder) where m[e] == nil { m[e] = g.name }
+            } else if let l = g.battleNet, let host = GameLibrary.inspect(URL(fileURLWithPath: l.hostApp)),
+                      let loc = BattleNet.installedGames(host: host).first(where: { $0.uid == l.uid })?.installLocation,
+                      let folder = BattleNet.unixPath(loc, prefix: host.prefix) {
+                for e in exeNames(in: folder) where m[e] == nil { m[e] = l.name }
             }
+            names[h] = m
         }
+        for (h, m) in names {
+            try? fm.createDirectory(at: folder(h), withIntermediateDirectories: true)
+            if let lib, let want {
+                let dst = folder(h).appendingPathComponent(dylibName)
+                if (try? Hashing.sha256(file: dst)) != want {
+                    try? fm.removeItem(at: dst)
+                    try? fm.copyItem(at: lib, to: dst)
+                }
+            }
+            if let tool = NokPaths.bundledResource("screen-size"), let want = try? Hashing.sha256(file: tool) {
+                let dst = folder(h).appendingPathComponent("screen-size")
+                if (try? Hashing.sha256(file: dst)) != want { try? fm.removeItem(at: dst); try? fm.copyItem(at: tool, to: dst) }
+            }
+            let text = m.sorted { $0.key < $1.key }.map { "\($0.key)\t\($0.value)" }.joined(separator: "\n") + "\n"
+            let file = folder(h).appendingPathComponent("app-names.tsv")
+            if (try? String(contentsOf: file, encoding: .utf8)) != text { try? Data(text.utf8).write(to: file, options: .atomic) }
+        }
+    }
+
+    /// Lower-cased .exe names in a game's folder (a few levels deep; skips huge data folders quickly).
+    static func exeNames(in folder: URL) -> [String] {
+        guard let en = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.isDirectoryKey],
+                                                      options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { return [] }
+        var out: [String] = []
+        for case let u as URL in en {
+            if en.level > 5 { en.skipDescendants(); continue }
+            let n = u.lastPathComponent.lowercased()
+            if n.hasSuffix(".exe") { out.append(n) }
+            if out.count > 200 { break }
+        }
+        return out
     }
 
     /// What the library said in the last run (it logs "nokcandu-rawmouse: …" lines to the game's log).
@@ -63,7 +111,21 @@ public enum RawMouse {
         guard let h = WineTools.hostContents(for: g) else { return nil }
         let log = h.appendingPathComponent(g.usesSharedSteam || g.isSteamHost ? "SharedSupport/Logs/steam.log" : "SharedSupport/Logs/launch.log")
         guard let tail = tailOfFile(log, maxLines: 4000) else { return nil }
-        return tail.components(separatedBy: .newlines).last { $0.hasPrefix("nokcandu-rawmouse:") }
+        let notes = tail.components(separatedBy: .newlines).filter { $0.hasPrefix("nokcandu-rawmouse:") }
             .map { String($0.dropFirst("nokcandu-rawmouse: ".count)) }
+        return summary(notes)
+    }
+
+    /// One plain sentence about the most recent run (notes since the last "installed" line).
+    static func summary(_ all: [String]) -> String? {
+        guard !all.isEmpty else { return nil }
+        let run = all.lastIndex { $0.hasPrefix("installed") }.map { Array(all[$0...]) } ?? all
+        if let bad = run.last(where: { $0.contains("staying off") }) { return "not used — \(bad)" }
+        let aims = run.filter { $0 == "aiming: raw mouse on" }.count
+        if aims > 0 {
+            return "working — took over the mouse \(aims) time\(aims == 1 ? "" : "s") while aiming (menus and other apps get the normal pointer back)"
+        }
+        if run.contains(where: { $0.hasPrefix("ready") }) { return "ready, but the game never captured the mouse for aiming" }
+        return "loaded, waiting for the first mouse move"
     }
 }

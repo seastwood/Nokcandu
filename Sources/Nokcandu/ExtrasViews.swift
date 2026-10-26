@@ -68,6 +68,7 @@ struct PerformanceSection: View {
     let game: InstalledGame
     @State private var s = Performance.Settings()
     @State private var loaded = false
+    @State private var buffer: Int?
 
     var steam: Bool { game.usesSharedSteam || game.isSteamHost }
     var metal: Bool { game.custom?.graphics == .appleMetal }
@@ -75,7 +76,34 @@ struct PerformanceSection: View {
     var body: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
-                Toggle("Show FPS counter", isOn: Binding(get: { s.fpsCounter }, set: { s.fpsCounter = $0; save() }))
+                HStack {
+                    Toggle("Show FPS counter", isOn: Binding(get: { s.fpsCounter }, set: { s.fpsCounter = $0; save() }))
+                    if s.fpsCounter {
+                        Picker("", selection: Binding(get: { s.hud ?? "graph" }, set: { s.hud = $0; save() })) {
+                            Text("FPS only").tag("fps"); Text("FPS + frame graph").tag("graph"); Text("Full details").tag("full")
+                        }.labelsHidden().frame(width: 170)
+                        Picker("", selection: Binding(get: { s.hudSize ?? "small" }, set: { s.hudSize = $0; save() })) {
+                            Text("Small").tag("small"); Text("Medium").tag("medium"); Text("Large").tag("large")
+                        }.labelsHidden().frame(width: 100)
+                    }
+                }
+                if let c = game.custom, LowLatency.supported(c) {
+                    Toggle("Low-latency aiming", isOn: Binding(get: { LowLatency.isOn(c) }, set: { setLowLatency($0) }))
+                    Text("For competitive play: turns the game's vsync off (the Mac never tears and always shows the newest frame)\(c.steamAppID == 730 ? " and has CS2 read the mouse as late as possible before each frame" : ""). Takes effect the next time the game starts.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    HStack {
+                        Text("Game frame cap")
+                        Picker("", selection: Binding(get: { LowLatency.cap(c) ?? -1 }, set: { setCap($0 < 0 ? nil : $0) })) {
+                            Text("Game's default").tag(-1)
+                            if let cur = LowLatency.cap(c), !LowLatency.caps.contains(cur) { Text("\(cur) FPS").tag(cur) }
+                            ForEach(LowLatency.caps, id: \.self) { f in
+                                Text(f == 0 ? "Unlimited" : f == autoFPS ? "\(f) FPS (recommended)" : "\(f) FPS").tag(f)
+                            }
+                        }.labelsHidden().frame(width: 190)
+                    }
+                    Text("Recommended is twice your \(refresh) Hz screen: every frame you see then carries fresher mouse input. Higher caps use more power; if the Mac gets hot, pick a lower one. Both settings are the game's launch options (see Settings).")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
                 Toggle("Vsync (smoother motion, no tearing; adds a little delay)", isOn: Binding(get: { s.vsync }, set: { s.vsync = $0; save() }))
                     .disabled(metal)
                 HStack {
@@ -86,14 +114,55 @@ struct PerformanceSection: View {
                     }
                     .labelsHidden().frame(width: 110).disabled(metal)
                 }
-                Text(metal ? "Apple Metal shows Apple's own performance overlay; vsync and frame limit only work in Classic 3D and Modern 3D."
+                if let b = buffer {
+                    HStack {
+                        Text("Audio buffer")
+                        Picker("", selection: Binding(get: { b }, set: { setBuffer($0) })) {
+                            Text("Normal (10 ms)").tag(10); Text("Large (20 ms)").tag(20); Text("Extra large (40 ms)").tag(40)
+                        }.labelsHidden().frame(width: 170)
+                    }
+                    Text("If sound crackles or has static, choose Large: games get a 3× bigger sound buffer, so a busy moment doesn't cause gaps (adds a little sound delay). \(steam ? "Applies to all Steam games; quit Steam first." : "Quit the game first.")")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                Text(metal ? "Apple Metal uses Apple's own overlay. Vsync and frame limit only work in Classic 3D and Modern 3D — use the game's own settings instead (e.g. +fps_max 60 for Source games)."
                            : "A frame limit keeps the Mac cooler and quieter and makes motion more even. \(steam ? "Applies to all Steam games when Steam next starts." : "Takes effect the next time the game starts.")")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             .toggleStyle(.switch)
             .padding(6).frame(maxWidth: .infinity, alignment: .leading)
         } label: { Text("Performance").font(.headline) }
-        .onAppear { s = Performance.settings(for: game); loaded = true }
+        .onAppear { s = Performance.settings(for: game); buffer = AudioBuffer.current(for: game); loaded = true }
+    }
+
+    /// Fastest refresh among connected screens (ProMotion and external monitors report 120+).
+    var refresh: Int { NSScreen.screens.map(\.maximumFramesPerSecond).max() ?? 60 }
+    var autoFPS: Int { LowLatency.autoFPS(refresh: refresh) }
+
+    func setLowLatency(_ on: Bool) {
+        let g = game
+        Task {
+            let r = await Task.detached { Result { try LowLatency.apply(on, to: g) } }.value
+            switch r {
+            case .success: model.say(on ? "Low-latency aiming on. Takes effect the next time the game starts." : "Low-latency aiming off."); model.refresh()
+            case .failure(let e): model.fail(e)
+            }
+        }
+    }
+
+    func setCap(_ fps: Int?) {
+        let g = game
+        Task {
+            let r = await Task.detached { Result { try LowLatency.applyCap(fps, to: g) } }.value
+            switch r {
+            case .success: model.say("Frame cap: \(fps.map { $0 == 0 ? "unlimited" : "\($0) FPS" } ?? "game's default"). Takes effect the next time the game starts."); model.refresh()
+            case .failure(let e): model.fail(e)
+            }
+        }
+    }
+
+    func setBuffer(_ ms: Int) {
+        do { try AudioBuffer.apply(ms, for: game); buffer = AudioBuffer.current(for: game); model.say("Audio buffer: \(ms) ms chunks. Takes effect next start.") }
+        catch { model.fail(error) }
     }
 
     func save() {
@@ -199,6 +268,52 @@ struct StorageView: View {
         Task {
             let r = await Task.detached { (Storage.volumes(), Storage.games(g), Storage.nokcanduData()) }.value
             volumes = r.0; games = r.1; data = r.2; loading = false
+        }
+    }
+}
+
+// MARK: - Game resolution
+
+struct GameResolutionSection: View {
+    @EnvironmentObject var model: AppModel
+    let game: InstalledGame
+    @State private var options: [GameDisplay.Resolution] = []
+
+    var current: [Int]? { game.custom?.displayPixels }
+
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Game resolution")
+                    Picker("", selection: Binding(get: { current.map { "\($0[0])x\($0[1])" } ?? "desktop" }, set: { choose($0) })) {
+                        Text("Desktop (don't switch)").tag("desktop")
+                        if let c = current, !options.contains(where: { $0.pixels == c }) { Text("\(c[0]) × \(c[1])").tag("\(c[0])x\(c[1])") }
+                        ForEach(Array(options.enumerated()), id: \.element.id) { i, r in
+                            Text("\(r.width) × \(r.height)\(i == 0 ? " — native" : "")").tag(r.id)
+                        }
+                    }.labelsHidden().frame(width: 280)
+                }
+                Text("While the game runs, your Mac's screen switches to exactly this many pixels (other apps look small if you alt-tab), and your desktop comes back when it quits. In the game, choose **Fullscreen Windowed**: it then matches the screen, so nothing switches while you play, and changing settings or alt-tabbing can't resize it. Lower resolutions give more FPS.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if game.usesSharedSteam {
+                    Text("Changing this needs Steam closed.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .padding(6).frame(maxWidth: .infinity, alignment: .leading)
+        } label: { Text("Display").font(.headline) }
+        .onAppear { options = GameDisplay.resolutions() }
+    }
+
+    func choose(_ tag: String) {
+        let px: [Int]? = tag == "desktop" ? nil : tag.split(separator: "x").compactMap { Int($0) }
+        let g = game, lib = model.games
+        Task {
+            let r = await Task.detached { Result { try GameDisplay.apply(px, to: g, library: lib) } }.value
+            switch r {
+            case .success: model.say(px.map { "Game resolution: \($0[0]) × \($0[1]). Set the game to Fullscreen Windowed." } ?? "The display won't switch for this game."); model.refresh()
+            case .failure(let e): model.fail(e)
+            }
         }
     }
 }

@@ -153,11 +153,7 @@ public final class InstallExecutor: @unchecked Sendable {
         let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { throw NokError("Give the game a name first.") }
         let appName = CustomGames.safeFolderName(clean)
-        var target = NokPaths.gameAppsFolder.appendingPathComponent("\(appName).app")
-        var n = 2
-        while FileManager.default.fileExists(atPath: target.path) {
-            target = NokPaths.gameAppsFolder.appendingPathComponent("\(appName) \(n).app"); n += 1
-        }
+        let target = try CustomGames.freeAppURL(appName)
         var state = InstallState(installID: String(CustomGames.slug(clean).prefix(16)) + "-" + String(UUID().uuidString.prefix(6)).lowercased(),
                                  recipeID: CustomInstall.recipeID, targetApp: target.path)
         state.inputs["name"] = clean
