@@ -15,6 +15,16 @@ final class ProfileTests: XCTestCase {
         XCTAssertEqual(try GameProfile.parse(body), p)
     }
 
+    func testAudioBufferAndResolutionRoundTrip() throws {
+        var p = sample()
+        p.audioBuffer = 20; p.displayPixels = [2048, 1280]
+        XCTAssertEqual(p.problems, [])
+        let body = "### Profile\n\n```json\n\(p.json())\n```"
+        XCTAssertEqual(try GameProfile.parse(body), p)
+        p.audioBuffer = 15; p.displayPixels = [99999]
+        XCTAssertEqual(p.problems.count, 2)
+    }
+
     func testRejectsDangerousSettings() {
         var p = sample()
         p.environment = ["DYLD_INSERT_LIBRARIES": "x", "VK_ICD_FILENAMES": "x", "WINEDLLOVERRIDES": "/tmp/evil", "PATH": "x"]

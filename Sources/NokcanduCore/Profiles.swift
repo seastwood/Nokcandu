@@ -54,6 +54,10 @@ public struct GameProfile: Codable, Hashable {
     public var disc: Bool? = nil
     /// Raw mouse "Smooth movement".
     public var rawMouseSmooth: Bool? = nil
+    /// Audio buffer chunk size in ms (10, 20 or 40) for the game's Wine engine.
+    public var audioBuffer: Int? = nil
+    /// Game resolution: screen pixels while the game runs ([width, height]); nil = desktop (don't switch).
+    public var displayPixels: [Int]? = nil
 
     /// Paths inside the game's own app are shared as `{app}/…` and expanded on the other Mac.
     public static let appToken = "{app}"
@@ -103,6 +107,8 @@ public struct GameProfile: Codable, Hashable {
         }
         if let a = hostArguments, a.count > 300 || a.contains("\n") { p.append("Battle.net launch options must be one line, ≤300 characters") }
         for d in drives ?? [] where d.range(of: #"^[D-Yd-y]$"#, options: .regularExpression) == nil { p.append("drive \(d) isn't a letter from D to Y") }
+        if let b = audioBuffer, !AudioBuffer.choices.contains(b) { p.append("audioBuffer must be 10, 20 or 40") }
+        if let d = displayPixels, d.count != 2 || !d.allSatisfy({ (320...8192).contains($0) }) { p.append("displayPixels must be [width, height] in pixels") }
         for (name, text) in [("install", install), ("notes", notes)] where (text?.count ?? 0) > 4000 { p.append("\(name) is too long") }
         return p
     }
@@ -326,6 +332,8 @@ public enum Profiles {
         if !drives.isEmpty { p.drives = drives.sorted() }
         if c?.disc != nil { p.disc = true }
         if raw.enabled { p.rawMouseSmooth = raw.smooth }
+        p.audioBuffer = AudioBuffer.current(for: g)
+        if g.battleNet == nil { p.displayPixels = c?.displayPixels }
         if p.arguments?.isEmpty == true { p.arguments = nil }
         return p
     }
@@ -418,6 +426,21 @@ public enum Profiles {
             if perf.fpsLimit > 0 { parts.append("\(perf.fpsLimit) FPS limit") }
             plan.sharedSettings.append("Performance: \(parts.isEmpty ? "all off" : parts.joined(separator: ", "))\(shared)")
         }
+        if let b = p.audioBuffer, b != AudioBuffer.current(for: g) {
+            plan.sharedSettings.append("Audio buffer: \(b) ms chunks\(shared)")
+        }
+        if g.battleNet == nil, g.custom != nil {
+            let mine = g.custom?.displayPixels
+            if let d = p.displayPixels {
+                if GameDisplay.resolutions().contains(where: { $0.pixels == d }) {
+                    if d != mine { plan.gameSettings.append("Game resolution: \(d[0]) × \(d[1]) (use the game's Fullscreen Windowed)") }
+                } else {
+                    plan.skipped.append("Game resolution \(d[0]) × \(d[1]) — this screen can't run it; pick one in Display")
+                }
+            } else if let m = mine {
+                plan.gameSettings.append("Game resolution: desktop (removes \(m[0]) × \(m[1]))")
+            }
+        }
         if p.fixes?.contains("cinematic") == true {
             if CinematicFix.isPresent(for: g) { plan.gameSettings.append("Cinematic fix (LAV Filters): already installed") }
             else { plan.needsCinematicFix = true }
@@ -438,6 +461,7 @@ public enum Profiles {
         let game: InstalledGame
         let raw: RawMouse.Settings
         let perf: Performance.Settings
+        var buffer: Int? = nil
         public var gameName: String { game.name }
     }
 
@@ -451,6 +475,7 @@ public enum Profiles {
         }
         try RawMouse.apply(s.raw, for: s.game)
         try Performance.apply(s.perf, for: s.game)
+        if let b = s.buffer, b != AudioBuffer.current(for: s.game) { try? AudioBuffer.apply(b, for: s.game) }
     }
 
     /// Applies the profile's settings (not the cinematic fix — that downloads, so the UI runs it).
@@ -460,7 +485,8 @@ public enum Profiles {
         let problems = p.problems
         guard problems.isEmpty else { throw NokError("This profile can't be applied: \(problems.joined(separator: "; ")).") }
         let target = g.battleNet.flatMap { GameLibrary.inspect(URL(fileURLWithPath: $0.hostApp)) } ?? g
-        let snapshot = Snapshot(target: target, config: target.custom, game: g, raw: RawMouse.settings(for: g), perf: Performance.settings(for: g))
+        let snapshot = Snapshot(target: target, config: target.custom, game: g, raw: RawMouse.settings(for: g), perf: Performance.settings(for: g),
+                                buffer: AudioBuffer.current(for: g))
         if var c = target.custom {
             if let gr = p.graphics { c.graphics = gr }
             if g.battleNet == nil { c.arguments = p.arguments ?? "" }
@@ -477,11 +503,17 @@ public enum Profiles {
                 }
                 c.environment = merged.isEmpty ? nil : merged
             }
+            if g.battleNet == nil {
+                if let d = p.displayPixels { if GameDisplay.resolutions().contains(where: { $0.pixels == d }) { c.displayPixels = d } }
+                else { c.displayPixels = nil }
+            }
             if c != target.custom { try CustomGames.saveAll(c, to: target) }
         }
         if includeShared {
             if let r = p.rawMouse { try RawMouse.apply(RawMouse.Settings(enabled: r > 0, scale: r > 0 ? r : 1, smooth: p.rawMouseSmooth ?? false), for: g) }
             if let perf = p.performance { try Performance.apply(perf, for: g) }
+            // Needs the game (or Steam) closed; skipped quietly otherwise — the profile sheet says so.
+            if let b = p.audioBuffer, b != AudioBuffer.current(for: g) { try? AudioBuffer.apply(b, for: g) }
         }
         return snapshot
     }
