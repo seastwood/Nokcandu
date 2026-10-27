@@ -110,6 +110,7 @@ static double aim_started;
 // Without it Wine hands the game the movement in uneven clumps (one frame double, the next almost none).
 static _Atomic uint64_t last_frame_tick;      // mach time of the last frame
 static double fs_x, fs_y;                      // movement collected since the last frame (raw_q)
+static bool frame_sync_env;                    // NOKCANDU_RAW_MOUSE_FRAME_SYNC=1
 static bool frame_sync_off = true;             // on only with NOKCANDU_RAW_MOUSE_FRAME_SYNC=1
 static uint64_t fs_frames, fs_frames_with_move;
 static IMP orig_nextDrawable;
@@ -771,16 +772,20 @@ static void guard_hot_corners(void) {
 // and changing the speed apply to a running game.
 static char settings_path[PATH_MAX];
 
+static bool settings_frame_sync;               // "framesync" line in the settings file
 static bool read_raw_settings(double *sc, bool *sm) {
     FILE *f = settings_path[0] ? fopen(settings_path, "r") : NULL;
     if (!f) return false;
-    char l1[64] = "", l2[64] = "";
+    char l1[64] = "", l[64];
     if (!fgets(l1, sizeof l1, f)) l1[0] = 0;
-    if (!fgets(l2, sizeof l2, f)) l2[0] = 0;
+    *sm = false; settings_frame_sync = false;
+    while (fgets(l, sizeof l, f)) {                 // option lines: "smooth", "framesync"
+        if (strncmp(l, "smooth", 6) == 0) *sm = true;
+        if (strncmp(l, "framesync", 9) == 0) settings_frame_sync = true;
+    }
     fclose(f);
     double v = atof(l1);
     *sc = v > 0.01 && v < 20 ? v : 1.0;
-    *sm = strncmp(l2, "smooth", 6) == 0;
     return true;
 }
 
@@ -789,10 +794,12 @@ static void apply_raw_settings(bool on, double sc, bool sm, bool announce) {
     dispatch_async(raw_q, ^{
         if (!sm && (pend_x != 0 || pend_y != 0)) { emit(pend_x, pend_y); pend_x = pend_y = 0; }
         scale = sc; smooth_on = sm;
+        if (frame_sync_off && settings_frame_sync == false) { fs_x = fs_y = 0; }
     });
+    frame_sync_off = !(settings_frame_sync || frame_sync_env);
     atomic_store(&raw_enabled, on);
     if (on && !installed) install();
-    if (announce) note(@"raw mouse capture %@ (speed %.2f, smooth %@)", on ? @"on" : @"off", sc, sm ? @"on" : @"off");
+    if (announce) note(@"raw mouse capture %@ (speed %.2f, smooth %@, once per frame %@)", on ? @"on" : @"off", sc, sm ? @"on" : @"off", frame_sync_off ? @"off" : @"on");
     if (was && !on) update_aiming(controller());        // hand the pointer back right away
 }
 
@@ -1019,14 +1026,15 @@ __attribute__((constructor)) static void start(void) {
     metal_vsync = getenv("NOKCANDU_METAL_VSYNC") && strcmp(getenv("NOKCANDU_METAL_VSYNC"), "1") == 0;
     // Once-per-frame delivery is opt-in (NOKCANDU_RAW_MOUSE_FRAME_SYNC=1): it didn't cure CS2's hitches and
     // can add up to a frame of delay.
-    frame_sync_off = !(getenv("NOKCANDU_RAW_MOUSE_FRAME_SYNC") && strcmp(getenv("NOKCANDU_RAW_MOUSE_FRAME_SYNC"), "1") == 0);
+    frame_sync_env = getenv("NOKCANDU_RAW_MOUSE_FRAME_SYNC") && strcmp(getenv("NOKCANDU_RAW_MOUSE_FRAME_SYNC"), "1") == 0;
+    frame_sync_off = !frame_sync_env;
     atomic_store(&raw_enabled, getenv("NOKCANDU_RAW_MOUSE_SCALE") != NULL);
     mach_timebase_info(&timebase);
     gl_limit_setup();
     raw_q = dispatch_queue_create("nokcandu.rawmouse", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
     smooth_on = getenv("NOKCANDU_RAW_MOUSE_SMOOTH") && atoi(getenv("NOKCANDU_RAW_MOUSE_SMOOTH")) == 1;
     { double sc; bool sm;                 // the settings file wins over the launcher's copy of it
-      if (read_raw_settings(&sc, &sm)) { scale = sc; smooth_on = sm; atomic_store(&raw_enabled, true); }
+      if (read_raw_settings(&sc, &sm)) { scale = sc; smooth_on = sm; atomic_store(&raw_enabled, true); frame_sync_off = !(settings_frame_sync || frame_sync_env); }
       else if (settings_path[0]) atomic_store(&raw_enabled, false); }
     {   // created suspended; smoothing can be switched on while playing
         smooth_timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, DISPATCH_TIMER_STRICT, raw_q);

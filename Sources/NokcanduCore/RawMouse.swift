@@ -12,7 +12,11 @@ public enum RawMouse {
         public var scale: Double
         /// Spread each report over the time until the next (evens out 125 Hz mice; ≤1 report of delay).
         public var smooth: Bool = false
-        public init(enabled: Bool, scale: Double, smooth: Bool = false) { self.enabled = enabled; self.scale = scale; self.smooth = smooth }
+        /// Hand movement to the game once per frame instead of report by report (experimental).
+        public var frameSync: Bool = false
+        public init(enabled: Bool, scale: Double, smooth: Bool = false, frameSync: Bool = false) {
+            self.enabled = enabled; self.scale = scale; self.smooth = smooth; self.frameSync = frameSync
+        }
     }
 
     static func folder(_ host: URL) -> URL { host.appendingPathComponent("SharedSupport/nokcandu", isDirectory: true) }
@@ -27,7 +31,7 @@ public enum RawMouse {
         guard let text = try? String(contentsOf: flag(h), encoding: .utf8) else { return Settings(enabled: false, scale: 1) }
         let lines = text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
         let s = Double(lines.first ?? "") ?? 1
-        return Settings(enabled: true, scale: s, smooth: lines.dropFirst().first == "smooth")
+        return Settings(enabled: true, scale: s, smooth: lines.dropFirst().contains("smooth"), frameSync: lines.dropFirst().contains("framesync"))
     }
 
     public static var bundledLibrary: URL? { NokPaths.bundledResource(dylibName) }
@@ -46,7 +50,7 @@ public enum RawMouse {
                 try fm.copyItem(at: lib, to: dst)
             }
             let scale = min(max(s.scale, 0.1), 10)
-            try Data((String(format: "%.2f\n", scale) + (s.smooth ? "smooth\n" : "")).utf8).write(to: flag(h), options: .atomic)
+            try Data((String(format: "%.2f\n", scale) + (s.smooth ? "smooth\n" : "") + (s.frameSync ? "framesync\n" : "")).utf8).write(to: flag(h), options: .atomic)
         } else {
             try? fm.removeItem(at: flag(h))
         }
