@@ -27,6 +27,49 @@ public enum Storage {
         return kb * 1024
     }
 
+    public struct GameUsage: Equatable {
+        public struct Part: Equatable {
+            public var title: String
+            public var url: URL
+            public var bytes: Int64?
+            public var drive: String
+        }
+        public var parts: [Part]
+        public var appOnly = false
+        public var bytes: Int64 { parts.compactMap(\.bytes).reduce(0, +) }
+        public var complete: Bool { parts.allSatisfy { $0.bytes != nil } }
+        public var summary: String {
+            let drives = Set(parts.map(\.drive))
+            return (appOnly ? "App: " : "") + (complete ? "" : "At least ") + Storage.format(bytes) + " · " + (drives.count == 1 ? (drives.first ?? "Unknown drive") : "\(drives.count) drives")
+        }
+        public var detail: String {
+            parts.map { "\($0.title): " + ($0.bytes.map(Storage.format) ?? "drive not connected") + " on \($0.drive)" }.joined(separator: " · ")
+        }
+    }
+    public static func driveName(_ url: URL) -> String {
+        if url.path.hasPrefix("/Volumes/"), url.pathComponents.count > 2 { return url.pathComponents[2] }
+        return GameFolders.volumeName(url)
+    }
+    /// App/runtime plus separately stored game files and known Documents data. Never add a folder
+    /// already inside another counted folder, and never follow arbitrary links while sizing the app.
+    public static func usage(for g: InstalledGame) -> GameUsage {
+        let app = g.native?.installFolder.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath() } ?? g.appURL.resolvingSymlinksInPath()
+        var roots: [(String, URL)] = [("App", app)]
+        if let data = GameMover.externalFiles(g) ?? WineTools.places(for: g).first(where: { $0.title == "Game folder" })?.url {
+            let resolved = data.resolvingSymlinksInPath()
+            if !resolved.path.hasPrefix(app.path + "/"), resolved != app { roots.append(("Game files", resolved)) }
+        }
+        if let data = GameDataSpec.forGame(g)?.folder {
+            let resolved = data.resolvingSymlinksInPath()
+            if !roots.contains(where: { resolved == $0.1 || resolved.path.hasPrefix($0.1.path + "/") }) {
+                roots.append(("Settings & saves", resolved))
+            }
+        }
+        return GameUsage(parts: roots.map { title, url in
+            GameUsage.Part(title: title, url: url, bytes: FileManager.default.fileExists(atPath: url.path) ? size(url) : nil, drive: driveName(url))
+        }, appOnly: g.native != nil && g.native?.installFolder == nil)
+    }
+
     public static func games(_ games: [InstalledGame]) -> [Item] {
         games.map { g in
             let logs = size(g.logs)
@@ -64,7 +107,7 @@ public enum Storage {
             guard let v = try? u.resourceValues(forKeys: Set(keys)), v.volumeIsBrowsable != false,
                   let total = v.volumeTotalCapacity, total > 0 else { return nil }
             return VolumeInfo(name: v.volumeName ?? u.lastPathComponent, url: u,
-                              free: v.volumeAvailableCapacityForImportantUsage ?? 0, total: Int64(total))
+                              free: GameFolders.freeSpace(u) ?? 0, total: Int64(total))
         }
     }
 

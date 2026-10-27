@@ -354,6 +354,7 @@ struct GameResolutionSection: View {
                 }
                 Text("Changes your Mac's display while the game runs and restores it afterward. Desktop keeps your current screen resolution. This doesn't change the game's own settings.")
                     .font(.caption).foregroundStyle(.secondary)
+                if game.usesSharedSteam { Text("Changing the Mac screen resolution needs Steam closed.").font(.caption).foregroundStyle(.secondary) }
                 Divider()
                 HStack {
                     Text("Window style")
@@ -397,7 +398,6 @@ struct GameResolutionSection: View {
                     Text("Set this game's own resolution inside the game.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                if game.usesSharedSteam { Text("Changing the Mac screen resolution needs Steam closed.").font(.caption).foregroundStyle(.secondary) }
                 if working { ProgressView().controlSize(.small) }
                 if !status.isEmpty { Text(status).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
             }
@@ -585,15 +585,14 @@ struct RemoveGameSection: View {
 struct GameLocationSection: View {
     @EnvironmentObject var model: AppModel
     let game: InstalledGame
-    @State private var size: Int64?
 
     var body: some View {
         let folder = GameFolders.folder(of: game)
         GroupBox {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Location").font(.body.bold())
-                    Text("App: " + GameFolderLabel.text(folder) + (size.map { " · " + Storage.format($0) } ?? ""))
+                    Text("Storage & Location").font(.body.bold())
+                    Text("App: " + Storage.driveName(game.appURL) + " · " + GameFolderLabel.text(folder))
                         .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                     if let ext = GameMover.externalFiles(game) {
                         Text("Game files: \(ext.path)" + (GameMover.missingDrive(game) != nil ? " — drive not connected" : ""))
@@ -615,10 +614,6 @@ struct GameLocationSection: View {
                 }
             }
             .padding(6)
-        }
-        .task {
-            let u = game.appURL
-            size = await Task.detached(priority: .utility) { Storage.size(u) }.value
         }
     }
 }
@@ -693,5 +688,31 @@ struct GameFoldersBox: View {
         panel.message = "Choose a folder or drive for games. Picking a whole drive makes a “Nokcandu Games” folder on it."
         guard panel.runModal() == .OK, let u = panel.url else { return }
         do { try GameFolders.add(u); reload() } catch { self.error = error.localizedDescription }
+    }
+}
+
+/// A single background size scan on the game page; details below retain the existing Move controls.
+struct GameStorageSummary: View {
+    let game: InstalledGame
+    @State private var usage: Storage.GameUsage?
+    @State private var measurement = 0
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Label(usage?.summary ?? "Measuring storage…", systemImage: "internaldrive").font(.callout).foregroundStyle(.secondary)
+                Button { measurement += 1 } label: { Image(systemName: "arrow.clockwise").font(.caption) }
+                    .buttonStyle(.borderless).help("Recalculate storage size").disabled(usage == nil)
+            }
+            if let usage, usage.parts.count > 1 {
+                Text(usage.detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .help("Allocated-size estimate, including separately stored game files and known settings folders. APFS copies can share disk blocks, so removing a game may free less than this estimate. Shared Steam/Battle.net runtime space is counted with its launcher.")
+        .task(id: "\(game.id)-\(measurement)") {
+            let g = game
+            usage = nil
+            let result = await Task.detached(priority: .utility) { Storage.usage(for: g) }.value
+            if !Task.isCancelled { usage = result }
+        }
     }
 }

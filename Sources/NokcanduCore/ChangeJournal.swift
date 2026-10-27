@@ -19,15 +19,33 @@ public final class ChangeJournal {
     public private(set) var entries: [JournalEntry] = []
     private let journalURL: URL
     private let backupDir: URL
+    private let portableRoot: URL?
     private let fm = FileManager.default
 
-    public init(scope: String, root: URL = NokPaths.support) {
+    public init(scope: String, root: URL = NokPaths.support, portableRoot: URL? = nil) {
         self.scope = scope
+        self.portableRoot = portableRoot
         journalURL = root.appendingPathComponent("Journals/\(scope).json")
         backupDir = root.appendingPathComponent("Backups/\(scope)", isDirectory: true)
         if let data = try? Data(contentsOf: journalURL),
            let decoded = try? Self.decoder.decode([JournalEntry].self, from: data) {
             entries = decoded
+        }
+        if let portableRoot {
+            let marker = journalURL.appendingPathExtension("root")
+            let inferred = entries.compactMap { entry -> String? in
+                guard let r = entry.path.range(of: ".app/Contents/") else { return nil }
+                return String(entry.path[..<entry.path.index(r.lowerBound, offsetBy: 4)])
+            }.first
+            let old = (try? String(contentsOf: marker, encoding: .utf8)) ?? inferred
+            if let old, old != portableRoot.path {
+                func rebase(_ value: String) -> String {
+                    value.hasPrefix(old + "/") ? portableRoot.path + value.dropFirst(old.count) : value
+                }
+                entries = entries.map { entry in
+                    var e = entry; e.path = rebase(e.path); e.backupPath = e.backupPath.map(rebase); return e
+                }
+            }
         }
     }
 
@@ -68,6 +86,7 @@ public final class ChangeJournal {
     private func save() throws {
         try NokPaths.ensure(journalURL.deletingLastPathComponent())
         try Self.encoder.encode(entries).write(to: journalURL, options: .atomic)
+        if let portableRoot { try Data(portableRoot.path.utf8).write(to: journalURL.appendingPathExtension("root"), options: .atomic) }
     }
 
     public struct RevertReport {

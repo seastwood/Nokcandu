@@ -418,6 +418,8 @@ enum ProfileText {
         if let a = p.hostArguments, !a.isEmpty { s.append("Battle.net: \(a)") }
         if let e = p.environment, !e.isEmpty { s.append(e.keys.sorted().joined(separator: ", ")) }
         if let r = p.rawMouse, r > 0 { s.append("raw mouse \(String(format: "%.2g", r))×") }
+        if p.rawMouseFrameSync == true { s.append("once-per-frame mouse") }
+        if let d = p.gameDisplay, d.resolution.count == 2 { s.append("BF1942 \(d.resolution[0]) × \(d.resolution[1])" + (d.menuCorrection ? "; menu correction" : "")) }
         if p.fixes?.contains("cinematic") == true { s.append("cinematic fix") }
         for fix in CompatibilityFix.allCases where p.fixes?.contains(fix.id) == true { s.append(fix.title) }
         if let d = p.drives { s.append(d.map { "\($0):" }.joined(separator: " ")) }
@@ -515,7 +517,7 @@ struct ProfileDetail: View {
                             }
                             Text(undoSnapshot == nil
                                  ? "After you apply, an Undo button appears here that puts back the settings from before."
-                                 : "Undo puts back the settings from before. Installed components have their own Undo in the game's Fixes.")
+                                 : "Undo puts back the settings from before. BF1942 display changes are restored too. Installed components have their own Undo in the game's Fixes.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }
@@ -552,6 +554,7 @@ struct ProfileDetail: View {
                 undoSnapshot = try Profiles.apply(p, to: g, includeShared: includeShared)
                 if plan.needsCinematicFix { try await CinematicFix.install(for: g) { _ in } }
                 for fix in plan.componentFixes { try await CompatibilityFixes.install(fix, for: g) { _ in } }
+                if let snap = undoSnapshot { try await Profiles.applyGameDisplay(p, to: g, snapshot: snap) { _ in } }
                 model.refresh()
                 model.say("Applied “\(p.title)” to \(g.name).")
             } catch { model.fail(error) }

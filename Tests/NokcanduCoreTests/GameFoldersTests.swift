@@ -73,3 +73,50 @@ final class GameFoldersTests: XCTestCase {
         XCTAssertFalse(fm.fileExists(atPath: dest.path))
     }
 }
+
+final class PortableGameFixTests: XCTestCase {
+    func testMovingAppKeepsPrivateUndoAndNativeRendererPaths() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("portable-fix-" + UUID().uuidString).resolvingSymlinksInPath()
+        defer { try? fm.removeItem(at: root) }
+        let app = root.appendingPathComponent("A/BF1942.app"), dest = root.appendingPathComponent("B")
+        try NokPaths.ensure(dest)
+        let contents = app.appendingPathComponent("Contents"), prefix = contents.appendingPathComponent("SharedSupport/prefix")
+        try NokPaths.ensure(prefix.appendingPathComponent("dosdevices")); try NokPaths.ensure(contents.appendingPathComponent("MacOS"))
+        try NokPaths.ensure(contents.appendingPathComponent("SharedSupport/nokcandu"))
+        try fm.createSymbolicLink(atPath: prefix.appendingPathComponent("dosdevices/c:").path, withDestinationPath: "../drive_c")
+        let gameRoot = prefix.appendingPathComponent("drive_c/Games/BF1942")
+        try NokPaths.ensure(gameRoot.appendingPathComponent("Mods/bf1942/Settings/Profiles/Default"))
+        try Data("test EXE".utf8).write(to: gameRoot.appendingPathComponent("BF1942.exe"))
+        let video = gameRoot.appendingPathComponent("Mods/bf1942/Settings/Profiles/Default/Video.con")
+        let original = Data("game.setGameDisplayMode 800 600 32 60\n".utf8)
+        try original.write(to: video)
+        try Data("run Profiles/Default/Video.con\n".utf8).write(to: gameRoot.appendingPathComponent("Mods/bf1942/Settings/Video.con"))
+        var c = CustomGameConfig(id: "portable", name: "BF1942", source: .folder, exe: #"C:\Games\BF1942\BF1942.exe"#, graphics: .classic3D)
+        c.environment = ["WINEDLLPATH_D9VK": contents.appendingPathComponent("SharedSupport/renderer/dxvk/wine").path]
+        let script = CustomGames.launcherScript(for: c)
+        c.launcherSHA = Hashing.sha256(data: Data(script.utf8))
+        try Data(script.utf8).write(to: contents.appendingPathComponent("MacOS/game-launcher"))
+        try c.encoded().write(to: CustomGameConfig.url(in: contents))
+        let info = ["CFBundleName": "BF1942", "CFBundleExecutable": "game-launcher", "CFBundleIdentifier": "local.portable." + UUID().uuidString]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: contents.appendingPathComponent("Info.plist"))
+        let g = try XCTUnwrap(GameLibrary.inspect(app))
+        try await BF1942DisplayFix.apply(to: g, size: [1280, 800], recommended: false) { _ in }
+        let movedURL = try GameMover.move(try XCTUnwrap(GameLibrary.inspect(app)), to: dest)
+        let moved = try XCTUnwrap(GameLibrary.inspect(movedURL))
+        XCTAssertTrue(moved.custom?.environment?["WINEDLLPATH_D9VK"]?.hasPrefix(moved.contents.path) == true)
+        XCTAssertEqual(moved.custom?.launcherSHA, try Hashing.sha256(file: moved.contents.appendingPathComponent("MacOS/game-launcher")))
+        try BF1942DisplayFix.undo(for: moved) { _ in }
+        XCTAssertEqual(try Data(contentsOf: moved.prefix.appendingPathComponent("drive_c/Games/BF1942/Mods/bf1942/Settings/Profiles/Default/Video.con")), original)
+        // File-only relocation must retain BF1942 controls and its Undo path too.
+        try await BF1942DisplayFix.apply(to: moved, size: [1920, 1080], recommended: false) { _ in }
+        let external = root.appendingPathComponent("GameFiles")
+        try NokPaths.ensure(external)
+        try GameMover.moveFiles(CompatibilityFixes.fresh(moved), to: external)
+        XCTAssertTrue(BF1942DisplayFix.supports(CompatibilityFixes.fresh(moved)))
+        try BF1942DisplayFix.undo(for: CompatibilityFixes.fresh(moved)) { _ in }
+        XCTAssertEqual(try Data(contentsOf: external.appendingPathComponent("BF1942/Mods/bf1942/Settings/Profiles/Default/Video.con")), original)
+        try GameMover.moveFiles(CompatibilityFixes.fresh(moved), to: nil)
+        XCTAssertFalse(fm.fileExists(atPath: external.appendingPathComponent("BF1942").path))
+    }
+}

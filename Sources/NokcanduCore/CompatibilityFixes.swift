@@ -44,7 +44,7 @@ public enum CompatibilityFixes {
         g.nokcanduState.appendingPathComponent("fix-\(fix.rawValue).json")
     }
     static func journal(_ fix: CompatibilityFix, _ g: InstalledGame) -> ChangeJournal {
-        ChangeJournal(scope: fix.rawValue, root: g.nokcanduState)
+        ChangeJournal(scope: fix.rawValue, root: g.nokcanduState, portableRoot: g.appURL)
     }
     static func state(_ fix: CompatibilityFix, _ g: InstalledGame) -> State? {
         (try? Data(contentsOf: marker(fix, g))).flatMap { try? JSONDecoder().decode(State.self, from: $0) }

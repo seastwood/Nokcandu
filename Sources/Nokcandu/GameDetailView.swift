@@ -142,6 +142,7 @@ struct GameDetailView: View {
                 } else {
                     Text("Not set up by a Nokcandu recipe — Play still works.").foregroundStyle(.secondary)
                 }
+                GameStorageSummary(game: game)
                 HStack(spacing: 10) {
                     Button { model.play(game) } label: {
                         Label(game.isSteamHost ? (running ? "Show Steam" : "Open Steam") : (running ? "Running" : "Play"), systemImage: "play.fill").frame(minWidth: 90)
@@ -392,7 +393,6 @@ struct NativeGameDetail: View {
     let game: InstalledGame
     let native: NativeGame
     @State private var confirmRemove = false
-    @State private var size: Int64?
 
     var running: Bool { if case .launcherRunning = model.runStates[game.id] ?? .notRunning { return true }; return false }
 
@@ -406,6 +406,7 @@ struct NativeGameDetail: View {
                             Text(game.name).font(.largeTitle.bold())
                             Button { model.renaming = game } label: { Image(systemName: "pencil") }.buttonStyle(.borderless)
                         }
+                        GameStorageSummary(game: game)
                         Text(native.store.map { "Mac version from \($0.store.title)" } ?? "Mac game — runs natively, no Wine").foregroundStyle(.secondary)
                         HStack {
                             Button { model.play(game) } label: { Label(running ? "Running" : "Play", systemImage: "play.fill").frame(minWidth: 90) }
@@ -418,7 +419,7 @@ struct NativeGameDetail: View {
                 GroupBox {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(game.appURL.path).font(.callout).textSelection(.enabled)
-                        Text((size.map { Storage.format($0) + " · " } ?? "") + "Nokcandu only opens this app; its settings live in the game itself. Graphics, mouse and Wine settings don't apply to Mac games.")
+                        Text("On " + Storage.driveName(game.appURL) + ". Nokcandu only opens this app; its settings live in the game itself. Graphics, mouse and Wine settings don't apply to Mac games.")
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(6).frame(maxWidth: .infinity, alignment: .leading)
@@ -437,10 +438,6 @@ struct NativeGameDetail: View {
             }
             .padding(24)
             .frame(maxWidth: 760, alignment: .leading)
-        }
-        .task {
-            let u = game.appURL
-            size = await Task.detached(priority: .utility) { Storage.size(u) }.value
         }
         .confirmationDialog("Remove \(game.name)?", isPresented: $confirmRemove) {
             Button("Remove from Nokcandu") { remove(trash: false) }

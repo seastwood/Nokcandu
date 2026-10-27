@@ -59,7 +59,10 @@ public enum GameFolders {
         return (try? probe.resourceValues(forKeys: [.volumeLocalizedNameKey]).volumeLocalizedName) ?? "Unknown drive"
     }
     public static func freeSpace(_ u: URL) -> Int64? {
-        (try? u.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage)
+        let values = try? u.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey])
+        let filesystem = (try? FileManager.default.attributesOfFileSystem(forPath: u.path)[.systemFreeSize]) as? NSNumber
+        return [values?.volumeAvailableCapacityForImportantUsage, values?.volumeAvailableCapacity.map(Int64.init), filesystem?.int64Value]
+            .compactMap { $0 }.filter { $0 >= 0 }.max()
     }
 
     /// Why a folder can't hold Wine games, or nil if it can. Wine prefixes need symbolic links and
@@ -78,7 +81,11 @@ public enum GameFolders {
     public static func holdsApps(_ u: URL) -> Bool {
         var probe = u
         while !FileManager.default.fileExists(atPath: probe.path), probe.pathComponents.count > 1 { probe.deleteLastPathComponent() }
-        return (try? probe.resourceValues(forKeys: [.volumeSupportsSymbolicLinksKey]).volumeSupportsSymbolicLinks) ?? true
+        let values = try? probe.resourceValues(forKeys: [.volumeSupportsSymbolicLinksKey, .volumeLocalizedFormatDescriptionKey])
+        // macOS can report symbolic-link support on ExFAT even though it cannot host a Wine prefix
+        // reliably. Keep those drives on the game-files-only path regardless of that capability flag.
+        if values?.volumeLocalizedFormatDescription?.range(of: "fat", options: .caseInsensitive) != nil { return false }
+        return values?.volumeSupportsSymbolicLinks ?? false
     }
     public static func formatName(_ u: URL) -> String {
         (try? u.resourceValues(forKeys: [.volumeLocalizedFormatDescriptionKey]).volumeLocalizedFormatDescription) ?? "?"
@@ -165,7 +172,7 @@ public enum GameMover {
     /// Where the game's files really are when they've been moved off the Mac (the folder in drive_c is a link).
     public static func externalFiles(_ g: InstalledGame) -> URL? {
         guard let f = gameFilesFolder(g), let d = try? FileManager.default.destinationOfSymbolicLink(atPath: f.path) else { return nil }
-        return URL(fileURLWithPath: d, isDirectory: true)
+        return d.hasPrefix("/") ? URL(fileURLWithPath: d, isDirectory: true) : f.deletingLastPathComponent().appendingPathComponent(d).standardizedFileURL
     }
 
     /// Nil when the game can start; otherwise e.g. "Connect Elements first".
@@ -286,7 +293,14 @@ public enum GameMover {
             }
         }
         progress("Updating paths inside the game…")
-        fixPaths(in: target, from: g.appURL)
+        do { try fixPaths(in: target, from: g.appURL) }
+        catch {
+            if sameDrive {
+                try? fm.moveItem(at: target, to: g.appURL)
+                try? fixPaths(in: g.appURL, from: target)
+            } else { try? fm.removeItem(at: target) }
+            throw NokError("The move couldn't finish updating paths. The original game was kept: \(error.localizedDescription)")
+        }
         if !sameDrive {
             progress("Removing the old copy…")
             do { try fm.removeItem(at: g.appURL) }
@@ -303,7 +317,7 @@ public enum GameMover {
 
     /// Points what referred to the old location at the new one: Wine's drive links and the registry's
     /// font paths (Z:\Users\…\Old.app\…).
-    static func fixPaths(in app: URL, from old: URL) {
+    static func fixPaths(in app: URL, from old: URL) throws {
         let fm = FileManager.default
         let prefix = app.appendingPathComponent("Contents/SharedSupport/prefix")
         let oldPath = old.standardizedFileURL.path, newPath = app.standardizedFileURL.path
@@ -313,6 +327,18 @@ public enum GameMover {
             guard let d = try? fm.destinationOfSymbolicLink(atPath: link.path), d.hasPrefix(oldPath + "/") || d == oldPath else { continue }
             try? fm.removeItem(at: link)
             try? fm.createSymbolicLink(atPath: link.path, withDestinationPath: newPath + d.dropFirst(oldPath.count))
+        }
+        let contents = app.appendingPathComponent("Contents")
+        if var config = CustomGameConfig.load(contents: contents) {
+            config.environment = config.environment?.mapValues { $0.replacingOccurrences(of: oldPath + "/", with: newPath + "/") }
+            let launcher = contents.appendingPathComponent("MacOS/" + CustomGames.launcherName)
+            if let data = try? Data(contentsOf: launcher), let text = String(data: data, encoding: .utf8) {
+                let owned = config.launcherSHA == Hashing.sha256(data: data)
+                let rewritten = Data(text.replacingOccurrences(of: oldPath + "/", with: newPath + "/").utf8)
+                if rewritten != data { try rewritten.write(to: launcher, options: .atomic) }
+                if owned { config.launcherSHA = Hashing.sha256(data: rewritten) }
+            }
+            try config.encoded().write(to: CustomGameConfig.url(in: contents), options: .atomic)
         }
         func winPath(_ p: String) -> String { "Z:" + p.replacingOccurrences(of: "/", with: "\\\\") }
         let (o, n) = (winPath(oldPath), winPath(newPath))

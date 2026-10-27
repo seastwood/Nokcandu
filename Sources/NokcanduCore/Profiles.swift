@@ -55,6 +55,18 @@ public struct GameProfile: Codable, Hashable {
     public var disc: Bool? = nil
     /// Raw mouse "Smooth movement".
     public var rawMouseSmooth: Bool? = nil
+    /// Nil in old profiles means preserve the current experimental delivery setting.
+    public var rawMouseFrameSync: Bool? = nil
+    /// A built-in recipe name and values only; never paths, patches or config commands.
+    public struct GameDisplay: Codable, Hashable {
+        public var recipe: String
+        public var resolution: [Int]
+        public var menuCorrection: Bool
+        public init(recipe: String = "bf1942", resolution: [Int], menuCorrection: Bool) {
+            self.recipe = recipe; self.resolution = resolution; self.menuCorrection = menuCorrection
+        }
+    }
+    public var gameDisplay: GameDisplay? = nil
     /// Audio buffer chunk size in ms (10, 20 or 40) for the game's Wine engine.
     public var audioBuffer: Int? = nil
     /// Game resolution: screen pixels while the game runs ([width, height]); nil = desktop (don't switch).
@@ -88,7 +100,13 @@ public struct GameProfile: Codable, Hashable {
         var p: [String] = []
         let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
         if t.isEmpty || t.count > 100 { p.append("title must be 1–100 characters") }
-        if schema != 1 { p.append("unknown schema \(schema)") }
+        if ![1, 2].contains(schema) { p.append("unknown schema \(schema)") }
+        if (gameDisplay != nil || rawMouseFrameSync != nil), schema != 2 { p.append("these settings require profile schema 2") }
+        if let d = gameDisplay {
+            if d.recipe != "bf1942" { p.append("unknown display recipe") }
+            if !BF1942DisplayFix.resolutions.contains(d.resolution) { p.append("unsupported BF1942 game resolution") }
+            if match.exeName?.lowercased() != "bf1942.exe" { p.append("BF1942 display settings require the BF1942.exe game match") }
+        }
         if !Self.sources.contains(source) { p.append("source must be one of \(Self.sources.joined(separator: ", "))") }
         if match.steamAppID == nil && match.battleNetUID == nil && (match.exeName ?? "").isEmpty { p.append("match needs steamAppID, battleNetUID or exeName") }
         if let e = match.exeName, e.range(of: #"^[^/\\:*?"<>|]{1,80}\.exe$"#, options: [.regularExpression, .caseInsensitive]) == nil { p.append("exeName must be a plain .exe file name") }
@@ -336,6 +354,12 @@ public enum Profiles {
         if !drives.isEmpty { p.drives = drives.sorted() }
         if c?.disc != nil { p.disc = true }
         if raw.enabled { p.rawMouseSmooth = raw.smooth }
+        p.rawMouseFrameSync = raw.frameSync
+        if let size = BF1942DisplayFix.resolution(for: g), BF1942DisplayFix.supports(g) {
+            p.gameDisplay = GameProfile.GameDisplay(resolution: size, menuCorrection: BF1942DisplayFix.isRecommended(for: g))
+            p.match.exeName = "BF1942.exe"
+        }
+        p.schema = 2
         p.audioBuffer = AudioBuffer.current(for: g)
         if g.battleNet == nil { p.displayPixels = c?.displayPixels }
         if p.arguments?.isEmpty == true { p.arguments = nil }
@@ -351,7 +375,6 @@ public enum Profiles {
     public static func notShared(from g: InstalledGame) -> [String] {
         let host = settingsApp(g)
         var out: [String] = []
-        if BF1942DisplayFix.hasChanges(for: g) { out.append("BF1942 display recipe — use its built-in Display option on the other installation") }
         for (k, v) in (host.custom?.environment ?? [:]).sorted(by: { $0.key < $1.key }) {
             let pv = portable(v, contents: host.contents)
             if !GameProfile.envNameAllowed(k) {
@@ -408,6 +431,7 @@ public enum Profiles {
         public var sharedSettings: [String] = []      // raw mouse / performance (whole Steam or Battle.net, or the app)
         public var needsCinematicFix = false
         public var componentFixes: [CompatibilityFix] = []
+        public var appliesGameDisplay = false
         public var skipped: [String] = []
     }
 
@@ -417,7 +441,7 @@ public enum Profiles {
         let host = settingsApp(g)
         let shared = g.usesSharedSteam ? " (all Steam games)" : g.battleNet != nil ? " (all Battle.net games)" : ""
         if let prog = p.program, g.custom != nil, !g.usesSharedSteam, g.battleNet == nil {
-            if prog != g.custom?.exe, (!CompatibilityFixes.installedIDs(for: g).isEmpty || BF1942DisplayFix.hasChanges(for: g)) {
+            if prog != g.custom?.exe, (!CompatibilityFixes.installedIDs(for: g).isEmpty || BF1942DisplayFix.hasChanges(for: g) || p.gameDisplay != nil) {
                 plan.skipped.append("Program \(prog) — Undo installed game fixes before changing the program")
             } else if BattleNet.unixPath(prog, prefix: g.prefix).map({ FileManager.default.fileExists(atPath: $0.path) }) == true {
                 plan.gameSettings.append("Program: \(prog)")
@@ -450,6 +474,15 @@ public enum Profiles {
             }
         }
         if let r = p.rawMouse { plan.sharedSettings.append(r == 0 ? "Raw mouse: off\(shared)" : "Raw mouse: on at \(String(format: "%.2f", r))×\(p.rawMouseSmooth == true ? ", smooth movement" : "")\(shared)") }
+        if let f = p.rawMouseFrameSync { plan.sharedSettings.append("Once-per-frame mouse delivery: \(f ? "on" : "off")\(shared)") }
+        if let d = p.gameDisplay {
+            if let reason = displayUnavailable(d, for: g) { plan.skipped.append("BF1942 display settings: \(reason)") }
+            else {
+                plan.appliesGameDisplay = true
+                plan.gameSettings.append("BF1942 game resolution: \(d.resolution[0]) × \(d.resolution[1])" + (d.menuCorrection ? "; verified menu correction" : ""))
+                if !d.menuCorrection, BF1942DisplayFix.isRecommended(for: g) { plan.gameSettings.append("Existing BF1942 menu correction stays enabled") }
+            }
+        }
         if let perf = p.performance {
             var parts: [String] = []
             if perf.fpsCounter { parts.append("FPS counter") }
@@ -503,6 +536,7 @@ public enum Profiles {
         let raw: RawMouse.Settings
         let perf: Performance.Settings
         var buffer: Int? = nil
+        var displayCheckpoint: BF1942DisplayFix.Checkpoint? = nil
         public var gameName: String { game.name }
     }
 
@@ -511,6 +545,7 @@ public enum Profiles {
 
     /// Puts back the settings from before `apply`.
     public static func undo(_ s: Snapshot) throws {
+        try s.displayCheckpoint?.restore()
         if let c = s.config, GameLibrary.inspect(s.target.appURL)?.custom != c {
             let current = GameLibrary.inspect(s.target.appURL) ?? s.target
             try CustomGames.saveAll(CompatibilityFixes.preservingInstalledSettings(c, for: current), to: current)
@@ -527,14 +562,17 @@ public enum Profiles {
         let problems = p.problems
         guard problems.isEmpty else { throw NokError("This profile can't be applied: \(problems.joined(separator: "; ")).") }
         let target = g.battleNet.flatMap { GameLibrary.inspect(URL(fileURLWithPath: $0.hostApp)) } ?? g
-        let snapshot = Snapshot(target: target, config: target.custom, game: g, raw: RawMouse.settings(for: g), perf: Performance.settings(for: g),
+        var snapshot = Snapshot(target: target, config: target.custom, game: g, raw: RawMouse.settings(for: g), perf: Performance.settings(for: g),
                                 buffer: AudioBuffer.current(for: g))
+        if let d = p.gameDisplay, displayUnavailable(d, for: target) == nil {
+            snapshot.displayCheckpoint = try BF1942DisplayFix.checkpoint(for: CompatibilityFixes.fresh(target), size: d.resolution, menuCorrection: d.menuCorrection)
+        }
         if var c = target.custom {
             if let gr = p.graphics, c.legacyD3D9 != true { c.graphics = gr }
             if g.battleNet == nil { c.arguments = p.arguments ?? "" }
             if g.battleNet != nil, let a = p.hostArguments { c.arguments = a }
             if let prog = p.program, g.battleNet == nil, !g.usesSharedSteam,
-               CompatibilityFixes.installedIDs(for: target).isEmpty, !BF1942DisplayFix.hasChanges(for: target),
+               CompatibilityFixes.installedIDs(for: target).isEmpty, !BF1942DisplayFix.hasChanges(for: target), p.gameDisplay == nil,
                BattleNet.unixPath(prog, prefix: g.prefix).map({ FileManager.default.fileExists(atPath: $0.path) }) == true {
                 c.exe = prog
             }
@@ -555,12 +593,32 @@ public enum Profiles {
             if c != target.custom { try CustomGames.saveAll(c, to: target) }
         }
         if includeShared {
-            if let r = p.rawMouse { try RawMouse.apply(RawMouse.Settings(enabled: r > 0, scale: r > 0 ? r : 1, smooth: p.rawMouseSmooth ?? false), for: g) }
+            if let r = p.rawMouse { try RawMouse.apply(RawMouse.Settings(enabled: r > 0, scale: r > 0 ? r : 1, smooth: p.rawMouseSmooth ?? false, frameSync: p.rawMouseFrameSync ?? RawMouse.settings(for: g).frameSync), for: g) }
+            if p.rawMouse == nil, let f = p.rawMouseFrameSync {
+                var raw = RawMouse.settings(for: g); raw.frameSync = f; try RawMouse.apply(raw, for: g)
+            }
             if let perf = p.performance { try Performance.apply(perf, for: g) }
             // Needs the game (or Steam) closed; skipped quietly otherwise — the profile sheet says so.
             if let b = p.audioBuffer, b != AudioBuffer.current(for: g) { try? AudioBuffer.apply(b, for: g) }
         }
         return snapshot
+    }
+
+    public static func displayUnavailable(_ display: GameProfile.GameDisplay, for game: InstalledGame) -> String? {
+        guard display.recipe == "bf1942", BF1942DisplayFix.resolutions.contains(display.resolution), BF1942DisplayFix.supports(game) else { return "only available for a standalone BF1942 installation" }
+        if display.menuCorrection || BF1942DisplayFix.isRecommended(for: game) { return BF1942DisplayFix.menuUnavailable(for: game) }
+        return nil
+    }
+
+    /// Runs only after the previewed component installs. The snapshot retains a file-level Undo even
+    /// when a display operation fails part way; component Undo remains in Fixes as before.
+    public static func applyGameDisplay(_ p: GameProfile, to game: InstalledGame, snapshot: Snapshot,
+                                        log: @escaping @Sendable (String) -> Void) async throws {
+        guard let d = p.gameDisplay, let checkpoint = snapshot.displayCheckpoint else { return }
+        checkpoint.started = true
+        defer { checkpoint.seal() }
+        try await BF1942DisplayFix.apply(to: game, size: d.resolution, recommended: d.menuCorrection,
+                                        includePresentation: false, log: log)
     }
 }
 

@@ -18,7 +18,7 @@ public enum BF1942DisplayFix {
         var ownsBorderless = false
     }
     static func record(_ g: InstalledGame) -> URL { g.nokcanduState.appendingPathComponent("bf1942-display.json") }
-    static func journal(_ g: InstalledGame) -> ChangeJournal { ChangeJournal(scope: "bf1942-display", root: g.nokcanduState) }
+    static func journal(_ g: InstalledGame) -> ChangeJournal { ChangeJournal(scope: "bf1942-display", root: g.nokcanduState, portableRoot: g.appURL) }
     static func state(_ g: InstalledGame) -> State? {
         (try? Data(contentsOf: record(g))).flatMap { try? JSONDecoder().decode(State.self, from: $0) }
     }
@@ -31,12 +31,15 @@ public enum BF1942DisplayFix {
               let program = CompatibilityFixes.program(g) else { return nil }
         let names = ["bf1942.exe", "bf1942borderless.exe", "bf1942-menu-test.exe", "bftest.exe", copyName.lowercased()]
         guard names.contains(program.lastPathComponent.lowercased()) else { return nil }
-        let folder = program.deletingLastPathComponent().resolvingSymlinksInPath()
+        let logical = program.deletingLastPathComponent()
+        let folder = logical.resolvingSymlinksInPath()
         let base = g.prefix.appendingPathComponent("drive_c").resolvingSymlinksInPath().path + "/"
-        guard folder.path.hasPrefix(base),
-              FileManager.default.fileExists(atPath: folder.appendingPathComponent("BF1942.exe").path),
+        let external = GameMover.externalFiles(g)?.resolvingSymlinksInPath()
+        let inManagedFiles = external.map { folder.path == $0.path || folder.path.hasPrefix($0.path + "/") } ?? false
+        guard folder.path.hasPrefix(base) || inManagedFiles else { return nil }
+        guard FileManager.default.fileExists(atPath: folder.appendingPathComponent("BF1942.exe").path),
               FileManager.default.fileExists(atPath: folder.appendingPathComponent("Mods/bf1942/Settings").path) else { return nil }
-        return folder
+        return logical
     }
     public static func supports(_ g: InstalledGame) -> Bool { folder(g) != nil }
     public static func hasChanges(for g: InstalledGame) -> Bool { state(g) != nil }
@@ -100,7 +103,7 @@ public enum BF1942DisplayFix {
         }
         let resolved = try canonical(path), base = try canonical(root)
         guard resolved.path.hasPrefix(base.path + "/") else { throw NokError("A display settings file points outside this game. Nothing was changed.") }
-        return resolved
+        return root.appendingPathComponent(String(resolved.path.dropFirst(base.path.count + 1)))
     }
     static func plannedFiles(root: URL, size: [Int], recommended: Bool) throws -> [URL: Data] {
         guard resolutions.contains(size) else { throw NokError("Choose one of the supported game resolutions.") }
@@ -155,7 +158,7 @@ public enum BF1942DisplayFix {
     }
     /// `recommended` also adds the verified menu copy and borderless component. Resolution-only edits
     /// never patch an executable or change the Mac's screen. All mutations have a recovery receipt.
-    public static func apply(to game: InstalledGame, size: [Int] = [1280, 800], recommended: Bool,
+    public static func apply(to game: InstalledGame, size: [Int] = [1280, 800], recommended: Bool, includePresentation: Bool = true,
                              log: @escaping @Sendable (String) -> Void) async throws {
         let g = CompatibilityFixes.fresh(game)
         try CompatibilityFixes.begin(g); defer { CompatibilityFixes.end(g) }
@@ -177,16 +180,16 @@ public enum BF1942DisplayFix {
                (try? Hashing.sha256(file: target)) != correctedSHA { throw NokError("The display-copy filename is already in use. That file was left untouched.") }
             files[target] = copy
             // Normalize older manually created wrappers, while retaining the original program for Undo.
-            guard let canonical = CustomGames.windowsPath(forUnix: original, prefix: g.prefix.resolvingSymlinksInPath()) else { throw NokError("Couldn't locate BF1942 on C:.") }
+            guard let canonical = CustomGames.windowsPath(forUnix: original, prefix: g.prefix) else { throw NokError("Couldn't locate BF1942 on C:.") }
             if c.exe != canonical, !CompatibilityFixes.installedIDs(for: g).isEmpty {
                 throw NokError("Undo compatibility components before replacing this older BF1942 launcher. Then apply the recommended display settings again.")
             }
             c.exe = canonical; c.bf1942MenuCopy = true
-            if recommended { c.displayPixels = nil }
+            if recommended && includePresentation { c.displayPixels = nil }
             st.appliedProgram = canonical; st.recommended = true
         }
         st.width = size[0]; st.height = size[1]
-        let needsBorderless = recommended && !CompatibilityFixes.isInstalled(.borderless, for: g)
+        let needsBorderless = recommended && includePresentation && !CompatibilityFixes.isInstalled(.borderless, for: g)
         if needsBorderless { st.ownsBorderless = true }
         try save(st, g)
         for (url, data) in files { try journal(g).write(data, to: url, reason: "BF1942 display settings") }
@@ -194,6 +197,62 @@ public enum BF1942DisplayFix {
         if needsBorderless { try await CompatibilityFixes.installReserved(.borderless, for: CompatibilityFixes.fresh(g), log: log) }
         log(wantsRecommended ? "Applied BF1942's recommended display settings. The original executable is unchanged." : "Saved BF1942's game resolution.")
     }
+    /// In-memory checkpoint for a profile's existing Undo button. The display recipe keeps its own
+    /// baseline journal; restoring that ledger as well allows both Undo paths to remain independent.
+    final class Checkpoint {
+        struct File {
+            let url: URL
+            let before: Data?
+            var after: String?
+        }
+        let game: InstalledGame
+        var files: [File]
+        var started = false
+        private var sealed = false
+        init(game: InstalledGame, urls: [URL]) throws {
+            self.game = game
+            files = try urls.map { File(url: $0, before: FileManager.default.fileExists(atPath: $0.path) ? try Data(contentsOf: $0) : nil) }
+        }
+        func seal() {
+            sealed = true
+            for i in files.indices {
+                files[i].after = try? Hashing.sha256(file: files[i].url)
+                if FileManager.default.fileExists(atPath: files[i].url.path), files[i].after == nil { sealed = false }
+            }
+        }
+        func restore() throws {
+            guard started else { return }
+            try CompatibilityFixes.requireClosed(CompatibilityFixes.fresh(game))
+            guard sealed else { throw NokError("The display changes couldn't be verified for Undo. Use the game's Display controls to recover them.") }
+            for file in files {
+                let current = try? Hashing.sha256(file: file.url)
+                guard current == file.after,
+                      !FileManager.default.fileExists(atPath: file.url.path) || current != nil else {
+                    throw NokError("\(file.url.lastPathComponent) changed after the profile. Undo kept your files and settings.")
+                }
+            }
+            for file in files {
+                if let before = file.before {
+                    try NokPaths.ensure(file.url.deletingLastPathComponent())
+                    try before.write(to: file.url, options: .atomic)
+                } else if FileManager.default.fileExists(atPath: file.url.path) {
+                    try FileManager.default.trashItem(at: file.url, resultingItemURL: nil)
+                }
+            }
+            started = false
+        }
+    }
+    static func checkpoint(for g: InstalledGame, size: [Int], menuCorrection: Bool) throws -> Checkpoint {
+        try CompatibilityFixes.requireClosed(g)
+        guard let root = folder(g) else { throw NokError("Choose a standalone BF1942 installation first.") }
+        try validateJournal(g)
+        let recommended = menuCorrection || isRecommended(for: g)
+        var urls = Array(try plannedFiles(root: root, size: size, recommended: recommended).keys)
+        if recommended { urls.append(try checkedURL(root.appendingPathComponent(copyName), root: root)) }
+        urls += [record(g), g.nokcanduState.appendingPathComponent("Journals/bf1942-display.json"), g.nokcanduState.appendingPathComponent("Journals/bf1942-display.json.root")]
+        return try Checkpoint(game: g, urls: urls)
+    }
+
     public static func undo(for game: InstalledGame, log: @escaping @Sendable (String) -> Void) throws {
         var g = CompatibilityFixes.fresh(game)
         try CompatibilityFixes.begin(g); defer { CompatibilityFixes.end(g) }
