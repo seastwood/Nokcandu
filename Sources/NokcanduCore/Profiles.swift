@@ -416,13 +416,19 @@ public enum Profiles {
         let host = settingsApp(g)
         let shared = g.usesSharedSteam ? " (all Steam games)" : g.battleNet != nil ? " (all Battle.net games)" : ""
         if let prog = p.program, g.custom != nil, !g.usesSharedSteam, g.battleNet == nil {
-            if BattleNet.unixPath(prog, prefix: g.prefix).map({ FileManager.default.fileExists(atPath: $0.path) }) == true {
+            if prog != g.custom?.exe, !CompatibilityFixes.installedIDs(for: g).isEmpty {
+                plan.skipped.append("Program \(prog) — Undo installed compatibility components before changing the program")
+            } else if BattleNet.unixPath(prog, prefix: g.prefix).map({ FileManager.default.fileExists(atPath: $0.path) }) == true {
                 plan.gameSettings.append("Program: \(prog)")
             } else {
                 plan.skipped.append("Program \(prog) — not found in this game, so the current program is kept")
             }
         }
-        if let gr = p.graphics { plan.gameSettings.append("Graphics: \(gr.title)\(g.battleNet != nil ? shared : "")") }
+        if let gr = p.graphics {
+            if host.custom?.legacyD3D9 == true, gr != .classic3D {
+                plan.skipped.append("Graphics: \(gr.title) — Older 3D games stays selected while DirectX 8 compatibility is installed")
+            } else { plan.gameSettings.append("Graphics: \(gr.title)\(g.battleNet != nil ? shared : "")") }
+        }
         let a = p.arguments ?? ""
         if g.battleNet != nil {
             if !a.isEmpty { plan.skipped.append("Launch options \(a) (Battle.net games take launch options in Battle.net's game settings)") }
@@ -523,10 +529,11 @@ public enum Profiles {
         let snapshot = Snapshot(target: target, config: target.custom, game: g, raw: RawMouse.settings(for: g), perf: Performance.settings(for: g),
                                 buffer: AudioBuffer.current(for: g))
         if var c = target.custom {
-            if let gr = p.graphics { c.graphics = gr }
+            if let gr = p.graphics, c.legacyD3D9 != true { c.graphics = gr }
             if g.battleNet == nil { c.arguments = p.arguments ?? "" }
             if g.battleNet != nil, let a = p.hostArguments { c.arguments = a }
             if let prog = p.program, g.battleNet == nil, !g.usesSharedSteam,
+               CompatibilityFixes.installedIDs(for: target).isEmpty,
                BattleNet.unixPath(prog, prefix: g.prefix).map({ FileManager.default.fileExists(atPath: $0.path) }) == true {
                 c.exe = prog
             }

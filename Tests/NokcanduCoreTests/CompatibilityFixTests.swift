@@ -65,6 +65,11 @@ final class CompatibilityFixTests: XCTestCase {
         let st = CompatibilityFixes.State(executable: c.exe, previousOverrides: ["d3d8": "n", "d3d9": "b", "dsound": "n"],
             appliedOverrides: ["d3dx9_43": "n,b"], previousLegacy: true)
         try JSONEncoder().encode(st).write(to: CompatibilityFixes.marker(.directx9Extras, g))
+        var p = GameProfile(title: "Other settings", match: .init(exeName: "T.exe"), source: "folder", rating: .playable)
+        p.graphics = .modern3D; p.program = #"C:\Games\T\Other.exe"#
+        let plan = Profiles.plan(p, for: g)
+        XCTAssertTrue(plan.skipped.contains { $0.contains("Older 3D games stays selected") })
+        XCTAssertTrue(plan.skipped.contains { $0.contains("before changing the program") })
         try c.encoded().write(to: CustomGameConfig.url(in: g.contents))
         try Data("user changed DLL".utf8).write(to: original)
         XCTAssertThrowsError(try CompatibilityFixes.undo(.directx9Extras, for: g) { _ in })
