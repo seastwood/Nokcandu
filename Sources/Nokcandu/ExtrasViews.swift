@@ -359,14 +359,14 @@ struct GameResolutionSection: View {
                     Text("Window style")
                     Picker("Window style", selection: Binding(get: { game.custom?.borderless == true }, set: windowStyle)) {
                         Text("Game default").tag(false)
-                        Text("Fill screen (borderless)").tag(true)
+                        Text("Fullscreen (Borderless)").tag(true)
                     }.labelsHidden().frame(width: 280)
                         .disabled(CompatibilityFixes.unavailable(.borderless, for: game) != nil && game.custom?.borderless != true)
                 }
                 if let reason = CompatibilityFixes.unavailable(.borderless, for: game) {
                     Text(reason).font(.caption).foregroundStyle(.secondary)
                 } else {
-                    Text("Choose Windowed inside the game before using Fill screen. This uses the same optional borderless fix as the Fixes panel and leaves the Mac's display mode alone.")
+                    Text("Choose Windowed inside the game before using Fullscreen (Borderless). This uses the same optional borderless fix as the Fixes panel and leaves the Mac's display mode alone.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if BF1942DisplayFix.supports(game) {
@@ -388,7 +388,7 @@ struct GameResolutionSection: View {
                         }.disabled(BF1942DisplayFix.menuUnavailable(for: game) != nil)
                         if BF1942DisplayFix.hasChanges(for: game) { Button("Undo BF1942 Display Settings") { undoGameDisplay() } }
                     }
-                    Text("Uses a verified copy for the 1280 × 800 menu, sets gameplay to 1280 × 800 windowed, and enables Fill screen. Keeps the original executable and leaves the Mac at its desktop resolution. Graphics and shader fixes are available separately under Fixes.")
+                    Text("Uses a verified copy for the 1280 × 800 menu, sets gameplay to 1280 × 800 windowed, and enables Fullscreen (Borderless). Keeps the original executable and leaves the Mac at its desktop resolution. Graphics and shader fixes are available separately under Fixes.")
                         .font(.caption).foregroundStyle(.secondary)
                     if let reason = BF1942DisplayFix.menuUnavailable(for: game) {
                         Text(reason).font(.caption).foregroundStyle(.secondary)

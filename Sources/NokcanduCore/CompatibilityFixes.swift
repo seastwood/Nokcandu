@@ -10,7 +10,7 @@ public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable {
         switch self {
         case .directx9Extras: "DirectX 9 extras"
         case .d3d8to9: "DirectX 8 compatibility"
-        case .borderless: "Fill the screen (borderless)"
+        case .borderless: "Fullscreen (Borderless)"
         }
     }
     public var detail: String {
