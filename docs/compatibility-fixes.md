@@ -6,6 +6,7 @@ The feature is optional and per standalone managed game. No defaults or existing
 | --- | --- | --- |
 | `directx9-extras` | Matching-architecture `d3dx9_43.dll`, `d3dcompiler_43.dll` beside the selected program; individual native/builtin DLL rules | Microsoft June 2010 DirectX redistributable, SHA-256 checked |
 | `d3d8to9` | Local `d3d8.dll`, individual d3d8/d3d9 rules, `legacyD3D9` flag selecting existing `renderer/dxvk/wine` | crosire/d3d8to9 v1.16.0, SHA-256 checked |
+| `cursor-visibility` | Opt-in state flag; native helper uses a transparent cursor only while Wine requests it hidden, restoring Wine cursor updates for menus and focus changes. Raw mouse input is independent. | Nokcandu native helper; validated runtime layout |
 | `borderless` | `C:\nokcandu\borderless\launcher.exe` and `window.dll`, matching program architecture; `borderless` flag | Nokcandu C sources built with pinned Zig |
 
 The generic components leave the selected game executable unchanged. The launcher wraps it only when borderless is enabled; its working directory and original arguments are preserved. The injected window helper stays inside the launched process, ignores minimized, owned and tool windows, and does not change the display mode or force the window above other apps. It follows restarts of the same executable, not arbitrary launcher children. This is a compatibility option, not a guarantee for every game.

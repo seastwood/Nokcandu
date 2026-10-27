@@ -4,13 +4,14 @@ import Foundation
 /// downloads or patch bytes. DLLs are private to the selected executable's folder; Wine's system DLLs
 /// and registry are untouched. File undo uses the same conflict-aware journal as other Nokcandu edits.
 public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable {
-    case directx9Extras = "directx9-extras", d3d8to9, borderless
+    case directx9Extras = "directx9-extras", d3d8to9, borderless, cursorVisibility = "cursor-visibility"
     public var id: String { rawValue }
     public var title: String {
         switch self {
         case .directx9Extras: "DirectX 9 extras"
         case .d3d8to9: "DirectX 8 compatibility"
         case .borderless: "Fullscreen (Borderless)"
+        case .cursorVisibility: "Hide stray Mac pointer"
         }
     }
     public var detail: String {
@@ -18,6 +19,7 @@ public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable {
         case .directx9Extras: "Downloads Microsoft's shader libraries (d3dx9_43 and d3dcompiler_43) for missing effects or crashes while loading a match."
         case .d3d8to9: "Downloads d3d8to9 1.16.0 and uses the bundled DXVK 2.3 renderer. Try this when Older 3D games has visual glitches. For 32-bit DirectX 8 games."
         case .borderless: "Makes the game's window fill its screen without changing the Mac's display mode. Select Windowed inside the game first."
+        case .cursorVisibility: "Try this if the Mac arrow stays visible during gameplay. Follows the game's cursor visibility requests without changing mouse input. Works with Raw Mouse Capture off. Restart the game after installing or undoing."
         }
     }
 }
@@ -166,6 +168,8 @@ public enum CompatibilityFixes {
                 sha: "122928cfe225c25d30decf7184a5d37e490cecf3b58256ba3206c7e1853f8ab8", log: log)
             files[exe.deletingLastPathComponent().appendingPathComponent("d3d8.dll")] = try Data(contentsOf: dll)
             applied = ["d3d8": "n", "d3d9": "b"]
+        case .cursorVisibility:
+            files[g.nokcanduState.appendingPathComponent("cursor-visibility-fix")] = Data("1\n".utf8)
         case .borderless:
             let arch = PEFile.inspect(exe)?.is64Bit == true ? "x86_64" : "x86"
             for (name, ext) in [("launcher", "exe"), ("window", "dll")] {

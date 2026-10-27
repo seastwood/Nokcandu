@@ -820,6 +820,8 @@ static void watch_settings(void) {
     [NSRunLoop.mainRunLoop addTimer:t forMode:NSRunLoopCommonModes];
 }
 
+#include "cursor-visibility.m"
+
 static void image_added(const struct mach_header *mh, __unused intptr_t slide) {
     Dl_info info;
     static bool seen;
@@ -828,6 +830,7 @@ static void image_added(const struct mach_header *mh, __unused intptr_t slide) {
     // winemac registers its classes and starts Cocoa after loading; the main queue runs once Cocoa does.
     dispatch_async(dispatch_get_main_queue(), ^{
         name_app();
+        install_cursor_visibility();
         gl_limit_wine();
         watch_display(app_name());
         guard_hot_corners();
@@ -1019,7 +1022,9 @@ __attribute__((constructor)) static void start(void) {
     Dl_info self;
     if (dladdr((const void *)start, &self) && self.dli_fname) {
         char me[PATH_MAX]; strlcpy(me, self.dli_fname, sizeof me);
-        snprintf(settings_path, sizeof settings_path, "%s/raw-mouse", dirname(me));
+        const char *state = dirname(me);
+        snprintf(settings_path, sizeof settings_path, "%s/raw-mouse", state);
+        snprintf(visibility_flag, sizeof visibility_flag, "%s/cursor-visibility-fix", state);
     }
     debug_on = getenv("NOKCANDU_RAW_MOUSE_DEBUG") != NULL;
     game_cursor = getenv("NOKCANDU_RAW_MOUSE_GAME_CURSOR") != NULL;

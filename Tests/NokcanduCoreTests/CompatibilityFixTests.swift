@@ -46,6 +46,29 @@ final class CompatibilityFixTests: XCTestCase {
             CustomGameConfig(id: "t", name: "T", source: .steamLibrary, exe: "T.exe", graphics: .classic3D))
         for fix in CompatibilityFix.allCases { XCTAssertNotNil(CompatibilityFixes.unavailable(fix, for: shared)) }
     }
+    func testCursorFixIsOptInShareableAndIndependentlyUndoable() async throws {
+        let g = try ProfileCompletenessTests().fixture()
+        defer { try? FileManager.default.removeItem(at: g.appURL) }
+        let exe = try XCTUnwrap(CompatibilityFixes.program(g))
+        var pe = Data(repeating: 0, count: 512)
+        pe[0] = 0x4d; pe[1] = 0x5a; pe[0x3c] = 0x80
+        pe[0x80] = 0x50; pe[0x81] = 0x45; pe[0x94] = 0xe0
+        pe[0x98] = 0x0b; pe[0x99] = 0x01
+        try pe.write(to: exe)
+        let flag = g.nokcanduState.appendingPathComponent("cursor-visibility-fix")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: flag.path))
+        XCTAssertNil(CompatibilityFixes.unavailable(.cursorVisibility, for: g))
+        try await CompatibilityFixes.install(.cursorVisibility, for: g) { _ in }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: flag.path))
+        XCTAssertEqual(try Data(contentsOf: exe), pe)
+        XCTAssertEqual(CompatibilityFixes.installedIDs(for: g), ["cursor-visibility"])
+        XCTAssertFalse(RawMouse.settings(for: g).enabled)
+        let profile = Profiles.make(from: CompatibilityFixes.fresh(g), rating: .playable, notes: nil, install: nil)
+        XCTAssertTrue(profile.fixes?.contains("cursor-visibility") == true)
+        try CompatibilityFixes.undo(.cursorVisibility, for: g) { _ in }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: flag.path))
+        XCTAssertEqual(try Data(contentsOf: exe), pe)
+    }
     func testUndoChecksFilesBeforeChangingSettingsAndKeepsOtherFixes() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("fix-undo-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
