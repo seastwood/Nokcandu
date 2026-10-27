@@ -13,6 +13,9 @@ public enum GameDisplay {
         public var pixels: [Int] { [width, height] }
     }
 
+    /// Classic sizes for old games, offered as Wine's virtual screen (no Mac display has most of them).
+    public static let classicSizes: [[Int]] = [[640, 480], [800, 600], [1024, 768], [1152, 864], [1280, 960], [1280, 1024], [1600, 1200]]
+
     /// Resolutions the main display can run, largest first.
     public static func resolutions() -> [Resolution] {
         let d = CGMainDisplayID()
@@ -47,7 +50,7 @@ public enum GameDisplay {
         return """
         # Game resolution (Nokcandu → Display): the Mac's screen runs at \(p[0])×\(p[1]) while the game does.
         if [ -x \(tool) ]; then
-         ( trap '' HUP; exec \(tool) --play \(p[0]) \(p[1]) --watch \(q(pattern)) ) </dev/null >>\(log) 2>&1 &
+         ( trap '' HUP; unset DYLD_INSERT_LIBRARIES; exec \(tool) --play \(p[0]) \(p[1]) --watch \(q(pattern)) ) </dev/null >>\(log) 2>&1 &
          disown $! 2>/dev/null || true
         fi
 
@@ -88,6 +91,15 @@ public enum GameDisplay {
         if !system.isEmpty { try Data(system.utf8).write(to: s, options: .atomic) }
     }
 
+    /// Runs the game on a Wine virtual screen of this size (nil = off). Turns off display switching.
+    public static func applyVirtualScreen(_ size: [Int]?, to g: InstalledGame) throws {
+        guard var c = g.custom, !g.usesSharedSteam else { return }
+        if case .launcherRunning = GameLauncher.runState(of: g) { throw NokError("Quit the game first.") }
+        c.virtualScreen = size
+        if size != nil { c.displayPixels = nil }
+        try CustomGames.saveAll(c, to: g, force: false)
+    }
+
     /// Saves a game's resolution choice and makes its Windows environment match.
     public static func apply(_ pixels: [Int]?, to g: InstalledGame, library: [InstalledGame]) throws {
         guard var c = g.custom else { return }
@@ -98,6 +110,7 @@ public enum GameDisplay {
             throw NokError(steam ? "Quit Steam first (Steam page → Quit Steam)." : "Quit the game first.")
         }
         c.displayPixels = pixels
+        c.virtualScreen = nil
         try CustomGames.saveAll(c, to: g, force: false)
         // Undo Retina mode from earlier test builds: it made game windows the wrong size.
         if let prefix = WineTools.hostContents(for: g)?.appendingPathComponent("SharedSupport/prefix"), retinaOn(prefix: prefix) {

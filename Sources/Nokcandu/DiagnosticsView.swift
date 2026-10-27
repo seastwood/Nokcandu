@@ -46,7 +46,7 @@ struct DiagnosticsView: View {
                                     ScrollView(.horizontal) {
                                         Text(log.tail).font(.caption.monospaced()).textSelection(.enabled)
                                     }
-                                }
+                                }.disclosureGroupStyle(WholeRowDisclosureStyle())
                             }
                         }
                     }

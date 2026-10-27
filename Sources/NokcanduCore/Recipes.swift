@@ -7,7 +7,7 @@ public enum DisplayMode: String, Codable, CaseIterable, Identifiable {
     case fillScreen = "fill"
     case windowed = "windowed"
     public var id: String { rawValue }
-    public var title: String { self == .fillScreen ? "Fill screen" : "Windowed" }
+    public var title: String { self == .fillScreen ? "Fullscreen" : "Windowed" }
 }
 
 public struct RuntimeSpec: Codable, Hashable {
@@ -121,7 +121,7 @@ public enum RecipeCatalog {
             verification: [
                 VerificationItem(title: "Local gameplay", state: .confirmed, note: "User confirmed skirmish gameplay."),
                 VerificationItem(title: "Performance", state: .confirmed, note: "Near 60 FPS at 1280 × 800, Medium detail."),
-                VerificationItem(title: "Fill screen + app switching", state: .confirmed, note: "Desktop-sized fullscreen, Wine display capture off."),
+                VerificationItem(title: "Fullscreen + app switching", state: .confirmed, note: "Desktop-sized fullscreen, Wine display capture off."),
                 VerificationItem(title: "Online match", state: .notVerified, note: "No live online match yet; anti-cheat compatibility unknown."),
             ],
             hasInstaller: true,

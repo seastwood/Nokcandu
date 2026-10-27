@@ -77,8 +77,9 @@ if [ "${1:-}" = --windowed ] || { [ -z "${1:-}" ] && [ "$(cat "$MODE_FILE" 2>/de
     // MARK: State
 
     public static func launcherState(_ g: InstalledGame) -> LauncherState {
-        guard let url = g.launcherURL, let text = try? String(contentsOf: url, encoding: .utf8),
-              let sha = try? Hashing.sha256(file: url) else { return .missing }
+        guard let url = g.launcherURL, let raw = try? String(contentsOf: url, encoding: .utf8) else { return .missing }
+        let text = HelperPatch.strip(raw)          // Nokcandu's helper-library block doesn't change what the launcher is
+        let sha = Hashing.sha256(data: Data(text.utf8))
         if g.recipe?.knownLauncherHashes[sha] != nil { return .original }
         if text.contains(patchMarker) {
             let restored = text.replacingOccurrences(of: patchedLines.trimmingCharacters(in: .newlines), with: originalLine)

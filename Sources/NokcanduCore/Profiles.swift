@@ -1,4 +1,5 @@
 import Foundation
+import IOKit
 
 /// Shareable game profiles: the settings that make a game work (graphics, launch options, extra
 /// settings, raw mouse, performance, needed fixes) plus how well it runs. Settings only — never scripts,
@@ -58,6 +59,8 @@ public struct GameProfile: Codable, Hashable {
     public var audioBuffer: Int? = nil
     /// Game resolution: screen pixels while the game runs ([width, height]); nil = desktop (don't switch).
     public var displayPixels: [Int]? = nil
+    /// Wine virtual screen size ([width, height]) for old games, shown in a window.
+    public var virtualScreen: [Int]? = nil
 
     /// Paths inside the game's own app are shared as `{app}/…` and expanded on the other Mac.
     public static let appToken = "{app}"
@@ -108,6 +111,7 @@ public struct GameProfile: Codable, Hashable {
         if let a = hostArguments, a.count > 300 || a.contains("\n") { p.append("Battle.net launch options must be one line, ≤300 characters") }
         for d in drives ?? [] where d.range(of: #"^[D-Yd-y]$"#, options: .regularExpression) == nil { p.append("drive \(d) isn't a letter from D to Y") }
         if let b = audioBuffer, !AudioBuffer.choices.contains(b) { p.append("audioBuffer must be 10, 20 or 40") }
+        if let v = virtualScreen, v.count != 2 || !v.allSatisfy({ (320...8192).contains($0) }) { p.append("virtualScreen must be [width, height]") }
         if let d = displayPixels, d.count != 2 || !d.allSatisfy({ (320...8192).contains($0) }) { p.append("displayPixels must be [width, height] in pixels") }
         for (name, text) in [("install", install), ("notes", notes)] where (text?.count ?? 0) > 4000 { p.append("\(name) is too long") }
         return p
@@ -358,12 +362,31 @@ public enum Profiles {
         return out
     }
 
+    /// The Mac a profile was tested on, e.g. "MacBook Air (13-inch, M4, 2025), 16 GB" — the model matters
+    /// (an M4 Air has no fan; an M4 Pro/Max has far more GPU), not only the chip.
     static var macModel: String {
-        var size = 0
-        sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0)
-        var b = [CChar](repeating: 0, count: max(size, 1))
-        sysctlbyname("machdep.cpu.brand_string", &b, &size, nil, 0)
-        return String(cString: b)
+        func sysctlString(_ name: String) -> String? {
+            var size = 0
+            guard sysctlbyname(name, nil, &size, nil, 0) == 0, size > 0 else { return nil }
+            var b = [CChar](repeating: 0, count: size)
+            guard sysctlbyname(name, &b, &size, nil, 0) == 0 else { return nil }
+            return String(cString: b)
+        }
+        var memory: UInt64 = 0
+        var msize = MemoryLayout<UInt64>.size
+        sysctlbyname("hw.memsize", &memory, &msize, nil, 0)
+        let gb = memory > 0 ? ", \(memory / 1_073_741_824) GB" : ""
+        // Apple silicon Macs carry their marketing name in the device tree.
+        let entry = IORegistryEntryFromPath(kIOMainPortDefault, "IODeviceTree:/product")
+        defer { if entry != 0 { IOObjectRelease(entry) } }
+        if entry != 0, let d = IORegistryEntryCreateCFProperty(entry, "product-name" as CFString, kCFAllocatorDefault, 0)?
+            .takeRetainedValue() as? Data,
+           let name = String(data: d, encoding: .utf8)?.trimmingCharacters(in: CharacterSet(charactersIn: "\0").union(.whitespaces)),
+           !name.isEmpty {
+            return name + gb
+        }
+        let chip = sysctlString("machdep.cpu.brand_string") ?? "Mac"
+        return chip + (sysctlString("hw.model").map { " (\($0))" } ?? "") + gb
     }
 
     /// Opens a pre-filled "Game profile" issue on GitHub (the submitter just clicks Submit).
@@ -440,6 +463,7 @@ public enum Profiles {
             } else if let m = mine {
                 plan.gameSettings.append("Game resolution: desktop (removes \(m[0]) × \(m[1]))")
             }
+
         }
         if p.fixes?.contains("cinematic") == true {
             if CinematicFix.isPresent(for: g) { plan.gameSettings.append("Cinematic fix (LAV Filters): already installed") }
@@ -503,6 +527,7 @@ public enum Profiles {
                 }
                 c.environment = merged.isEmpty ? nil : merged
             }
+            if g.battleNet == nil { c.virtualScreen = nil }
             if g.battleNet == nil {
                 if let d = p.displayPixels { if GameDisplay.resolutions().contains(where: { $0.pixels == d }) { c.displayPixels = d } }
                 else { c.displayPixels = nil }
@@ -516,5 +541,46 @@ public enum Profiles {
             if let b = p.audioBuffer, b != AudioBuffer.current(for: g) { try? AudioBuffer.apply(b, for: g) }
         }
         return snapshot
+    }
+}
+
+/// The discussion on a shared profile (its GitHub issue), read through GitHub's public API.
+public struct ProfileComment: Identifiable, Hashable, Sendable {
+    public var id: Int
+    public var author: String
+    public var body: String
+    public var created: Date?
+    public var url: URL?
+}
+
+public enum ProfileComments {
+    /// Current 👍/👎 on the profile (the catalog only refreshes hourly).
+    public static func votes(issue number: Int) async -> (up: Int, down: Int)? {
+        var req = URLRequest(url: URL(string: "https://api.github.com/repos/\(Profiles.repo)/issues/\(number)")!)
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.timeoutInterval = 20
+        guard let (d, r) = try? await URLSession.shared.data(for: req), (r as? HTTPURLResponse)?.statusCode == 200,
+              let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any], let rx = j["reactions"] as? [String: Any] else { return nil }
+        return (rx["+1"] as? Int ?? 0, rx["-1"] as? Int ?? 0)
+    }
+
+    public static func fetch(issue number: Int) async throws -> [ProfileComment] {
+        var req = URLRequest(url: URL(string: "https://api.github.com/repos/\(Profiles.repo)/issues/\(number)/comments?per_page=100")!)
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.timeoutInterval = 20
+        let (d, r) = try await URLSession.shared.data(for: req)
+        let code = (r as? HTTPURLResponse)?.statusCode ?? 0
+        guard code == 200, let arr = try JSONSerialization.jsonObject(with: d) as? [[String: Any]] else {
+            throw NokError(code == 403 ? "GitHub is limiting requests right now — try again in a bit, or read them on GitHub." : "Couldn't load the comments (\(code)).")
+        }
+        let iso = ISO8601DateFormatter()
+        return arr.compactMap { c in
+            guard let id = c["id"] as? Int, let body = c["body"] as? String else { return nil }
+            // The catalog's own status notes (from GitHub Actions) aren't discussion.
+            if ((c["user"] as? [String: Any])?["type"] as? String) == "Bot" { return nil }
+            return ProfileComment(id: id, author: ((c["user"] as? [String: Any])?["login"] as? String) ?? "someone", body: body,
+                                  created: (c["created_at"] as? String).flatMap(iso.date(from:)),
+                                  url: (c["html_url"] as? String).flatMap(URL.init(string:)))
+        }
     }
 }

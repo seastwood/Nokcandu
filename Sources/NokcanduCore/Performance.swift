@@ -38,7 +38,7 @@ public enum Performance {
             let size = s.hudSize ?? "small"
             let metalScale = size == "small" ? "0.1" : size == "medium" ? "0.15" : "0.25"
             let dxvkScale = size == "small" ? "0.6" : size == "medium" ? "0.8" : "1.0"
-            out += #"if [ -n "${WINEDLLPATH_D3DMETAL:-}" ]; then export MTL_HUD_ENABLED=1; export MTL_HUD_SCALE=\#(metalScale)"#
+            out += #"if [ -n "${WINEDLLPATH_D3DMETAL:-}${WINEDLLPATH_DXMT:-}" ]; then export MTL_HUD_ENABLED=1; export MTL_HUD_SCALE=\#(metalScale)"#
             if !metal.isEmpty { out += #"; export MTL_HUD_ELEMENTS="\#(metal)""# }
             out += #"; else export DXVK_HUD="\#(dxvk),scale=\#(dxvkScale)"; fi"# + "\n"
         }
@@ -47,6 +47,20 @@ public enum Performance {
         }
         if s.fpsLimit > 0 { out += "export DXVK_FRAME_RATE=\(s.fpsLimit)\n" }
         return out
+    }
+
+    /// Rewrites each game's perf.env from its saved settings when an older Nokcandu wrote it differently
+    /// (for example before DXMT got Apple's Metal FPS counter). Runs with the launch maintenance.
+    public static func refreshEnvFiles(_ games: [InstalledGame]) {
+        var seen = Set<String>()
+        for g in games {
+            guard let h = WineTools.hostContents(for: g), seen.insert(h.path).inserted else { continue }
+            let f = folder(h), env = f.appendingPathComponent("perf.env")
+            guard let d = try? Data(contentsOf: f.appendingPathComponent("perf.json")),
+                  let s = try? JSONDecoder().decode(Settings.self, from: d), !s.isDefault else { continue }
+            let want = Data(envText(s).utf8)
+            if (try? Data(contentsOf: env)) != want { try? want.write(to: env, options: .atomic) }
+        }
     }
 
     public static func apply(_ s: Settings, for g: InstalledGame) throws {

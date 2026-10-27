@@ -152,20 +152,20 @@ struct SteamTipsSection: View {
 
     var tips: [Tip] {
         [
-            Tip(title: "Steam → Settings → In Game → Steam Overlay: off",
-                detail: "The overlay hooks into the game's graphics, which costs frame rate and can cause stutters under Wine.", done: overlayOff),
+            Tip(title: "Steam → Settings → In Game → Steam Overlay: off (worth trying)",
+                detail: "The overlay draws into the game. Under Wine it can cause stutters or crashes in some games; in others it makes no difference.", done: overlayOff),
             Tip(title: "Steam → Settings → Downloads → Allow downloads during gameplay: off",
-                detail: "Updates downloading and unpacking in the background take CPU and disk while you play."),
-            Tip(title: "Steam → Settings → Downloads → Shader Pre-Caching: off",
-                detail: "It's for Vulkan games; it doesn't help Apple Metal, but its background work still uses CPU."),
-            Tip(title: "Minimize Steam's window while playing",
-                detail: "Steam's window is drawn in software under Wine and can use a whole CPU core while it's on screen; minimized (yellow button), it mostly idles. Steam closes after the game unless you opened it yourself."),
-            Tip(title: "Mac: plugged in, Low Power Mode off",
-                detail: "Low Power Mode caps the CPU and GPU. Battery Settings → Low Power Mode → Never (or Only on Battery).", done: !lowPower),
-            Tip(title: "Mac: quit browsers and other heavy apps",
-                detail: "Especially on a MacBook Air (no fan): everything running shares the same heat budget as the game."),
-            Tip(title: "In the game: fullscreen at your screen's resolution, vsync off",
-                detail: "For shooters, Low-latency aiming and the frame cap (Performance, on the game's page) set this up."),
+                detail: "Off is Steam's default — just check it hasn't been turned on. Downloading and unpacking updates mid-game competes for CPU and disk."),
+            Tip(title: "Shader Pre-Caching: only matters if Steam is processing shaders",
+                detail: "Steam's pre-cached shaders are for Vulkan/OpenGL; Apple Metal and DXMT build their own. If you see \"Processing Vulkan shaders\" before a game starts, turning it off (Settings → Downloads) skips that work."),
+            Tip(title: "Try minimizing Steam's window while playing",
+                detail: "Under Wine, Steam's window can keep using CPU while it's visible. Minimize it (yellow button) and compare in Activity Monitor; if it makes no difference on your Mac, don't bother."),
+            Tip(title: "Mac: Low Power Mode off",
+                detail: "Low Power Mode caps the CPU and GPU (Battery Settings → Low Power Mode → Never, or Only on Battery). On a MacBook Air, being plugged in doesn't make games faster by itself — it just keeps you playing longer.", done: !lowPower),
+            Tip(title: "Mac: quit apps that are busy",
+                detail: "Idle apps cost little, but busy ones — video, a browser tab doing work, a build — share the CPU, GPU and memory with the game. On a MacBook Air (no fan) they also share its heat budget, so it slows down sooner."),
+            Tip(title: "In the game: lower the resolution before lowering everything else",
+                detail: "Your screen's full Retina resolution is expensive; a lower one (e.g. 1920×1200, or Game resolution on the game's page) usually gains the most FPS. Vsync off gives the lowest input lag but can tear; turn it on if tearing bothers you. Fullscreen is worth comparing with windowed."),
         ]
     }
 
@@ -189,12 +189,128 @@ struct SteamTipsSection: View {
                 .padding(.top, 6)
             } label: {
                 Text("Performance tips for Steam games").font(.headline)
-            }
+            }.disclosureGroupStyle(WholeRowDisclosureStyle())
             .padding(6)
         }
         .onAppear {
             overlayOff = SharedSteam.overlayDisabled
             lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
         }
+    }
+}
+
+/// On the EA app / Ubisoft Connect page: games installed in it, each addable as its own app.
+struct LauncherGamesSection: View {
+    @EnvironmentObject var model: AppModel
+    let host: InstalledGame
+    let kind: PCLauncher
+    @State private var games: [PCLaunchers.HostedGame] = []
+
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                if games.isEmpty {
+                    Text("No games installed in \(kind.title) yet. Install one there, then press Refresh.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(games) { hg in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(hg.name)
+                            Text(hg.installLocation).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if let app = PCLaunchers.addedApp(for: hg, kind: kind, in: model.games) {
+                            Button("Show") { model.selection = app.id }.buttonStyle(.link)
+                            Button("Play") { model.play(app) }
+                        } else {
+                            Button("Add to Nokcandu") { add(hg) }
+                        }
+                    }
+                }
+                Text("Each game gets its own app that opens \(kind.title) (signed in) and starts the game, using this app's graphics and performance settings. \(kind == .ea ? "The EA app runs in Wine with mixed results; if it won't open, try another graphics mode here." : "Games with anti-cheat may not run.")")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(6).frame(maxWidth: .infinity, alignment: .leading)
+        } label: {
+            HStack {
+                Text("\(kind.title) Games").font(.headline)
+                Spacer()
+                Button("Refresh", action: load).buttonStyle(.link)
+            }
+        }
+        .onAppear(perform: load)
+    }
+
+    func load() { games = PCLaunchers.installedGames(kind, host: host) }
+
+    func add(_ hg: PCLaunchers.HostedGame) {
+        do {
+            let url = try PCLaunchers.addGame(hg, kind: kind, host: host)
+            model.refresh(); model.selection = url.path
+            model.say("Added \(hg.name). Play starts it through \(kind.title).")
+        } catch { model.fail(error) }
+    }
+}
+
+/// On a launcher's page (Steam, Battle.net, EA app, Ubisoft Connect): let it install games on another drive.
+/// Gives the drive a Windows letter inside the launcher; the launcher's own settings then pick it.
+struct LauncherDriveBox: View {
+    @EnvironmentObject var model: AppModel
+    let host: InstalledGame
+    let name: String
+    @State private var drives: [Drives.Drive] = []
+    @State private var message: String?
+
+    var howTo: String {
+        switch name {
+        case "Steam": "In Steam: Settings → Storage → Add Drive, pick %@, then install games there (or move them with Steam's Move button)."
+        case "Battle.net": "In Battle.net: Settings → Downloads → Default Install Directory, choose %@. Existing games can be moved by reinstalling or with Battle.net's \"Locate the game\"."
+        case "EA app": "In the EA app: Settings → Download → Download location, choose %@."
+        default: "In Ubisoft Connect: Settings → Downloads → Default game installation location, choose %@."
+        }
+    }
+
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(drives.filter { !$0.builtIn && !$0.gameDisc }) { d in
+                    HStack {
+                        Text("\(d.letter):").font(.body.monospaced().bold())
+                        Image(systemName: d.connected ? "externaldrive.fill" : "externaldrive.badge.xmark").foregroundStyle(d.connected ? Color.secondary : .orange)
+                        Text(d.target).lineLimit(1).truncationMode(.middle).font(.caption)
+                        if !d.connected { Text("not connected").font(.caption).foregroundStyle(.orange) }
+                    }
+                }
+                if let message { Text(message).font(.caption).fixedSize(horizontal: false, vertical: true) }
+                HStack {
+                    Text("Keep \(name)'s games on an external drive (ExFAT is fine). The drive appears inside \(name) as a drive letter.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button("Use a Drive for Games…", action: add)
+                }
+            }
+            .padding(6).frame(maxWidth: .infinity, alignment: .leading)
+        } label: { Text("Game Drives").font(.headline) }
+        .onAppear { drives = Drives.list(for: host) }
+    }
+
+    func add() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true
+        panel.prompt = "Use for Games"
+        panel.message = "Choose a drive or folder for \(name) games. Picking a whole drive makes a “\(name) Games” folder on it."
+        guard panel.runModal() == .OK, var u = panel.url else { return }
+        do {
+            if (try? u.resourceValues(forKeys: [.isVolumeKey]).isVolume) == true {
+                u = u.appendingPathComponent("\(name) Games", isDirectory: true)
+                try FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
+            }
+            let free = Drives.freeLetters(for: host).filter { $0 != "D" }
+            guard let letter = free.first else { throw NokError("No free drive letters left.") }
+            try Drives.add(letter, to: u, for: host)
+            drives = Drives.list(for: host)
+            message = "\(letter): is now \(u.path). " + String(format: howTo, "\(letter):") + " If \(name) is open, quit and reopen it first."
+        } catch { message = error.localizedDescription }
     }
 }

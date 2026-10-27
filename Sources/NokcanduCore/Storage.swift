@@ -30,8 +30,18 @@ public enum Storage {
     public static func games(_ games: [InstalledGame]) -> [Item] {
         games.map { g in
             let logs = size(g.logs)
-            return Item(title: g.isSteamHost ? "Steam (all Steam games)" : g.name, url: g.appURL, bytes: size(g.appURL),
-                        detail: logs > 1_000_000 ? "logs \(format(logs))" : "")
+            var detail: [String] = []
+            let folder = g.appURL.deletingLastPathComponent()
+            if folder.path.hasPrefix("/Volumes/") { detail.append("on \(folder.pathComponents.count > 2 ? folder.pathComponents[2] : "another drive")") }
+            var bytes = size(g.appURL)
+            if let ext = GameMover.externalFiles(g) {
+                let b = size(ext)
+                detail.append("game files on \(ext.path.hasPrefix("/Volumes/") ? ext.pathComponents[2] : "another drive") (\(format(b)))")
+                bytes += b
+            }
+            if logs > 1_000_000 { detail.append("logs \(format(logs))") }
+            return Item(title: g.isSteamHost ? "Steam (all Steam games)" : g.name, url: g.appURL, bytes: bytes,
+                        detail: detail.joined(separator: " · "))
         }.sorted { $0.bytes > $1.bytes }
     }
 

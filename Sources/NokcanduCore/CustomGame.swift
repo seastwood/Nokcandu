@@ -5,7 +5,7 @@ import Foundation
 // Contents/SharedSupport/nokcandu/game.json; the launcher is generated from those settings.
 
 public enum GameSource: String, Codable, CaseIterable, Identifiable {
-    case installer, disc, steamLibrary, steam, folder
+    case installer, disc, steamLibrary, steam, folder, store
     public var id: String { rawValue }
     public var title: String {
         switch self {
@@ -14,6 +14,7 @@ public enum GameSource: String, Codable, CaseIterable, Identifiable {
         case .steamLibrary: "From your Steam library"
         case .steam: "Steam download (SteamCMD)"
         case .folder: "Existing game folder"
+        case .store: "From GOG, Epic or Amazon"
         }
     }
     public var detail: String {
@@ -23,10 +24,11 @@ public enum GameSource: String, Codable, CaseIterable, Identifiable {
         case .steamLibrary: "Browse your Steam games. They install into one shared Windows Steam (sign in once); each game still gets its own Mac app. For games that need Steam running, like Counter-Strike: Source."
         case .steam: "Just the game's Windows files, via SteamCMD. Only for games that run without Steam (like Zero Hour)."
         case .folder: "A Windows game folder that's already installed somewhere."
+        case .store: "Sign in to your GOG, Epic Games or Amazon account and install games you own; each gets its own Mac app."
         }
     }
     public var symbol: String {
-        switch self { case .installer: "shippingbox"; case .disc: "opticaldisc"; case .steamLibrary: "cloud"; case .steam: "arrow.down.circle"; case .folder: "folder" }
+        switch self { case .installer: "shippingbox"; case .disc: "opticaldisc"; case .steamLibrary: "cloud"; case .steam: "arrow.down.circle"; case .folder: "folder"; case .store: "bag" }
     }
 }
 
@@ -35,6 +37,7 @@ public enum GraphicsPreset: String, Codable, CaseIterable, Identifiable {
     case classic3D = "dx9"
     case modern3D = "dx11"
     case appleMetal = "d3dmetal"
+    case dxmt = "dxmt"
     case classic2D = "ddraw"
     case compatible = "wined3d"
 
@@ -44,6 +47,7 @@ public enum GraphicsPreset: String, Codable, CaseIterable, Identifiable {
         case .classic3D: "Older 3D games"
         case .modern3D: "Newer 3D games"
         case .appleMetal: "Apple Metal"
+        case .dxmt: "Metal for DirectX 10–11 (DXMT)"
         case .classic2D: "Classic 2D games"
         case .compatible: "Compatibility"
         }
@@ -53,6 +57,7 @@ public enum GraphicsPreset: String, Codable, CaseIterable, Identifiable {
         case .classic3D: "DirectX 8–9. The mode tested with Zero Hour."
         case .modern3D: "DirectX 10–11."
         case .appleMetal: "DirectX 11–12, 64-bit games only."
+        case .dxmt: "DirectX 10–11 straight to Metal, 32- and 64-bit games. Newer; try it when Apple Metal can't run a game (32-bit) or Newer 3D games is slow."
         case .classic2D: "DirectDraw games from the late '90s."
         case .compatible: "Wine's own graphics. Slower, but works with the most games."
         }
@@ -62,6 +67,7 @@ public enum GraphicsPreset: String, Codable, CaseIterable, Identifiable {
         case .classic3D: "DXVK-Sikarugir 3.1.1 (d9vk) + KosmicKrisp Vulkan"
         case .modern3D: "DXVK-Sikarugir 3.1.1 (dxvk3) + KosmicKrisp Vulkan"
         case .appleMetal: "Apple D3DMetal (Game Porting Toolkit)"
+        case .dxmt: "DXMT (open source, LGPL) — D3D10/11 on Metal"
         case .classic2D: "cnc-ddraw 7.1"
         case .compatible: "WineD3D (OpenGL)"
         }
@@ -87,6 +93,14 @@ public enum GraphicsPreset: String, Codable, CaseIterable, Identifiable {
                     #"export DYLD_FALLBACK_FRAMEWORK_PATH="$SUPPORT/renderer/d3dmetal/external""#,
                     #"[ -f "$SUPPORT/renderer/d3dmetal/external/libd3dshared.dylib" ] && export CX_APPLEGPTK_LIBD3DSHARED_PATH="$SUPPORT/renderer/d3dmetal/external/libd3dshared.dylib""#,
                     #"export WINEDLLOVERRIDES="dxgi,d3d11,d3d12,d3d12core=b""#]
+        case .dxmt:
+            return [#"export WINEDLLPATH_DXMT="$SUPPORT/renderer/dxmt/wine""#,
+                    #"export DXMT_LOG_PATH="$SUPPORT/Logs""#,
+                    // Report the same graphics card as Apple Metal (D3DMetal: AMD 0x1002/0x66AF). Games remember
+                    // settings per card — CS2 resets its video settings and window mode whenever the card changes —
+                    // so switching between Apple Metal and DXMT would otherwise wipe the game's own settings.
+                    #"export DXMT_CONFIG="${DXMT_CONFIG:+$DXMT_CONFIG;}dxgi.customVendorId=1002;dxgi.customDeviceId=66af""#,
+                    #"export WINEDLLOVERRIDES="dxgi,d3d10core,d3d11,winemetal=b""#]
         case .classic2D:
             return [#"export WINEDLLPATH_CNCD="$SUPPORT/renderer/cnc_ddraw/wine""#, #"export WINEDLLOVERRIDES="ddraw=b""#]
         case .compatible:
@@ -118,6 +132,8 @@ public struct CustomGameConfig: Codable, Hashable {
     public var arguments: String = ""
     public var graphics: GraphicsPreset
     public var disc: DiscSpec?
+    /// Disc 2, 3… of a multi-disc game (Disc 1 is `disc`). Drive D: holds one at a time.
+    public var extraDiscs: [DiscSpec]?
     public var is64Bit: Bool?
     public var detectedAPIs: [String] = []
     /// Graphics mode the user confirmed actually played well (nil = not play-tested yet).
@@ -128,6 +144,10 @@ public struct CustomGameConfig: Codable, Hashable {
     public var environment: [String: String]?
     /// Game resolution: the Mac's screen switches to these pixels while the game runs (nil = leave it).
     public var displayPixels: [Int]?
+    /// Unused: Wine's Mac driver has no virtual screen (kept so settings saved by test builds still load).
+    public var virtualScreen: [Int]?
+    /// The store the game came from (GOG, Epic, Amazon); Epic and Amazon add sign-in details at launch.
+    public var store: StoreLink?
 
     public static let fileName = "game.json"
     public static func url(in contents: URL) -> URL { contents.appendingPathComponent("SharedSupport/nokcandu/\(fileName)") }
@@ -165,7 +185,7 @@ public struct CustomGameConfig: Codable, Hashable {
         return GameRecipe(
             id: "custom-\(id)",
             displayName: name,
-            edition: "Added with Nokcandu · \(source.title)",
+            edition: "Added with Nokcandu · " + (store.map { "From \($0.store.title)" } ?? source.title),
             ownershipSource: steamAppID.map { "Steam app \($0)" } ?? source.title,
             validationDate: ISO8601DateFormatter().string(from: createdAt).prefix(10).description,
             appBundleName: "\(name).app",
@@ -293,6 +313,10 @@ public enum CustomGames {
 
     static func shellQuote(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
 
+    static func shellQuoteIfNeeded(_ s: String) -> String {
+        s.isEmpty || s.contains(where: { " \t'\"".contains($0) }) ? "\"" + s.replacingOccurrences(of: "\"", with: "") + "\"" : s
+    }
+
     static func splitArguments(_ s: String) -> [String] {
         var out: [String] = [], cur = "", quote: Character? = nil, has = false
         for ch in s {
@@ -372,7 +396,7 @@ public enum CustomGames {
         fi
 
         """
-        if let d = c.disc {
+        if let d = c.disc, c.extraDiscs?.isEmpty ?? true {
             s += """
             # Disc: mount the game's own image read-only and map D: (volume) and D:: (raw device).
             DISC_IMAGE="$SUPPORT/"\(shellQuote(d.imageName))
@@ -393,8 +417,33 @@ public enum CustomGames {
             ln -sfn "$RAW_DEVICE" "$WINEPREFIX/dosdevices/d::"
 
             """
+        } else if c.disc != nil {
+            let discs = Discs.all(c)
+            s += """
+            # Discs: the game's \(discs.count) disc images. D: holds the one chosen in Nokcandu (Discs → Put in drive D:,
+            # also while playing); each is mounted read-only at its own folder inside the app.
+            DISC_IMAGES=(\(discs.map { shellQuote($0.imageName) }.joined(separator: " ")))
+            CUR=$(head -n 1 "$SUPPORT/nokcandu/current-disc" 2>/dev/null || echo 0)
+            { [[ "$CUR" =~ ^[0-9]+$ ]] && [ "$CUR" -lt ${#DISC_IMAGES[@]} ]; } || CUR=0
+            DISC_IMAGE="$SUPPORT/${DISC_IMAGES[$CUR]}"
+            MOUNT_DIR="$SUPPORT/MountedDisc"; [ "$CUR" -gt 0 ] && MOUNT_DIR="$SUPPORT/MountedDisc$((CUR + 1))"
+            info() { /usr/sbin/diskutil info -plist "$1" 2>/dev/null | /usr/bin/plutil -extract "$2" raw -o - - 2>/dev/null || true; }
+            if [ "$(info "$MOUNT_DIR" MountPoint)" != "$MOUNT_DIR" ]; then
+             [ -f "$DISC_IMAGE" ]
+             mkdir -p "$MOUNT_DIR"
+             /usr/bin/hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT_DIR" "$DISC_IMAGE" >/dev/null
+            fi
+            DISC_DEVICE=$(info "$MOUNT_DIR" DeviceNode)
+            RAW_DEVICE="/dev/r${DISC_DEVICE#/dev/}"
+            [ -r "$RAW_DEVICE" ]
+            ln -sfn "$MOUNT_DIR" "$WINEPREFIX/dosdevices/d:"
+            ln -sfn "$RAW_DEVICE" "$WINEPREFIX/dosdevices/d::"
+
+            """
         }
         let args = splitArguments(c.arguments).map(shellQuote).joined(separator: " ")
+        if let link = c.store { s += StoreAccounts.launcherLines(link) }
+        let storeArgs = c.store == nil ? "" : #" ${STORE_ARGS[@]+"${STORE_ARGS[@]}"}"#
         s += """
         [ -x "$SUPPORT/wine/bin/wine" ]
         [ -f "$GAME_DIR/"\(shellQuote(exeName)) ]
@@ -402,7 +451,7 @@ public enum CustomGames {
         \(GameDisplay.launcherLines(c.displayPixels, tool: #""$SUPPORT/nokcandu/screen-size""#, log: #""$LOG_DIR/display.log""#,
                                      pattern: GameDisplay.watchPattern(exeName: exeName)))cd "$GAME_DIR"
         STATUS=0
-        "$SUPPORT/wine/bin/wine" "$GAME_EXE"\(args.isEmpty ? "" : " " + args) || STATUS=$?
+        "$SUPPORT/wine/bin/wine" "$GAME_EXE"\(args.isEmpty ? "" : " " + args)\(storeArgs) || STATUS=$?
         echo "nokcandu: game exited with status $STATUS after ${SECONDS}s"
         exit $STATUS
 

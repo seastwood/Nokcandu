@@ -154,7 +154,8 @@ public enum SharedSteam {
         # What Steam's Wine was started with: graphics mode, Performance and Mouse settings, helper library.
         # A game started later restarts Steam (after asking) when any of it changed since.
         config_id() {
-         { echo "$MODE"; cat "$STATE/perf.env" "$STATE/raw-mouse" "$STATE/raw-mouse-debug" 2>/dev/null
+         # (Files that don't exist are simply left out — a missing one must never stop Steam from starting.)
+         { echo "$MODE"; cat "$STATE/perf.env" "$STATE/raw-mouse" "$STATE/raw-mouse-debug" 2>/dev/null || true
            /sbin/md5 -q "$STATE/nokcandu-rawmouse.dylib" 2>/dev/null || true; } | /sbin/md5 -q
         }
         if running; then

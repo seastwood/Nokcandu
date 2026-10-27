@@ -23,6 +23,8 @@ public struct GameNote: Codable, Identifiable, Hashable {
     public var edited: Date?
     /// The game's setup when the note was written (graphics, program, options), so "this worked" stays meaningful.
     public var setup: String?
+    /// The full setup at that time, so it can be looked at in detail and restored.
+    public var snapshot: GameProfile?
 
     public init(kind: Kind, text: String, link: String? = nil, setup: String? = nil) {
         self.kind = kind; self.text = text; self.link = link; self.setup = setup

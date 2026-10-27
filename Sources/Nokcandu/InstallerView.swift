@@ -9,7 +9,19 @@ final class InstallerModel: ObservableObject {
     @Published var log: String = ""
     @Published var running = false
     @Published var tick = 0
-    @Published var saved: [InstallState] = InstallExecutor.savedInstalls().filter { $0.finishedAt == nil }
+    @Published var saved: [InstallState] = InstallerModel.unfinished()
+
+    /// Installs that aren't finished and whose app isn't a working game yet (an install whose last
+    /// confirmation step was skipped, but whose app plays, isn't shown).
+    static func unfinished() -> [InstallState] {
+        InstallExecutor.savedInstalls().filter { s in
+            guard s.finishedAt == nil else { return false }
+            let app = URL(fileURLWithPath: s.targetApp)
+            let complete = FileManager.default.fileExists(atPath: app.appendingPathComponent("Contents/Info.plist").path)
+                && GameLibrary.inspect(app)?.launcherURL != nil
+            return !complete
+        }
+    }
     @Published var exeCandidates: [CustomGames.ExeCandidate] = []
     private var task: Task<Void, Never>?
 
@@ -26,9 +38,44 @@ final class InstallerModel: ObservableObject {
         catch { append("✗ \(error.localizedDescription)") }
     }
 
-    func startCustom(name: String, source: GameSource, library: [InstalledGame]) {
-        do { wire(try InstallExecutor.makeCustom(name: name, source: source, library: library, log: logger)) }
-        catch { append("✗ \(error.localizedDescription)") }
+    /// Shown in the chooser when a game can't be started (the log isn't visible there yet).
+    @Published var startError: String?
+
+    func startCustom(name: String, source: GameSource, library: [InstalledGame], folder: URL = GameFolders.installFolder, inputs: [String: String] = [:]) {
+        startError = nil
+        // Same name as an unfinished install: pick that one up again instead of refusing.
+        let appName = CustomGames.safeFolderName(name.trimmingCharacters(in: .whitespacesAndNewlines)) + ".app"
+        if let s = saved.first(where: { URL(fileURLWithPath: $0.targetApp).lastPathComponent.caseInsensitiveCompare(appName) == .orderedSame }) {
+            resume(s.installID, library: library)
+            return
+        }
+        do { wire(try InstallExecutor.makeCustom(name: name, source: source, library: library, folder: folder, inputs: inputs, log: logger)) }
+        catch { append("✗ \(error.localizedDescription)"); startError = error.localizedDescription }
+    }
+
+    func startBattleNet(library: [InstalledGame]) {
+        startError = nil
+        append("Downloading the Battle.net installer…")
+        Task {
+            do {
+                let setup = try await PCLaunchers.downloadBattleNetSetup()
+                startCustom(name: "Battle.net", source: .installer, library: library, folder: NokPaths.gameAppsFolder, inputs: ["installerPath": setup.path])
+                if executor != nil { continueInstall() }
+            } catch { append("✗ \(error.localizedDescription)"); startError = error.localizedDescription }
+        }
+    }
+
+    /// EA app / Ubisoft Connect: fetch the official installer, then the usual "Windows installer" setup.
+    func startLauncher(_ k: PCLauncher, library: [InstalledGame]) {
+        startError = nil
+        append("Downloading the \(k.title) installer…")
+        Task {
+            do {
+                let setup = try await PCLaunchers.downloadSetup(k)
+                startCustom(name: k.title, source: .installer, library: library, folder: NokPaths.gameAppsFolder, inputs: ["installerPath": setup.path])
+                if executor != nil { continueInstall() }
+            } catch { append("✗ \(error.localizedDescription)"); startError = error.localizedDescription }
+        }
     }
 
     func startSteamHost(library: [InstalledGame]) {
@@ -46,7 +93,7 @@ final class InstallerModel: ObservableObject {
         do {
             let ex = try InstallExecutor.resume(id, library: library, log: { _ in })
             let msg = ex.removeUnfinishedInstall()
-            saved = InstallExecutor.savedInstalls().filter { $0.finishedAt == nil }
+            saved = InstallerModel.unfinished()
             return msg
         } catch { return error.localizedDescription }
     }
@@ -90,13 +137,14 @@ struct InstallerView: View {
     @State private var steamAppID = ""
     @State private var newName = ""
     @State private var newSource: GameSource = .installer
+    @State private var installFolder: URL = GameFolders.installFolder
     @State private var confirmRemove = false
     @State private var pendingRemoval: InstallState?
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text(m.executor == nil ? "Install a Game" : "Install \(m.executor!.displayName)").font(.title2.bold())
+                Text(m.executor == nil ? "Add a Game" : "Install \(m.executor!.displayName)").font(.title2.bold())
                 Spacer()
                 Text("Preview").font(.caption.bold()).padding(.horizontal, 8).padding(.vertical, 3)
                     .background(.orange.opacity(0.2), in: Capsule())
@@ -117,6 +165,15 @@ struct InstallerView: View {
         } message: { Text("Moves the half-built app (only if this install created it) to the Trash and forgets its progress. Other games aren't touched.") }
         .onAppear {
             if app.installerStartsSteamHost && m.executor == nil { m.startSteamHost(library: app.games) }
+            if let p = app.pendingLauncherSetup, m.executor == nil {
+                app.pendingLauncherSetup = nil
+                if let k = p { m.startLauncher(k, library: app.games) } else { m.startBattleNet(library: app.games) }
+            }
+            if let p = app.pendingStoreInstall, m.executor == nil {
+                app.pendingStoreInstall = nil
+                m.startCustom(name: p.name, source: .store, library: app.games, folder: p.folder, inputs: p.inputs)
+                if m.executor != nil { m.continueInstall() }
+            }
         }
     }
 
@@ -128,8 +185,33 @@ struct InstallerView: View {
                 Text("Every game gets its own new app with its own Windows environment. Your existing games, saves and settings aren't touched. Each step checks its own result and stops rather than guessing.")
                     .font(.callout).foregroundStyle(.secondary)
             }
+            if let e = m.startError {
+                Section { Label(e, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
+            }
+            if !m.saved.isEmpty {
+                Section("Unfinished installs") {
+                    ForEach(m.saved, id: \.installID) { s in
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text(URL(fileURLWithPath: s.targetApp).deletingPathExtension().lastPathComponent)
+                                Text("\(s.completed.count) steps done · started \(s.startedAt.formatted(date: .abbreviated, time: .shortened))")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Resume") { m.resume(s.installID, library: app.games); m.refreshCandidates() }
+                            Button("Remove…", role: .destructive) { pendingRemoval = s }
+                        }
+                    }
+                }
+            }
             Section("Any Windows game you own") {
-                TextField("Game name", text: $newName)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Game name").font(.subheadline.weight(.medium))
+                    TextField("Game name", text: $newName, prompt: Text("For example: Counter-Strike 2"))
+                        .textFieldStyle(.roundedBorder)
+                        .labelsHidden()
+                }
+                .padding(.vertical, 2)
                 ForEach(GameSource.allCases) { s in
                     Button { newSource = s } label: {
                         HStack(alignment: .top, spacing: 10) {
@@ -146,20 +228,80 @@ struct InstallerView: View {
                     }
                     .buttonStyle(.plain)
                 }
+                if newSource != .steamLibrary && newSource != .store {
+                    InstallFolderPicker(folder: $installFolder)
+                }
                 HStack {
                     Text("New games start untested. Nokcandu suggests a graphics mode; you confirm it actually plays.")
                         .font(.caption).foregroundStyle(.secondary)
                     Spacer()
-                    Button(newSource == .steamLibrary ? "Open Steam Library" : "Start") {
+                    Button(newSource == .steamLibrary ? "Open Steam Library" : newSource == .store ? "Open Store Library" : "Start") {
                         if newSource == .steamLibrary {
                             dismiss()
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { app.showSteamLibrary = true }
+                        } else if newSource == .store {
+                            dismiss()
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { app.showStores = true }
                         } else {
-                            m.startCustom(name: newName, source: newSource, library: app.games)
+                            m.startCustom(name: newName, source: newSource, library: app.games, folder: installFolder)
                         }
                     }
-                        .disabled(newSource != .steamLibrary && newName.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .disabled(newSource != .steamLibrary && newSource != .store && newName.trimmingCharacters(in: .whitespaces).isEmpty)
                         .keyboardShortcut(.defaultAction)
+                }
+            }
+            Section("Mac games") {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Add a Mac game").font(.headline)
+                        Text("Keep Mac games (like OpenMW) in the same library. Nokcandu just opens them — nothing is changed or moved.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer()
+                    Button("Choose App…") {
+                        dismiss()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { app.addMacGame() }
+                    }
+                }
+            }
+            Section("Game launchers") {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Battle.net").font(.headline)
+                        Text("Downloads Blizzard's installer and sets up Battle.net. Each Blizzard game you install in it gets its own Mac app.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer()
+                    if let h = app.games.first(where: BattleNet.isHost) {
+                        Label("Installed", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(.green)
+                        Button("Show") { app.selection = h.id; dismiss() }
+                    } else {
+                        Button("Set Up") { m.startBattleNet(library: app.games) }.disabled(m.running)
+                    }
+                }
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Steam").font(.headline)
+                        Text("One shared Steam for all your Steam games.").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Open Steam Library") { dismiss(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { app.showSteamLibrary = true } }
+                }
+                ForEach(PCLauncher.allCases.filter { !$0.isOptional }) { k in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(k.title).font(.headline)
+                            Text("Downloads the official \(k.title) installer and sets it up as a launcher app. Games you install in it can each get their own Mac app.")
+                                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer()
+                        if let h = app.games.first(where: { PCLaunchers.kind(of: $0) == k }) {
+                            Label("Installed", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(.green)
+                            Button("Show") { app.selection = h.id; dismiss() }
+                        } else {
+                            Button("Set Up") { m.startLauncher(k, library: app.games) }.disabled(m.running)
+                        }
+                    }
                 }
             }
             Section("Tested recipes") {
@@ -174,22 +316,6 @@ struct InstallerView: View {
                             Button("Choose") { m.start(recipe: r, library: app.games) }
                         } else {
                             Text("Installed manually").font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            }
-            if !m.saved.isEmpty {
-                Section("Unfinished installs") {
-                    ForEach(m.saved, id: \.installID) { s in
-                        HStack {
-                            VStack(alignment: .leading) {
-                                Text(URL(fileURLWithPath: s.targetApp).deletingPathExtension().lastPathComponent)
-                                Text("\(s.completed.count) steps done · started \(s.startedAt.formatted(date: .abbreviated, time: .shortened))")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Button("Resume") { m.resume(s.installID, library: app.games); m.refreshCandidates() }
-                            Button("Remove…", role: .destructive) { pendingRemoval = s }
                         }
                     }
                 }
@@ -211,6 +337,7 @@ struct InstallerView: View {
             .frame(width: 270)
             Divider()
             VStack(alignment: .leading, spacing: 10) {
+                DiscSwapBar(ex: ex)
                 if let s = ex.nextStage {
                     Text(s.info.title).font(.headline)
                     Text(s.info.detail).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -334,8 +461,13 @@ struct InstallerView: View {
             }
         case .disc:
             HStack {
-                Button("Choose Disc Image…") {
-                    if let u = pick(folder: false, types: ["iso", "cdr"]) { m.setInput("isoPath", u.path); m.continueInstall() }
+                Button("Choose Disc Images…") {
+                    let urls = Discs.sorted(pickMany(types: Discs.imageTypes))
+                    if let first = urls.first {
+                        m.setInput("acquire.opened", "0"); m.setInput("acquire.finished", "0")
+                        m.setInput("isoPaths", urls.map(\.path).joined(separator: "\n"))
+                        m.setInput("isoPath", first.path); m.continueInstall()
+                    }
                 }
                 if inputs["acquire.opened"] == "1" {
                     Button("Run Setup Again") { m.setInput("acquire.opened", "0"); m.setInput("acquire.finished", "0"); m.continueInstall() }
@@ -357,6 +489,8 @@ struct InstallerView: View {
             appIDHint
         case .steamLibrary:
             Button("Open Steam Library") { app.showSteamLibrary = true }
+        case .store:
+            Button("Continue Download") { m.continueInstall() }.disabled(m.running)
         }
     }
 
@@ -425,6 +559,16 @@ struct InstallerView: View {
             Button("Close") { app.refresh(); dismiss() }.disabled(m.running)
         }
         .padding()
+    }
+
+    /// Several files at once (all of a game's discs). Disc order comes from their names.
+    func pickMany(types: [String]) -> [URL] {
+        let p = NSOpenPanel()
+        p.canChooseFiles = true
+        p.allowsMultipleSelection = true
+        p.message = "Choose the game's disc image — or all of its discs (Disc 1, Disc 2…)."
+        p.allowedContentTypes = types.compactMap { UTType(filenameExtension: $0) }
+        return p.runModal() == .OK ? p.urls : []
     }
 
     func pick(folder: Bool, types: [String]) -> URL? {
@@ -511,5 +655,111 @@ struct GraphicsPicker: View {
             app.refresh()
             onChange()
         } catch { app.fail(error) }
+    }
+}
+
+
+/// While a multi-disc game installs: which disc is in D:, and buttons to swap when setup asks.
+struct DiscSwapBar: View {
+    let ex: InstallExecutor
+    @State private var current = 0
+    @State private var error: String?
+    @State private var running = false
+
+    var images: [String] { (ex.ctx.state.inputs["disc.images"] ?? "").split(separator: "\n").map(String.init) }
+
+    var body: some View {
+        if images.count > 1 {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Image(systemName: "opticaldisc")
+                    Text("Drive D: has Disc \(current + 1) of \(images.count).").font(.callout)
+                    ForEach(images.indices, id: \.self) { i in
+                        if i != current {
+                            Button("Insert Disc \(i + 1)") { insert(i) }
+                        }
+                    }
+                }
+                HStack(spacing: 8) {
+                    Text("Expansion discs with their own setup:").font(.caption).foregroundStyle(.secondary)
+                    ForEach(images.indices.dropFirst(), id: \.self) { i in
+                        Button("Run Setup from Disc \(i + 1)") { runSetup(i) }.disabled(running)
+                    }
+                    if running { ProgressView().controlSize(.small) }
+                }
+                Text("When setup asks for another disc, insert it here, then continue in setup. Expansions: install the base game first, then run each expansion disc's setup.").font(.caption).foregroundStyle(.secondary)
+                if let error { Text(error).font(.caption).foregroundStyle(.red) }
+            }
+            .padding(8).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+            .onAppear { current = Discs.current(support: ex.ctx.support) }
+        }
+    }
+
+    func insert(_ i: Int) {
+        do { try Discs.insert(i, images: images, support: ex.ctx.support, prefix: ex.ctx.prefix); current = i; error = nil }
+        catch { self.error = error.localizedDescription }
+    }
+
+    func runSetup(_ i: Int) {
+        let ctx = ex.ctx, imgs = images
+        running = true; current = i
+        Task {
+            do { try await Discs.runSetup(i, images: imgs, support: ctx.support, prefix: ctx.prefix, env: ctx.wineEnvironment, log: ctx.log); error = nil }
+            catch { self.error = error.localizedDescription }
+            running = false
+        }
+    }
+}
+
+/// "Install to:" — the library folders, plus adding another (e.g. on an external drive).
+struct InstallFolderPicker: View {
+    @Binding var folder: URL
+    @State private var folders = GameFolders.all
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Picker("Install to", selection: Binding(get: { folder.standardizedFileURL }, set: { pick($0) })) {
+                ForEach(folders, id: \.self) { f in
+                    Text(GameFolderLabel.text(f)).tag(f).disabled(!GameFolders.isAvailable(f))
+                }
+                Divider()
+                Text("Other Folder…").tag(URL(fileURLWithPath: "/__other__"))
+            }
+            if let error { Text(error).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true) }
+            else {
+                let free = GameFolders.freeSpace(folder).map { Storage.format($0) + " free" } ?? ""
+                Text("\(GameFolders.volumeName(folder)) · \(free)"
+                     + (GameFolders.holdsApps(folder) ? "" : " · \(GameFolders.formatName(folder)) drive: the game's files go here, its small app stays on this Mac"))
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    func pick(_ u: URL) {
+        error = nil
+        guard u.path == "/__other__" else { folder = u; GameFolders.setInstallFolder(u); return }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true
+        panel.prompt = "Use This Folder"
+        panel.message = "Choose where to install games. Picking a whole drive makes a “Nokcandu Games” folder on it."
+        guard panel.runModal() == .OK, let picked = panel.url else { return }
+        do {
+            let added = try GameFolders.add(picked)
+            folders = GameFolders.all
+            folder = added
+            GameFolders.setInstallFolder(added)
+        } catch { self.error = error.localizedDescription }
+    }
+}
+
+enum GameFolderLabel {
+    static func text(_ f: URL) -> String {
+        let path = f.path.replacingOccurrences(of: NokPaths.home.path, with: "~")
+        if GameFolders.isStandard(f) { return "Standard folder (\(path))" }
+        if !GameFolders.isAvailable(f) { return "\(path) — not connected" }
+        let filesOnly = GameFolders.holdsApps(f) ? "" : " (game files only)"
+        if f.path.hasPrefix("/Volumes/") { return "\(GameFolders.volumeName(f)): \(f.lastPathComponent)\(filesOnly)" }
+        return path + filesOnly
     }
 }

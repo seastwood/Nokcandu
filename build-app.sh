@@ -51,10 +51,26 @@ cp Resources/refresh-generals-launcher.py Resources/build-icu-adapter.py Resourc
 chmod 755 "$APP/Contents/Resources/generals-launcher" "$APP/Contents/Resources/screen-size"
 # Raw mouse for aiming: x86_64 library loaded into Wine (which runs under Rosetta).
 xcrun clang -arch x86_64 -mmacosx-version-min=11.0 -dynamiclib -fobjc-arc -O2 -Wall \
-  -framework AppKit -framework GameController -framework CoreGraphics -framework IOKit \
+  -framework AppKit -framework GameController -framework CoreGraphics -framework IOKit -framework OpenGL \
   -install_name @rpath/nokcandu-rawmouse.dylib \
   -o "$APP/Contents/Resources/nokcandu-rawmouse.dylib" Resources/rawmouse/rawmouse.m
-codesign --force --sign - "$APP/Contents/Resources/nokcandu-rawmouse.dylib"
+# Signing identity: a stable one keeps macOS permissions (Input Monitoring, drives, folders) across builds.
+# NOKCANDU_SIGN_IDENTITY, else the "Nokcandu Signing" identity from scripts/make-signing-identity.sh, else ad-hoc.
+SIGN_ID="${NOKCANDU_SIGN_IDENTITY:-}"
+if [ -z "$SIGN_ID" ]; then
+  SIGN_ID="$(security find-identity -p codesigning 2>/dev/null | awk '/"Nokcandu Signing"/ { print $2; exit }')"
+fi
+SIGN_ID="${SIGN_ID:--}"
+# The identity's own keychain (scripts/signing-keychain.sh): unlock it so codesign never prompts.
+SIGN_KC=()
+KC="$HOME/Library/Keychains/nokcandu-signing.keychain-db"
+KC_PW="$HOME/Library/Application Support/Nokcandu/signing-keychain.password"
+if [ -z "${NOKCANDU_SIGN_IDENTITY:-}" ] && [ -f "$KC" ] && [ -f "$KC_PW" ] && security unlock-keychain -p "$(cat "$KC_PW")" "$KC" 2>/dev/null; then
+  K_ID="$(security find-identity -p codesigning "$KC" 2>/dev/null | awk '/"Nokcandu Signing"/ { print $2; exit }')"
+  [ -n "$K_ID" ] && { SIGN_ID="$K_ID"; SIGN_KC=(--keychain "$KC"); echo "Signing keychain: nokcandu-signing (unlocked, no prompts)"; }
+fi
+[ "$SIGN_ID" = "-" ] && echo "Signing: ad-hoc (macOS will re-ask for permissions after each build)" || echo "Signing: $SIGN_ID"
+codesign --force ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/nokcandu-rawmouse.dylib"
 
 # App icon (original artwork in Resources/AppIcon.png)
 ICONSET="$(mktemp -d)/AppIcon.iconset"
@@ -81,7 +97,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
-  <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>CFBundleURLTypes</key>
   <array><dict>
@@ -92,14 +108,17 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleURLSchemes</key><array><string>nokcandu</string></array>
   </dict></array>
   <key>NSMicrophoneUsageDescription</key><string>Games started from Nokcandu can use your microphone for voice chat.</string>
-  <key>NSDocumentsFolderUsageDescription</key><string>Nokcandu reads and adjusts Zero Hour's display settings in your Documents folder.</string>
+  <key>NSDocumentsFolderUsageDescription</key><string>Nokcandu reads and adjusts some games' settings in your Documents folder.</string>
+  <key>NSDownloadsFolderUsageDescription</key><string>Nokcandu installs games from installers and disc images you choose in Downloads.</string>
+  <key>NSRemovableVolumesUsageDescription</key><string>Nokcandu keeps games and game files on drives you choose, like an external SSD.</string>
+  <key>NSNetworkVolumesUsageDescription</key><string>Nokcandu can install games from a network drive you choose.</string>
 </dict>
 </plist>
 PLIST
 
-# Ad-hoc signature (local use; not notarized).
-codesign --force --sign - "$APP/Contents/Resources/screen-size"
-codesign --force --sign - "$APP"
+# Signed with the identity chosen above (not notarized).
+codesign --force ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/screen-size"
+codesign --force ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP"
 echo "Built $(pwd)/$APP"
 
 if [ "${1:-}" = --install ]; then

@@ -6,6 +6,8 @@ import NokcanduCore
 /// cinematic fix. Nothing changes until you choose it, and every engine change can be rolled back.
 struct UpdatesView: View {
     @EnvironmentObject var model: AppModel
+    /// Shown as a Settings tab (no title or Done button).
+    var embedded = false
     @Environment(\.dismiss) var dismiss
     @State private var checking = false
     @State private var busy: String?          // what's running now
@@ -24,16 +26,16 @@ struct UpdatesView: View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Updates").font(.title2.bold())
+                    if !embedded { Text("Updates").font(.title2.bold()) }
                     Text(cat.map { "Checked \($0.checkedAt.formatted(.relative(presentation: .named)))" } ?? "Not checked yet")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 if checking { ProgressView().controlSize(.small) }
                 Button("Check Now") { Task { checking = true; await model.checkForUpdates(); checking = false } }.disabled(checking)
-                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+                if !embedded { Button("Done") { dismiss() }.keyboardShortcut(.defaultAction) }
             }
-            .padding(20)
+            .padding(embedded ? 14 : 20)
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {

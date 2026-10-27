@@ -353,7 +353,8 @@ public enum ZeroHourInstall {
                              detail: "Adds the validated launcher, display helper, original game icon, and app details.", kind: .automatic)
         func isDone(_ ctx: InstallContext) -> Bool {
             let launcher = ctx.contents.appendingPathComponent("MacOS/generals-launcher")
-            guard let sha = try? Hashing.sha256(file: launcher) else { return false }
+            guard let text = try? String(contentsOf: launcher, encoding: .utf8) else { return false }
+            let sha = Hashing.sha256(data: Data(HelperPatch.strip(text).utf8))
             return ctx.recipe.knownLauncherHashes[sha] != nil &&
                 FileManager.default.fileExists(atPath: ctx.contents.appendingPathComponent("Info.plist").path) &&
                 FileManager.default.isExecutableFile(atPath: ctx.contents.appendingPathComponent("Resources/screen-size").path)

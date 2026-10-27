@@ -74,7 +74,8 @@ public enum Diagnostics {
 
         // App & launcher
         if let l = g.launcherURL, fm.isExecutableFile(atPath: l.path) {
-            let sha = (try? Hashing.sha256(file: l)) ?? "?"
+            let text = (try? String(contentsOf: l, encoding: .utf8)).map(HelperPatch.strip)
+            let sha = text.map { Hashing.sha256(data: Data($0.utf8)) } ?? ((try? Hashing.sha256(file: l)) ?? "?")
             if let known = g.recipe?.knownLauncherHashes[sha] {
                 add(.app, "Launcher", .ok, known)
             } else if g.recipe?.display != nil, DisplayController.launcherState(g) == .nokcanduPatched {

@@ -49,7 +49,7 @@ struct WelcomeView: View {
                 Spacer()
                 if ready {
                     Button("Set Up Steam") { dismiss(); model.installerStartsSteamHost = true; model.showInstaller = true }
-                    Button("Install a Game…") { dismiss(); model.showInstaller = true }.buttonStyle(.borderedProminent)
+                    Button("Add a Game…") { dismiss(); model.showInstaller = true }.buttonStyle(.borderedProminent)
                 }
                 Button(ready ? "Done" : "Later") { dismiss() }.keyboardShortcut(.cancelAction)
             }

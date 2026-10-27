@@ -56,9 +56,20 @@ public enum RawMouse {
         let lib = bundledLibrary
         let want = lib.flatMap { try? Hashing.sha256(file: $0) }
         var names: [URL: [String: String]] = [:]       // host Contents → exe → name
+        var appNames: [URL: String] = [:]               // host Contents → name of its main GameApp wrapper
+        var wrappers: [URL: [GameApp.Wrapper]] = [:]    // host Contents → wrappers (one per program name)
         for g in games {
             guard let h = WineTools.hostContents(for: g) else { continue }
             var m = names[h] ?? [:]
+            if g.isSteamHost { appNames[h] = "Steam" }
+            else if BattleNet.isHost(g) { appNames[h] = "Battle.net" }
+            else if appNames[h] == nil, !g.usesSharedSteam, g.battleNet == nil { appNames[h] = LibraryOrganizer.canonicalName(g) }
+            if g.isSteamHost || BattleNet.isHost(g) || (!g.usesSharedSteam && g.battleNet == nil) {
+                wrappers[h, default: []].insert(GameApp.Wrapper(name: appNames[h] ?? g.name, iconFrom: g.contents,
+                                                               isGame: !g.isSteamHost && !BattleNet.isHost(g)), at: 0)
+            } else {
+                wrappers[h, default: []].append(GameApp.Wrapper(name: g.battleNet?.name ?? g.name, iconFrom: g.contents))
+            }
             if g.isSteamHost {
                 for e in ["steam.exe", "steamwebhelper.exe", "steamerrorreporter.exe", "steamservice.exe"] { m[e] = "Steam" }
             } else if BattleNet.isHost(g) {
@@ -87,6 +98,7 @@ public enum RawMouse {
                 if (try? Hashing.sha256(file: dst)) != want { try? fm.removeItem(at: dst); try? fm.copyItem(at: tool, to: dst) }
             }
             let text = m.sorted { $0.key < $1.key }.map { "\($0.key)\t\($0.value)" }.joined(separator: "\n") + "\n"
+            if let n = appNames[h] { GameApp.ensure(host: h, wrappers: wrappers[h] ?? [], programs: m, fallback: n) }
             let file = folder(h).appendingPathComponent("app-names.tsv")
             if (try? String(contentsOf: file, encoding: .utf8)) != text { try? Data(text.utf8).write(to: file, options: .atomic) }
         }

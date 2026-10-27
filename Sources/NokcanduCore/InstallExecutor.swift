@@ -148,16 +148,20 @@ public final class InstallExecutor: @unchecked Sendable {
     }
 
     /// Start a general install: any owned Windows game, from the chosen source.
-    public static func makeCustom(name: String, source: GameSource, library: [InstalledGame],
-                                  log: @escaping @Sendable (String) -> Void) throws -> InstallExecutor {
+    public static func makeCustom(name: String, source: GameSource, library: [InstalledGame], folder: URL = GameFolders.installFolder,
+                                  inputs: [String: String] = [:], log: @escaping @Sendable (String) -> Void) throws -> InstallExecutor {
         let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { throw NokError("Give the game a name first.") }
         let appName = CustomGames.safeFolderName(clean)
-        let target = try CustomGames.freeAppURL(appName)
+        if let p = GameFolders.problem(with: folder) { throw NokError(p) }
+        let plan = GameFolders.installPlan(folder)
+        let target = try CustomGames.freeAppURL(appName, in: plan.apps)
         var state = InstallState(installID: String(CustomGames.slug(clean).prefix(16)) + "-" + String(UUID().uuidString.prefix(6)).lowercased(),
                                  recipeID: CustomInstall.recipeID, targetApp: target.path)
         state.inputs["name"] = clean
         state.inputs["source"] = source.rawValue
+        if let files = plan.files { state.inputs["filesFolder"] = files.path }
+        for (k, v) in inputs { state.inputs[k] = v }
         return try resumeCustom(state, library: library, log: log)
     }
 

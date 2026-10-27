@@ -15,6 +15,10 @@ public struct InstalledGame: Identifiable, Hashable {
     public var renderer: String?
     /// A Blizzard game started through the shared Battle.net app.
     public var battleNet: BattleNetLink? = nil
+    /// A game started through the EA app or Ubisoft Connect app.
+    public var hosted: HostedGameLink? = nil
+    /// A Mac game (no Wine): Nokcandu just opens it.
+    public var native: NativeGame? = nil
 
     public var contents: URL { appURL.appendingPathComponent("Contents", isDirectory: true) }
     public var support: URL { contents.appendingPathComponent("SharedSupport", isDirectory: true) }
@@ -34,7 +38,7 @@ public struct InstalledGame: Identifiable, Hashable {
 
 public enum GameLibrary {
     /// Scans the Sikarugir apps folder (and any extra folders) for game apps.
-    public static func scan(folders: [URL] = [NokPaths.gameAppsFolder]) -> [InstalledGame] {
+    public static func scan(folders: [URL] = GameFolders.all) -> [InstalledGame] {
         let fm = FileManager.default
         var found: [InstalledGame] = []
         for folder in folders {
@@ -42,6 +46,10 @@ public enum GameLibrary {
             for app in items where app.pathExtension == "app" {
                 if let g = inspect(app) { found.append(g) }
             }
+        }
+        if folders == GameFolders.all {
+            let known = Set(found.map { $0.appURL.standardizedFileURL.path })
+            found += NativeGames.all().compactMap(NativeGames.installedGame).filter { !known.contains($0.appURL.standardizedFileURL.path) }
         }
         return found.sorted { ($0.recipe == nil ? 1 : 0, $0.name) < ($1.recipe == nil ? 1 : 0, $1.name) }
     }
@@ -52,7 +60,8 @@ public enum GameLibrary {
         // Wine-wrapper apps carry SharedSupport/prefix; Steam-library game apps carry only their Nokcandu settings.
         let hasPrefix = FileManager.default.fileExists(atPath: contents.appendingPathComponent("SharedSupport/prefix").path)
         let bnet = BattleNetLink.load(contents: contents)
-        guard hasPrefix || bnet != nil || FileManager.default.fileExists(atPath: CustomGameConfig.url(in: contents).path) else { return nil }
+        let hosted = HostedGameLink.load(contents: contents)
+        guard hasPrefix || bnet != nil || hosted != nil || FileManager.default.fileExists(atPath: CustomGameConfig.url(in: contents).path) else { return nil }
         let exe = info["CFBundleExecutable"] as? String
         let name = (info["CFBundleName"] as? String) ?? app.deletingPathExtension().lastPathComponent
         var recipe = RecipeCatalog.all.first { r in
@@ -78,7 +87,7 @@ public enum GameLibrary {
         if let custom { renderer = custom.graphics.technical }
         return InstalledGame(appURL: app, name: name, recipe: recipe, custom: custom,
                              bundleIdentifier: info["CFBundleIdentifier"] as? String,
-                             executableName: exe, iconURL: icon, wineVersion: version, renderer: renderer, battleNet: bnet)
+                             executableName: exe, iconURL: icon, wineVersion: version, renderer: renderer, battleNet: bnet, hosted: hosted)
     }
 }
 

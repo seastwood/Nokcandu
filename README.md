@@ -21,11 +21,13 @@ with tested settings, one-click fixes and safe updates. Think of it as a free al
 ## What it does
 
 - **Any Windows game you own** — run its installer, install from a disc image (.iso, mounted automatically), add an existing game folder, or download with Steam. Nokcandu picks the game's program, suggests a graphics mode from what the game uses, and extracts its icon.
-- **Shared Steam & Battle.net** — sign in once; every Steam or Blizzard game gets its own Mac app with its icon. Steam libraries and Battle.net installs on external drives are supported.
-- **Graphics modes** — Classic 3D (DirectX 8/9 → Vulkan), Modern 3D (DirectX 10/11), Apple Metal (DirectX 11/12, 64-bit), Classic 2D, Compatibility.
+- **Game stores** — Steam, GOG, Epic Games and Amazon in one window (sign in, install, Mac versions when available), plus Battle.net and optional EA app / Ubisoft Connect. Every game gets its own Mac app with its icon.
+- **Real Mac apps** — games show under their own names in the Dock and macOS turns on **Game Mode** in full screen.
+- **Your games, your drives** — choose where each game installs (external drives included), move games later, and see which ones need a drive plugged in. Mac games you already have can be added too.
+- **Graphics modes** — Classic 3D (DirectX 8/9 → Vulkan), Modern 3D (DirectX 10/11), Apple Metal (DirectX 11/12, 64-bit), DXMT (DirectX 10/11 → Metal), Classic 2D, Compatibility.
 - **Raw mouse for aiming** — reads your mouse directly while you aim (hundreds of updates a second, no macOS acceleration), fixing the choppy aim Wine has on Macs.
 - **Performance** — FPS counter, vsync, frame limit. **Drives** — map D:, E:… to external SSDs. **Storage** — see and free space.
-- **Fixes & health** — Fix cinematic playback (LAV Filters), Repair, Diagnostics, crash recognition with suggested fixes, notes per game.
+- **Fixes & health** — Fix cinematic playback (LAV Filters), known community fixes (winetricks), anti-cheat notes, Repair, Diagnostics, crash recognition with suggested fixes, notes per game.
 - **Stays current** — checks this repo for new Nokcandu releases and the Sikarugir/LAV projects for new components. New engines are self-tested before they're offered, each game tries them separately, and you can roll back.
 - **Safe by design** — every file Nokcandu changes is backed up and journaled; your saves and game files are never touched by repairs or updates.
 
@@ -49,7 +51,11 @@ Got a game running? **Share This Setup…** on its page submits your settings in
 Nokcandu's own code is MIT licensed (see [LICENSE](LICENSE)). At runtime it downloads, from their official releases:
 Wine and the Sikarugir engine/wrapper (LGPL-2.1+, [Sikarugir-App](https://github.com/Sikarugir-App)), which bundle DXVK (zlib),
 Mesa KosmicKrisp (MIT), MoltenVK (Apache-2.0) and Apple's D3DMetal (Apple's license), and LAV Filters (GPL-2.0, on request).
-Nokcandu isn't affiliated with Apple, Microsoft, Valve, Blizzard, CodeWeavers or the Wine project.
+When you use them: the store clients [gogdl](https://github.com/Heroic-Games-Launcher/heroic-gogdl), [legendary](https://github.com/derrod/legendary)
+and [nile](https://github.com/imLinguin/nile) (GPL-3.0, run as separate programs), [winetricks](https://github.com/Winetricks/winetricks) (LGPL-2.1+),
+fix data from [umu-protonfixes](https://github.com/Open-Wine-Components/umu-protonfixes) (BSD-2-Clause) and anti-cheat data from
+[AreWeAntiCheatYet](https://github.com/AreWeAntiCheatYet/AreWeAntiCheatYet) (MIT).
+Nokcandu isn't affiliated with Apple, Microsoft, Valve, Blizzard, GOG, Epic Games, Amazon, EA, Ubisoft, CodeWeavers or the Wine project.
 
 ## Build from source
 

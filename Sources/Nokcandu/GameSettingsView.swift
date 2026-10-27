@@ -95,7 +95,7 @@ struct GameSettingsSection: View {
                             }
                         }
                         .padding(.top, 4)
-                    }
+                    }.disclosureGroupStyle(WholeRowDisclosureStyle())
                 }
                 if launcherEdited {
                     Label("The launcher was edited outside Nokcandu. Saving will replace it (the old one is kept so it can be undone).", systemImage: "exclamationmark.triangle")

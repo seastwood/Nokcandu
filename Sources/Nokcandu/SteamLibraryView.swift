@@ -83,6 +83,8 @@ final class SteamLibraryModel: ObservableObject {
 
 struct SteamLibraryView: View {
     @EnvironmentObject var app: AppModel
+    /// Shown as a tab in Game Stores (no title or Done button).
+    var embedded = false
     @Environment(\.dismiss) private var dismiss
     @StateObject private var m = SteamLibraryModel()
     @State private var search = ""
@@ -95,7 +97,7 @@ struct SteamLibraryView: View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Steam Library").font(.title2.bold())
+                    if !embedded { Text("Steam Library").font(.title2.bold()) }
                     if let a = m.account { Text("Signed in as \(a.personaName.isEmpty ? a.accountName : a.personaName)").font(.caption).foregroundStyle(.secondary) }
                 }
                 Spacer()
@@ -112,11 +114,12 @@ struct SteamLibraryView: View {
                 Text("Windows Steam games install into one shared Steam; each game you add gets its own Mac app.")
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Button("Done") { app.refresh(); dismiss() }.keyboardShortcut(.defaultAction)
+                Button("Browse Steam Store") { NSWorkspace.shared.open(URL(string: "https://store.steampowered.com")!) }
+                if !embedded { Button("Done") { app.refresh(); dismiss() }.keyboardShortcut(.defaultAction) }
             }
             .padding()
         }
-        .frame(width: 760, height: 600)
+        .frame(width: embedded ? nil : 760, height: embedded ? nil : 600)
         .onAppear { m.refresh(); m.startPolling(); if m.hasKey { m.loadOwned() } }
         .onDisappear { m.stopPolling() }
         .alert("\(macWarning?.name ?? "This game") has a Mac version",
@@ -257,6 +260,10 @@ struct SteamLibraryView: View {
                     else if m.waiting.contains(g.appID) { badge("Downloading in Steam…", .orange) }
                     if let min = g.playtimeMinutes, min > 0 { Text("\(min / 60) h played").font(.caption).foregroundStyle(.secondary) }
                     if let s = g.sizeOnDisk, s > 0 { Text(ByteCountFormatter.string(fromByteCount: s, countStyle: .file)).font(.caption).foregroundStyle(.secondary) }
+                    if let w = AntiCheat.warning(steamAppID: g.appID, name: g.name) {
+                        Label(w.short, systemImage: w.verdict == .blocked ? "xmark.shield" : "exclamationmark.shield")
+                            .font(.caption).foregroundStyle(w.verdict == .blocked ? .red : .orange).help(w.detail).lineLimit(1)
+                    }
                 }
             }
             Spacer()

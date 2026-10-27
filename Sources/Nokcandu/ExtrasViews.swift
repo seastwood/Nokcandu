@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 import NokcanduCore
 
 // MARK: - Drives
@@ -17,13 +18,19 @@ struct DrivesSection: View {
             ForEach(drives.filter { !$0.builtIn }) { d in
                 HStack {
                     Text("\(d.letter):").font(.body.monospaced().bold()).frame(width: 28, alignment: .leading)
-                    Image(systemName: d.connected ? "externaldrive.fill" : "externaldrive.badge.xmark")
+                    Image(systemName: d.gameDisc ? "opticaldisc" : d.connected ? "externaldrive.fill" : "externaldrive.badge.xmark")
                         .foregroundStyle(d.connected ? Color.secondary : Color.orange)
-                    Text(d.target).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
-                    if !d.connected { Text("not connected").font(.caption).foregroundStyle(.orange) }
-                    Spacer()
-                    if d.connected { Button("Show") { NSWorkspace.shared.open(URL(fileURLWithPath: d.target)) }.buttonStyle(.link) }
-                    Button("Remove") { remove(d) }.buttonStyle(.link)
+                    if d.gameDisc {
+                        Text("The game's disc image").foregroundStyle(.secondary)
+                        Text("linked each time the game starts").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                    } else {
+                        Text(d.target).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                        if !d.connected { Text("not connected").font(.caption).foregroundStyle(.orange) }
+                        Spacer()
+                        if d.connected { Button("Show") { NSWorkspace.shared.open(URL(fileURLWithPath: d.target)) }.buttonStyle(.link) }
+                        Button("Remove") { remove(d) }.buttonStyle(.link)
+                    }
                 }
             }
             HStack {
@@ -71,7 +78,7 @@ struct PerformanceSection: View {
     @State private var buffer: Int?
 
     var steam: Bool { game.usesSharedSteam || game.isSteamHost }
-    var metal: Bool { game.custom?.graphics == .appleMetal }
+    var metal: Bool { game.custom?.graphics == .appleMetal || game.custom?.graphics == .dxmt }
 
     var body: some View {
         GroupBox {
@@ -125,7 +132,7 @@ struct PerformanceSection: View {
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Text(metal ? "Apple Metal uses Apple's own overlay. Vsync and frame limit only work in Classic 3D and Modern 3D — use the game's own settings instead (e.g. +fps_max 60 for Source games)."
-                           : "A frame limit keeps the Mac cooler and quieter and makes motion more even. \(steam ? "Applies to all Steam games when Steam next starts." : "Takes effect the next time the game starts.")")
+                           : "A frame limit keeps the Mac cooler and quieter, makes motion more even, and leaves CPU for sound — also in Compatibility mode. \(steam ? "Applies to all Steam games when Steam next starts." : "Takes effect the next time the game starts.")")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             .toggleStyle(.switch)
@@ -176,6 +183,9 @@ struct PerformanceSection: View {
 
 struct StorageView: View {
     @EnvironmentObject var model: AppModel
+    /// Shown as a Settings tab (no title or Done button).
+    var embedded = false
+    @State private var leftovers: [GameRemoval.Item] = []
     @Environment(\.dismiss) var dismiss
     @State private var volumes: [Storage.VolumeInfo] = []
     @State private var games: [Storage.Item] = []
@@ -185,12 +195,12 @@ struct StorageView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Storage").font(.title2.bold())
+                if !embedded { Text("Storage").font(.title2.bold()) }
                 Spacer()
                 if loading { ProgressView().controlSize(.small) }
                 Button("Refresh", action: load).disabled(loading)
-                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
-            }.padding(20)
+                if !embedded { Button("Done") { dismiss() }.keyboardShortcut(.defaultAction) }
+            }.padding(embedded ? 14 : 20)
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
@@ -209,6 +219,8 @@ struct StorageView: View {
                             }
                         }.padding(6)
                     } label: { Label("Drives", systemImage: "internaldrive").font(.headline) }
+
+                    GameFoldersBox()
 
                     GroupBox {
                         VStack(alignment: .leading, spacing: 6) {
@@ -242,6 +254,30 @@ struct StorageView: View {
                             }
                         }.padding(6)
                     } label: { Label("Nokcandu's own data", systemImage: "shippingbox").font(.headline) }
+
+                    if !leftovers.isEmpty {
+                        GroupBox {
+                            VStack(alignment: .leading, spacing: 6) {
+                                ForEach(leftovers) { i in
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 1) {
+                                            Text(i.what)
+                                            Text(i.url.lastPathComponent).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                                        }
+                                        Spacer()
+                                        Text(Storage.format(i.bytes)).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                                HStack {
+                                    Text("Kept for games that are no longer installed (for example an app deleted in Finder).").font(.caption).foregroundStyle(.secondary)
+                                    Spacer()
+                                    Button("Move to Trash") {
+                                        let n = GameRemoval.clean(leftovers); model.say("Moved \(n) leftover item(s) to the Trash."); load()
+                                    }
+                                }
+                            }.padding(6)
+                        } label: { Label("Leftovers from removed games", systemImage: "trash").font(.headline) }
+                    }
                 }.padding(20)
             }
         }
@@ -257,6 +293,10 @@ struct StorageView: View {
             }
             Spacer()
             Text(Storage.format(i.bytes)).monospacedDigit().foregroundStyle(.secondary)
+            if let g = model.games.first(where: { $0.appURL == i.url }),
+               [GameMover.blocker(g), GameMover.filesBlocker(g)].contains(where: { $0 == nil || $0 == "Quit the game first." }) {
+                Menu("Move") { GameContextMenuMoveItems(game: g) }.fixedSize().menuStyle(.borderlessButton)
+            }
             Button { NSWorkspace.shared.activateFileViewerSelecting([i.url]) } label: { Image(systemName: "magnifyingglass") }
                 .buttonStyle(.borderless).help("Show in Finder")
         }
@@ -266,8 +306,8 @@ struct StorageView: View {
         loading = true
         let g = model.games
         Task {
-            let r = await Task.detached { (Storage.volumes(), Storage.games(g), Storage.nokcanduData()) }.value
-            volumes = r.0; games = r.1; data = r.2; loading = false
+            let r = await Task.detached { (Storage.volumes(), Storage.games(g), Storage.nokcanduData(), GameRemoval.orphans(library: g)) }.value
+            volumes = r.0; games = r.1; data = r.2; leftovers = r.3; loading = false
         }
     }
 }
@@ -280,21 +320,26 @@ struct GameResolutionSection: View {
     @State private var options: [GameDisplay.Resolution] = []
 
     var current: [Int]? { game.custom?.displayPixels }
+    var selection: String {
+        return current.map { "\($0[0])x\($0[1])" } ?? "desktop"
+    }
 
     var body: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text("Game resolution")
-                    Picker("", selection: Binding(get: { current.map { "\($0[0])x\($0[1])" } ?? "desktop" }, set: { choose($0) })) {
+                    Picker("", selection: Binding(get: { selection }, set: { choose($0) })) {
                         Text("Desktop (don't switch)").tag("desktop")
                         if let c = current, !options.contains(where: { $0.pixels == c }) { Text("\(c[0]) × \(c[1])").tag("\(c[0])x\(c[1])") }
-                        ForEach(Array(options.enumerated()), id: \.element.id) { i, r in
-                            Text("\(r.width) × \(r.height)\(i == 0 ? " — native" : "")").tag(r.id)
+                        Section("Full screen — your Mac's screen switches") {
+                            ForEach(Array(options.enumerated()), id: \.element.id) { i, r in
+                                Text("\(r.width) × \(r.height)\(i == 0 ? " — native" : "")").tag(r.id)
+                            }
                         }
-                    }.labelsHidden().frame(width: 280)
+}.labelsHidden().frame(width: 280)
                 }
-                Text("While the game runs, your Mac's screen switches to exactly this many pixels (other apps look small if you alt-tab), and your desktop comes back when it quits. In the game, choose **Fullscreen Windowed**: it then matches the screen, so nothing switches while you play, and changing settings or alt-tabbing can't resize it. Lower resolutions give more FPS.")
+                Text("While the game runs, your Mac's screen switches to exactly this many pixels (other apps look small if you alt-tab), and your desktop comes back when it quits. In the game, choose **Fullscreen Windowed**: it then matches the screen, so nothing switches while you play, and changing settings or alt-tabbing can't resize it. Lower resolutions give more FPS. Old games that only offer small 4:3 sizes (800 × 600…): play them windowed, or pick the nearest size here and the same size in the game.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if game.usesSharedSteam {
                     Text("Changing this needs Steam closed.").font(.caption).foregroundStyle(.secondary)
@@ -306,6 +351,17 @@ struct GameResolutionSection: View {
     }
 
     func choose(_ tag: String) {
+        if tag.hasPrefix("vs-") {
+            let v = tag.dropFirst(3).split(separator: "x").compactMap { Int($0) }, g = game
+            Task {
+                let r = await Task.detached { Result { try GameDisplay.applyVirtualScreen(v, to: g) } }.value
+                switch r {
+                case .success: model.say("The game will see a \(v[0]) × \(v[1]) screen, in a window. Pick that resolution in the game too."); model.refresh()
+                case .failure(let e): model.fail(e)
+                }
+            }
+            return
+        }
         let px: [Int]? = tag == "desktop" ? nil : tag.split(separator: "x").compactMap { Int($0) }
         let g = game, lib = model.games
         Task {
@@ -315,5 +371,249 @@ struct GameResolutionSection: View {
             case .failure(let e): model.fail(e)
             }
         }
+    }
+}
+
+// MARK: - Discs
+
+/// A disc-based game's discs: which one is in drive D:, swapping (also while playing), adding more.
+struct GameDiscsSection: View {
+    @EnvironmentObject var model: AppModel
+    let game: InstalledGame
+    @State private var current = 0
+    @State private var busy = false
+
+    var discs: [DiscSpec] { game.custom.map(Discs.all) ?? [] }
+
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(discs.enumerated()), id: \.offset) { i, d in
+                    HStack(spacing: 8) {
+                        Image(systemName: i == current ? "opticaldisc.fill" : "opticaldisc").foregroundStyle(i == current ? Color.accentColor : .secondary)
+                        Text("Disc \(i + 1)").bold()
+                        Text(d.volumeLabel.isEmpty ? d.imageName : d.volumeLabel).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                        Spacer()
+                        if i == current { Text("In drive D:").font(.caption).foregroundStyle(.secondary) }
+                        else { Button("Put in Drive D:") { insert(i) }.disabled(busy) }
+                        Button("Run Setup") { runSetup(i) }.disabled(busy)
+                            .help("Runs this disc's installer — for expansion packs and add-on discs.")
+                    }
+                }
+                HStack {
+                    Button("Add Discs…", action: addDiscs).disabled(busy)
+                    if busy { ProgressView().controlSize(.small) }
+                }
+                Text("Works while the game is running, like swapping a real CD — use it when the game asks for another disc. The disc in D: is kept for next time. Formats: .iso, .cdr, .bin/.cue, .img/.ccd, .mdf (CD-audio music tracks can't be used).")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(6).frame(maxWidth: .infinity, alignment: .leading)
+        } label: { Text(discs.count > 1 ? "Discs" : "Disc").font(.headline) }
+        .onAppear { current = Discs.current(support: game.support) }
+    }
+
+    func insert(_ i: Int) {
+        do { try Discs.insert(i, for: game); current = i; model.say("Disc \(i + 1) is in drive D:.") }
+        catch { model.fail(error) }
+    }
+
+    func runSetup(_ i: Int) {
+        guard let c = game.custom else { return }
+        var env = WineTools.environment(contents: game.contents)
+        env["WINEPREFIX"] = game.prefix.path
+        let g = game, imgs = Discs.all(c).map(\.imageName)
+        busy = true; current = i
+        model.say("Starting disc \(i + 1)'s setup — finish it in its own window.")
+        Task {
+            do {
+                try await Discs.runSetup(i, images: imgs, support: g.support, prefix: g.prefix, env: env, log: { _ in })
+                model.say("Disc \(i + 1)'s setup finished.")
+            } catch { model.fail(error) }
+            busy = false
+        }
+    }
+
+    func addDiscs() {
+        let p = NSOpenPanel()
+        p.allowsMultipleSelection = true
+        p.message = "Choose the game's other discs."
+        p.allowedContentTypes = Discs.imageTypes.compactMap { UTType(filenameExtension: $0) }
+        guard p.runModal() == .OK, let c = game.custom else { return }
+        let urls = Discs.sorted(p.urls), g = game
+        busy = true
+        Task {
+            let r = await Task.detached { Result { () -> [String] in
+                let (n, notes) = try Discs.add(urls, to: g, current: c)
+                try CustomGames.saveAll(n, to: g)
+                return notes
+            } }.value
+            busy = false
+            switch r {
+            case .success(let notes): model.say((["Discs added."] + notes).joined(separator: " ")); model.refresh()
+            case .failure(let e): model.fail(e)
+            }
+        }
+    }
+}
+
+
+// MARK: - Remove game
+
+/// Removes a game completely — its app and everything Nokcandu keeps for it — to the Trash.
+struct RemoveGameSection: View {
+    @EnvironmentObject var model: AppModel
+    let game: InstalledGame
+    @State private var items: [GameRemoval.Item] = []
+    @State private var confirm = false
+
+    var body: some View {
+        GroupBox {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Remove \(game.name)").font(.body.bold())
+                    Text("Moves the app and everything Nokcandu keeps for it (undo backups, change history, install progress, notes) to the Trash. Your saved profiles stay.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                Button("Remove Game…", role: .destructive) { items = GameRemoval.items(for: game); confirm = true }
+            }
+            .padding(6)
+        }
+        .confirmationDialog("Move \(game.name) to the Trash?", isPresented: $confirm) {
+            Button("Move to Trash", role: .destructive) { remove() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(items.map { "• \($0.what) — \(Storage.format($0.bytes))" }.joined(separator: "\n")
+                 + "\n\nYou can put it back from the Trash. Save games stored inside the app go with it.")
+        }
+    }
+
+    func remove() {
+        let g = game, lib = model.games
+        Task {
+            let r = await Task.detached { Result { try GameRemoval.remove(g, library: lib) } }.value
+            switch r {
+            case .success(let failed):
+                model.say(failed.isEmpty ? "\(g.name) moved to the Trash." : "Moved to the Trash, except: \(failed.joined(separator: "; "))")
+                model.selection = nil
+                model.refresh()
+            case .failure(let e): model.fail(e)
+            }
+        }
+    }
+}
+
+/// Where the game app lives, and moving it (e.g. to an external drive).
+struct GameLocationSection: View {
+    @EnvironmentObject var model: AppModel
+    let game: InstalledGame
+    @State private var size: Int64?
+
+    var body: some View {
+        let folder = GameFolders.folder(of: game)
+        GroupBox {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Location").font(.body.bold())
+                    Text("App: " + GameFolderLabel.text(folder) + (size.map { " · " + Storage.format($0) } ?? ""))
+                        .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                    if let ext = GameMover.externalFiles(game) {
+                        Text("Game files: \(ext.path)" + (GameMover.missingDrive(game) != nil ? " — drive not connected" : ""))
+                            .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                    }
+                    if let b = GameMover.blocker(game), b != "Quit the game first.", GameMover.filesBlocker(game).map({ $0 != "Quit the game first." }) ?? false {
+                        Text(b).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text("Move it to another folder or drive to free up space. On APFS or Mac OS Extended drives the whole app moves; on ExFAT drives (most USB drives) only the game's files move and the small app stays here. Keep the drive connected to play.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer()
+                Button("Show in Finder") { model.reveal(game.appURL) }
+                if [GameMover.blocker(game), GameMover.filesBlocker(game)].contains(where: { $0 == nil || $0 == "Quit the game first." }) {
+                    Menu("Move To") { GameContextMenuMoveItems(game: game) }
+                        .fixedSize()
+                        .disabled(model.moving.contains(game.id))
+                }
+            }
+            .padding(6)
+        }
+        .task {
+            let u = game.appURL
+            size = await Task.detached(priority: .utility) { Storage.size(u) }.value
+        }
+    }
+}
+
+struct GameContextMenuMoveItems: View {
+    @EnvironmentObject var model: AppModel
+    let game: InstalledGame
+    var body: some View {
+        let ok: (String?) -> Bool = { $0 == nil || $0 == "Quit the game first." }
+        let appOK = ok(GameMover.blocker(game)), filesOK = ok(GameMover.filesBlocker(game))
+        ForEach(GameFolders.all.filter { $0 != GameFolders.folder(of: game) }, id: \.self) { f in
+            Button(GameFolderLabel.text(f)) { model.move(game, to: f) }
+                .disabled(!GameFolders.isAvailable(f) || !(GameFolders.holdsApps(f) ? appOK : filesOK))
+        }
+        if GameMover.externalFiles(game) != nil {
+            Button("Bring Game Files Back to This Mac") { model.moveFiles(game, to: nil) }
+        }
+        Divider()
+        Button("Other Folder…") { model.moveToChosenFolder(game) }
+    }
+}
+
+/// Storage → Game Folders: where games live and where new ones install.
+struct GameFoldersBox: View {
+    @EnvironmentObject var model: AppModel
+    @State private var folders = GameFolders.all
+    @State private var installTo = GameFolders.installFolder
+    @State private var error: String?
+
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(folders, id: \.self) { f in
+                    HStack {
+                        Image(systemName: f.path.hasPrefix("/Volumes/") ? "externaldrive" : "folder")
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(GameFolderLabel.text(f))
+                            let n = model.games.filter { GameFolders.folder(of: $0) == f || (GameMover.externalFiles($0)?.path.hasPrefix(f.path + "/") ?? false) }.count
+                            let free = GameFolders.isAvailable(f) ? (GameFolders.freeSpace(f).map { " · \(Storage.format($0)) free" } ?? "") : ""
+                            Text("\(n) app\(n == 1 ? "" : "s")\(free)\(f == installTo.standardizedFileURL ? " · new games install here" : "")")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if f != installTo.standardizedFileURL, GameFolders.isAvailable(f) {
+                            Button("Install Here") { GameFolders.setInstallFolder(f); installTo = GameFolders.installFolder }
+                        }
+                        Button("Show") { model.reveal(f) }.disabled(!GameFolders.isAvailable(f))
+                        if !GameFolders.isStandard(f) {
+                            Button("Remove") { GameFolders.remove(f); reload() }
+                                .help("Stops showing this folder in Nokcandu. The games in it stay on disk.")
+                        }
+                    }
+                }
+                if let error { Text(error).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true) }
+                HStack {
+                    Text("Steam, Battle.net and their games stay in the standard folder (pick a drive in their own settings instead). Other games can live anywhere — move one from its page or by right-clicking it. On ExFAT drives only the game's files are stored; the small app stays on this Mac.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button("Add Folder…", action: add)
+                }
+            }.padding(6)
+        } label: { Label("Game Folders", systemImage: "folder").font(.headline) }
+    }
+
+    func reload() { folders = GameFolders.all; installTo = GameFolders.installFolder; model.refresh() }
+
+    func add() {
+        error = nil
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true
+        panel.prompt = "Add Folder"
+        panel.message = "Choose a folder or drive for games. Picking a whole drive makes a “Nokcandu Games” folder on it."
+        guard panel.runModal() == .OK, let u = panel.url else { return }
+        do { try GameFolders.add(u); reload() } catch { self.error = error.localizedDescription }
     }
 }

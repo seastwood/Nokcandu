@@ -19,6 +19,7 @@
 #import <GameController/GameController.h>
 #import <IOKit/hid/IOHIDManager.h>
 #import <IOKit/hid/IOHIDUsageTables.h>
+#import <OpenGL/OpenGL.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
 #include <dlfcn.h>
@@ -35,6 +36,24 @@
 // Layout of winemac's event header and mouse-move payload (Wine's macdrv_cocoa.h), verified at runtime.
 enum { kRefs = 0x0, kDeliver = 0x4, kType = 0x8, kWindow = 0x10, kX = 0x18, kY = 0x1c, kDrag = 0x20, kTime = 0x28 };
 enum { kEventAllocSize = 256 };
+// Mouse button events (the type just before relative moves): button, pressed, then the pointer position.
+enum { kButton = 0x18, kPressed = 0x1c, kButtonX = 0x20, kButtonY = 0x24 };
+
+// Where the *game's* cursor is while aiming (Windows coordinates). Games that draw their own cursor in
+// menus (Battlefield 1942…) move it with our relative input, but Wine sends clicks at the frozen Mac
+// pointer — so clicks are rewritten to this position. Updated from our moves and the game's own warps.
+static os_unfair_lock vcur_lock = OS_UNFAIR_LOCK_INIT;
+static double vcur_x, vcur_y;
+static CGRect vcur_bounds;               // the game window, Windows coordinates (clamp)
+static BOOL game_cursor;                 // opt-in (NOKCANDU_RAW_MOUSE_GAME_CURSOR): track the game's own cursor + move clicks there
+static int button_layout = 0;            // 0 = not checked yet, 1 = verified, -1 = unknown layout (leave clicks alone)
+
+static void vcur_set(double x, double y) {
+    os_unfair_lock_lock(&vcur_lock);
+    vcur_x = fmin(fmax(x, CGRectGetMinX(vcur_bounds)), CGRectGetMaxX(vcur_bounds) - 1);
+    vcur_y = fmin(fmax(y, CGRectGetMinY(vcur_bounds)), CGRectGetMaxY(vcur_bounds) - 1);
+    os_unfair_lock_unlock(&vcur_lock);
+}
 
 static IMP orig_handleMouseMove, orig_setCursorPosition, orig_postEvent;
 static ptrdiff_t hidden_ivar = -1;
@@ -94,10 +113,27 @@ static NSWindow *update_aiming(id ctl) {
     if (now != aiming) {
         aiming = now;
         if (aiming) {
-            // Park the frozen pointer in the middle of the game so clicks land there.
+            // The game's cursor starts where the Mac pointer is now (Wine last saw it there); then park
+            // the frozen pointer in the middle of the game.
             NSRect f = w.frame;
             CGFloat top = NSMaxY(NSScreen.screens.firstObject.frame);
+            CGEventRef e = CGEventCreate(NULL);
+            CGPoint p = e ? CGEventGetLocation(e) : CGPointMake(NSMidX(f), top - NSMidY(f));
+            if (e) CFRelease(e);
+            if (game_cursor) {
+            os_unfair_lock_lock(&vcur_lock);
+            vcur_bounds = CGRectMake(NSMinX(f), top - NSMaxY(f), NSWidth(f), NSHeight(f));
+            os_unfair_lock_unlock(&vcur_lock);
+            vcur_set(p.x, p.y);
+            }
             CGWarpMouseCursorPosition(CGPointMake(NSMidX(f), top - NSMidY(f)));
+        } else if (game_cursor) {
+            // Hand the pointer back where the game's cursor is, so the next move doesn't jump.
+            os_unfair_lock_lock(&vcur_lock);
+            CGPoint p = CGPointMake(vcur_x, vcur_y);
+            BOOL known = !CGRectIsEmpty(vcur_bounds);
+            os_unfair_lock_unlock(&vcur_lock);
+            if (known) CGWarpMouseCursorPosition(p);
         }
         CGAssociateMouseAndMouseCursorPosition(!aiming);
         note(@"%@", aiming ? @"aiming: raw mouse on" : @"aiming: raw mouse off");
@@ -150,6 +186,12 @@ static void send_relative(int dx, int dy, bool drag) {
             ((void (*)(id, SEL, void *))orig_postEvent)((__bridge id)q, sel_registerName("postEvent:"), ev);
             release_ours(ev);
             moves_sent++;
+            if (game_cursor) {
+                os_unfair_lock_lock(&vcur_lock);
+                double nx = vcur_x + dx, ny = vcur_y + dy;
+                os_unfair_lock_unlock(&vcur_lock);
+                vcur_set(nx, ny);
+            }
         }
     }
     if (w) CFRelease(w);
@@ -221,7 +263,10 @@ static void my_handleMouseMove(id self, SEL _cmd, NSEvent *event) {
 
 static BOOL my_setCursorPosition(id self, SEL _cmd, CGPoint pos) {
     BOOL ok = ((BOOL (*)(id, SEL, CGPoint))orig_setCursorPosition)(self, _cmd, pos);
-    if (aiming) CGAssociateMouseAndMouseCursorPosition(false);   // winemac re-associates after a warp
+    if (aiming) {
+        CGAssociateMouseAndMouseCursorPosition(false);   // winemac re-associates after a warp
+        if (game_cursor) vcur_set(pos.x, pos.y);         // the game moved its cursor itself
+    }
     return ok;
 }
 
@@ -249,6 +294,25 @@ static void my_postEvent(id self, SEL _cmd, void *raw) {
             note(@"winemac event layout not recognised (refs %d deliver %d type %d) — staying off", refs, deliver, type);
             watching_post = NO;
             relative_type = -2;            // never arm in this process
+        }
+    }
+    // Clicks: check the layout once on a normal click (position = the Mac pointer), then while aiming
+    // put each click where the game's cursor is.
+    if (game_cursor && raw && relative_type > 0 && *(int *)((char *)raw + kType) == relative_type - 1 && button_layout >= 0) {
+        char *ev = raw;
+        if (button_layout == 0) {
+            CGEventRef e = CGEventCreate(NULL);
+            CGPoint p = e ? CGEventGetLocation(e) : CGPointZero;
+            if (e) CFRelease(e);
+            int b = *(int *)(ev + kButton), pr = *(int *)(ev + kPressed), x = *(int *)(ev + kButtonX), y = *(int *)(ev + kButtonY);
+            button_layout = (b >= 0 && b < 8 && (pr == 0 || pr == 1) && fabs(x - floor(p.x)) <= 3 && fabs(y - floor(p.y)) <= 3) ? 1 : -1;
+            note(@"clicks: %@", button_layout == 1 ? @"layout recognised" : @"layout not recognised — clicks left as they are");
+        }
+        if (button_layout == 1 && aiming) {
+            os_unfair_lock_lock(&vcur_lock);
+            *(int *)(ev + kButtonX) = (int)vcur_x;
+            *(int *)(ev + kButtonY) = (int)vcur_y;
+            os_unfair_lock_unlock(&vcur_lock);
         }
     }
     ((void (*)(id, SEL, void *))orig_postEvent)(self, _cmd, raw);
@@ -476,6 +540,7 @@ static void watch_display(NSString *name) {
     }];
 }
 
+static void gl_limit_wine(void);
 static void restore_pointer(void) { if (aiming) CGAssociateMouseAndMouseCursorPosition(true); }
 
 static void image_added(const struct mach_header *mh, __unused intptr_t slide) {
@@ -486,17 +551,200 @@ static void image_added(const struct mach_header *mh, __unused intptr_t slide) {
     // winemac registers its classes and starts Cocoa after loading; the main queue runs once Cocoa does.
     dispatch_async(dispatch_get_main_queue(), ^{
         name_app();
+        gl_limit_wine();
         watch_display(app_name());
         if (raw_enabled) install();
     });
 }
 
+// MARK: - Sound threads get top priority
+// While a game is in front its busy threads take the performance cores, and Wine's sound mixing threads
+// (translated by Rosetta) can land on efficiency cores and miss their deadlines — choppy, doubled sound
+// that clears up when the game is minimized. Wine names its threads, so raise the sound ones as they start.
+#include <pthread.h>
+static int my_pthread_setname_np(const char *name) {
+    int r = pthread_setname_np(name);
+    if (name && (strstr(name, "dsound") || strstr(name, "audio") || strstr(name, "mmdevapi") || strstr(name, "xaudio")
+                 || strstr(name, "winmm") || strstr(name, "Miles") || strstr(name, "mss"))) {
+        pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+        note(@"sound thread \"%s\" set to top priority", name);
+    }
+    return r;
+}
+__attribute__((used)) static const struct { const void *replacement, *original; } name_interpose[]
+    __attribute__((section("__DATA,__interpose"))) = { { (const void *)my_pthread_setname_np, (const void *)pthread_setname_np } };
+
+// MARK: - No real-time scheduling for game threads
+// Wine's wineserver gives "time critical" Windows threads macOS real-time scheduling. Old games mark their
+// busy main or render loop that way; under Rosetta it overruns its real-time slot, the kernel throttles it,
+// and everything else — the sound mixer included — stutters while the game is in front. Give those threads
+// a strong normal priority instead when NOKCANDU_NO_REALTIME is set (off by default: it did not cure
+// BF1942's choppy sound, and CS2 plays well with Wine's normal behaviour).
+#include <mach/thread_policy.h>
+#include <mach/thread_act.h>
+static kern_return_t my_thread_policy_set(thread_act_t thread, thread_policy_flavor_t flavor,
+                                          thread_policy_t info, mach_msg_type_number_t count) {
+    if (flavor == THREAD_TIME_CONSTRAINT_POLICY && getenv("NOKCANDU_NO_REALTIME")) {
+        static bool told;
+        if (!told) { told = true; note(@"real-time thread priority replaced with high normal priority"); }
+        thread_precedence_policy_data_t p = { .importance = 63 };
+        thread_policy_set(thread, THREAD_PRECEDENCE_POLICY, (thread_policy_t)&p, THREAD_PRECEDENCE_POLICY_COUNT);
+        return KERN_SUCCESS;
+    }
+    return thread_policy_set(thread, flavor, info, count);
+}
+__attribute__((used)) static const struct { const void *replacement, *original; } policy_interpose[]
+    __attribute__((section("__DATA,__interpose"))) = { { (const void *)my_thread_policy_set, (const void *)thread_policy_set } };
+
+// MARK: - Frame limit for Wine's own OpenGL graphics ("Compatibility")
+// Nokcandu's frame limit is DXVK's (DXVK_FRAME_RATE); games drawing through WineD3D/OpenGL ignore it and
+// can spin menus at hundreds of FPS, starving their sound. Pace every OpenGL frame to the same limit.
+static double gl_fps_limit;
+static uint64_t gl_next_frame;            // render thread only
+static __thread bool gl_in_flush;
+
+static void gl_pace(void) {
+    if (gl_fps_limit <= 0 || gl_in_flush) return;
+    static bool told;
+    if (!told) { told = true; note(@"frame limit: pacing OpenGL frames to %.0f FPS", gl_fps_limit); }
+    uint64_t period = (uint64_t)(1e9 / gl_fps_limit * timebase.denom / timebase.numer);
+    uint64_t now = mach_absolute_time();
+    if (gl_next_frame == 0 || now > gl_next_frame + period) gl_next_frame = now;      // first frame, or fell behind
+    else if (now < gl_next_frame) mach_wait_until(gl_next_frame);
+    gl_next_frame += period;
+}
+
+static CGLError my_CGLFlushDrawable(CGLContextObj ctx) {
+    gl_pace();
+    gl_in_flush = true;
+    CGLError e = CGLFlushDrawable(ctx);
+    gl_in_flush = false;
+    return e;
+}
+__attribute__((used)) static const struct { const void *replacement, *original; } gl_interpose[]
+    __attribute__((section("__DATA,__interpose"))) = { { (const void *)my_CGLFlushDrawable, (const void *)CGLFlushDrawable } };
+
+static IMP orig_flushBuffer;
+static void my_flushBuffer(id self, SEL _cmd) {
+    gl_pace();
+    gl_in_flush = true;                    // AppKit may flush through CGLFlushDrawable: pace only once
+    ((void (*)(id, SEL))orig_flushBuffer)(self, _cmd);
+    gl_in_flush = false;
+}
+
+static void gl_limit_setup(void) {
+    const char *f = getenv("DXVK_FRAME_RATE");
+    gl_fps_limit = f ? atof(f) : 0;
+    if (gl_fps_limit < 10 || gl_fps_limit > 1000) { gl_fps_limit = 0; return; }
+    Method m = class_getInstanceMethod(objc_getClass("NSOpenGLContext"), sel_registerName("flushBuffer"));
+    if (m) orig_flushBuffer = method_setImplementation(m, (IMP)my_flushBuffer);
+    note(@"frame limit %.0f FPS armed for OpenGL", gl_fps_limit);
+}
+
+/// winemac's own context class may override -flushBuffer; pace that one too (called once winemac loads).
+static IMP orig_wine_flushBuffer;
+static void my_wine_flushBuffer(id self, SEL _cmd) {
+    gl_pace();
+    gl_in_flush = true;
+    ((void (*)(id, SEL))orig_wine_flushBuffer)(self, _cmd);
+    gl_in_flush = false;
+}
+static void gl_limit_wine(void) {
+    if (gl_fps_limit <= 0) return;
+    Class c = objc_getClass("WineOpenGLContext");
+    if (!c) return;
+    unsigned n = 0; Method *list = class_copyMethodList(c, &n);
+    for (unsigned i = 0; i < n; i++)
+        if (method_getName(list[i]) == sel_registerName("flushBuffer")) {
+            orig_wine_flushBuffer = method_setImplementation(list[i], (IMP)my_wine_flushBuffer);
+            note(@"frame limit: WineOpenGLContext has its own flushBuffer — pacing it");
+        }
+    free(list);
+}
+
+// MARK: - Run as a real app (GameApp wrapper)
+// Wine's processes are a bare `wine` program, so macOS shows "wine" and never turns on Game Mode. Nokcandu
+// keeps a small app wrapper next to this library (SharedSupport/GameApp/<Name>.app, marked as a game) with a
+// copy of the loader in Contents/MacOS. Before Wine starts, relaunch this process from there: same process,
+// same arguments and inherited connection to wineserver — but macOS now sees the game's app.
+#include <crt_externs.h>
+#include <dirent.h>
+#include <libgen.h>
+#include <unistd.h>
+#include <strings.h>
+#include <spawn.h>
+#include <sys/stat.h>
+static void run_from_game_app(void) {
+    if (getenv("NOKCANDU_NO_GAME_APP")) return;
+    char exe[PATH_MAX]; uint32_t size = sizeof exe;
+    if (_NSGetExecutablePath(exe, &size) != 0 || strstr(exe, "/GameApp/")) return;
+    const char *base = strrchr(exe, '/');
+    if (!base || strcmp(base + 1, "wine") != 0) return;
+    int argc = *_NSGetArgc(); char **argv = *_NSGetArgv();
+    if (argc < 2 || !argv[1] || argv[1][0] == '-' || !argv[1][0]) return;
+    // Wine's own background programs stay as they are (no Dock icon, nothing to gain).
+    const char *prog = argv[1];
+    for (const char *q = argv[1]; *q; q++) if (*q == '\\' || *q == '/') prog = q + 1;
+    static const char *skip[] = { "services.exe", "winedevice.exe", "plugplay.exe", "svchost.exe", "explorer.exe",
+        "rpcss.exe", "conhost.exe", "start.exe", "wineboot.exe", "winemenubuilder.exe", "rundll32.exe", "tabtip.exe",
+        "wineconsole.exe", "regedit.exe", "reg.exe", "msiexec.exe", "cmd.exe", "steamerrorreporter.exe", "steamservice.exe", "gldriverquery.exe", "gldriverquery64.exe",
+        "vulkandriverquery.exe", "vulkandriverquery64.exe", "crashhandler.exe", NULL };
+    for (int i = 0; skip[i]; i++) if (strcasecmp(prog, skip[i]) == 0) return;
+    Dl_info info;
+    if (!dladdr((const void *)run_from_game_app, &info) || !info.dli_fname) return;
+    char me[PATH_MAX], dir[PATH_MAX], list[PATH_MAX];
+    strlcpy(me, info.dli_fname, sizeof me);
+    snprintf(dir, sizeof dir, "%s/../GameApp", dirname(me));
+    snprintf(list, sizeof list, "%s/programs.tsv", dir);
+    // programs.tsv: "<program.exe>\t<Wrapper>.app" lines, and "*\t<Wrapper>.app" for everything else.
+    char wrapper[NAME_MAX + 1] = "", fallback[NAME_MAX + 1] = "", engine[64] = "", line[1024];
+    FILE *f = fopen(list, "r");
+    if (!f) return;
+    while (fgets(line, sizeof line, f)) {
+        line[strcspn(line, "\r\n")] = 0;
+        char *tab = strchr(line, '\t');
+        if (!tab || !tab[1]) continue;
+        *tab = 0;
+        if (strcmp(line, "#engine") == 0) strlcpy(engine, tab + 1, sizeof engine);
+        else if (strcmp(line, "*") == 0) strlcpy(fallback, tab + 1, sizeof fallback);
+        else if (strcasecmp(line, prog) == 0) strlcpy(wrapper, tab + 1, sizeof wrapper);
+    }
+    fclose(f);
+    if (!wrapper[0]) strlcpy(wrapper, fallback, sizeof wrapper);
+    // Only use wrappers made for this engine (Nokcandu refreshes them after an engine update).
+    char real[PATH_MAX], want[64];
+    struct stat st;
+    snprintf(real, sizeof real, "%s/../wine/bin/wine", dir);
+    if (!engine[0] || stat(real, &st) != 0) return;
+    snprintf(want, sizeof want, "%lld:%lld", (long long)st.st_size, (long long)st.st_mtimespec.tv_sec);
+    if (strcmp(want, engine) != 0) return;
+    if (!wrapper[0] || strchr(wrapper, '/')) return;
+    char target[PATH_MAX];
+    snprintf(target, sizeof target, "%s/%s/Contents/MacOS/wine", dir, wrapper);
+    if (access(target, X_OK) != 0) return;
+    // Replace this process in place (like exec) and make the game responsible for itself, so macOS (Game
+    // Mode, the Games app, privacy prompts) credits the game — not Nokcandu or Steam, which started it.
+    posix_spawnattr_t attr;
+    if (posix_spawnattr_init(&attr) == 0) {
+        posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETEXEC);
+        typedef int (*Disclaim)(posix_spawnattr_t *, bool);
+        Disclaim disclaim = (Disclaim)dlsym(RTLD_DEFAULT, "responsibility_spawnattrs_setdisclaim");
+        if (disclaim) disclaim(&attr, true);
+        posix_spawn(NULL, target, NULL, &attr, argv, *_NSGetEnviron());
+        posix_spawnattr_destroy(&attr);   // only reached if that failed
+    }
+    execv(target, argv);                       // only returns on failure: carry on as bare wine
+}
+
 __attribute__((constructor)) static void start(void) {
+    run_from_game_app();
     const char *s = getenv("NOKCANDU_RAW_MOUSE_SCALE");
     if (s && atof(s) > 0.01 && atof(s) < 20) scale = atof(s);
     debug_on = getenv("NOKCANDU_RAW_MOUSE_DEBUG") != NULL;
+    game_cursor = getenv("NOKCANDU_RAW_MOUSE_GAME_CURSOR") != NULL;
     raw_enabled = getenv("NOKCANDU_RAW_MOUSE_SCALE") != NULL;
     mach_timebase_info(&timebase);
+    gl_limit_setup();
     raw_q = dispatch_queue_create("nokcandu.rawmouse", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
     smooth_on = getenv("NOKCANDU_RAW_MOUSE_SMOOTH") && atoi(getenv("NOKCANDU_RAW_MOUSE_SMOOTH")) == 1;
     if (smooth_on) {

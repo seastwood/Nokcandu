@@ -9,6 +9,7 @@ public enum Drives {
         public var target: String          // Mac path the letter points to
         public var connected: Bool         // target currently exists (external drives can be unplugged)
         public var builtIn: Bool           // C: and Z: are Wine's own
+        public var gameDisc = false        // D: of a game set up from a disc image: its launcher links it each start
     }
 
     static func folder(_ g: InstalledGame) -> URL? {
@@ -18,13 +19,14 @@ public enum Drives {
     public static func list(for g: InstalledGame) -> [Drive] {
         guard let dir = folder(g), let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return [] }
         var out: [Drive] = []
+        let discGame = g.custom?.disc != nil || g.recipe?.disc != nil
         for n in names.sorted() where n.count == 2 && n.hasSuffix(":") {
             let link = dir.appendingPathComponent(n)
             guard let dest = try? FileManager.default.destinationOfSymbolicLink(atPath: link.path) else { continue }
             let abs = dest.hasPrefix("/") ? dest : dir.appendingPathComponent(dest).standardizedFileURL.path
             let letter = String(n.prefix(1)).uppercased()
             out.append(Drive(letter: letter, target: abs, connected: FileManager.default.fileExists(atPath: abs),
-                             builtIn: letter == "C" || letter == "Z"))
+                             builtIn: letter == "C" || letter == "Z", gameDisc: discGame && letter == "D"))
         }
         return out
     }

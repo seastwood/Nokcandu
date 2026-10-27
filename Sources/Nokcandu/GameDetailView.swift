@@ -21,9 +21,29 @@ struct GameDetailView: View {
     var running: Bool { if case .launcherRunning = model.runStates[game.id] ?? .notRunning { return true }; return false }
 
     var body: some View {
+        if let n = game.native { NativeGameDetail(game: game, native: n) } else { wineBody }
+    }
+
+    var wineBody: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 header
+                if let w = AntiCheat.warning(for: game), !game.isSteamHost, !LibraryOrganizer.isLauncher(game) {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: w.verdict == .blocked ? "xmark.shield" : "exclamationmark.shield")
+                            .foregroundStyle(w.verdict == .blocked ? .red : .orange).font(.title3)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(w.verdict == .blocked ? "Anti-cheat blocks online play" : "Anti-cheat may affect online play").font(.body.bold())
+                            Text(w.detail).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            Text("Based on areweanticheatyet.com (Linux/Steam Deck reports) — your results on a Mac may differ.").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(12)
+                    .background((w.verdict == .blocked ? Color.red : Color.orange).opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+                }
+                if game.custom != nil, !LibraryOrganizer.isLauncher(game) {
+                    SuggestionsBanner(game: game).id("suggest-\(game.id)")
+                }
                 if let h = graphicsHint {
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: "display.trianglebadge.exclamationmark").foregroundStyle(.orange).font(.title3)
@@ -60,10 +80,16 @@ struct GameDetailView: View {
                 if game.custom != nil, game.battleNet == nil, !BattleNet.isHost(game), !DisplayController.supports(game) {
                     GameResolutionSection(game: game).id("res-\(game.id)-\(game.custom?.displayPixels ?? [])")
                 }
+                if game.custom?.disc != nil { GameDiscsSection(game: game).id("discs-\(game.id)-\(Discs.all(game.custom!).count)") }
                 if game.battleNet != nil { BattleNetGameInfo(game: game) }
                 if game.isSteamHost { SteamGamesSection().id("steamgames-\(model.games.count)") }
                 if game.isSteamHost || game.usesSharedSteam { SteamTipsSection() }
                 if BattleNet.isHost(game) { BlizzardGamesSection(host: game).id("bnet-\(game.id)-\(model.games.count)") }
+                if let k = PCLaunchers.kind(of: game) { LauncherGamesSection(host: game, kind: k).id("pcl-\(game.id)-\(model.games.count)") }
+                if game.isSteamHost || BattleNet.isHost(game) || PCLaunchers.kind(of: game) != nil {
+                    LauncherDriveBox(host: game, name: game.isSteamHost ? "Steam" : BattleNet.isHost(game) ? "Battle.net" : PCLaunchers.kind(of: game)!.title)
+                        .id("drives-\(game.id)")
+                }
                 if game.custom != nil || game.isSteamHost {
                     PerformanceSection(game: game).id("perf-\(game.id)")
                 }
@@ -79,6 +105,8 @@ struct GameDetailView: View {
                 if game.custom != nil || game.battleNet != nil { ProfilesSection(game: game).id("profiles-\(game.id)") }
                 if game.isManaged { NotesSection(game: game).id(game.id) }
                 aboutSection
+                GameLocationSection(game: game).id("location-\(game.id)")
+                RemoveGameSection(game: game).id("remove-\(game.id)")
             }
             .padding(28)
             .frame(maxWidth: 720, alignment: .leading)
@@ -94,7 +122,7 @@ struct GameDetailView: View {
         .confirmationDialog("Reset \(game.name) to its tested settings?", isPresented: $confirmReset) {
             Button("Reset", role: .destructive, action: reset)
         } message: {
-            Text("Undoes every change Nokcandu made and returns to Fill screen. Saves, replays, maps, and your other options are not touched.")
+            Text("Undoes every change Nokcandu made and returns to Fullscreen. Saves, replays, maps, and your other options are not touched.")
         }
     }
 
@@ -104,7 +132,11 @@ struct GameDetailView: View {
         HStack(alignment: .center, spacing: 18) {
             Image(nsImage: game.icon).resizable().frame(width: 96, height: 96)
             VStack(alignment: .leading, spacing: 6) {
-                Text(game.name).font(.largeTitle.bold())
+                HStack(alignment: .firstTextBaseline) {
+                    Text(game.name).font(.largeTitle.bold())
+                    Button { model.renaming = game } label: { Image(systemName: "pencil") }
+                        .buttonStyle(.borderless).help("Rename this game or give it a subtitle")
+                }
                 if let r = game.recipe {
                     Text(r.edition).foregroundStyle(.secondary)
                 } else {
@@ -250,7 +282,7 @@ struct GameDetailView: View {
                             ForEach(r.notes, id: \.self) { Text("• " + $0).font(.caption).foregroundStyle(.secondary) }
                         }
                         .padding(.top, 4)
-                    }
+                    }.disclosureGroupStyle(WholeRowDisclosureStyle())
                 } else {
                     detail("Engine", game.wineVersion ?? "unknown")
                     detail("App", game.appURL.path)
@@ -350,6 +382,179 @@ struct GameDetailView: View {
             switch r { case .success(let msg): model.say(msg); case .failure(let e): model.fail(e) }
             busy = false
             reloadDisplay()
+        }
+    }
+}
+
+/// A Mac game's page: open it, see where it is, take it out of the library.
+struct NativeGameDetail: View {
+    @EnvironmentObject var model: AppModel
+    let game: InstalledGame
+    let native: NativeGame
+    @State private var confirmRemove = false
+    @State private var size: Int64?
+
+    var running: Bool { if case .launcherRunning = model.runStates[game.id] ?? .notRunning { return true }; return false }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                HStack(alignment: .center, spacing: 18) {
+                    Image(nsImage: game.icon).resizable().frame(width: 96, height: 96)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(game.name).font(.largeTitle.bold())
+                            Button { model.renaming = game } label: { Image(systemName: "pencil") }.buttonStyle(.borderless)
+                        }
+                        Text(native.store.map { "Mac version from \($0.store.title)" } ?? "Mac game — runs natively, no Wine").foregroundStyle(.secondary)
+                        HStack {
+                            Button { model.play(game) } label: { Label(running ? "Running" : "Play", systemImage: "play.fill").frame(minWidth: 90) }
+                                .buttonStyle(.borderedProminent).controlSize(.large).disabled(running)
+                            Button("Show in Finder") { model.reveal(game.appURL) }
+                        }
+                        .padding(.top, 4)
+                    }
+                }
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(game.appURL.path).font(.callout).textSelection(.enabled)
+                        Text((size.map { Storage.format($0) + " · " } ?? "") + "Nokcandu only opens this app; its settings live in the game itself. Graphics, mouse and Wine settings don't apply to Mac games.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(6).frame(maxWidth: .infinity, alignment: .leading)
+                } label: { Text("Location").font(.headline) }
+                GroupBox {
+                    HStack(alignment: .top) {
+                        Text(native.installFolder != nil
+                             ? "Remove from Nokcandu, or also move the downloaded game to the Trash."
+                             : "Removes it from Nokcandu's list. The app itself isn't touched.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Remove…", role: .destructive) { confirmRemove = true }
+                    }
+                    .padding(6)
+                } label: { Text("Remove").font(.headline) }
+            }
+            .padding(24)
+            .frame(maxWidth: 760, alignment: .leading)
+        }
+        .task {
+            let u = game.appURL
+            size = await Task.detached(priority: .utility) { Storage.size(u) }.value
+        }
+        .confirmationDialog("Remove \(game.name)?", isPresented: $confirmRemove) {
+            Button("Remove from Nokcandu") { remove(trash: false) }
+            if let f = native.installFolder {
+                Button("Remove and Move Game to Trash", role: .destructive) { _ = f; remove(trash: true) }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    func remove(trash: Bool) {
+        NativeGames.remove(id: native.id)
+        if trash, let f = native.installFolder { try? FileManager.default.trashItem(at: URL(fileURLWithPath: f), resultingItemURL: nil) }
+        model.selection = nil
+        model.refresh()
+        model.say(trash ? "\(game.name) moved to the Trash." : "Removed \(game.name) from Nokcandu.")
+    }
+}
+
+/// Top of a game's page: the best-rated community profile (for games not played yet) and known fixes
+/// from Proton's community database. Each can be applied or dismissed.
+struct SuggestionsBanner: View {
+    @EnvironmentObject var model: AppModel
+    let game: InstalledGame
+    @State private var fix: KnownFix?
+    @State private var profile: CatalogEntry?
+    @State private var applying = false
+    @State private var log = ""
+    @AppStorage("dismissedProfiles") private var dismissedProfiles = ""
+
+    var newGame: Bool { LibraryOrganizer.lastPlayed(game) == nil || (game.custom.map { Date().timeIntervalSince($0.createdAt) < 7 * 86400 } ?? false) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let e = profile {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "person.2.fill").foregroundStyle(.blue).font(.title3)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Community profile for this game").font(.body.bold())
+                            RatingBadge(rating: e.profile.rating)
+                            Text("👍 \(e.up)").font(.caption).foregroundStyle(.secondary)
+                        }
+                        if let n = e.profile.notes { Text(n).font(.callout).foregroundStyle(.secondary).lineLimit(3) }
+                        Text("Shared by \(e.author)" + (e.profile.tested?.mac.map { " · tested on \($0)" } ?? "")).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing) {
+                        Button("View & Apply…") { model.profileFocus = e.number; model.showProfiles = true }.buttonStyle(.borderedProminent)
+                        Button("Not Now") { dismissedProfiles += ",\(game.id)#\(e.number)"; profile = nil }.buttonStyle(.link)
+                    }
+                }
+                .padding(12)
+                .background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+            }
+            if let f = fix {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "wrench.and.screwdriver.fill").foregroundStyle(.purple).font(.title3)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Known fixes for this game").font(.body.bold())
+                        if !f.summary.isEmpty { Text(f.summary).font(.callout).foregroundStyle(.secondary) }
+                        ForEach(lines(f), id: \.self) { Text("• " + $0).font(.caption) }
+                        ForEach(f.notApplied, id: \.self) { Text("• " + $0 + " (not applied automatically)").font(.caption).foregroundStyle(.secondary) }
+                        HStack(spacing: 4) {
+                            Text("From Proton's community fixes (umu-protonfixes) —").font(.caption).foregroundStyle(.secondary)
+                            Link("details", destination: f.source).font(.caption)
+                        }
+                        if applying || !log.isEmpty { Text(log).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(2) }
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing) {
+                        if applying { ProgressView().controlSize(.small) }
+                        else {
+                            if !f.isEmpty { Button("Apply Fixes") { apply(f) }.buttonStyle(.borderedProminent) }
+                            Button(f.isEmpty ? "Got It" : "Not Now") { KnownFixes.markHandled(game, f); fix = nil }.buttonStyle(.link)
+                        }
+                    }
+                }
+                .padding(12)
+                .background(Color.purple.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+            }
+        }
+        .task {
+            let g = game
+            if newGame {
+                let best = Profiles.forGame(g, in: Profiles.cached()).first { !$0.reportedBroken && $0.profile.rating != .broken && $0.score >= 0 }
+                if let best, !dismissedProfiles.contains("\(g.id)#\(best.number)") { profile = best }
+            }
+            if let f = await KnownFixes.lookup(g), KnownFixes.handled(g) != f.fingerprint { fix = f }
+        }
+    }
+
+    func lines(_ f: KnownFix) -> [String] {
+        var out: [String] = []
+        if !f.verbs.isEmpty { out.append("Install Windows components: \(f.verbs.joined(separator: ", "))") }
+        if !f.arguments.isEmpty { out.append("Launch options: \(f.arguments.joined(separator: " "))") }
+        for (k, v) in f.environment.sorted(by: { $0.key < $1.key }) { out.append("Setting: \(k)=\(v)") }
+        for (d, o) in f.dllOverrides.sorted(by: { $0.key < $1.key }) {
+            out.append("Use \(o.hasPrefix("n") ? "the game's own" : o.isEmpty ? "no" : "Wine's") \(d).dll")
+        }
+        return out
+    }
+
+    func apply(_ f: KnownFix) {
+        applying = true; log = ""
+        let g = game
+        Task {
+            do {
+                try await KnownFixes.apply(f, to: g) { line in Task { @MainActor in log = line } }
+                fix = nil
+                model.refresh()
+                model.say("Applied the known fixes to \(g.name).")
+            } catch { model.fail(error) }
+            applying = false
         }
     }
 }

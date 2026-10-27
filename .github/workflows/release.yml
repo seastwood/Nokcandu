@@ -16,6 +16,21 @@ jobs:
         run: |
           V="$(tr -d '[:space:]' < VERSION)"
           [ "v$V" = "${GITHUB_REF_NAME}" ] || { echo "Tag ${GITHUB_REF_NAME} doesn't match VERSION $V"; exit 1; }
+      - name: Signing identity (keeps macOS permissions across updates)
+        env:
+          P12: ${{ secrets.NOKCANDU_SIGNING_P12 }}
+          P12_PASSWORD: ${{ secrets.NOKCANDU_SIGNING_PASSWORD }}
+        run: |
+          if [ -z "$P12" ]; then echo "No signing secret: ad-hoc build"; exit 0; fi
+          KC="$RUNNER_TEMP/signing.keychain-db"
+          security create-keychain -p ci "$KC"
+          security set-keychain-settings "$KC"
+          security unlock-keychain -p ci "$KC"
+          echo "$P12" | base64 --decode > "$RUNNER_TEMP/id.p12"
+          security import "$RUNNER_TEMP/id.p12" -k "$KC" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci "$KC" >/dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/id.p12"
       - name: Build, test and package
         run: ./make-dmg.sh
       - name: Publish release

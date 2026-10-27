@@ -19,11 +19,11 @@ struct FixesSection: View {
                     Image(systemName: "film").font(.title3).foregroundStyle(present ? .green : .secondary).frame(width: 24)
                     VStack(alignment: .leading, spacing: 3) {
                         HStack {
-                            Text("Fix cinematic playback").font(.body.bold())
+                            Text("Fix video and music playback").font(.body.bold())
                             if present { Text("Installed").font(.caption2.bold()).padding(.horizontal, 6).padding(.vertical, 2)
                                 .background(.green.opacity(0.18), in: Capsule()).foregroundStyle(.green) }
                         }
-                        Text("Adds a movie reader, video decoder and audio decoder (LAV Filters \(CinematicFix.version), open source) to \(game.usesSharedSteam ? "the shared Steam's" : "this game's") Windows environment, for games whose intro or cutscene videos crash or stay black. Confirmed to fix Warcraft III's cinematics on this Mac.")
+                        Text("Adds a movie reader, video decoder and audio decoder (LAV Filters \(CinematicFix.version), open source) to \(game.usesSharedSteam ? "the shared Steam's" : "this game's") Windows environment, for games whose videos crash or stay black, or whose MP3 music won't play (“Music Error: Can not play file”). Confirmed to fix Warcraft III's cinematics on this Mac.")
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         if CinematicFix.likelyUsesDirectShow(game) && !present {
                             Label("This game looks like it plays videos through DirectShow, so it may need this.", systemImage: "lightbulb")

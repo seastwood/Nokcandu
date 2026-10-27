@@ -160,6 +160,9 @@ public enum Shell {
         p.waitUntilExit()
         out.fileHandleForReading.readabilityHandler = nil
         err.fileHandleForReading.readabilityHandler = nil
+        // Whatever was still in the pipes when the program exited.
+        collector.append(out: out.fileHandleForReading.readDataToEndOfFile())
+        collector.append(err: err.fileHandleForReading.readDataToEndOfFile())
         try Task.checkCancellation()
         return ShellResult(status: p.terminationStatus, stdout: collector.stdout, stderr: collector.stderr)
     }

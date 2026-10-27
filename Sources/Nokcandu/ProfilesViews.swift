@@ -67,26 +67,33 @@ struct ProfilesView: View {
                 VStack(spacing: 8) {
                     Picker("", selection: $tab) {
                         Text("Community").tag("community")
-                        Text("My Profiles (\(mine.count))").tag("mine")
+                        Text("Favorites (\(mine.filter { $0.favoriteOf != nil }.count))").tag("favorites")
+                        Text("Mine (\(mine.filter { $0.favoriteOf == nil }.count))").tag("mine")
                     }.pickerStyle(.segmented).labelsHidden()
-                    if tab == "mine" {
+                    if tab == "mine" || tab == "favorites" {
                         List(selection: $selectedMine) {
-                            ForEach(mine) { m in
+                            ForEach(mine.filter { (tab == "favorites") == ($0.favoriteOf != nil) }) { m in
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(m.name).font(.headline).lineLimit(1)
                                     HStack(spacing: 6) {
                                         Text(m.profile.title)
                                         Text("· \(m.updated.formatted(.relative(presentation: .named)))")
                                         if m.sharedAt != nil { Image(systemName: "person.2").help("Shared with everyone") }
+                                        if m.favoriteOf != nil { Image(systemName: "star.fill").foregroundStyle(.yellow).help("Favorite from the community") }
                                     }.font(.caption).foregroundStyle(.secondary)
                                 }.tag(m.id)
                             }
                         }
                         .listStyle(.sidebar)
                         .overlay {
-                            if mine.isEmpty {
-                                ContentUnavailableView("No saved profiles", systemImage: "tray",
-                                                       description: Text("Use Save Setup as Profile… on a game's page, or Import File…. They stay on this Mac until you share them."))
+                            if !mine.contains(where: { (tab == "favorites") == ($0.favoriteOf != nil) }) {
+                                if tab == "favorites" {
+                                    ContentUnavailableView("No favorites yet", systemImage: "star",
+                                                           description: Text("Click the ☆ on any community profile. It's kept exactly as it was then, even if its author changes it later."))
+                                } else {
+                                    ContentUnavailableView("No saved profiles", systemImage: "tray",
+                                                           description: Text("Use Save Setup as Profile… on a game's page, or Import File…. They stay on this Mac until you share them."))
+                                }
                             }
                         }
                     } else {
@@ -113,9 +120,9 @@ struct ProfilesView: View {
                 .padding(12)
                 .frame(width: 330)
                 Divider()
-                if tab == "mine" {
-                    if let m = mine.first(where: { $0.id == selectedMine }) {
-                        MyProfileDetail(item: m, changed: reloadMine).id(m.id)
+                if tab == "mine" || tab == "favorites" {
+                    if let m = mine.first(where: { $0.id == selectedMine && (tab == "favorites") == ($0.favoriteOf != nil) }) {
+                        MyProfileDetail(item: m, changed: reloadMine, openInCatalog: openInCatalog).id(m.id)
                     } else {
                         ContentUnavailableView("Choose a profile", systemImage: "tray").frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
@@ -125,6 +132,8 @@ struct ProfilesView: View {
         }
         .frame(width: 980, height: 660)
         .onAppear { store.load(); focus() }
+        .onReceive(NotificationCenter.default.publisher(for: MyProfiles.changed)) { _ in mine = MyProfiles.all() }
+        .onChange(of: tab) { mine = MyProfiles.all(); selectedMine = mine.first { (tab == "favorites") == ($0.favoriteOf != nil) }?.id }
         .onChange(of: store.entries) { focus() }
         .sheet(item: $detail) { e in
             VStack(spacing: 0) {
@@ -150,12 +159,23 @@ struct ProfilesView: View {
         VStack(alignment: .leading, spacing: 3) {
             Text(g.title).font(.headline).lineLimit(1)
             HStack(spacing: 8) {
-                RatingBadge(rating: g.bestRating)
+                RatingBadge(rating: g.bestRating).help("The best rating among this game's profiles")
                 Text("\(g.entries.count) profile\(g.entries.count == 1 ? "" : "s")")
-                Label("\(g.totalUp)", systemImage: "hand.thumbsup")
                 if let d = g.newest { Text(d.formatted(.relative(presentation: .named))) }
             }.font(.caption).foregroundStyle(.secondary)
         }.padding(.vertical, 2)
+    }
+
+    /// From a favorite: show its profile in the Community list.
+    func openInCatalog(_ number: Int) {
+        guard let e = store.entries.first(where: { $0.number == number }) else {
+            model.say("That profile isn't in the catalog anymore (its author may have removed it). Your saved copy stays.")
+            return
+        }
+        tab = "community"
+        query = ""
+        selectedGroup = Profiles.groupKey(e.profile)
+        detail = e
     }
 
     func reloadMine() {
@@ -181,9 +201,13 @@ struct MyProfileDetail: View {
     @EnvironmentObject var model: AppModel
     let item: MyProfile
     let changed: () -> Void
+    var openInCatalog: (Int) -> Void = { _ in }
     @State private var name: String = ""
     @State private var sharing = false
     @State private var confirmDelete = false
+    @State private var latest: CatalogEntry?
+    @State private var showLatest = false
+    @State private var inCatalog = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -191,9 +215,32 @@ struct MyProfileDetail: View {
                 HStack {
                     TextField("Name", text: $name, onCommit: rename).textFieldStyle(.roundedBorder).font(.title3).frame(maxWidth: 360)
                     Spacer()
-                    Button(item.sharedAt == nil ? "Share with Everyone…" : "Share Again…") { sharing = true }
+                    if item.favoriteOf == nil { Button(item.sharedAt == nil ? "Share with Everyone…" : "Share Again…") { sharing = true } }
                     Button("Export…", action: export)
                     Button("Delete…") { confirmDelete = true }
+                }
+                if let n = item.favoriteOf {
+                    HStack {
+                        Image(systemName: "star.fill").foregroundStyle(.yellow)
+                        Text("Favorite — shared by \(item.favoriteAuthor ?? "someone"). Kept exactly as it was when you starred it.")
+                        if latest != nil {
+                            Picker("", selection: $showLatest) {
+                                Text("My Saved Version").tag(false)
+                                Text("Latest Version").tag(true)
+                            }.pickerStyle(.segmented).frame(width: 260).labelsHidden()
+                        }
+                        Spacer()
+                        Button("Open in Catalog") { openInCatalog(n) }.buttonStyle(.link)
+                            .help("Shows this profile in the Community tab, with its current votes and comments")
+                    }.font(.caption)
+                    if let l = latest {
+                        Text("Its author updated it since you starred it" + (l.updatedDate.map { " (\($0.formatted(.relative(presentation: .named))))" } ?? "") + ". Switch to Latest Version above to see or apply the new one — your saved version doesn't change.")
+                            .font(.caption).foregroundStyle(.orange)
+                    } else if inCatalog {
+                        Label("Up to date — the shared profile hasn't changed since you starred it.", systemImage: "checkmark.circle").font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Label("No longer in the catalog — your saved copy is all that's left.", systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 Text("Saved \(item.created.formatted(date: .abbreviated, time: .shortened))"
                      + (item.updated.timeIntervalSince(item.created) > 60 ? " · changed \(item.updated.formatted(.relative(presentation: .named)))" : "")
@@ -202,10 +249,22 @@ struct MyProfileDetail: View {
             }
             .padding(16)
             Divider()
-            ProfileDetail(entry: CatalogEntry(number: 0, url: Profiles.catalogPage, author: "you", up: 0, down: 0, comments: 0,
-                                              updated: "", profile: item.profile))
+            if showLatest, let l = latest {
+                ProfileDetail(entry: l).id("latest")
+            } else {
+                ProfileDetail(entry: CatalogEntry(number: 0, url: Profiles.catalogPage, author: item.favoriteAuthor ?? "you", up: 0, down: 0, comments: 0,
+                                                  updated: "", profile: item.profile)).id("saved")
+            }
         }
-        .onAppear { name = item.name }
+        .onAppear {
+            name = item.name
+            // A newer version in the catalog than the one saved?
+            if let n = item.favoriteOf {
+                let e = Profiles.cached().first(where: { $0.number == n })
+                inCatalog = e != nil
+                if let e, e.profile != item.profile { latest = e }
+            }
+        }
         .sheet(isPresented: $sharing) {
             SubmitProfileSheet(profile: item.profile) { try? MyProfiles.markShared(item); changed() }.environmentObject(model)
         }
@@ -276,7 +335,7 @@ struct GroupDetail: View {
                 if !broken.isEmpty {
                     DisclosureGroup("Reported not working (\(broken.count))", isExpanded: $showBroken) {
                         ForEach(broken) { ProfileCard(entry: $0, open: open).opacity(0.7) }
-                    }
+                    }.disclosureGroupStyle(WholeRowDisclosureStyle())
                 }
             }
             .padding(16).frame(maxWidth: .infinity, alignment: .leading)
@@ -287,19 +346,34 @@ struct GroupDetail: View {
 struct ProfileCard: View {
     let entry: CatalogEntry
     let open: (CatalogEntry) -> Void
+    @State private var showComments = false
+    @State private var expanded = false
+    @State private var favorite = false
+    @State private var liveVotes: (up: Int, down: Int)?
     var p: GameProfile { entry.profile }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
                 RatingBadge(rating: p.rating)
-                Label("\(entry.up)", systemImage: "hand.thumbsup")
-                Label("\(entry.down)", systemImage: "hand.thumbsdown")
+                Label("\(liveVotes?.up ?? entry.up)", systemImage: "hand.thumbsup")
+                Label("\(liveVotes?.down ?? entry.down)", systemImage: "hand.thumbsdown")
                 Label("\(entry.comments)", systemImage: "bubble.left")
                 Spacer()
                 Text(dates).foregroundStyle(.secondary)
+                Button {
+                    if favorite { MyProfiles.removeFavorite(of: entry.number) } else { _ = try? MyProfiles.addFavorite(entry) }
+                    favorite = MyProfiles.favorite(of: entry.number) != nil
+                } label: { Image(systemName: favorite ? "star.fill" : "star").foregroundStyle(favorite ? .yellow : .secondary) }
+                .buttonStyle(.borderless)
+                .help(favorite ? "Remove from favorites" : "Favorite: keeps this version in My Profiles, even if it changes later")
             }.font(.caption)
-            if let n = p.notes, !n.isEmpty { Text(n).lineLimit(4).fixedSize(horizontal: false, vertical: true) }
+            if let n = p.notes, !n.isEmpty {
+                Text(n).lineLimit(expanded ? nil : 4).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                if n.count > 220 || n.contains("\n") {
+                    Button(expanded ? "Show Less" : "Show More") { withAnimation { expanded.toggle() } }.buttonStyle(.link).font(.caption)
+                }
+            }
             Text(ProfileText.summary(p)).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 6) {
                 if let t = p.tested { Text("Tested on " + [t.mac, t.macOS, t.engine].compactMap { $0 }.joined(separator: " · ")) }
@@ -307,13 +381,24 @@ struct ProfileCard: View {
             }.font(.caption2).foregroundStyle(.secondary)
             HStack {
                 Button("View & Apply…") { open(entry) }.buttonStyle(.borderedProminent)
-                Button("Vote or Comment") { NSWorkspace.shared.open(entry.url) }
+                Button {
+                    withAnimation { showComments.toggle() }
+                } label: {
+                    Label(showComments ? "Hide Comments" : "Comments (\(entry.comments))", systemImage: "bubble.left")
+                }
+                Button("Vote on GitHub") { NSWorkspace.shared.open(entry.url) }
                 Spacer()
                 Text("by \(entry.author)").font(.caption).foregroundStyle(.secondary)
             }
+            if showComments { ProfileCommentsView(entry: entry) }
         }
         .padding(12)
         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+        .task {
+            favorite = MyProfiles.favorite(of: entry.number) != nil
+            // The catalog's vote counts lag; read the current ones from GitHub.
+            liveVotes = await ProfileComments.votes(issue: entry.number)
+        }
     }
 
     var dates: String {
@@ -369,7 +454,7 @@ struct ProfileDetail: View {
                         Label("\(entry.down) say it doesn't", systemImage: "hand.thumbsdown")
                         Label("\(entry.comments) comments", systemImage: "bubble.left")
                         Spacer()
-                        Button("Vote or Comment on GitHub") { NSWorkspace.shared.open(entry.url) }
+                        Button("Vote on GitHub") { NSWorkspace.shared.open(entry.url) }
                     }.font(.callout).foregroundStyle(.secondary)
                     if entry.reportedBroken {
                         Label("Many people report this profile doesn't work. Read the comments first.", systemImage: "exclamationmark.triangle")
@@ -377,6 +462,7 @@ struct ProfileDetail: View {
                     }
                     Text("Shared by \(entry.author)" + (entry.createdDate.map { " on \($0.formatted(date: .long, time: .omitted))" } ?? "") + (entry.updatedDate.map { " · updated \($0.formatted(.relative(presentation: .named)))" } ?? ""))
                         .font(.caption).foregroundStyle(.secondary)
+                    ProfileCommentsView(entry: entry).id("comments-\(entry.number)")
                 }
                 if let t = p.tested {
                     Text("Tested on \([t.mac, t.macOS, t.engine, t.nokcandu.map { "Nokcandu \($0)" }].compactMap { $0 }.joined(separator: " · "))")
@@ -393,7 +479,7 @@ struct ProfileDetail: View {
                                     Button("Install in Steam") { do { try SharedSteam.install(appID: id) } catch { model.fail(error) } }
                                 }
                                 if p.source == "battlenet", let h = BattleNet.host(in: model.games) { Button("Open Battle.net") { model.play(h) } }
-                                if ["installer", "disc", "folder"].contains(p.source) { Button("Install a Game…") { model.showProfiles = false; model.showInstaller = true } }
+                                if ["installer", "disc", "folder"].contains(p.source) { Button("Add a Game…") { model.showProfiles = false; model.showInstaller = true } }
                             }
                         }
                     }
@@ -425,11 +511,14 @@ struct ProfileDetail: View {
                                 }
                                 if working { ProgressView().controlSize(.small) }
                             }
-                            Text("Undo puts back the settings from before. The cinematic fix has its own Undo in the game's Fixes.").font(.caption).foregroundStyle(.secondary)
+                            Text(undoSnapshot == nil
+                                 ? "After you apply, an Undo button appears here that puts back the settings from before."
+                                 : "Undo puts back the settings from before. The cinematic fix has its own Undo in the game's Fixes.")
+                                .font(.caption).foregroundStyle(.secondary)
                         }
                     }
                 }
-                DisclosureGroup("Profile details") { Text(p.json()).font(.caption.monospaced()).textSelection(.enabled) }
+                DisclosureGroup("Profile details") { Text(p.json()).font(.caption.monospaced()).textSelection(.enabled) }.disclosureGroupStyle(WholeRowDisclosureStyle())
             }
             .padding(20).frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -441,7 +530,7 @@ struct ProfileDetail: View {
         switch p.source {
         case "steam": "Install this game in Steam, add it from Steam → Steam Games, then come back here."
         case "battlenet": "Install it in Battle.net, add it from Battle.net → Blizzard Games, then come back here."
-        default: "Install the game with Install a Game… (it uses \(p.match.exeName ?? "the game's program")), then come back here."
+        default: "Install the game with Add a Game… (it uses \(p.match.exeName ?? "the game's program")), then come back here."
         }
     }
 
@@ -486,6 +575,9 @@ struct ProfilesSection: View {
                 } else {
                     ForEach(entries.prefix(3)) { e in
                         HStack {
+                            if mine.contains(where: { $0.favoriteOf == e.number }) {
+                                Image(systemName: "star.fill").foregroundStyle(.yellow).help("In your favorites")
+                            }
                             RatingBadge(rating: e.profile.rating)
                             Text("👍 \(e.up)  👎 \(e.down)").font(.caption).foregroundStyle(.secondary)
                             Text(e.profile.notes?.components(separatedBy: .newlines).first ?? "").lineLimit(1).font(.caption)
@@ -496,10 +588,15 @@ struct ProfilesSection: View {
                 }
                 if !mine.isEmpty {
                     Divider()
-                    Text("My profiles for this game").font(.caption.bold()).foregroundStyle(.secondary)
-                    ForEach(mine) { m in
+                    Text("My profiles and favorites for this game").font(.caption.bold()).foregroundStyle(.secondary)
+                    ForEach(mine.sorted { ($0.favoriteOf != nil ? 0 : 1) < ($1.favoriteOf != nil ? 0 : 1) }) { m in
                         HStack {
-                            Image(systemName: m.sharedAt == nil ? "tray" : "person.2").foregroundStyle(.secondary)
+                            if m.favoriteOf != nil {
+                                Image(systemName: "star.fill").foregroundStyle(.yellow).help("Your favorite (saved as it was when you starred it)")
+                            } else {
+                                Image(systemName: m.sharedAt == nil ? "tray" : "person.2").foregroundStyle(.secondary)
+                                    .help(m.sharedAt == nil ? "Saved on this Mac" : "You shared it")
+                            }
                             Text(m.name)
                             Text(m.updated.formatted(.relative(presentation: .named))).font(.caption).foregroundStyle(.secondary)
                             Spacer()
@@ -525,6 +622,7 @@ struct ProfilesSection: View {
             entries = Profiles.forGame(game, in: r.entries)
         }
         .onAppear { mine = MyProfiles.forGame(game) }
+        .onReceive(NotificationCenter.default.publisher(for: MyProfiles.changed)) { _ in mine = MyProfiles.forGame(game) }
         .sheet(isPresented: $sharing, onDismiss: { mine = MyProfiles.forGame(game) }) { ShareProfileView(game: game).environmentObject(model) }
         .sheet(isPresented: $saving, onDismiss: { mine = MyProfiles.forGame(game) }) { ShareProfileView(game: game, saveOnly: true).environmentObject(model) }
         .sheet(item: $open) { e in
@@ -563,7 +661,7 @@ struct ShareProfileView: View {
             TextEditor(text: $notes).frame(height: 70).overlay(RoundedRectangle(cornerRadius: 5).stroke(.quaternary))
             Text("How to install (optional)").font(.caption)
             TextEditor(text: $install).frame(height: 50).overlay(RoundedRectangle(cornerRadius: 5).stroke(.quaternary))
-            DisclosureGroup("What will be shared") { Text(profile.json()).font(.caption.monospaced()).textSelection(.enabled) }
+            DisclosureGroup("What will be shared") { Text(profile.json()).font(.caption.monospaced()).textSelection(.enabled) }.disclosureGroupStyle(WholeRowDisclosureStyle())
             let left = Profiles.notShared(from: game)
             if !left.isEmpty {
                 VStack(alignment: .leading, spacing: 2) {
@@ -613,5 +711,57 @@ struct ShareProfileView: View {
         let p = NSSavePanel(); p.nameFieldStringValue = "\(CustomGames.safeFolderName(profile.title)).nokcandu-profile.json"
         guard p.runModal() == .OK, let u = p.url else { return }
         do { try Data(profile.json().utf8).write(to: u) } catch { model.fail(error) }
+    }
+}
+
+/// The profile's discussion from GitHub, read in place. Writing needs a GitHub account, so that opens GitHub.
+struct ProfileCommentsView: View {
+    static let howToVote = "To vote: press Vote on GitHub (a free GitHub account is needed). At the very top of that page is the profile itself, with its settings. Below it, click the smiley-face button (Add reaction) — not the one under a comment — and choose 👍 if the profile works for you or 👎 if it doesn't. Votes show here within the hour."
+    let entry: CatalogEntry
+    @State private var comments: [ProfileComment] = []
+    @State private var votes: (up: Int, down: Int)?
+    @State private var loading = true
+    @State private var error: String?
+
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 10) {
+                if let v = votes {
+                    Text("Right now: 👍 \(v.up)  👎 \(v.down)  (the catalog updates hourly)").font(.caption).foregroundStyle(.secondary)
+                }
+                if loading { ProgressView().controlSize(.small) }
+                if let error { Text(error).font(.caption).foregroundStyle(.secondary) }
+                if !loading && error == nil && comments.isEmpty { Text("No comments yet.").font(.caption).foregroundStyle(.secondary) }
+                ForEach(comments) { c in
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack {
+                            Text(c.author).font(.caption.bold())
+                            if let d = c.created { Text(d.formatted(.relative(presentation: .named))).font(.caption).foregroundStyle(.secondary) }
+                        }
+                        Text((try? AttributedString(markdown: c.body, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(c.body))
+                            .font(.callout).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    }
+                    if c.id != comments.last?.id { Divider() }
+                }
+                Text(Self.howToVote).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Button("Write a Comment on GitHub…") {
+                        NSWorkspace.shared.open(URL(string: entry.url.absoluteString + "#new_comment_field") ?? entry.url)
+                    }
+                    Button("Refresh") { Task { await load() } }.buttonStyle(.link)
+                    Spacer()
+
+                }
+            }
+            .padding(6).frame(maxWidth: .infinity, alignment: .leading)
+        } label: { Text("Comments").font(.headline) }
+        .task { await load() }
+    }
+
+    func load() async {
+        loading = true; error = nil
+        do { comments = try await ProfileComments.fetch(issue: entry.number) } catch { self.error = error.localizedDescription }
+        votes = await ProfileComments.votes(issue: entry.number)
+        loading = false
     }
 }
