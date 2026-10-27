@@ -155,7 +155,7 @@ public enum SharedSteam {
         # A game started later restarts Steam (after asking) when any of it changed since.
         config_id() {
          # (Files that don't exist are simply left out — a missing one must never stop Steam from starting.)
-         { echo "$MODE"; cat "$STATE/perf.env" "$STATE/raw-mouse" "$STATE/raw-mouse-debug" 2>/dev/null || true
+         { echo "$MODE"; cat "$STATE/perf.env" "$STATE/raw-mouse-debug" 2>/dev/null || true; if [ -f "$STATE/steam-gpu" ]; then echo gpu; fi
            /sbin/md5 -q "$STATE/nokcandu-rawmouse.dylib" 2>/dev/null || true; } | /sbin/md5 -q
         }
         if running; then
@@ -203,7 +203,11 @@ public enum SharedSteam {
         cd "$STEAM_DIR"
         # (Not via /usr/bin/nohup: macOS strips DYLD_* variables when running system binaries, and Wine needs them.)
         trap '' HUP
-        "$WINE" "$STEAM_EXE" \(CustomGames.steamWineFlags) ${PASS[@]+"${PASS[@]}"} > >(\(CustomGames.logFilter) >>"$LOG_DIR/steam.log") 2>&1 </dev/null &
+        # Steam's browser draws in software unless GPU drawing was switched on in Nokcandu (Steam's page).
+        STEAM_FLAGS=(\(CustomGames.steamWineFlags))
+        if [ -f "$STATE/steam-gpu" ]; then STEAM_FLAGS=(-no-cef-sandbox); fi
+        echo "nokcandu: Steam window drawing: $([ -f "$STATE/steam-gpu" ] && echo GPU || echo software)" >>"$LOG_DIR/steam.log"
+        "$WINE" "$STEAM_EXE" "${STEAM_FLAGS[@]}" ${PASS[@]+"${PASS[@]}"} > >(\(CustomGames.logFilter) >>"$LOG_DIR/steam.log") 2>&1 </dev/null &
         echo $! > "$LOCK/pid"
         disown $! 2>/dev/null || true
         if [ -n "$APP" ] && [ ! -f "$STATE/keep-steam-open" ]; then
@@ -505,6 +509,16 @@ public enum SharedSteam {
         }
     }
 
+    /// "Smoother Steam windows": Steam's built-in browser draws with the GPU instead of in software.
+    /// Smoother window moves and scrolling, but Steam then shares the GPU with the game. Off by default.
+    public static var gpuDrawing: Bool {
+        get { FileManager.default.fileExists(atPath: contents.appendingPathComponent("SharedSupport/nokcandu/steam-gpu").path) }
+        set {
+            let f = contents.appendingPathComponent("SharedSupport/nokcandu/steam-gpu")
+            if newValue { FileManager.default.createFile(atPath: f.path, contents: Data()) } else { try? FileManager.default.removeItem(at: f) }
+        }
+    }
+
     public static func shutdown() async { _ = try? await Shell.runAsync("/bin/bash", [helper.path, "--shutdown"], timeout: 180) }
 
     /// Existing Nokcandu app for a Steam game, if any.
@@ -529,6 +543,8 @@ public enum SharedSteam {
         var config = CustomGameConfig(id: "steam-\(game.appID)", name: game.name, source: .steamLibrary, steamAppID: game.appID,
                                       exe: CustomGames.steamExe, graphics: GraphicsPreset.suggest(for: pe), is64Bit: pe?.is64Bit,
                                       detectedAPIs: (pe?.imports ?? []).map { $0.lowercased() }.filter { $0.hasPrefix("d3d") || $0 == "dxgi.dll" || $0 == "ddraw.dll" || $0 == "opengl32.dll" })
+        // Valve shooters start with Low-latency aiming on (Performance on the game's page).
+        if LowLatency.supported(config) { config = LowLatency.set(true, config) }
         let script = CustomGames.launcherScript(for: config)
         config.launcherSHA = Hashing.sha256(data: Data(script.utf8))
         let launcher = c.appendingPathComponent("MacOS/\(CustomGames.launcherName)")

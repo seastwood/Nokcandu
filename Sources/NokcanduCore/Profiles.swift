@@ -445,6 +445,7 @@ public enum Profiles {
         if let perf = p.performance {
             var parts: [String] = []
             if perf.fpsCounter { parts.append("FPS counter") }
+            if perf.lowLatency == true { parts.append("low-latency mode") }
             if perf.vsync { parts.append("vsync") }
             if perf.fpsLimit > 0 { parts.append("\(perf.fpsLimit) FPS limit") }
             plan.sharedSettings.append("Performance: \(parts.isEmpty ? "all off" : parts.joined(separator: ", "))\(shared)")

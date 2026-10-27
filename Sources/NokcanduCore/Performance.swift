@@ -12,6 +12,8 @@ public enum Performance {
         public var hud: String? = nil
         /// Overlay size: "small", "medium" or "large" (nil = small).
         public var hudSize: String? = nil
+        /// Low-latency mode: the graphics layer queues at most one frame ahead (DXVK modes; nil = off).
+        public var lowLatency: Bool? = nil
         public init() {}
         public static let hudSizes = ["small", "medium", "large"]
         public static let hudStyles = ["fps", "graph", "full"]
@@ -44,8 +46,20 @@ public enum Performance {
         }
         if s.vsync {
             out += #"export DXVK_CONFIG="${DXVK_CONFIG:+$DXVK_CONFIG; }d3d9.presentInterval = 1; dxgi.syncInterval = 1""# + "\n"
+            // Metal modes (Apple Metal, DXMT): Nokcandu's library makes the game's Metal layer wait for the
+            // screen's refresh with at most one frame waiting — no repeated frames, little added delay.
+            out += "export NOKCANDU_METAL_VSYNC=1\n"
         }
-        if s.fpsLimit > 0 { out += "export DXVK_FRAME_RATE=\(s.fpsLimit)\n" }
+        if s.fpsLimit > 0 {
+            out += "export DXVK_FRAME_RATE=\(s.fpsLimit)\n"
+            // DXMT's own limiter paces frames through Metal's presentation timing: evenly spaced frames
+            // without vsync's queue of waiting frames.
+            out += #"export DXMT_CONFIG="${DXMT_CONFIG:+$DXMT_CONFIG;}d3d11.preferredMaxFrameRate=\#(s.fpsLimit)""# + "\n"
+        }
+        if s.lowLatency == true {
+            // DXVK renders up to 3 frames ahead by default; with 1, each frame shows input from moments ago.
+            out += #"export DXVK_CONFIG="${DXVK_CONFIG:+$DXVK_CONFIG; }dxgi.maxFrameLatency = 1; d3d9.maxFrameLatency = 1""# + "\n"
+        }
         return out
     }
 

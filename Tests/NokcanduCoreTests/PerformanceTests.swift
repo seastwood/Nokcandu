@@ -51,4 +51,25 @@ final class AudioBufferTests: XCTestCase {
         XCTAssertEqual(AudioBuffer.immediates(d, value: 100_000), [3, 19])
         XCTAssertEqual(AudioBuffer.immediates(d, value: 50_000).count, 2)
     }
+
+    func testLowLatencyMode() {
+        var s = Performance.Settings()
+        XCTAssertFalse(Performance.envText(s).contains("maxFrameLatency"))
+        s.lowLatency = true
+        s.vsync = true
+        let env = Performance.envText(s)
+        XCTAssertTrue(env.contains("dxgi.maxFrameLatency = 1; d3d9.maxFrameLatency = 1"))
+        XCTAssertTrue(env.contains("presentInterval = 1"))          // both DXVK settings kept
+        XCTAssertFalse(s.isDefault)
+        // Old perf.json files (no field) still decode.
+        let old = try! JSONDecoder().decode(Performance.Settings.self, from: Data(#"{"fpsCounter":true,"vsync":false,"fpsLimit":0}"#.utf8))
+        XCTAssertNil(old.lowLatency)
+    }
+
+    func testFrameLimitAlsoForDXMT() {
+        var s = Performance.Settings(); s.fpsLimit = 60
+        let env = Performance.envText(s)
+        XCTAssertTrue(env.contains("export DXVK_FRAME_RATE=60"))
+        XCTAssertTrue(env.contains(#"export DXMT_CONFIG="${DXMT_CONFIG:+$DXMT_CONFIG;}d3d11.preferredMaxFrameRate=60""#))
+    }
 }

@@ -78,6 +78,7 @@ struct SteamGamesSection: View {
     @State private var games: [SharedSteam.LibraryGame] = []
     @State private var adding: Int?
     @State private var closes = SharedSteam.closesWithGame
+    @State private var gpu = SharedSteam.gpuDrawing
 
     /// Steam's own runtimes and redistributables aren't games.
     static let notGames: Set<Int> = [228980, 1070560, 1391110, 1628350, 1493710]
@@ -107,6 +108,10 @@ struct SteamGamesSection: View {
                         }
                     }
                 }
+                Toggle("Smoother Steam windows (GPU drawing)", isOn: Binding(get: { gpu }, set: { gpu = $0; SharedSteam.gpuDrawing = $0
+                    model.say("Takes effect when Steam next starts.") }))
+                Text("Steam's windows, scrolling and friends list move more smoothly, but Steam then uses the graphics chip alongside the game, which can add a little delay in games. If Steam's windows turn black, switch it off. Takes effect when Steam next starts.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Toggle("Close Steam when its game quits", isOn: Binding(get: { closes }, set: { closes = $0; SharedSteam.closesWithGame = $0 }))
                 Text("Steam opened by a game closes about 30 seconds after that game quits, so the next game starts Steam fresh with its own graphics settings. Steam you open yourself (Open Steam) stays open.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)

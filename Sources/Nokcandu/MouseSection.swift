@@ -2,7 +2,7 @@ import SwiftUI
 import GameController
 import NokcanduCore
 
-/// "Raw mouse for aiming" switch and aim speed, on any game with a Windows environment.
+/// "Raw mouse capture" switch and speed, on any game with a Windows environment.
 struct MouseSection: View {
     @EnvironmentObject var model: AppModel
     let game: InstalledGame
@@ -20,15 +20,15 @@ struct MouseSection: View {
             VStack(alignment: .leading, spacing: 10) {
                 Toggle(isOn: Binding(get: { enabled }, set: { enabled = $0; save() })) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Raw mouse for aiming").font(.body.bold())
-                        Text("Wine normally turns the Mac's pointer into game input — about one update per screen refresh, with macOS acceleration, and stalls each time a shooter re-centers the cursor. This reads the mouse itself (hundreds of updates a second, no acceleration) while you're aiming. Menus and other apps keep the normal pointer.")
+                        Text("Raw mouse capture").font(.body.bold())
+                        Text("Whenever the game captures the mouse — aiming, turning the camera in third-person, flight or racing games, rotating the view in strategy games — this reads the mouse itself: hundreds of updates a second, no macOS acceleration, no stalls when the game re-centers the cursor. While the game shows a normal cursor (menus, point-and-click games) the Mac pointer is used. For those, turning off Pointer acceleration in System Settings → Mouse gives a similar 1:1 feel.")
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 .toggleStyle(.switch)
                 if enabled {
                     HStack {
-                        Text("Aim speed").foregroundStyle(.secondary).frame(width: 90, alignment: .leading)
+                        Text("Speed").foregroundStyle(.secondary).frame(width: 90, alignment: .leading)
                         Slider(value: $scale, in: 0.25...3, step: 0.05) { editing in if !editing { save() } }
                             .frame(maxWidth: 260)
                         Text(String(format: "%.2f×", scale)).monospacedDigit().frame(width: 52, alignment: .trailing)
@@ -76,7 +76,7 @@ struct MouseSection: View {
         guard loaded else { return }
         do {
             try RawMouse.apply(RawMouse.Settings(enabled: enabled, scale: scale, smooth: smooth), for: game)
-            model.say(enabled ? "Raw mouse on (\(String(format: "%.2f", scale))×). \(steam ? "Restart Steam" : "Restart the game") to use it." : "Raw mouse off.")
+            model.say(enabled ? "Raw mouse capture on (\(String(format: "%.2f", scale))×) — applies right away, also while playing." : "Raw mouse capture off — applies right away.")
         } catch { model.fail(error) }
     }
 }

@@ -28,6 +28,10 @@
 #include <mach/mach_time.h>
 #include <os/lock.h>
 #include <sys/sysctl.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <libgen.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -59,7 +63,7 @@ static IMP orig_handleMouseMove, orig_setCursorPosition, orig_postEvent;
 static ptrdiff_t hidden_ivar = -1;
 static double scale = 1.0, rest_x, rest_y;
 static int relative_type = -1;           // learned from winemac's own absolute-move events
-static BOOL watching_post, aiming, debug_on, installed;
+static BOOL watching_post, debug_on, installed;
 static CGPoint watched_location;
 static unsigned long moves_sent;
 
@@ -74,7 +78,7 @@ static _Atomic bool armed;
 // 3 into others, so the view turns unevenly. Each update is spread evenly over the time until the next one
 // (at most one report interval of delay). raw_q only.
 static bool smooth_on;
-static bool raw_enabled;          // raw mouse switch is on for this app (NOKCANDU_RAW_MOUSE_SCALE set)
+static _Atomic bool raw_enabled;  // Raw mouse capture is on (read live from the settings file next to this library)
 static double pend_x, pend_y, pend_ms, interval_ms = 8;
 static uint64_t last_report;
 static dispatch_source_t smooth_timer;
@@ -97,14 +101,54 @@ static id controller(void) {
     return c ? ((id (*)(id, SEL))objc_msgSend)(c, sel_registerName("sharedController")) : nil;
 }
 
-// The game window while the game is in mouse-look: our app is active, the Windows cursor is hidden,
-// a mouse is connected and the layout check has passed.
+static BOOL aiming;
+static _Atomic double last_game_warp;   // when the game last moved the cursor itself (uptime, seconds)
+static _Atomic int warps_while_aiming;  // the game's own cursor moves during this capture (for the log)
+static double aim_started;
+// Frame-synchronised delivery: while capturing, movement is handed to Wine once per frame (when the game asks
+// Metal for its next frame) instead of report by report, so every frame turns by exactly one frame's worth.
+// Without it Wine hands the game the movement in uneven clumps (one frame double, the next almost none).
+static _Atomic uint64_t last_frame_tick;      // mach time of the last frame
+static double fs_x, fs_y;                      // movement collected since the last frame (raw_q)
+static bool frame_sync_off;                    // NOKCANDU_RAW_MOUSE_FRAME_SYNC=0
+static uint64_t fs_frames, fs_frames_with_move;
+static IMP orig_nextDrawable;
+static os_unfair_lock qt_lock = OS_UNFAIR_LOCK_INIT;
+static struct { void *ev; uint64_t t; } qt_ring[512];
+static unsigned qt_next;
+static uint64_t qt_count, qt_sum, qt_max, qt_over4, qt_over8, qt_over16;
+static IMP orig_getEvent;
+static _Atomic bool hid_active;
+// Input timing while capturing (raw_q): how steadily mouse reports arrive, and from which mouse.
+static uint64_t in_last, in_count, in_gaps4, in_max_gap;            // mach time units
+static struct { IOHIDDeviceRef dev; uint64_t n; char name[64]; } in_dev[4];
+
+static double uptime(void) { return NSProcessInfo.processInfo.systemUptime; }
+
+// Is the game confining the cursor to a small area (mouse-look), not just to its window?
+static bool clip_is_small(id ctl, NSWindow *w) {
+    @try {
+        id h = [ctl valueForKey:@"clipCursorHandler"];
+        if (!h || ![[h valueForKey:@"clippingCursor"] boolValue]) return false;
+        CGRect r = [[h valueForKey:@"cursorClipRect"] rectValue];
+        return r.size.width < NSWidth(w.frame) / 2 || r.size.height < NSHeight(w.frame) / 2;
+    } @catch (__unused NSException *e) { return false; }
+}
+
+// The game window while the game captures the mouse (mouse-look): our app is active, a mouse is connected,
+// the layout check has passed, the Windows cursor is hidden — and the game is really capturing it: it keeps
+// re-centring the cursor or confines it to a small area. A hidden cursor alone isn't enough: games that draw
+// their own cursor (Diablo, while dragging an item; Battlefield 1942's menus) hide it too, and must keep
+// the normal pointer. Once capturing, it lasts until the cursor is shown again.
 static NSWindow *aim_window(id ctl) {
-    if (relative_type < 0 || !ctl || !NSApp.isActive || GCMouse.mice.count == 0 || hidden_ivar < 0) return nil;
+    if (!atomic_load(&raw_enabled) || relative_type < 0 || !ctl || !NSApp.isActive || GCMouse.mice.count == 0 || hidden_ivar < 0) return nil;
     BOOL hidden = *(BOOL *)((char *)(__bridge void *)ctl + hidden_ivar);
     if (!hidden) return nil;
     NSWindow *w = NSApp.keyWindow;
-    return [w isKindOfClass:objc_getClass("WineWindow")] ? w : nil;
+    if (![w isKindOfClass:objc_getClass("WineWindow")]) return nil;
+    if (aiming) return w;
+    bool recentering = uptime() - atomic_load(&last_game_warp) < 0.5;
+    return recentering || clip_is_small(ctl, w) ? w : nil;
 }
 
 static NSWindow *update_aiming(id ctl) {
@@ -136,7 +180,31 @@ static NSWindow *update_aiming(id ctl) {
             if (known) CGWarpMouseCursorPosition(p);
         }
         CGAssociateMouseAndMouseCursorPosition(!aiming);
-        note(@"%@", aiming ? @"aiming: raw mouse on" : @"aiming: raw mouse off");
+        if (aiming) {
+            aim_started = uptime(); atomic_store(&warps_while_aiming, 0);
+            dispatch_async(raw_q, ^{ in_last = in_count = in_gaps4 = in_max_gap = 0; memset(in_dev, 0, sizeof in_dev); fs_frames = fs_frames_with_move = 0; });
+            os_unfair_lock_lock(&qt_lock); qt_count = qt_sum = qt_max = qt_over4 = qt_over8 = qt_over16 = 0; os_unfair_lock_unlock(&qt_lock);
+            note(@"aiming: raw mouse on (%@)", uptime() - atomic_load(&last_game_warp) < 0.5 ? @"game re-centres the cursor" : @"game confines the cursor");
+        } else {
+            double secs = uptime() - aim_started;
+            note(@"aiming: raw mouse off (%.0f s, game moved the cursor %.0f times a second)", secs,
+                 secs > 0 ? atomic_load(&warps_while_aiming) / secs : 0.0);
+            dispatch_async(raw_q, ^{
+                int top = 0; for (int i = 1; i < 4; i++) if (in_dev[i].n > in_dev[top].n) top = i;
+                double maxms = (double)in_max_gap * timebase.numer / timebase.denom / 1e6;
+                note(@"input: %llu mouse reports (%.0f a second) from %s via %@; longest gap while moving %.1f ms, gaps over 4 ms: %llu",
+                     in_count, secs > 0 ? in_count / secs : 0.0, in_dev[top].n ? in_dev[top].name : "?",
+                     atomic_load(&hid_active) ? @"hardware" : @"GameController", maxms, in_gaps4);
+                os_unfair_lock_lock(&qt_lock);
+                uint64_t n = qt_count, sum = qt_sum, mx = qt_max, o4 = qt_over4, o8 = qt_over8, o16 = qt_over16;
+                os_unfair_lock_unlock(&qt_lock);
+                double f = (double)timebase.numer / timebase.denom / 1e6;
+                note(@"frames: %llu during capture, %llu carried movement (%@)", fs_frames, fs_frames_with_move,
+                     frame_sync_off ? @"frame sync off" : fs_frames ? @"movement delivered once per frame" : @"no Metal/OpenGL frames seen — delivered as it arrived");
+                if (n) note(@"queue: %llu moves; game took them out of Wine's queue after %.2f ms on average, longest %.1f ms; over 4 ms: %llu, over 8 ms: %llu, over 16 ms: %llu",
+                            n, sum * f / n, mx * f, o4, o8, o16);
+            });
+        }
     }
     // Publish (or clear) the window the background queue posts to — only when it changes.
     static __unsafe_unretained NSWindow *published;
@@ -154,6 +222,32 @@ static NSWindow *update_aiming(id ctl) {
     if (oq) CFRelease(oq);
     if (oc) CFRelease(oc);
     return w;
+}
+
+// Queue timing while capturing: when each of our moves was posted, and how long until the game's thread
+// took it out of Wine's event queue (getEventMatchingMask:). Logged when capture ends.
+
+static void qt_posted(void *ev) {
+    os_unfair_lock_lock(&qt_lock);
+    qt_ring[qt_next++ % 512] = (typeof(qt_ring[0])){ ev, mach_absolute_time() };
+    os_unfair_lock_unlock(&qt_lock);
+}
+
+static void *my_getEvent(id self, SEL _cmd, uint64_t mask) {
+    void *ev = ((void *(*)(id, SEL, uint64_t))orig_getEvent)(self, _cmd, mask);
+    if (ev && aiming) {
+        uint64_t now = mach_absolute_time();
+        os_unfair_lock_lock(&qt_lock);
+        for (unsigned i = 0; i < 512; i++) if (qt_ring[i].ev == ev) {
+            uint64_t d = now - qt_ring[i].t; qt_ring[i].ev = NULL;
+            double ms = (double)d * timebase.numer / timebase.denom / 1e6;
+            qt_count++; qt_sum += d; if (d > qt_max) qt_max = d;
+            if (ms > 4) qt_over4++; if (ms > 8) qt_over8++; if (ms > 16) qt_over16++;
+            break;
+        }
+        os_unfair_lock_unlock(&qt_lock);
+    }
+    return ev;
 }
 
 static void release_ours(char *ev) {
@@ -183,6 +277,7 @@ static void send_relative(int dx, int dy, bool drag) {
             *(int *)(ev + kDrag) = drag;
             *(unsigned long *)(ev + kTime) = ((unsigned long (*)(id, SEL, NSTimeInterval))objc_msgSend)(
                 (__bridge id)c, sel_registerName("ticksForEventTime:"), NSProcessInfo.processInfo.systemUptime);
+            if (orig_getEvent) qt_posted(ev);
             ((void (*)(id, SEL, void *))orig_postEvent)((__bridge id)q, sel_registerName("postEvent:"), ev);
             release_ours(ev);
             moves_sent++;
@@ -223,7 +318,24 @@ static void smooth_tick(void) {                   // on raw_q, every STEP_MS whi
 }
 
 static void raw_moved(float dx, float dy) {      // on raw_q
-    if (!atomic_load(&armed)) { rest_x = rest_y = 0; pend_x = pend_y = 0; return; }
+    if (aiming) {                                   // timing stats (reports during continuous movement)
+        uint64_t now = mach_absolute_time();
+        if (in_last) {
+            uint64_t gap = now - in_last;
+            double ms = (double)gap * timebase.numer / timebase.denom / 1e6;
+            if (ms < 200) { if (gap > in_max_gap) in_max_gap = gap; if (ms > 4) in_gaps4++; }
+        }
+        in_last = now; in_count++;
+    }
+    if (!atomic_load(&armed)) { rest_x = rest_y = 0; pend_x = pend_y = 0; fs_x = fs_y = 0; return; }
+    if (!frame_sync_off) {
+        uint64_t tick = atomic_load(&last_frame_tick), now = mach_absolute_time();
+        if (tick && (double)(now - tick) * timebase.numer / timebase.denom < 100e6) {   // frames seen in the last 100 ms
+            fs_x += dx * scale; fs_y -= dy * scale;                                     // y: GameController is y-up
+            return;
+        }
+        if (fs_x != 0 || fs_y != 0) { emit(fs_x, fs_y); fs_x = fs_y = 0; }            // frames stopped: flush
+    }
     if (smooth_on) {
         uint64_t now = mach_absolute_time();
         if (last_report) {
@@ -263,6 +375,8 @@ static void my_handleMouseMove(id self, SEL _cmd, NSEvent *event) {
 
 static BOOL my_setCursorPosition(id self, SEL _cmd, CGPoint pos) {
     BOOL ok = ((BOOL (*)(id, SEL, CGPoint))orig_setCursorPosition)(self, _cmd, pos);
+    atomic_store(&last_game_warp, uptime());
+    if (aiming) atomic_fetch_add(&warps_while_aiming, 1);
     if (aiming) {
         CGAssociateMouseAndMouseCursorPosition(false);   // winemac re-associates after a warp
         if (game_cursor) vcur_set(pos.x, pos.y);         // the game moved its cursor itself
@@ -323,7 +437,6 @@ static void my_postEvent(id self, SEL _cmd, void *raw) {
 // The mouse hardware itself (IOHID): every report the mouse sends — 1000 a second from a gaming mouse.
 // GameController's GCMouse (the fallback) bunches them into ~125 updates a second.
 static IOHIDManagerRef hid;
-static _Atomic bool hid_active;
 static double hid_dx, hid_dy;                 // raw_q only
 static bool hid_flush_pending;                // raw_q only
 
@@ -337,6 +450,18 @@ static void hid_value(__unused void *ctx, __unused IOReturn r, __unused void *se
     if (!n) return;
     atomic_store(&hid_active, true);
     if (u == kHIDUsage_GD_X) hid_dx += n; else hid_dy += n;
+    if (aiming && u == kHIDUsage_GD_X) {           // which mouse is moving (for the timing note)
+        IOHIDDeviceRef d = IOHIDElementGetDevice(e);
+        for (int i = 0; i < 4; i++) {
+            if (in_dev[i].dev == d) { in_dev[i].n++; break; }
+            if (!in_dev[i].dev) {
+                in_dev[i].dev = d; in_dev[i].n = 1;
+                CFStringRef pn = IOHIDDeviceGetProperty(d, CFSTR(kIOHIDProductKey));
+                if (!pn || !CFStringGetCString(pn, in_dev[i].name, sizeof in_dev[i].name, kCFStringEncodingUTF8)) strlcpy(in_dev[i].name, "mouse", sizeof in_dev[i].name);
+                break;
+            }
+        }
+    }
     // X and Y of one report arrive back to back; hand them on together.
     if (!hid_flush_pending) {
         hid_flush_pending = true;
@@ -368,6 +493,59 @@ static void watch_mouse(GCMouse *m) {
     note(@"mouse: %@", m.vendorName ?: @"(unnamed)");
 }
 
+static void frame_tick(void) {                 // any thread, once per frame
+    atomic_store(&last_frame_tick, mach_absolute_time());
+    if (!aiming || frame_sync_off) return;
+    dispatch_async(raw_q, ^{
+        fs_frames++;
+        if (fs_x == 0 && fs_y == 0) return;
+        fs_frames_with_move++;
+        double x = fs_x, y = fs_y; fs_x = fs_y = 0;
+        emit(x, y);
+    });
+}
+
+// Low-delay vsync for Metal games (NOKCANDU_METAL_VSYNC=1, Performance → Vsync): frames wait for the screen's
+// refresh, so none is shown twice when the game's frame clock drifts against the screen's — but only one
+// frame may wait (two drawables), instead of the usual queue of three that makes vsync feel delayed.
+static bool metal_vsync;
+static IMP orig_setDisplaySync, orig_setMaxDrawables;
+static void my_setDisplaySync(id self, SEL _cmd, BOOL on) {
+    ((void (*)(id, SEL, BOOL))orig_setDisplaySync)(self, _cmd, metal_vsync ? YES : on);
+}
+static void my_setMaxDrawables(id self, SEL _cmd, NSUInteger n) {
+    ((void (*)(id, SEL, NSUInteger))orig_setMaxDrawables)(self, _cmd, metal_vsync ? 2 : n);
+}
+
+static id my_nextDrawable(id self, SEL _cmd) {
+    frame_tick();
+    if (metal_vsync) {
+        static char key;
+        if (!objc_getAssociatedObject(self, &key)) {
+            objc_setAssociatedObject(self, &key, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            if (orig_setDisplaySync) ((void (*)(id, SEL, BOOL))orig_setDisplaySync)(self, sel_registerName("setDisplaySyncEnabled:"), YES);
+            if (orig_setMaxDrawables) ((void (*)(id, SEL, NSUInteger))orig_setMaxDrawables)(self, sel_registerName("setMaximumDrawableCount:"), 2);
+            note(@"vsync: frames wait for the screen's refresh (low delay: 2 drawables)");
+        }
+    }
+    return ((id (*)(id, SEL))orig_nextDrawable)(self, _cmd);
+}
+
+static BOOL swap(Class c, const char *sel, IMP mine, IMP *orig);
+// Frame clock (mouse frame sync) and low-delay vsync: hooks on Metal's layer, for every game.
+static void hook_metal_layer(void) {
+    static bool done; if (done) return; done = true;
+    Class layer = objc_getClass("CAMetalLayer");
+    if (!layer) return;
+    if (class_getInstanceMethod(layer, sel_registerName("nextDrawable"))) swap(layer, "nextDrawable", (IMP)my_nextDrawable, &orig_nextDrawable);
+    if (metal_vsync) {
+        if (class_getInstanceMethod(layer, sel_registerName("setDisplaySyncEnabled:")))
+            swap(layer, "setDisplaySyncEnabled:", (IMP)my_setDisplaySync, &orig_setDisplaySync);
+        if (class_getInstanceMethod(layer, sel_registerName("setMaximumDrawableCount:")))
+            swap(layer, "setMaximumDrawableCount:", (IMP)my_setMaxDrawables, &orig_setMaxDrawables);
+    }
+}
+
 static BOOL swap(Class c, const char *sel, IMP mine, IMP *orig) {
     Method m = class_getInstanceMethod(c, sel_registerName(sel));
     if (!m) return NO;
@@ -392,6 +570,9 @@ static void install(void) {
     swap(app, "handleMouseMove:", (IMP)my_handleMouseMove, &orig_handleMouseMove);
     swap(app, "setCursorPosition:", (IMP)my_setCursorPosition, &orig_setCursorPosition);
     swap(queue, "postEvent:", (IMP)my_postEvent, &orig_postEvent);
+    if (class_getInstanceMethod(queue, sel_registerName("getEventMatchingMask:")))
+        swap(queue, "getEventMatchingMask:", (IMP)my_getEvent, &orig_getEvent);
+
     installed = YES;
     start_hid();
     for (GCMouse *m in GCMouse.mice) watch_mouse(m);
@@ -506,7 +687,7 @@ static bool same_mode(CGDisplayModeRef a, CGDisplayModeRef b) {
 static bool has_fullscreen_window(void) {
     NSRect screen = NSScreen.screens.firstObject.frame;
     for (NSWindow *w in NSApp.windows)
-        if (w.visible && NSEqualRects(w.frame, screen)) return true;
+        if (w.visible && NSContainsRect(w.frame, screen)) return true;
     return false;
 }
 
@@ -543,6 +724,137 @@ static void watch_display(NSString *name) {
 static void gl_limit_wine(void);
 static void restore_pointer(void) { if (aiming) CGAssociateMouseAndMouseCursorPosition(true); }
 
+// MARK: - Hot corners during full-screen play
+// macOS hot corners (Mission Control, Quick Note…) fire the instant the pointer touches a corner — in a
+// full-screen game with a cursor (Diablo, strategy games) that happens all the time, and moving the pointer
+// away afterwards is too late. So while a game is in front and full screen, its hot corners are switched
+// off through the Dock's own call, and put back as soon as you switch away, leave full screen or quit.
+// The original settings are saved first (Application Support/Nokcandu/hot-corners-saved) so Nokcandu can
+// restore them even if a game crashes.
+typedef void (*CornerSet)(int action, int corner, int modifier);   // corner: 0 tl, 1 tr, 2 bl, 3 br
+static CornerSet corner_set;
+static bool corners_off;
+static char corners_file[PATH_MAX];
+
+static void read_corners(int act[4], int mod[4]) {
+    static const char *keys[4] = { "tl", "tr", "bl", "br" };
+    CFPreferencesAppSynchronize(CFSTR("com.apple.dock"));
+    for (int i = 0; i < 4; i++) {
+        char k[32], m[32];
+        snprintf(k, sizeof k, "wvous-%s-corner", keys[i]); snprintf(m, sizeof m, "wvous-%s-modifier", keys[i]);
+        CFStringRef ck = CFStringCreateWithCString(NULL, k, kCFStringEncodingUTF8), cm = CFStringCreateWithCString(NULL, m, kCFStringEncodingUTF8);
+        CFPropertyListRef a = CFPreferencesCopyAppValue(ck, CFSTR("com.apple.dock")), md = CFPreferencesCopyAppValue(cm, CFSTR("com.apple.dock"));
+        act[i] = 0; mod[i] = 0;
+        if (a && CFGetTypeID(a) == CFNumberGetTypeID()) CFNumberGetValue(a, kCFNumberIntType, &act[i]);
+        if (md && CFGetTypeID(md) == CFNumberGetTypeID()) CFNumberGetValue(md, kCFNumberIntType, &mod[i]);
+        if (a) CFRelease(a); if (md) CFRelease(md);
+        CFRelease(ck); CFRelease(cm);
+    }
+}
+
+static void corners_disable(void) {
+    if (corners_off || !corner_set) return;
+    int act[4], mod[4];
+    read_corners(act, mod);
+    bool any = false;
+    for (int i = 0; i < 4; i++) if (act[i] > 1 && mod[i] == 0) any = true;   // a modifier corner can't fire by accident
+    if (!any) return;
+    // Keep the first saved copy: another game may already have switched them off.
+    int fd = open(corners_file, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    if (fd >= 0) {
+        FILE *f = fdopen(fd, "w");
+        fprintf(f, "%d\n", (int)getpid());
+        for (int i = 0; i < 4; i++) fprintf(f, "%d %d\n", act[i], mod[i]);
+        fclose(f);
+    } else if (errno != EEXIST) return;                    // can't save them: leave them alone
+    for (int i = 0; i < 4; i++) if (act[i] > 1 && mod[i] == 0) corner_set(1, i, 0);
+    corners_off = true;
+    note(@"hot corners off while the game is in front");
+}
+
+static void corners_restore(void) {
+    if (!corners_off || !corner_set) return;
+    corners_off = false;
+    FILE *f = fopen(corners_file, "r");
+    if (!f) return;
+    int pid = 0, act[4] = {0}, mod[4] = {0}, ok = fscanf(f, "%d", &pid) == 1;
+    for (int i = 0; i < 4 && ok; i++) ok = fscanf(f, "%d %d", &act[i], &mod[i]) == 2;
+    fclose(f);
+    if (!ok) return;
+    unlink(corners_file);
+    for (int i = 0; i < 4; i++) if (act[i] > 1 && mod[i] == 0) corner_set(act[i], i, mod[i]);
+    note(@"hot corners back");
+}
+
+static bool is_game_app(void) {
+    NSString *cat = NSBundle.mainBundle.infoDictionary[@"LSApplicationCategoryType"];
+    return [cat isKindOfClass:NSString.class] && [cat hasPrefix:@"public.app-category."] && [cat hasSuffix:@"games"];
+}
+
+static void guard_hot_corners(void) {
+    if (getenv("NOKCANDU_ALLOW_HOT_CORNERS") || !is_game_app()) return;
+    void *h = dlopen("/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices", RTLD_LAZY);
+    corner_set = h ? (CornerSet)dlsym(h, "CoreDockSetExposeCornerActionWithModifier") : NULL;
+    const char *home = getenv("HOME");
+    if (!corner_set || !home) return;
+    snprintf(corners_file, sizeof corners_file, "%s/Library/Application Support/Nokcandu/hot-corners-saved", home);
+    atexit(corners_restore);
+    NSTimer *t = [NSTimer timerWithTimeInterval:0.25 repeats:YES block:^(__unused NSTimer *timer) {
+        if (NSApp.isActive && has_fullscreen_window()) corners_disable(); else corners_restore();
+    }];
+    [NSRunLoop.mainRunLoop addTimer:t forMode:NSRunLoopCommonModes];
+    [NSNotificationCenter.defaultCenter addObserverForName:NSApplicationDidResignActiveNotification object:nil
+        queue:NSOperationQueue.mainQueue usingBlock:^(__unused NSNotification *n) { corners_restore(); }];
+}
+
+// MARK: - Live settings
+// Nokcandu writes the Raw mouse capture settings to "raw-mouse" next to this library (line 1: speed,
+// line 2: "smooth"; no file = off). Read it at start and whenever it changes, so switching it on or off
+// and changing the speed apply to a running game.
+static char settings_path[PATH_MAX];
+
+static bool read_raw_settings(double *sc, bool *sm) {
+    FILE *f = settings_path[0] ? fopen(settings_path, "r") : NULL;
+    if (!f) return false;
+    char l1[64] = "", l2[64] = "";
+    if (!fgets(l1, sizeof l1, f)) l1[0] = 0;
+    if (!fgets(l2, sizeof l2, f)) l2[0] = 0;
+    fclose(f);
+    double v = atof(l1);
+    *sc = v > 0.01 && v < 20 ? v : 1.0;
+    *sm = strncmp(l2, "smooth", 6) == 0;
+    return true;
+}
+
+static void apply_raw_settings(bool on, double sc, bool sm, bool announce) {
+    bool was = atomic_load(&raw_enabled);
+    dispatch_async(raw_q, ^{
+        if (!sm && (pend_x != 0 || pend_y != 0)) { emit(pend_x, pend_y); pend_x = pend_y = 0; }
+        scale = sc; smooth_on = sm;
+    });
+    atomic_store(&raw_enabled, on);
+    if (on && !installed) install();
+    if (announce) note(@"raw mouse capture %@ (speed %.2f, smooth %@)", on ? @"on" : @"off", sc, sm ? @"on" : @"off");
+    if (was && !on) update_aiming(controller());        // hand the pointer back right away
+}
+
+static void watch_settings(void) {
+    if (!settings_path[0]) return;
+    NSTimer *t = [NSTimer timerWithTimeInterval:0.5 repeats:YES block:^(__unused NSTimer *timer) {
+        static struct timespec last; static bool had, first = true;
+        struct stat st;
+        bool has = stat(settings_path, &st) == 0;
+        if (!first && has == had && (!has || (st.st_mtimespec.tv_sec == last.tv_sec && st.st_mtimespec.tv_nsec == last.tv_nsec))) return;
+        if (has) last = st.st_mtimespec;
+        had = has;
+        bool announce = !first; first = false;
+        double sc = 1; bool sm = false;
+        bool on = read_raw_settings(&sc, &sm);
+        if (announce || on != atomic_load(&raw_enabled)) apply_raw_settings(on, sc, sm, announce);
+    }];
+    [NSRunLoop.mainRunLoop addTimer:t forMode:NSRunLoopCommonModes];
+}
+
 static void image_added(const struct mach_header *mh, __unused intptr_t slide) {
     Dl_info info;
     static bool seen;
@@ -553,7 +865,10 @@ static void image_added(const struct mach_header *mh, __unused intptr_t slide) {
         name_app();
         gl_limit_wine();
         watch_display(app_name());
-        if (raw_enabled) install();
+        guard_hot_corners();
+        hook_metal_layer();
+        if (atomic_load(&raw_enabled)) install();
+        watch_settings();
     });
 }
 
@@ -603,7 +918,9 @@ static double gl_fps_limit;
 static uint64_t gl_next_frame;            // render thread only
 static __thread bool gl_in_flush;
 
+static void frame_tick(void);
 static void gl_pace(void) {
+    frame_tick();
     if (gl_fps_limit <= 0 || gl_in_flush) return;
     static bool told;
     if (!told) { told = true; note(@"frame limit: pacing OpenGL frames to %.0f FPS", gl_fps_limit); }
@@ -673,6 +990,8 @@ static void gl_limit_wine(void) {
 #include <unistd.h>
 #include <strings.h>
 #include <spawn.h>
+#include <fcntl.h>
+#include <errno.h>
 #include <sys/stat.h>
 static void run_from_game_app(void) {
     if (getenv("NOKCANDU_NO_GAME_APP")) return;
@@ -722,17 +1041,9 @@ static void run_from_game_app(void) {
     char target[PATH_MAX];
     snprintf(target, sizeof target, "%s/%s/Contents/MacOS/wine", dir, wrapper);
     if (access(target, X_OK) != 0) return;
-    // Replace this process in place (like exec) and make the game responsible for itself, so macOS (Game
-    // Mode, the Games app, privacy prompts) credits the game — not Nokcandu or Steam, which started it.
-    posix_spawnattr_t attr;
-    if (posix_spawnattr_init(&attr) == 0) {
-        posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETEXEC);
-        typedef int (*Disclaim)(posix_spawnattr_t *, bool);
-        Disclaim disclaim = (Disclaim)dlsym(RTLD_DEFAULT, "responsibility_spawnattrs_setdisclaim");
-        if (disclaim) disclaim(&attr, true);
-        posix_spawn(NULL, target, NULL, &attr, argv, *_NSGetEnviron());
-        posix_spawnattr_destroy(&attr);   // only reached if that failed
-    }
+    // Replace this process in place, like exec. It stays in the care of the app that started it, so it
+    // keeps that app's privacy permissions (Input Monitoring for raw mouse, the microphone) — making the game
+    // responsible for itself made macOS refuse raw mouse access (0xe00002e2) without asking.
     execv(target, argv);                       // only returns on failure: carry on as bare wine
 }
 
@@ -740,14 +1051,24 @@ __attribute__((constructor)) static void start(void) {
     run_from_game_app();
     const char *s = getenv("NOKCANDU_RAW_MOUSE_SCALE");
     if (s && atof(s) > 0.01 && atof(s) < 20) scale = atof(s);
+    Dl_info self;
+    if (dladdr((const void *)start, &self) && self.dli_fname) {
+        char me[PATH_MAX]; strlcpy(me, self.dli_fname, sizeof me);
+        snprintf(settings_path, sizeof settings_path, "%s/raw-mouse", dirname(me));
+    }
     debug_on = getenv("NOKCANDU_RAW_MOUSE_DEBUG") != NULL;
     game_cursor = getenv("NOKCANDU_RAW_MOUSE_GAME_CURSOR") != NULL;
-    raw_enabled = getenv("NOKCANDU_RAW_MOUSE_SCALE") != NULL;
+    metal_vsync = getenv("NOKCANDU_METAL_VSYNC") && strcmp(getenv("NOKCANDU_METAL_VSYNC"), "1") == 0;
+    frame_sync_off = getenv("NOKCANDU_RAW_MOUSE_FRAME_SYNC") && strcmp(getenv("NOKCANDU_RAW_MOUSE_FRAME_SYNC"), "0") == 0;
+    atomic_store(&raw_enabled, getenv("NOKCANDU_RAW_MOUSE_SCALE") != NULL);
     mach_timebase_info(&timebase);
     gl_limit_setup();
     raw_q = dispatch_queue_create("nokcandu.rawmouse", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
     smooth_on = getenv("NOKCANDU_RAW_MOUSE_SMOOTH") && atoi(getenv("NOKCANDU_RAW_MOUSE_SMOOTH")) == 1;
-    if (smooth_on) {
+    { double sc; bool sm;                 // the settings file wins over the launcher's copy of it
+      if (read_raw_settings(&sc, &sm)) { scale = sc; smooth_on = sm; atomic_store(&raw_enabled, true); }
+      else if (settings_path[0]) atomic_store(&raw_enabled, false); }
+    {   // created suspended; smoothing can be switched on while playing
         smooth_timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, DISPATCH_TIMER_STRICT, raw_q);
         dispatch_source_set_timer(smooth_timer, DISPATCH_TIME_NOW, (uint64_t)(STEP_MS * NSEC_PER_MSEC), 100 * NSEC_PER_USEC);
         dispatch_source_set_event_handler(smooth_timer, ^{ smooth_tick(); });

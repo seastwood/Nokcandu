@@ -82,7 +82,7 @@ final class AppModel: ObservableObject {
         Task.detached(priority: .utility) {
             // Icons first: the rest can be slow when a game drive is slow to answer.
             if StoreAccounts.refreshIcons(snapshot) { await MainActor.run { self.games = GameLibrary.scan() } }
-            HelperPatch.refresh(snapshot); RawMouse.refreshLibraries(snapshot); Performance.refreshEnvFiles(snapshot); BattleNet.refreshLaunchers(snapshot); PCLaunchers.refreshLaunchers(snapshot); BattleNet.refreshSteamLaunchers(snapshot); AudioBuffer.fixMicrophones(snapshot) 
+            HotCorners.recoverIfStale(); HelperPatch.refresh(snapshot); RawMouse.refreshLibraries(snapshot); Performance.refreshEnvFiles(snapshot); BattleNet.refreshLaunchers(snapshot); PCLaunchers.refreshLaunchers(snapshot); BattleNet.refreshSteamLaunchers(snapshot); AudioBuffer.fixMicrophones(snapshot) 
         }
         if selection == nil || !games.contains(where: { $0.id == selection }) { selection = games.first?.id }
         refreshRunStates()
@@ -111,6 +111,7 @@ final class AppModel: ObservableObject {
     }
 
     func refreshRunStates() {
+        HotCorners.recoverIfStale()        // a game that switched hot corners off may have crashed
         var s: [InstalledGame.ID: RunState] = [:]
         for g in games {
             if g.native != nil {
@@ -134,6 +135,11 @@ final class AppModel: ObservableObject {
         say("Starting \(g.name)…")
         Task {
             let r = await Task.detached(priority: .userInitiated) { () -> Result<Void, Error> in
+                // A copy of this game left over from an earlier run (no window) blocks the launcher from starting it.
+                let stuck = StuckGames.stuck(g)
+                if StuckGames.end(stuck) > 0 {
+                    await MainActor.run { self.say("\(g.name) was still running from before without a window — closed it and starting fresh.") }
+                }
                 if DisplayController.supports(g) { DisplayController.prepareForLaunch(g) }
                 LibraryOrganizer.notePlayed(g)
                 GameDataSpec.forGame(g)?.snapshot()     // keep a copy of settings that live outside the app

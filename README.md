@@ -25,7 +25,7 @@ with tested settings, one-click fixes and safe updates. Think of it as a free al
 - **Real Mac apps** — games show under their own names in the Dock and macOS turns on **Game Mode** in full screen.
 - **Your games, your drives** — choose where each game installs (external drives included), move games later, and see which ones need a drive plugged in. Mac games you already have can be added too.
 - **Graphics modes** — Classic 3D (DirectX 8/9 → Vulkan), Modern 3D (DirectX 10/11), Apple Metal (DirectX 11/12, 64-bit), DXMT (DirectX 10/11 → Metal), Classic 2D, Compatibility.
-- **Raw mouse for aiming** — reads your mouse directly while you aim (hundreds of updates a second, no macOS acceleration), fixing the choppy aim Wine has on Macs.
+- **Raw mouse capture** — reads your mouse directly whenever a game captures it (aiming, camera control) (hundreds of updates a second, no macOS acceleration), fixing the choppy aim Wine has on Macs.
 - **Performance** — FPS counter, vsync, frame limit. **Drives** — map D:, E:… to external SSDs. **Storage** — see and free space.
 - **Fixes & health** — Fix cinematic playback (LAV Filters), known community fixes (winetricks), anti-cheat notes, Repair, Diagnostics, crash recognition with suggested fixes, notes per game.
 - **Stays current** — checks this repo for new Nokcandu releases and the Sikarugir/LAV projects for new components. New engines are self-tested before they're offered, each game tries them separately, and you can roll back.

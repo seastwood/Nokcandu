@@ -1,6 +1,6 @@
 import Foundation
 
-/// "Raw mouse for aiming": a small library (Resources/rawmouse) that Wine loads at start. While a game
+/// "Raw mouse capture": a small library (Resources/rawmouse) that Wine loads at start. While a game
 /// is in mouse-look it feeds the game the mouse's own movement (hundreds of updates a second, no macOS
 /// acceleration) instead of Wine's pointer-derived moves. The switch lives with the app that owns the
 /// Wine engine — for Steam games that's the shared Steam, so it applies to all of them.
@@ -17,6 +17,10 @@ public enum RawMouse {
 
     static func folder(_ host: URL) -> URL { host.appendingPathComponent("SharedSupport/nokcandu", isDirectory: true) }
     static func flag(_ host: URL) -> URL { folder(host).appendingPathComponent("raw-mouse") }
+    /// Present once the setting has been chosen (by you, or the default below), so the default is set only once.
+    static func chosen(_ host: URL) -> URL { folder(host).appendingPathComponent("raw-mouse-chosen") }
+    /// New apps start with Raw mouse capture on (1×, no smoothing): it only acts while a game captures the mouse.
+    public static let defaultSettings = Settings(enabled: true, scale: 1, smooth: false)
 
     public static func settings(for g: InstalledGame) -> Settings {
         guard let h = WineTools.hostContents(for: g) else { return Settings(enabled: false, scale: 1) }
@@ -28,8 +32,8 @@ public enum RawMouse {
 
     public static var bundledLibrary: URL? { NokPaths.bundledResource(dylibName) }
 
-    /// Turns it on (copying the current library into the app) or off. Takes effect the next time the
-    /// game — or for Steam games, Steam — starts.
+    /// Turns it on (copying the current library into the app) or off. A running game picks the change up
+    /// within a second (libraries from Nokcandu 0.9.7 on); older ones on their next start.
     public static func apply(_ s: Settings, for g: InstalledGame) throws {
         guard let h = WineTools.hostContents(for: g) else { throw NokError("This game has no Windows environment.") }
         let fm = FileManager.default
@@ -46,6 +50,7 @@ public enum RawMouse {
         } else {
             try? fm.removeItem(at: flag(h))
         }
+        try? Data().write(to: chosen(h))
     }
 
     /// Puts Nokcandu's helper library (real app names in the Dock + raw mouse) into every app with a Wine
@@ -98,6 +103,13 @@ public enum RawMouse {
                 if (try? Hashing.sha256(file: dst)) != want { try? fm.removeItem(at: dst); try? fm.copyItem(at: tool, to: dst) }
             }
             let text = m.sorted { $0.key < $1.key }.map { "\($0.key)\t\($0.value)" }.joined(separator: "\n") + "\n"
+            if !fm.fileExists(atPath: chosen(h).path) {
+                if !fm.fileExists(atPath: flag(h).path) {
+                    let d = defaultSettings
+                    try? Data((String(format: "%.2f\n", d.scale) + (d.smooth ? "smooth\n" : "")).utf8).write(to: flag(h), options: .atomic)
+                }
+                try? Data().write(to: chosen(h))
+            }
             if let n = appNames[h] { GameApp.ensure(host: h, wrappers: wrappers[h] ?? [], programs: m, fallback: n) }
             let file = folder(h).appendingPathComponent("app-names.tsv")
             if (try? String(contentsOf: file, encoding: .utf8)) != text { try? Data(text.utf8).write(to: file, options: .atomic) }

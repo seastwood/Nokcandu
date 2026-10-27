@@ -79,6 +79,8 @@ struct PerformanceSection: View {
 
     var steam: Bool { game.usesSharedSteam || game.isSteamHost }
     var metal: Bool { game.custom?.graphics == .appleMetal || game.custom?.graphics == .dxmt }
+    var d3dmetal: Bool { game.custom?.graphics == .appleMetal }
+    var dxmt: Bool { game.custom?.graphics == .dxmt }
 
     var body: some View {
         GroupBox {
@@ -93,6 +95,11 @@ struct PerformanceSection: View {
                             Text("Small").tag("small"); Text("Medium").tag("medium"); Text("Large").tag("large")
                         }.labelsHidden().frame(width: 100)
                     }
+                }
+                if !metal {
+                    Toggle("Low-latency mode", isOn: Binding(get: { s.lowLatency == true }, set: { s.lowLatency = $0 ? true : nil; save() }))
+                    Text("The graphics layer prepares at most one frame ahead instead of up to three, so what you see reacts to the mouse sooner — at a small cost in FPS. Works in Classic 3D and Modern 3D (Apple Metal and DXMT have no such setting). Takes effect the next time the game\(steam ? " (and Steam)" : "") starts.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 if let c = game.custom, LowLatency.supported(c) {
                     Toggle("Low-latency aiming", isOn: Binding(get: { LowLatency.isOn(c) }, set: { setLowLatency($0) }))
@@ -111,15 +118,20 @@ struct PerformanceSection: View {
                     Text("Recommended is twice your \(refresh) Hz screen: every frame you see then carries fresher mouse input. Higher caps use more power; if the Mac gets hot, pick a lower one. Both settings are the game's launch options (see Settings).")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
-                Toggle("Vsync (smoother motion, no tearing; adds a little delay)", isOn: Binding(get: { s.vsync }, set: { s.vsync = $0; save() }))
-                    .disabled(metal)
+                Toggle(metal ? "Vsync (every refresh gets a new frame; low delay)" : "Vsync (smoother motion, no tearing; adds a little delay)",
+                       isOn: Binding(get: { s.vsync }, set: { s.vsync = $0; save() }))
+                if metal {
+                    Text("Without it, the game's frames drift against the screen's refresh and now and then one is shown twice — a visible hitch when you turn. With it, frames wait for the refresh, but at most one at a time, so it adds far less delay than a game's own vsync (keep that off). Pair it with Frame limit \(refresh) FPS.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
                 HStack {
                     Text("Frame limit")
                     Picker("", selection: Binding(get: { s.fpsLimit }, set: { s.fpsLimit = $0; save() })) {
                         Text("Off").tag(0)
-                        ForEach([30, 60, 90, 120], id: \.self) { Text("\($0) FPS").tag($0) }
+                        // DXMT paces through the screen's refresh: limits above it act like the refresh itself.
+                        ForEach([30, 60, 90, 120].filter { !dxmt || $0 <= max(refresh, 60) || $0 == s.fpsLimit }, id: \.self) { Text("\($0) FPS").tag($0) }
                     }
-                    .labelsHidden().frame(width: 110).disabled(metal)
+                    .labelsHidden().frame(width: 110).disabled(d3dmetal)
                 }
                 if let b = buffer {
                     HStack {
@@ -131,7 +143,8 @@ struct PerformanceSection: View {
                     Text("If sound crackles or has static, choose Large: games get a 3× bigger sound buffer, so a busy moment doesn't cause gaps (adds a little sound delay). \(steam ? "Applies to all Steam games; quit Steam first." : "Quit the game first.")")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
-                Text(metal ? "Apple Metal uses Apple's own overlay. Vsync and frame limit only work in Classic 3D and Modern 3D — use the game's own settings instead (e.g. +fps_max 60 for Source games)."
+                Text(d3dmetal ? "Apple Metal uses Apple's own overlay. The frame limit doesn't work in Apple Metal — use the game's own cap instead (e.g. +fps_max 60 for Source games)."
+                     : dxmt ? "DXMT's frame limit spaces frames evenly through Metal's own timing, without vsync's queue of waiting frames — set it to your screen's \(refresh) Hz and the game's own cap to unlimited for the smoothest motion with the least delay. It can't go above the screen's refresh; for more frames than that, turn it off and use the game's own cap. \(steam ? "Applies to all Steam games when Steam next starts." : "Takes effect the next time the game starts.")"
                            : "A frame limit keeps the Mac cooler and quieter, makes motion more even, and leaves CPU for sound — also in Compatibility mode. \(steam ? "Applies to all Steam games when Steam next starts." : "Takes effect the next time the game starts.")")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }

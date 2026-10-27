@@ -331,6 +331,26 @@ public enum CustomGames {
 
     /// Generates the game's launcher script. Same conventions as the validated launchers:
     /// private prefix, bundled engine, single instance, bounded log, read-only disc mounting.
+    /// Some Windows launchers start their games with an environment of their own (Blizzard's agent does),
+    /// which drops the variables that load Nokcandu's helper library. Windows builds such environments
+    /// from the user's registry environment, so keep the same variables there too (synced only when they change).
+    static let registryEnvBlock = #"""
+    if [ "$CHECK_ONLY" = 0 ] && [ -f "$SUPPORT/nokcandu/nokcandu-rawmouse.dylib" ]; then
+     REGENV="$SUPPORT/nokcandu/registry-env"
+     WANT="$(for v in DYLD_INSERT_LIBRARIES NOKCANDU_APP_NAMES NOKCANDU_RAW_MOUSE_SCALE NOKCANDU_RAW_MOUSE_DEBUG NOKCANDU_RAW_MOUSE_SMOOTH; do printf '%s=%s\n' "$v" "${!v:-}"; done)"
+     if [ "$(cat "$REGENV" 2>/dev/null || true)" != "$WANT" ]; then
+      REG="$(/usr/bin/mktemp -t nokcandu-env)"
+      { printf 'Windows Registry Editor Version 5.00\r\n\r\n[HKEY_CURRENT_USER\\Environment]\r\n'
+        while IFS='=' read -r k val; do
+         if [ -n "$val" ]; then printf '"%s"="%s"\r\n' "$k" "${val//\\/\\\\}"; else printf '"%s"=-\r\n' "$k"; fi
+        done <<<"$WANT"; } > "$REG"
+      "$SUPPORT/wine/bin/wine" regedit /S "$REG" >/dev/null 2>&1 && printf '%s' "$WANT" > "$REGENV" || true
+      rm -f "$REG"
+     fi
+    fi
+
+    """#
+
     public static func launcherScript(for c: CustomGameConfig) -> String {
         if c.source == .steamLibrary, let id = c.steamAppID {
             return SharedSteam.gameLauncherScript(appID: id, name: c.name, graphics: c.graphics, steamApp: SharedSteam.appURL,
@@ -396,6 +416,7 @@ public enum CustomGames {
         fi
 
         """
+        s += CustomGames.registryEnvBlock
         if let d = c.disc, c.extraDiscs?.isEmpty ?? true {
             s += """
             # Disc: mount the game's own image read-only and map D: (volume) and D:: (raw device).

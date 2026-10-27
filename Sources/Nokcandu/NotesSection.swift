@@ -206,7 +206,7 @@ struct NotesSection: View {
             for (k, v) in (p.environment ?? [:]).sorted(by: { $0.key < $1.key }) { out.append("\(k)=\(v)") }
             if let r = p.rawMouse { out.append(r > 0 ? "Raw mouse: on (\(String(format: "%.2g", r))×\(p.rawMouseSmooth == true ? ", smooth" : ""))" : "Raw mouse: off") }
             if let perf = p.performance {
-                out.append("FPS counter: \(perf.fpsCounter ? "on" : "off") · Vsync: \(perf.vsync ? "on" : "off") · Frame limit: \(perf.fpsLimit == 0 ? "off" : "\(perf.fpsLimit) FPS")")
+                out.append("FPS counter: \(perf.fpsCounter ? "on" : "off") · Vsync: \(perf.vsync ? "on" : "off") · Frame limit: \(perf.fpsLimit == 0 ? "off" : "\(perf.fpsLimit) FPS")\(perf.lowLatency == true ? " · Low-latency mode" : "")")
             }
             if let b = p.audioBuffer { out.append("Audio buffer: \(b) ms") }
             if let d = p.displayPixels, d.count == 2 { out.append("Game resolution: \(d[0]) × \(d[1])") }

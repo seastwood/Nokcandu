@@ -7,7 +7,21 @@ final class DiscsTests: XCTestCase {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent("discs-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     }
-    override func tearDown() { try? FileManager.default.removeItem(at: dir) }
+    override func tearDown() {
+        // Eject every disc image this test mounted (imports probe images too), then remove the folder.
+        if let info = try? Shell.run("/usr/bin/hdiutil", ["info"], timeout: 30) {
+            var image = ""
+            for line in info.stdout.split(separator: "\n").map(String.init) {
+                if line.hasPrefix("image-path") { image = line; continue }
+                if line.hasPrefix("/dev/disk"), image.contains(dir.lastPathComponent),
+                   let dev = line.split(whereSeparator: { $0 == "\t" || $0 == " " }).first {
+                    _ = try? Shell.run("/usr/bin/hdiutil", ["detach", String(dev), "-force", "-quiet"], timeout: 30)
+                    image = ""
+                }
+            }
+        }
+        try? FileManager.default.removeItem(at: dir)
+    }
 
     /// A raw MODE1/2352 image of `sectors` sectors whose user data is the sector number repeated.
     func rawImage(sectors: Int, mode: UInt8 = 1) -> (Data, Data) {
