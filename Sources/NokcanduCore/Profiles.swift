@@ -66,7 +66,7 @@ public struct GameProfile: Codable, Hashable {
     public static let appToken = "{app}"
 
     public static let sources = ["steam", "battlenet", "installer", "disc", "folder"]
-    public static let knownFixes = ["cinematic"]
+    public static let knownFixes = ["cinematic"] + CompatibilityFix.allCases.map(\.rawValue)
 
     /// Settings a shared profile may never set: anything that loads code or files, or moves Wine.
     public static func envNameAllowed(_ k: String) -> Bool {
@@ -326,7 +326,7 @@ public enum Profiles {
                             environment: env.isEmpty ? nil : env,
                             rawMouse: raw.enabled ? raw.scale : 0,
                             performance: Performance.settings(for: g),
-                            fixes: CinematicFix.isPresent(for: g) ? ["cinematic"] : nil,
+                            fixes: (CinematicFix.isPresent(for: g) ? ["cinematic"] : []) + CompatibilityFixes.installedIDs(for: g),
                             rating: rating,
                             tested: GameProfile.Tested(mac: macModel, macOS: ProcessInfo.processInfo.operatingSystemVersionString,
                                                        engine: host.wineVersion ?? g.wineVersion, nokcandu: AppUpdate.currentVersion),
@@ -406,6 +406,7 @@ public enum Profiles {
         public var gameSettings: [String] = []
         public var sharedSettings: [String] = []      // raw mouse / performance (whole Steam or Battle.net, or the app)
         public var needsCinematicFix = false
+        public var componentFixes: [CompatibilityFix] = []
         public var skipped: [String] = []
     }
 
@@ -470,6 +471,14 @@ public enum Profiles {
             if CinematicFix.isPresent(for: g) { plan.gameSettings.append("Cinematic fix (LAV Filters): already installed") }
             else { plan.needsCinematicFix = true }
         }
+        for fix in CompatibilityFix.allCases where p.fixes?.contains(fix.rawValue) == true {
+            // The profile's graphics choice is applied before component installation.
+            var planned = g
+            if let gr = p.graphics, var c = planned.custom { c.graphics = gr; planned.custom = c }
+            if CompatibilityFixes.isInstalled(fix, for: g) { plan.gameSettings.append("\(fix.title): already installed") }
+            else if let reason = CompatibilityFixes.unavailable(fix, for: planned) { plan.skipped.append("\(fix.title): \(reason)") }
+            else { plan.componentFixes.append(fix) }
+        }
         let have = Set(Drives.list(for: host).map(\.letter))
         for d in p.drives ?? [] {
             if have.contains(d.uppercased()) { plan.gameSettings.append("Uses drive \(d.uppercased()): (you have it)") }
@@ -496,7 +505,8 @@ public enum Profiles {
     /// Puts back the settings from before `apply`.
     public static func undo(_ s: Snapshot) throws {
         if let c = s.config, GameLibrary.inspect(s.target.appURL)?.custom != c {
-            try CustomGames.saveAll(c, to: GameLibrary.inspect(s.target.appURL) ?? s.target)
+            let current = GameLibrary.inspect(s.target.appURL) ?? s.target
+            try CustomGames.saveAll(CompatibilityFixes.preservingInstalledSettings(c, for: current), to: current)
         }
         try RawMouse.apply(s.raw, for: s.game)
         try Performance.apply(s.perf, for: s.game)
@@ -533,6 +543,7 @@ public enum Profiles {
                 if let d = p.displayPixels { if GameDisplay.resolutions().contains(where: { $0.pixels == d }) { c.displayPixels = d } }
                 else { c.displayPixels = nil }
             }
+            c = CompatibilityFixes.preservingInstalledSettings(c, for: target)
             if c != target.custom { try CustomGames.saveAll(c, to: target) }
         }
         if includeShared {

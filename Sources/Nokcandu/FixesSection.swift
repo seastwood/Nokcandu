@@ -41,6 +41,8 @@ struct FixesSection: View {
                 if !present && !working {
                     Button("Use Downloaded Zip Instead…") { installFromZip() }.buttonStyle(.link).font(.caption)
                 }
+                Divider()
+                ComponentFixesView(game: game)
                 if !log.isEmpty {
                     Text(log.suffix(6).joined(separator: "\n")).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
                 }
@@ -113,5 +115,53 @@ struct CinematicCrashBanner: View {
         }
         .padding(12)
         .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+/// App-owned fixes share one operation slot so installs and Undo cannot race within this view.
+private struct ComponentFixesView: View {
+    @EnvironmentObject var model: AppModel
+    let game: InstalledGame
+    @State private var working: CompatibilityFix?
+    @State private var installed: Set<String> = []
+    @State private var status = ""
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(CompatibilityFix.allCases) { fix in
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(fix.title).font(.body.bold())
+                        Text(fix.detail).font(.caption).foregroundStyle(.secondary)
+                        if let reason = CompatibilityFixes.unavailable(fix, for: game), !installed.contains(fix.id) {
+                            Text(reason).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    if working == fix { ProgressView().controlSize(.small) }
+                    else {
+                        Button(installed.contains(fix.id) ? "Undo" : "Install Fix") { run(fix) }
+                            .disabled(working != nil || (!installed.contains(fix.id) && CompatibilityFixes.unavailable(fix, for: game) != nil))
+                    }
+                }
+            }
+            Link("Microsoft DirectX download and license information", destination: URL(string: "https://www.microsoft.com/en-us/download/details.aspx?id=8109")!).font(.caption)
+            if !status.isEmpty { Text(status).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
+        }
+        .onAppear { reload() }
+        .onChange(of: game) { reload() }
+    }
+    func reload() { installed = Set(CompatibilityFixes.installedIDs(for: game)) }
+    func run(_ fix: CompatibilityFix) {
+        working = fix; status = ""
+        let undo = installed.contains(fix.id), g = game
+        let logger: @Sendable (String) -> Void = { line in Task { @MainActor in status = line } }
+        Task {
+            do {
+                if undo { try CompatibilityFixes.undo(fix, for: g, log: logger) }
+                else { try await CompatibilityFixes.install(fix, for: g, log: logger) }
+                model.refresh(); model.say(undo ? "Removed \(fix.title)." : "Installed \(fix.title). Try the game again.")
+            } catch { model.fail(error) }
+            reload(); working = nil
+        }
     }
 }

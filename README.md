@@ -27,7 +27,7 @@ with tested settings, one-click fixes and safe updates. Think of it as a free al
 - **Graphics modes** — Classic 3D (DirectX 8/9 → Vulkan), Modern 3D (DirectX 10/11), Apple Metal (DirectX 11/12, 64-bit), DXMT (DirectX 10/11 → Metal), Classic 2D, Compatibility.
 - **Raw mouse capture** — reads your mouse directly whenever a game captures it (aiming, camera control) (hundreds of updates a second, no macOS acceleration), fixing the choppy aim Wine has on Macs.
 - **Performance** — FPS counter, vsync, frame limit. **Drives** — map D:, E:… to external SSDs. **Storage** — see and free space.
-- **Fixes & health** — Fix cinematic playback (LAV Filters), known community fixes (winetricks), anti-cheat notes, Repair, Diagnostics, crash recognition with suggested fixes, notes per game.
+- **Fixes & health** — Optional DirectX 8 compatibility (d3d8to9 + bundled DXVK 2.3), DirectX 9 shader extras, borderless windows, cinematic playback (LAV Filters), known community fixes (winetricks), anti-cheat notes, Repair, Diagnostics, crash recognition with suggested fixes, notes per game.
 - **Stays current** — checks this repo for new Nokcandu releases and the Sikarugir/LAV projects for new components. New engines are self-tested before they're offered, each game tries them separately, and you can roll back.
 - **Safe by design** — every file Nokcandu changes is backed up and journaled; your saves and game files are never touched by repairs or updates.
 
@@ -66,3 +66,20 @@ Nokcandu isn't affiliated with Apple, Microsoft, Valve, Blizzard, GOG, Epic Game
 
 Needs Xcode or the Command Line Tools (Swift 5.9+). To release: bump `VERSION`, add `release-notes/v<version>.md`,
 then push a tag `v<version>` — GitHub Actions builds, tests and publishes the DMG. More in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+
+
+### Optional compatibility fixes
+
+A standalone game's **Fixes** panel offers three opt-in components alongside LAV Filters:
+
+- **DirectX 9 extras** downloads Microsoft's June 2010 redistributable and extracts only `d3dx9_43.dll` and `d3dcompiler_43.dll` beside the selected executable, matching its architecture. Nokcandu does not redistribute Microsoft's DLLs.
+- **DirectX 8 compatibility** downloads crosire's d3d8to9 1.16.0 (BSD-2-Clause) and selects the Sikarugir runtime's older DXVK renderer. It requires a 32-bit game, **Older 3D games**, and the bundled `renderer/dxvk/wine` build. The default renderer remains unchanged for other games.
+- **Fill the screen (borderless)** uses Nokcandu's source-built Windows helper, available for 32- and 64-bit games. Choose Windowed in the game. The helper sizes visible, unowned game windows to their monitor without changing the Mac's display mode or keeping the game above other apps. It preserves launch arguments and follows restarts of the same executable; unrelated child launchers aren't followed.
+
+These components currently require a game's own managed Windows environment and a program on its private C: drive. Shared Steam/Battle.net/other launcher environments are excluded until per-program routing is available. No game executable is patched. BF1942's menu-resolution correction and `.con` edits remain game-specific manual fixes.
+
+Each fix records its files and settings. **Undo** restores replaced files and its own DLL rules while preserving other fixes, and refuses to overwrite later manual edits. Quit the game before installing or undoing a fix. Undo installed components before changing the selected executable; undo DirectX 8 compatibility before changing its graphics mode. Profile settings Undo leaves installed components in place: use each component's Undo in Fixes to remove it.
+
+Profiles reference only built-in IDs: `cinematic`, `d3d8to9`, `directx9-extras`, `borderless`. Applying a profile previews downloads and unavailable fixes. Profiles cannot supply binaries, download URLs, scripts, config-file edits, or executable patches.
+
+Builds compile the Windows helpers with pinned Zig 0.15.2 from [ziglang.org](https://ziglang.org/download/), and the standalone archive tool with [cabextract 1.11](https://www.cabextract.org.uk/) (GPL-3.0-or-later). The app includes cabextract's license, corresponding source archive, and build recipe. Build scripts verify SHA-256 before extraction; `ZIG` may point to an existing official 0.15.2 toolchain.

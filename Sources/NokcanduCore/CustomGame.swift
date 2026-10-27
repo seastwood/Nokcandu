@@ -136,6 +136,9 @@ public struct CustomGameConfig: Codable, Hashable {
     public var extraDiscs: [DiscSpec]?
     public var is64Bit: Bool?
     public var detectedAPIs: [String] = []
+    /// Optional component switches, managed by CompatibilityFixes.
+    public var borderless: Bool?
+    public var legacyD3D9: Bool?
     /// Graphics mode the user confirmed actually played well (nil = not play-tested yet).
     public var confirmedGraphics: GraphicsPreset?
     public var createdAt = Date()
@@ -389,6 +392,9 @@ public enum CustomGames {
         for line in c.graphics.launcherExports { s += line + "\n" }
         s += "# Performance switches set in Nokcandu (FPS counter, vsync, frame limit).\n"
         s += #"[ -f "$SUPPORT/nokcandu/perf.env" ] && . "$SUPPORT/nokcandu/perf.env""# + "\n"
+        if c.legacyD3D9 == true {
+            s += #"export WINEDLLPATH_D9VK="$SUPPORT/renderer/dxvk/wine""# + "\n"
+        }
         let env = (c.environment ?? [:]).filter { CustomGames.isValidEnvName($0.key) }.sorted { $0.key < $1.key }
         if !env.isEmpty {
             s += "# Your extra settings\n"
@@ -472,6 +478,7 @@ public enum CustomGames {
         \(GameDisplay.launcherLines(c.displayPixels, tool: #""$SUPPORT/nokcandu/screen-size""#, log: #""$LOG_DIR/display.log""#,
                                      pattern: GameDisplay.watchPattern(exeName: exeName)))cd "$GAME_DIR"
         STATUS=0
+        \(c.borderless == true ? #"export NOKCANDU_BORDERLESS_TARGET="$GAME_EXE"; export NOKCANDU_BORDERLESS_DLL='C:\nokcandu\borderless\window.dll'; GAME_EXE='C:\nokcandu\borderless\launcher.exe'"# : "")
         "$SUPPORT/wine/bin/wine" "$GAME_EXE"\(args.isEmpty ? "" : " " + args)\(storeArgs) || STATUS=$?
         echo "nokcandu: game exited with status $STATUS after ${SECONDS}s"
         exit $STATUS
@@ -506,6 +513,13 @@ public enum CustomGames {
     public static func save(_ config: CustomGameConfig, to game: InstalledGame, force: Bool = false) throws {
         if case .launcherRunning = GameLauncher.runState(of: game) { throw NokError("Quit \(game.name) first.") }
         var c = config
+        let installed = CompatibilityFixes.installedIDs(for: game)
+        if let old = CustomGameConfig.load(contents: game.contents), old.exe != c.exe, !installed.isEmpty {
+            throw NokError("Undo compatibility fixes in Fixes before changing the game's program.")
+        }
+        if c.legacyD3D9 == true && c.graphics != .classic3D {
+            throw NokError("Undo DirectX 8 compatibility in Fixes before changing graphics modes.")
+        }
         let script = launcherScript(for: c)
         c.launcherSHA = Hashing.sha256(data: Data(script.utf8))
         let journal = ChangeJournal(scope: game.journalScope)

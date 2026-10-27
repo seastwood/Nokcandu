@@ -49,6 +49,8 @@ cp "$BIN/Nokcandu" "$APP/Contents/MacOS/Nokcandu"
 cp "$BIN/nokcandu-screen-size" "$APP/Contents/Resources/screen-size"
 cp Resources/refresh-generals-launcher.py Resources/build-icu-adapter.py Resources/generals-launcher "$APP/Contents/Resources/"
 chmod 755 "$APP/Contents/Resources/generals-launcher" "$APP/Contents/Resources/screen-size"
+./Resources/borderless/build.sh "$(pwd)/$APP/Contents/Resources"
+./Resources/cabextract/build.sh "$(pwd)/$APP/Contents/Resources"
 # Raw mouse for aiming: x86_64 library loaded into Wine (which runs under Rosetta).
 xcrun clang -arch x86_64 -mmacosx-version-min=11.0 -dynamiclib -fobjc-arc -O2 -Wall \
   -framework AppKit -framework GameController -framework CoreGraphics -framework IOKit -framework OpenGL \
@@ -71,6 +73,8 @@ if [ -z "${NOKCANDU_SIGN_IDENTITY:-}" ] && [ -f "$KC" ] && [ -f "$KC_PW" ] && se
 fi
 [ "$SIGN_ID" = "-" ] && echo "Signing: ad-hoc (macOS will re-ask for permissions after each build)" || echo "Signing: $SIGN_ID"
 codesign --force ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/nokcandu-rawmouse.dylib"
+
+codesign --force ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/cabextract"
 
 # App icon (original artwork in Resources/AppIcon.png)
 ICONSET="$(mktemp -d)/AppIcon.iconset"

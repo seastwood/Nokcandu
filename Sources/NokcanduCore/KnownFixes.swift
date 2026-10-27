@@ -224,8 +224,9 @@ public enum Winetricks {
         let s = try await ensure()
         let support = host.appendingPathComponent("SharedSupport")
         let wineBin = support.appendingPathComponent("wine/bin")
-        // cabextract ships inside every Sikarugir-based app (Configure.app).
-        let cab = host.appendingPathComponent("Configure.app/Contents/Resources")
+        // New apps omit Configure.app. Prefer Nokcandu's source-built archive tool.
+        let cab = NokPaths.bundledResource("cabextract")?.deletingLastPathComponent()
+            ?? host.appendingPathComponent("Configure.app/Contents/Resources")
         var env = ProcessInfo.processInfo.environment
         env["DYLD_INSERT_LIBRARIES"] = nil
         env["WINEPREFIX"] = support.appendingPathComponent("prefix").path

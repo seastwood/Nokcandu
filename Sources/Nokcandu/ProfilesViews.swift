@@ -419,6 +419,7 @@ enum ProfileText {
         if let e = p.environment, !e.isEmpty { s.append(e.keys.sorted().joined(separator: ", ")) }
         if let r = p.rawMouse, r > 0 { s.append("raw mouse \(String(format: "%.2g", r))×") }
         if p.fixes?.contains("cinematic") == true { s.append("cinematic fix") }
+        for fix in CompatibilityFix.allCases where p.fixes?.contains(fix.id) == true { s.append(fix.title) }
         if let d = p.drives { s.append(d.map { "\($0):" }.joined(separator: " ")) }
         if p.disc == true { s.append("disc image") }
         return s.joined(separator: " · ")
@@ -503,6 +504,7 @@ struct ProfileDetail: View {
                                 Toggle("Also set: " + plan.sharedSettings.joined(separator: "; "), isOn: $includeShared).toggleStyle(.checkbox)
                             }
                             if plan.needsCinematicFix { Label("Installs the cinematic fix (LAV Filters)", systemImage: "film") }
+                            ForEach(plan.componentFixes) { fix in Label("Installs \(fix.title)", systemImage: "wrench") }
                             ForEach(plan.skipped, id: \.self) { Label($0, systemImage: "minus.circle").foregroundStyle(.secondary) }
                             HStack {
                                 Button(Profiles.matches(p, g) ? "Apply" : "Try It") { apply(g, plan) }.buttonStyle(.borderedProminent).disabled(working)
@@ -513,7 +515,7 @@ struct ProfileDetail: View {
                             }
                             Text(undoSnapshot == nil
                                  ? "After you apply, an Undo button appears here that puts back the settings from before."
-                                 : "Undo puts back the settings from before. The cinematic fix has its own Undo in the game's Fixes.")
+                                 : "Undo puts back the settings from before. Installed components have their own Undo in the game's Fixes.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }
@@ -549,6 +551,7 @@ struct ProfileDetail: View {
             do {
                 undoSnapshot = try Profiles.apply(p, to: g, includeShared: includeShared)
                 if plan.needsCinematicFix { try await CinematicFix.install(for: g) { _ in } }
+                for fix in plan.componentFixes { try await CompatibilityFixes.install(fix, for: g) { _ in } }
                 model.refresh()
                 model.say("Applied “\(p.title)” to \(g.name).")
             } catch { model.fail(error) }
@@ -668,6 +671,9 @@ struct ShareProfileView: View {
                     Text("Not shared:").font(.caption.bold())
                     ForEach(left, id: \.self) { Text("• " + $0).font(.caption) }
                 }.foregroundStyle(.secondary)
+            }
+            ForEach(CompatibilityFix.allCases.filter { profile.fixes?.contains($0.id) == true }) { fix in
+                Label("Includes \(fix.title) — Apply installs it for others.", systemImage: "wrench").font(.caption)
             }
             if profile.fixes?.contains("cinematic") == true {
                 Label("Includes the cinematic fix (LAV Filters) — Apply installs it for others.", systemImage: "film").font(.caption)

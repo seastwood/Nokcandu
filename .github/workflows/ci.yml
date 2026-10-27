@@ -16,4 +16,4 @@ jobs:
       - name: Build app
         run: ./build-app.sh
       - name: Check shell scripts
-        run: bash -n build-app.sh make-dmg.sh dev-watch-agent.sh
+        run: bash -n build-app.sh make-dmg.sh dev-watch-agent.sh Resources/borderless/build.sh Resources/cabextract/build.sh
