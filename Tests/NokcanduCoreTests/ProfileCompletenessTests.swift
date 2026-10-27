@@ -46,6 +46,26 @@ final class ProfileCompletenessTests: XCTestCase {
         try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: g.contents.appendingPathComponent("Info.plist"))
         return try XCTUnwrap(GameLibrary.inspect(app))
     }
+    func testRawMouseDefaultsOffAndRefreshPreservesExplicitChoice() throws {
+        XCTAssertFalse(RawMouse.defaultSettings.enabled)
+        let g = try fixture(); defer { try? FileManager.default.removeItem(at: g.appURL) }
+        let bin = g.contents.appendingPathComponent("SharedSupport/wine/bin")
+        try NokPaths.ensure(bin)
+        try FileManager.default.createSymbolicLink(at: bin.appendingPathComponent("wine"), withDestinationURL: URL(fileURLWithPath: "/usr/bin/true"))
+        let flag = RawMouse.flag(g.contents), chosen = RawMouse.chosen(g.contents)
+        RawMouse.refreshLibraries([g])
+        XCTAssertFalse(RawMouse.settings(for: g).enabled)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: flag.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: chosen.path))
+        // A later refresh must respect a user's explicit opt-in.
+        try Data("1.00\n".utf8).write(to: flag)
+        RawMouse.refreshLibraries([g])
+        XCTAssertTrue(RawMouse.settings(for: g).enabled)
+        // And an explicit opt-out stays off after refresh.
+        try RawMouse.apply(.init(enabled: false, scale: 1), for: g)
+        RawMouse.refreshLibraries([g])
+        XCTAssertFalse(RawMouse.settings(for: g).enabled)
+    }
     func testProfileUndoRestoresDisplayFilesAndExistingRecipeBaseline() async throws {
         let g = try fixture(); defer { try? FileManager.default.removeItem(at: g.appURL) }
         let video = g.prefix.appendingPathComponent("drive_c/Games/BF1942/Mods/bf1942/Settings/Profiles/Default/Video.con")

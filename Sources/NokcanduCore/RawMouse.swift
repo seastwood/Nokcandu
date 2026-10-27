@@ -23,8 +23,8 @@ public enum RawMouse {
     static func flag(_ host: URL) -> URL { folder(host).appendingPathComponent("raw-mouse") }
     /// Present once the setting has been chosen (by you, or the default below), so the default is set only once.
     static func chosen(_ host: URL) -> URL { folder(host).appendingPathComponent("raw-mouse-chosen") }
-    /// New apps start with Raw mouse capture on (1×, no smoothing): it only acts while a game captures the mouse.
-    public static let defaultSettings = Settings(enabled: true, scale: 1, smooth: false)
+    /// Raw capture is opt-in: game compatibility varies, and ordinary Wine input remains the default.
+    public static let defaultSettings = Settings(enabled: false, scale: 1, smooth: false)
 
     public static func settings(for g: InstalledGame) -> Settings {
         guard let h = WineTools.hostContents(for: g) else { return Settings(enabled: false, scale: 1) }
@@ -110,7 +110,9 @@ public enum RawMouse {
             if !fm.fileExists(atPath: chosen(h).path) {
                 if !fm.fileExists(atPath: flag(h).path) {
                     let d = defaultSettings
-                    try? Data((String(format: "%.2f\n", d.scale) + (d.smooth ? "smooth\n" : "")).utf8).write(to: flag(h), options: .atomic)
+                    if d.enabled {
+                        try? Data((String(format: "%.2f\n", d.scale) + (d.smooth ? "smooth\n" : "")).utf8).write(to: flag(h), options: .atomic)
+                    }
                 }
                 try? Data().write(to: chosen(h))
             }

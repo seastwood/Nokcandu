@@ -54,8 +54,12 @@ struct MouseSection: View {
                 if let s = status {
                     Text("Last run: \(s)").font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
                 }
-                Text(steam ? "Applies to all Steam games. Takes effect the next time Steam starts (Quit Steam on the Steam page first)."
-                           : "Takes effect the next time the game starts.")
+                if BF1942DisplayFix.supports(game) {
+                    Text("Raw mouse capture currently has a reported compatibility issue in Battlefield 1942. Leave it off and use the game's normal mouse input.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Text(steam ? "Applies to all Steam games. You can turn it on or off while playing; changes apply within a second."
+                           : "You can turn it on or off while playing; changes apply within a second.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             .padding(6).frame(maxWidth: .infinity, alignment: .leading)
