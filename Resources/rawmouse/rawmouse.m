@@ -821,6 +821,7 @@ static void watch_settings(void) {
 }
 
 #include "cursor-visibility.m"
+#include "borderless-confinement.m"
 
 static void image_added(const struct mach_header *mh, __unused intptr_t slide) {
     Dl_info info;
@@ -831,6 +832,7 @@ static void image_added(const struct mach_header *mh, __unused intptr_t slide) {
     dispatch_async(dispatch_get_main_queue(), ^{
         name_app();
         install_cursor_visibility();
+        install_borderless_confinement();
         gl_limit_wine();
         watch_display(app_name());
         guard_hot_corners();
@@ -1025,6 +1027,7 @@ __attribute__((constructor)) static void start(void) {
         const char *state = dirname(me);
         snprintf(settings_path, sizeof settings_path, "%s/raw-mouse", state);
         snprintf(visibility_flag, sizeof visibility_flag, "%s/cursor-visibility-fix", state);
+        snprintf(borderless_confinement_record, sizeof borderless_confinement_record, "%s/fix-borderless.json", state);
     }
     debug_on = getenv("NOKCANDU_RAW_MOUSE_DEBUG") != NULL;
     game_cursor = getenv("NOKCANDU_RAW_MOUSE_GAME_CURSOR") != NULL;
