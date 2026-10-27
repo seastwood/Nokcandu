@@ -331,18 +331,18 @@ struct GameResolutionSection: View {
     @EnvironmentObject var model: AppModel
     let game: InstalledGame
     @State private var options: [GameDisplay.Resolution] = []
+    @State private var working = false
+    @State private var status = ""
 
     var current: [Int]? { game.custom?.displayPixels }
-    var selection: String {
-        return current.map { "\($0[0])x\($0[1])" } ?? "desktop"
-    }
-
+    var selection: String { current.map { "\($0[0])x\($0[1])" } ?? "desktop" }
+    var gameSelection: String { BF1942DisplayFix.resolution(for: game).map { "\($0[0])x\($0[1])" } ?? "current" }
     var body: some View {
         GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text("Game resolution")
-                    Picker("", selection: Binding(get: { selection }, set: { choose($0) })) {
+                    Text("Mac screen resolution")
+                    Picker("Mac screen resolution", selection: Binding(get: { selection }, set: choose)) {
                         Text("Desktop (don't switch)").tag("desktop")
                         if let c = current, !options.contains(where: { $0.pixels == c }) { Text("\(c[0]) × \(c[1])").tag("\(c[0])x\(c[1])") }
                         Section("Full screen — your Mac's screen switches") {
@@ -350,40 +350,105 @@ struct GameResolutionSection: View {
                                 Text("\(r.width) × \(r.height)\(i == 0 ? " — native" : "")").tag(r.id)
                             }
                         }
-}.labelsHidden().frame(width: 280)
+                    }.labelsHidden().frame(width: 280)
                 }
-                Text("While the game runs, your Mac's screen switches to exactly this many pixels (other apps look small if you alt-tab), and your desktop comes back when it quits. In the game, choose **Fullscreen Windowed**: it then matches the screen, so nothing switches while you play, and changing settings or alt-tabbing can't resize it. Lower resolutions give more FPS. Old games that only offer small 4:3 sizes (800 × 600…): play them windowed, or pick the nearest size here and the same size in the game.")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                if game.usesSharedSteam {
-                    Text("Changing this needs Steam closed.").font(.caption).foregroundStyle(.secondary)
+                Text("Changes your Mac's display while the game runs and restores it afterward. Desktop keeps your current screen resolution. This doesn't change the game's own settings.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Divider()
+                HStack {
+                    Text("Window style")
+                    Picker("Window style", selection: Binding(get: { game.custom?.borderless == true }, set: windowStyle)) {
+                        Text("Game default").tag(false)
+                        Text("Fill screen (borderless)").tag(true)
+                    }.labelsHidden().frame(width: 280)
+                        .disabled(CompatibilityFixes.unavailable(.borderless, for: game) != nil && game.custom?.borderless != true)
                 }
+                if let reason = CompatibilityFixes.unavailable(.borderless, for: game) {
+                    Text(reason).font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("Choose Windowed inside the game before using Fill screen. This uses the same optional borderless fix as the Fixes panel and leaves the Mac's display mode alone.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if BF1942DisplayFix.supports(game) {
+                    Divider()
+                    HStack {
+                        Text("Game resolution")
+                        Picker("BF1942 game resolution", selection: Binding(get: { gameSelection }, set: gameResolution)) {
+                            if gameSelection == "current" { Text("Current game settings").tag("current") }
+                            ForEach(BF1942DisplayFix.resolutions, id: \.self) { size in
+                                Text("\(size[0]) × \(size[1])").tag("\(size[0])x\(size[1])")
+                            }
+                        }.labelsHidden().frame(width: 280)
+                    }
+                    Text("Updates BF1942's gameplay resolution in its video profiles, with a backup for Undo. The game's menu resolution is handled separately below.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    HStack {
+                        Button(BF1942DisplayFix.isRecommended(for: game) ? "Reapply Recommended BF1942 Display Settings" : "Apply Recommended BF1942 Display Settings") {
+                            applyRecommended()
+                        }.disabled(BF1942DisplayFix.menuUnavailable(for: game) != nil)
+                        if BF1942DisplayFix.hasChanges(for: game) { Button("Undo BF1942 Display Settings") { undoGameDisplay() } }
+                    }
+                    Text("Uses a verified copy for the 1280 × 800 menu, sets gameplay to 1280 × 800 windowed, and enables Fill screen. Keeps the original executable and leaves the Mac at its desktop resolution. Graphics and shader fixes are available separately under Fixes.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if let reason = BF1942DisplayFix.menuUnavailable(for: game) {
+                        Text(reason).font(.caption).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("Set this game's own resolution inside the game.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if game.usesSharedSteam { Text("Changing the Mac screen resolution needs Steam closed.").font(.caption).foregroundStyle(.secondary) }
+                if working { ProgressView().controlSize(.small) }
+                if !status.isEmpty { Text(status).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
             }
+            .disabled(working)
             .padding(6).frame(maxWidth: .infinity, alignment: .leading)
         } label: { Text("Display").font(.headline) }
         .onAppear { options = GameDisplay.resolutions() }
     }
-
+    var logger: @Sendable (String) -> Void { { line in Task { @MainActor in status = line } } }
     func choose(_ tag: String) {
-        if tag.hasPrefix("vs-") {
-            let v = tag.dropFirst(3).split(separator: "x").compactMap { Int($0) }, g = game
-            Task {
-                let r = await Task.detached { Result { try GameDisplay.applyVirtualScreen(v, to: g) } }.value
-                switch r {
-                case .success: model.say("The game will see a \(v[0]) × \(v[1]) screen, in a window. Pick that resolution in the game too."); model.refresh()
-                case .failure(let e): model.fail(e)
-                }
-            }
-            return
-        }
         let px: [Int]? = tag == "desktop" ? nil : tag.split(separator: "x").compactMap { Int($0) }
         let g = game, lib = model.games
+        working = true
         Task {
             let r = await Task.detached { Result { try GameDisplay.apply(px, to: g, library: lib) } }.value
             switch r {
-            case .success: model.say(px.map { "Game resolution: \($0[0]) × \($0[1]). Set the game to Fullscreen Windowed." } ?? "The display won't switch for this game."); model.refresh()
+            case .success: model.say("Saved the Mac screen resolution for this game."); model.refresh()
             case .failure(let e): model.fail(e)
             }
+            working = false
         }
+    }
+    func windowStyle(_ borderless: Bool) {
+        working = true; status = ""
+        Task {
+            do { try await GameWindowStyle.apply(borderless: borderless, to: game, log: logger); model.refresh() }
+            catch { model.fail(error) }
+            working = false
+        }
+    }
+    func gameResolution(_ tag: String) {
+        guard tag != "current" else { return }
+        let size = tag.split(separator: "x").compactMap { Int($0) }
+        applyGameDisplay(size: size, recommended: false)
+    }
+    func applyRecommended() { applyGameDisplay(size: [1280, 800], recommended: true) }
+    func applyGameDisplay(size: [Int], recommended: Bool) {
+        working = true; status = ""
+        Task {
+            do {
+                try await BF1942DisplayFix.apply(to: game, size: size, recommended: recommended, log: logger)
+                model.refresh(); model.say("Saved BF1942 display settings. Undo is available in Display.")
+            } catch { model.fail(error); model.refresh() }
+            working = false
+        }
+    }
+    func undoGameDisplay() {
+        working = true; status = ""
+        do { try BF1942DisplayFix.undo(for: game, log: logger); model.refresh(); model.say("Restored BF1942's previous display settings.") }
+        catch { model.fail(error) }
+        working = false
     }
 }
 

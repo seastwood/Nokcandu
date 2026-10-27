@@ -351,6 +351,7 @@ public enum Profiles {
     public static func notShared(from g: InstalledGame) -> [String] {
         let host = settingsApp(g)
         var out: [String] = []
+        if BF1942DisplayFix.hasChanges(for: g) { out.append("BF1942 display recipe — use its built-in Display option on the other installation") }
         for (k, v) in (host.custom?.environment ?? [:]).sorted(by: { $0.key < $1.key }) {
             let pv = portable(v, contents: host.contents)
             if !GameProfile.envNameAllowed(k) {
@@ -416,8 +417,8 @@ public enum Profiles {
         let host = settingsApp(g)
         let shared = g.usesSharedSteam ? " (all Steam games)" : g.battleNet != nil ? " (all Battle.net games)" : ""
         if let prog = p.program, g.custom != nil, !g.usesSharedSteam, g.battleNet == nil {
-            if prog != g.custom?.exe, !CompatibilityFixes.installedIDs(for: g).isEmpty {
-                plan.skipped.append("Program \(prog) — Undo installed compatibility components before changing the program")
+            if prog != g.custom?.exe, (!CompatibilityFixes.installedIDs(for: g).isEmpty || BF1942DisplayFix.hasChanges(for: g)) {
+                plan.skipped.append("Program \(prog) — Undo installed game fixes before changing the program")
             } else if BattleNet.unixPath(prog, prefix: g.prefix).map({ FileManager.default.fileExists(atPath: $0.path) }) == true {
                 plan.gameSettings.append("Program: \(prog)")
             } else {
@@ -533,7 +534,7 @@ public enum Profiles {
             if g.battleNet == nil { c.arguments = p.arguments ?? "" }
             if g.battleNet != nil, let a = p.hostArguments { c.arguments = a }
             if let prog = p.program, g.battleNet == nil, !g.usesSharedSteam,
-               CompatibilityFixes.installedIDs(for: target).isEmpty,
+               CompatibilityFixes.installedIDs(for: target).isEmpty, !BF1942DisplayFix.hasChanges(for: target),
                BattleNet.unixPath(prog, prefix: g.prefix).map({ FileManager.default.fileExists(atPath: $0.path) }) == true {
                 c.exe = prog
             }

@@ -76,10 +76,19 @@ A standalone game's **Fixes** panel offers three opt-in components alongside LAV
 - **DirectX 8 compatibility** downloads crosire's d3d8to9 1.16.0 (BSD-2-Clause) and selects the Sikarugir runtime's older DXVK renderer. It requires a 32-bit game, **Older 3D games**, and the bundled `renderer/dxvk/wine` build. The default renderer remains unchanged for other games.
 - **Fill the screen (borderless)** uses Nokcandu's source-built Windows helper, available for 32- and 64-bit games. Choose Windowed in the game. The helper sizes visible, unowned game windows to their monitor without changing the Mac's display mode or keeping the game above other apps. It preserves launch arguments and follows restarts of the same executable; unrelated child launchers aren't followed.
 
-These components currently require a game's own managed Windows environment and a program on its private C: drive. Shared Steam/Battle.net/other launcher environments are excluded until per-program routing is available. No game executable is patched. BF1942's menu-resolution correction and `.con` edits remain game-specific manual fixes.
+These components currently require a game's own managed Windows environment and a program on its private C: drive. Shared Steam/Battle.net/other launcher environments are excluded until per-program routing is available. The generic components don't edit game executables. BF1942 also has a built-in Display recipe: **Apply Recommended BF1942 Display Settings** creates a fingerprint-checked menu copy, sets 1280 × 800 windowed gameplay, keeps the Mac at its desktop resolution, and enables borderless display. Its original executable is preserved. Other BF1942 executable variants need verification before menu-copy support can be enabled.
 
 Each fix records its files and settings. **Undo** restores replaced files and its own DLL rules while preserving other fixes, and refuses to overwrite later manual edits. Quit the game before installing or undoing a fix. Undo installed components before changing the selected executable; undo DirectX 8 compatibility before changing its graphics mode. Profile settings Undo leaves installed components in place: use each component's Undo in Fixes to remove it.
 
 Profiles reference only built-in IDs: `cinematic`, `d3d8to9`, `directx9-extras`, `borderless`. Applying a profile previews downloads and unavailable fixes. Profiles cannot supply binaries, download URLs, scripts, config-file edits, or executable patches.
 
 Builds compile the Windows helpers with pinned Zig 0.15.2 from [ziglang.org](https://ziglang.org/download/), and the standalone archive tool with [cabextract 1.11](https://www.cabextract.org.uk/) (GPL-3.0-or-later). The app includes cabextract's license, corresponding source archive, and build recipe. Build scripts verify SHA-256 before extraction; `ZIG` may point to an existing official 0.15.2 toolchain.
+
+
+### Display controls
+
+**Mac screen resolution** changes the Mac's display temporarily. **Window style** selects Game default or the same optional Fill screen component available in Fixes. **Game resolution**, currently available for standalone BF1942, edits the game's own video profiles and offers 800 × 600 through 1920 × 1200 independently of the Mac's supported screen modes.
+
+BF1942's recommended display button handles the menu-resolution correction separately from gameplay resolution. It accepts only two verified full-file fingerprints, writes a separate `BF1942-Nokcandu.exe`, sets windowed mode, and retains an Undo receipt. Launches verify both the source and corrected copy so a game update cannot silently use a stale copy. Undo restores original video files and removes a borderless component only when the recipe installed it. Components installed separately are retained. Later manual edits are preserved and reported. Graphics translation and shader extras remain separate optional fixes.
+
+The recipe is built into Nokcandu; community profiles cannot provide executable patches or config-file writes. Sharing a setup identifies the local display recipe as a separate step for the other installation.

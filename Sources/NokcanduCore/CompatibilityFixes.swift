@@ -25,11 +25,11 @@ public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable {
 public enum CompatibilityFixes {
     private static let operationLock = NSLock()
     private static var activeApps: Set<String> = []
-    private static func begin(_ g: InstalledGame) throws {
+    static func begin(_ g: InstalledGame) throws {
         operationLock.lock(); defer { operationLock.unlock() }
         guard activeApps.insert(g.id).inserted else { throw NokError("Another compatibility fix is still working on this game.") }
     }
-    private static func end(_ g: InstalledGame) {
+    static func end(_ g: InstalledGame) {
         operationLock.lock(); defer { operationLock.unlock() }
         activeApps.remove(g.id)
     }
@@ -132,6 +132,7 @@ public enum CompatibilityFixes {
     /// Profile settings cannot silently disable components still installed on disk.
     static func preservingInstalledSettings(_ config: CustomGameConfig, for g: InstalledGame) -> CustomGameConfig {
         var c = config, rules = overrides(c.environment?["WINEDLLOVERRIDES"])
+        if BF1942DisplayFix.isRecommended(for: g) { c.bf1942MenuCopy = true }
         for fix in CompatibilityFix.allCases {
             guard let st = state(fix, g) else { continue }
             for (name, order) in st.appliedOverrides { rules[name] = order }
@@ -146,6 +147,9 @@ public enum CompatibilityFixes {
     public static func install(_ fix: CompatibilityFix, for game: InstalledGame, log: @escaping @Sendable (String) -> Void) async throws {
         let g = fresh(game)
         try begin(g); defer { end(g) }
+        try await installReserved(fix, for: g, log: log)
+    }
+    static func installReserved(_ fix: CompatibilityFix, for g: InstalledGame, log: @escaping @Sendable (String) -> Void) async throws {
         try requireClosed(g)
         if isInstalled(fix, for: g) { throw NokError("This fix already has an installation record. Undo it before installing again.") }
         if let reason = unavailable(fix, for: g) { throw NokError(reason) }
@@ -196,6 +200,9 @@ public enum CompatibilityFixes {
     public static func undo(_ fix: CompatibilityFix, for game: InstalledGame, log: @escaping @Sendable (String) -> Void) throws {
         let g = fresh(game)
         try begin(g); defer { end(g) }
+        try undoReserved(fix, for: g, log: log)
+    }
+    static func undoReserved(_ fix: CompatibilityFix, for g: InstalledGame, log: @escaping @Sendable (String) -> Void) throws {
         try requireClosed(g)
         guard let st = state(fix, g), var c = g.custom else { throw NokError("No installation record for this fix.") }
         // Restore only settings still owned by this fix; preserve later manual edits and other fixes.

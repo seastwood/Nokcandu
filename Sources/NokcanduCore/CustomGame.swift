@@ -137,6 +137,8 @@ public struct CustomGameConfig: Codable, Hashable {
     public var is64Bit: Bool?
     public var detectedAPIs: [String] = []
     /// Optional component switches, managed by CompatibilityFixes.
+    /// Built-in BF1942 display recipe uses a verified menu-size copy beside the original.
+    public var bf1942MenuCopy: Bool?
     public var borderless: Bool?
     public var legacyD3D9: Bool?
     /// Graphics mode the user confirmed actually played well (nil = not play-tested yet).
@@ -468,6 +470,15 @@ public enum CustomGames {
 
             """
         }
+        if c.bf1942MenuCopy == true {
+            let target = c.exe.split(separator: "\\").dropLast().joined(separator: "\\") + "\\" + BF1942DisplayFix.copyName
+            s += "GAME_EXE=\(shellQuote(target))\n"
+            s += #"[ -f "$GAME_DIR/BF1942-Nokcandu.exe" ] || { echo 'Nokcandu: BF1942 display copy is missing. Undo or reapply its display fix.'; exit 1; }"# + "\n"
+            s += #"BF_SOURCE_SHA=$(/usr/bin/shasum -a 256 "$GAME_DIR/BF1942.exe" | /usr/bin/awk '{print $1}')"# + "\n"
+            s += #"case "$BF_SOURCE_SHA" in \#(BF1942DisplayFix.originalSHA)|\#(BF1942DisplayFix.correctedSHA)) ;; *) echo 'Nokcandu: BF1942 changed since the menu fix. Undo its display settings before using this version.'; exit 1 ;; esac"# + "\n"
+            s += #"BF_COPY_SHA=$(/usr/bin/shasum -a 256 "$GAME_DIR/BF1942-Nokcandu.exe" | /usr/bin/awk '{print $1}')"# + "\n"
+            s += #"[ "$BF_COPY_SHA" = \#(shellQuote(BF1942DisplayFix.correctedSHA)) ] || { echo 'Nokcandu: BF1942 display copy changed. Restore it before launching.'; exit 1; }"# + "\n"
+        }
         let args = splitArguments(c.arguments).map(shellQuote).joined(separator: " ")
         if let link = c.store { s += StoreAccounts.launcherLines(link) }
         let storeArgs = c.store == nil ? "" : #" ${STORE_ARGS[@]+"${STORE_ARGS[@]}"}"#
@@ -476,7 +487,7 @@ public enum CustomGames {
         [ -f "$GAME_DIR/"\(shellQuote(exeName)) ]
         if [ "$CHECK_ONLY" = 1 ]; then printf 'Launcher check passed: game and engine are ready.\\n'; exit 0; fi
         \(GameDisplay.launcherLines(c.displayPixels, tool: #""$SUPPORT/nokcandu/screen-size""#, log: #""$LOG_DIR/display.log""#,
-                                     pattern: GameDisplay.watchPattern(exeName: exeName)))cd "$GAME_DIR"
+                                     pattern: GameDisplay.watchPattern(exeName: c.bf1942MenuCopy == true ? BF1942DisplayFix.copyName : exeName)))cd "$GAME_DIR"
         STATUS=0
         \(c.borderless == true ? #"export NOKCANDU_BORDERLESS_TARGET="$GAME_EXE"; export NOKCANDU_BORDERLESS_DLL='C:\nokcandu\borderless\window.dll'; GAME_EXE='C:\nokcandu\borderless\launcher.exe'"# : "")
         "$SUPPORT/wine/bin/wine" "$GAME_EXE"\(args.isEmpty ? "" : " " + args)\(storeArgs) || STATUS=$?
@@ -510,10 +521,14 @@ public enum CustomGames {
     }
 
     /// `force` rewrites the launcher even if it was edited outside Nokcandu (the old one is kept in the journal).
-    public static func save(_ config: CustomGameConfig, to game: InstalledGame, force: Bool = false) throws {
+    public static func save(_ config: CustomGameConfig, to game: InstalledGame, force: Bool = false, allowDisplayProgramChange: Bool = false) throws {
         if case .launcherRunning = GameLauncher.runState(of: game) { throw NokError("Quit \(game.name) first.") }
         var c = config
         let installed = CompatibilityFixes.installedIDs(for: game)
+        if !allowDisplayProgramChange, BF1942DisplayFix.hasChanges(for: game),
+           let old = CustomGameConfig.load(contents: game.contents), old.exe != c.exe {
+            throw NokError("Undo BF1942 display settings in Display before changing the game's program.")
+        }
         if let old = CustomGameConfig.load(contents: game.contents), old.exe != c.exe, !installed.isEmpty {
             throw NokError("Undo compatibility fixes in Fixes before changing the game's program.")
         }
