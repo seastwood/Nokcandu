@@ -110,14 +110,9 @@ static double aim_started;
 // Without it Wine hands the game the movement in uneven clumps (one frame double, the next almost none).
 static _Atomic uint64_t last_frame_tick;      // mach time of the last frame
 static double fs_x, fs_y;                      // movement collected since the last frame (raw_q)
-static bool frame_sync_off;                    // NOKCANDU_RAW_MOUSE_FRAME_SYNC=0
+static bool frame_sync_off = true;             // on only with NOKCANDU_RAW_MOUSE_FRAME_SYNC=1
 static uint64_t fs_frames, fs_frames_with_move;
 static IMP orig_nextDrawable;
-static os_unfair_lock qt_lock = OS_UNFAIR_LOCK_INIT;
-static struct { void *ev; uint64_t t; } qt_ring[512];
-static unsigned qt_next;
-static uint64_t qt_count, qt_sum, qt_max, qt_over4, qt_over8, qt_over16;
-static IMP orig_getEvent;
 static _Atomic bool hid_active;
 // Input timing while capturing (raw_q): how steadily mouse reports arrive, and from which mouse.
 static uint64_t in_last, in_count, in_gaps4, in_max_gap;            // mach time units
@@ -183,7 +178,6 @@ static NSWindow *update_aiming(id ctl) {
         if (aiming) {
             aim_started = uptime(); atomic_store(&warps_while_aiming, 0);
             dispatch_async(raw_q, ^{ in_last = in_count = in_gaps4 = in_max_gap = 0; memset(in_dev, 0, sizeof in_dev); fs_frames = fs_frames_with_move = 0; });
-            os_unfair_lock_lock(&qt_lock); qt_count = qt_sum = qt_max = qt_over4 = qt_over8 = qt_over16 = 0; os_unfair_lock_unlock(&qt_lock);
             note(@"aiming: raw mouse on (%@)", uptime() - atomic_load(&last_game_warp) < 0.5 ? @"game re-centres the cursor" : @"game confines the cursor");
         } else {
             double secs = uptime() - aim_started;
@@ -195,14 +189,7 @@ static NSWindow *update_aiming(id ctl) {
                 note(@"input: %llu mouse reports (%.0f a second) from %s via %@; longest gap while moving %.1f ms, gaps over 4 ms: %llu",
                      in_count, secs > 0 ? in_count / secs : 0.0, in_dev[top].n ? in_dev[top].name : "?",
                      atomic_load(&hid_active) ? @"hardware" : @"GameController", maxms, in_gaps4);
-                os_unfair_lock_lock(&qt_lock);
-                uint64_t n = qt_count, sum = qt_sum, mx = qt_max, o4 = qt_over4, o8 = qt_over8, o16 = qt_over16;
-                os_unfair_lock_unlock(&qt_lock);
-                double f = (double)timebase.numer / timebase.denom / 1e6;
-                note(@"frames: %llu during capture, %llu carried movement (%@)", fs_frames, fs_frames_with_move,
-                     frame_sync_off ? @"frame sync off" : fs_frames ? @"movement delivered once per frame" : @"no Metal/OpenGL frames seen — delivered as it arrived");
-                if (n) note(@"queue: %llu moves; game took them out of Wine's queue after %.2f ms on average, longest %.1f ms; over 4 ms: %llu, over 8 ms: %llu, over 16 ms: %llu",
-                            n, sum * f / n, mx * f, o4, o8, o16);
+
             });
         }
     }
@@ -222,32 +209,6 @@ static NSWindow *update_aiming(id ctl) {
     if (oq) CFRelease(oq);
     if (oc) CFRelease(oc);
     return w;
-}
-
-// Queue timing while capturing: when each of our moves was posted, and how long until the game's thread
-// took it out of Wine's event queue (getEventMatchingMask:). Logged when capture ends.
-
-static void qt_posted(void *ev) {
-    os_unfair_lock_lock(&qt_lock);
-    qt_ring[qt_next++ % 512] = (typeof(qt_ring[0])){ ev, mach_absolute_time() };
-    os_unfair_lock_unlock(&qt_lock);
-}
-
-static void *my_getEvent(id self, SEL _cmd, uint64_t mask) {
-    void *ev = ((void *(*)(id, SEL, uint64_t))orig_getEvent)(self, _cmd, mask);
-    if (ev && aiming) {
-        uint64_t now = mach_absolute_time();
-        os_unfair_lock_lock(&qt_lock);
-        for (unsigned i = 0; i < 512; i++) if (qt_ring[i].ev == ev) {
-            uint64_t d = now - qt_ring[i].t; qt_ring[i].ev = NULL;
-            double ms = (double)d * timebase.numer / timebase.denom / 1e6;
-            qt_count++; qt_sum += d; if (d > qt_max) qt_max = d;
-            if (ms > 4) qt_over4++; if (ms > 8) qt_over8++; if (ms > 16) qt_over16++;
-            break;
-        }
-        os_unfair_lock_unlock(&qt_lock);
-    }
-    return ev;
 }
 
 static void release_ours(char *ev) {
@@ -277,7 +238,6 @@ static void send_relative(int dx, int dy, bool drag) {
             *(int *)(ev + kDrag) = drag;
             *(unsigned long *)(ev + kTime) = ((unsigned long (*)(id, SEL, NSTimeInterval))objc_msgSend)(
                 (__bridge id)c, sel_registerName("ticksForEventTime:"), NSProcessInfo.processInfo.systemUptime);
-            if (orig_getEvent) qt_posted(ev);
             ((void (*)(id, SEL, void *))orig_postEvent)((__bridge id)q, sel_registerName("postEvent:"), ev);
             release_ours(ev);
             moves_sent++;
@@ -570,8 +530,6 @@ static void install(void) {
     swap(app, "handleMouseMove:", (IMP)my_handleMouseMove, &orig_handleMouseMove);
     swap(app, "setCursorPosition:", (IMP)my_setCursorPosition, &orig_setCursorPosition);
     swap(queue, "postEvent:", (IMP)my_postEvent, &orig_postEvent);
-    if (class_getInstanceMethod(queue, sel_registerName("getEventMatchingMask:")))
-        swap(queue, "getEventMatchingMask:", (IMP)my_getEvent, &orig_getEvent);
 
     installed = YES;
     start_hid();
@@ -1059,7 +1017,9 @@ __attribute__((constructor)) static void start(void) {
     debug_on = getenv("NOKCANDU_RAW_MOUSE_DEBUG") != NULL;
     game_cursor = getenv("NOKCANDU_RAW_MOUSE_GAME_CURSOR") != NULL;
     metal_vsync = getenv("NOKCANDU_METAL_VSYNC") && strcmp(getenv("NOKCANDU_METAL_VSYNC"), "1") == 0;
-    frame_sync_off = getenv("NOKCANDU_RAW_MOUSE_FRAME_SYNC") && strcmp(getenv("NOKCANDU_RAW_MOUSE_FRAME_SYNC"), "0") == 0;
+    // Once-per-frame delivery is opt-in (NOKCANDU_RAW_MOUSE_FRAME_SYNC=1): it didn't cure CS2's hitches and
+    // can add up to a frame of delay.
+    frame_sync_off = !(getenv("NOKCANDU_RAW_MOUSE_FRAME_SYNC") && strcmp(getenv("NOKCANDU_RAW_MOUSE_FRAME_SYNC"), "1") == 0);
     atomic_store(&raw_enabled, getenv("NOKCANDU_RAW_MOUSE_SCALE") != NULL);
     mach_timebase_info(&timebase);
     gl_limit_setup();
