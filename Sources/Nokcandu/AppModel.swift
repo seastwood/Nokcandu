@@ -82,7 +82,14 @@ final class AppModel: ObservableObject {
         Task.detached(priority: .utility) {
             // Icons first: the rest can be slow when a game drive is slow to answer.
             if StoreAccounts.refreshIcons(snapshot) { await MainActor.run { self.games = GameLibrary.scan() } }
-            HotCorners.recoverIfStale(); HelperPatch.refresh(snapshot); RawMouse.refreshLibraries(snapshot); Performance.refreshEnvFiles(snapshot); BattleNet.refreshLaunchers(snapshot); PCLaunchers.refreshLaunchers(snapshot); BattleNet.refreshSteamLaunchers(snapshot); AudioBuffer.fixMicrophones(snapshot) 
+            HotCorners.recoverIfStale()
+            let migratedLaunchers = HelperPatch.refresh(snapshot)
+            RawMouse.refreshLibraries(snapshot); Performance.refreshEnvFiles(snapshot); BattleNet.refreshLaunchers(snapshot); PCLaunchers.refreshLaunchers(snapshot); BattleNet.refreshSteamLaunchers(snapshot); AudioBuffer.fixMicrophones(snapshot)
+            if !migratedLaunchers.isEmpty {
+                // Migration updates saved launcher hashes; replace the old in-memory configs too.
+                let refreshed = GameLibrary.scan()
+                await MainActor.run { self.games = refreshed; self.refreshRunStates() }
+            }
         }
         if selection == nil || !games.contains(where: { $0.id == selection }) { selection = games.first?.id }
         refreshRunStates()
