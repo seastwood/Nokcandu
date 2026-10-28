@@ -70,6 +70,15 @@ enum EAAppInstaller {
         } catch { return false }
         return sha.finalize().map { String(format: "%02x", $0) }.joined() == package.sha1
     }
+    static func configureClient(_ game: InstalledGame, log: @escaping @Sendable (String) -> Void) async throws {
+        // Shared optional components, referenced by the same IDs in saved and shared profiles.
+        for fix in [CompatibilityFix.bundledVC, .crossProcessWindows] {
+            let current = CompatibilityFixes.fresh(game)
+            if !CompatibilityFixes.isInstalled(fix, for: current) {
+                try await CompatibilityFixes.install(fix, for: current, log: log)
+            }
+        }
+    }
     static let program = #"C:\Program Files\Electronic Arts\EA Desktop\EA Desktop\EADesktop.exe"#
     static func run(_ ctx: InstallContext, installer: URL) async throws {
         guard let cab = NokPaths.bundledResource("cabextract") else { throw NokError("Nokcandu's installer reader is missing. Update Nokcandu first.") }
@@ -123,7 +132,7 @@ enum EAAppInstaller {
             throw NokError("EA setup didn't complete (exit \(result.status)). Installer details: \(diagnostic.path). You can retry this step.")
         }
         ctx.state.inputs["exe"] = program
-        if ctx.input("graphics") == nil { ctx.state.inputs["graphics"] = GraphicsPreset.compatible.rawValue }
+        if ctx.input("graphics") == nil { ctx.state.inputs["graphics"] = GraphicsPreset.dxmt.rawValue }
         ctx.state.inputs["launcherKind"] = PCLauncher.ea.rawValue
         ctx.state.inputs["acquire.finished"] = "1"
         try ctx.saveState()

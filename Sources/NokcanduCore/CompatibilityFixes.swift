@@ -4,10 +4,12 @@ import Foundation
 /// downloads or patch bytes. DLLs are private to the selected executable's folder; Wine's system DLLs
 /// and registry are untouched. File undo uses the same conflict-aware journal as other Nokcandu edits.
 public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable {
-    case directx9Extras = "directx9-extras", d3d8to9, borderless, cursorVisibility = "cursor-visibility", openUA = "openua-display"
+    case directx9Extras = "directx9-extras", d3d8to9, borderless, cursorVisibility = "cursor-visibility", openUA = "openua-display", bundledVC = "bundled-vc-runtime", crossProcessWindows = "cross-process-windows"
     public var id: String { rawValue }
     public var title: String {
         switch self {
+        case .bundledVC: "Use bundled Visual C++ libraries"
+        case .crossProcessWindows: "Fix launcher windows (DXMT)"
         case .openUA: "OpenUA recommended display settings"
         case .directx9Extras: "DirectX 9 extras"
         case .d3d8to9: "DirectX 8 compatibility"
@@ -17,6 +19,8 @@ public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable {
     }
     public var detail: String {
         switch self {
+        case .bundledVC: "Uses the Microsoft Visual C++ libraries already beside this program, instead of Wine’s replacements. Try this when an app waits before opening a window. Downloads nothing; restart afterward."
+        case .crossProcessWindows: "Allows DXMT to display windows drawn by another process, as used by some game launchers and embedded browsers. Requires DXMT graphics; restart afterward."
         case .openUA: "Fixes the invisible game window and tiny menu text. Uses OpenUA’s older OpenGL path and adds the original menu resolution. Only for OpenUA; restart the game afterward. Saved and shared profiles include this fix."
         case .directx9Extras: "Downloads Microsoft's shader libraries (d3dx9_43 and d3dcompiler_43) for missing effects or crashes while loading a match."
         case .d3d8to9: "Downloads d3d8to9 1.16.0 and uses the bundled DXVK 2.3 renderer. Try this when Older 3D games has visual glitches. For 32-bit DirectX 8 games."
@@ -43,6 +47,8 @@ public enum CompatibilityFixes {
         var appliedOverrides: [String: String]
         var previousLegacy: Bool?
         var previousBorderless: Bool?
+        var previousEnvironment: [String: String]? = nil
+        var appliedEnvironment: [String: String]? = nil
     }
     static func marker(_ fix: CompatibilityFix, _ g: InstalledGame) -> URL {
         g.nokcanduState.appendingPathComponent("fix-\(fix.rawValue).json")
@@ -73,6 +79,19 @@ public enum CompatibilityFixes {
            resolved.hasPrefix(external + "/") { return exe }
         return nil
     }
+    static let vcNames = ["concrt140", "msvcp140", "msvcp140_1", "msvcp140_2", "msvcp140_atomic_wait", "msvcp140_codecvt_ids", "vcruntime140", "vcruntime140_1", "vcruntime140_threads"]
+    static func bundledVCRules(_ g: InstalledGame) -> [String: String] {
+        guard let exe = managedProgram(g), let arch = PEFile.inspect(exe)?.is64Bit else { return [:] }
+        var rules: [String: String] = [:]
+        for name in vcNames {
+            let file = exe.deletingLastPathComponent().appendingPathComponent(name + ".dll")
+            // Only select real, matching-architecture libraries within the selected game folder.
+            guard file.resolvingSymlinksInPath().deletingLastPathComponent() == exe.resolvingSymlinksInPath().deletingLastPathComponent(),
+                  PEFile.inspect(file)?.is64Bit == arch else { continue }
+            rules[name] = "n,b"
+        }
+        return rules
+    }
     /// Restrict changes to standalone managed apps: shared launcher environments need per-program
     /// routing before these can safely be offered there.
     public static func unavailable(_ fix: CompatibilityFix, for g: InstalledGame) -> String? {
@@ -81,6 +100,8 @@ public enum CompatibilityFixes {
         guard let exe = managedProgram(g), PEFile.inspect(exe) != nil else {
             return "The selected program is missing or outside this game's C: folders. Choose it under Settings → Program."
         }
+        if fix == .bundledVC, bundledVCRules(g).isEmpty { return "No matching Visual C++ libraries were found beside this program." }
+        if fix == .crossProcessWindows, g.custom?.graphics != .dxmt { return "Choose Metal for DirectX 10–11 (DXMT) first." }
         if fix == .openUA, !OpenUASettings.supports(g) { return "Only available for OpenUA (UA_source.exe) with its game data and NUCLEUS.INI." }
         if fix == .cursorVisibility, BF1942DisplayFix.supports(g) {
             return "Temporarily unavailable for BF1942 because it can flicker. Leave it off; Fullscreen (Borderless) handles the mouse movement area separately."
@@ -155,6 +176,9 @@ public enum CompatibilityFixes {
         for fix in CompatibilityFix.allCases {
             guard let st = state(fix, g) else { continue }
             for (name, order) in st.appliedOverrides { rules[name] = order }
+            for (key, value) in st.appliedEnvironment ?? [:] {
+                if c.environment == nil { c.environment = [:] }; c.environment?[key] = value
+            }
             if fix == .borderless { c.borderless = true }
             if fix == .d3d8to9 { c.legacyD3D9 = true; c.graphics = .classic3D }
         }
@@ -175,8 +199,10 @@ public enum CompatibilityFixes {
         guard var c = g.custom, let exe = program(g) else { throw NokError("Choose the game's program first.") }
         let work = NokPaths.support.appendingPathComponent("Work/fix-\(UUID().uuidString)")
         try NokPaths.ensure(work); defer { try? FileManager.default.removeItem(at: work) }
-        var files: [URL: Data] = [:], applied: [String: String] = [:]
+        var files: [URL: Data] = [:], applied: [String: String] = [:], appliedEnv: [String: String] = [:]
         switch fix {
+        case .bundledVC: applied = bundledVCRules(g)
+        case .crossProcessWindows: appliedEnv = ["DXMT_ALLOW_CROSS_PROCESS_SWAPCHAIN": "1"]
         case .openUA:
             files = try OpenUASettings.plannedFiles(for: g)
         case .directx9Extras:
@@ -201,7 +227,8 @@ public enum CompatibilityFixes {
         guard CustomGameConfig.load(contents: g.contents) == g.custom else { throw NokError("Game settings changed during download. Try again.") }
         let previous = overrides(c.environment?["WINEDLLOVERRIDES"])
         let st = State(executable: c.exe, previousOverrides: previous, appliedOverrides: applied,
-                       previousLegacy: c.legacyD3D9, previousBorderless: c.borderless)
+                       previousLegacy: c.legacyD3D9, previousBorderless: c.borderless,
+                       previousEnvironment: c.environment?.filter { appliedEnv[$0.key] != nil }, appliedEnvironment: appliedEnv)
         let record = marker(fix, g)
         try NokPaths.ensure(record.deletingLastPathComponent())
         try JSONEncoder().encode(st).write(to: record, options: .atomic) // retain recovery if interrupted
@@ -213,6 +240,9 @@ public enum CompatibilityFixes {
             }
             var rules = previous; for (dll, order) in applied { rules[dll] = order }
             if !applied.isEmpty { setOverrides(rules, in: &c) }
+            for (key, value) in appliedEnv {
+                if c.environment == nil { c.environment = [:] }; c.environment?[key] = value
+            }
             if fix == .d3d8to9 { c.legacyD3D9 = true }
             if fix == .borderless { c.borderless = true }
             try CustomGames.save(c, to: g)
@@ -253,6 +283,11 @@ public enum CompatibilityFixes {
             rules[dll] = st.previousOverrides[dll]
         }
         if !st.appliedOverrides.isEmpty { setOverrides(rules, in: &c) }
+        for (key, applied) in st.appliedEnvironment ?? [:] {
+            let current = c.environment?[key], previous = st.previousEnvironment?[key]
+            guard current == applied || current == previous else { throw NokError("The \(key) setting changed after installation. Your setting was kept.") }
+            c.environment?[key] = previous
+        }
         if fix == .d3d8to9, c.legacyD3D9 == true { c.legacyD3D9 = st.previousLegacy }
         if fix == .borderless, c.borderless == true { c.borderless = st.previousBorderless }
         let j = journal(fix, g)

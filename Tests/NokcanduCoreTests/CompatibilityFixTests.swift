@@ -2,6 +2,39 @@ import XCTest
 @testable import NokcanduCore
 
 final class CompatibilityFixTests: XCTestCase {
+    func testBundledRuntimeAndCrossProcessFixesAreSharedOptInAndUndoable() async throws {
+        var g = try ProfileCompletenessTests().fixture()
+        defer { try? FileManager.default.removeItem(at: g.appURL) }
+        let exe = try XCTUnwrap(CompatibilityFixes.program(g)), pe = OpenUASettingsTests().pe()
+        try pe.write(to: exe)
+        try pe.write(to: exe.deletingLastPathComponent().appendingPathComponent("msvcp140.dll"))
+        try Data("invalid DLL".utf8).write(to: exe.deletingLastPathComponent().appendingPathComponent("concrt140.dll"))
+        var c = try XCTUnwrap(g.custom); c.graphics = .dxmt
+        c.environment = ["KEEP": "original", "WINEDLLOVERRIDES": "dsound=n", "DXMT_ALLOW_CROSS_PROCESS_SWAPCHAIN": "0"]
+        try CustomGames.save(c, to: g); g = CompatibilityFixes.fresh(g)
+        XCTAssertEqual(CompatibilityFixes.bundledVCRules(g), ["msvcp140": "n,b"])
+        XCTAssertFalse(CompatibilityFixes.isInstalled(.bundledVC, for: g))
+        try await CompatibilityFixes.install(.bundledVC, for: g) { _ in }
+        try await CompatibilityFixes.install(.crossProcessWindows, for: g) { _ in }
+        g = CompatibilityFixes.fresh(g)
+        XCTAssertEqual(g.custom?.environment?["DXMT_ALLOW_CROSS_PROCESS_SWAPCHAIN"], "1")
+        XCTAssertEqual(CompatibilityFixes.overrides(g.custom?.environment?["WINEDLLOVERRIDES"])["dsound"], "n")
+        var rebuilt = try XCTUnwrap(g.custom); rebuilt.environment = nil
+        let retained = CompatibilityFixes.preservingInstalledSettings(rebuilt, for: g)
+        XCTAssertEqual(retained.environment?["DXMT_ALLOW_CROSS_PROCESS_SWAPCHAIN"], "1")
+        XCTAssertEqual(CompatibilityFixes.overrides(retained.environment?["WINEDLLOVERRIDES"])["msvcp140"], "n,b")
+        let profile = Profiles.make(from: g, rating: .playable, notes: nil, install: nil)
+        XCTAssertTrue(profile.fixes?.contains("bundled-vc-runtime") == true)
+        XCTAssertTrue(profile.fixes?.contains("cross-process-windows") == true)
+        try CompatibilityFixes.undo(.crossProcessWindows, for: g) { _ in }
+        try CompatibilityFixes.undo(.bundledVC, for: g) { _ in }
+        g = CompatibilityFixes.fresh(g)
+        XCTAssertEqual(g.custom?.environment?["DXMT_ALLOW_CROSS_PROCESS_SWAPCHAIN"], "0")
+        XCTAssertEqual(g.custom?.environment?["KEEP"], "original")
+        XCTAssertEqual(g.custom?.environment?["WINEDLLOVERRIDES"], "dsound=n")
+        XCTAssertEqual(try Data(contentsOf: exe), pe)
+    }
+
     func testGroupedOverridesPreserveOtherComponents() {
         let prior = CompatibilityFixes.overrides("d3d8,d3d9=b;dsound=n;d3dx9_43=n,b")
         XCTAssertEqual(prior["d3d9"], "b")

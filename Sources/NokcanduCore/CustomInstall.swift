@@ -440,6 +440,7 @@ public enum CustomInstall {
     struct Build: InstallStage {
         let info = StageInfo(id: "app-build", title: "Finish the Mac app", detail: "Launcher, original game icon, and app details.", kind: .automatic)
         func isDone(_ ctx: InstallContext) -> Bool {
+            if ctx.input("launcherKind") == PCLauncher.ea.rawValue, ctx.input("ea.client-configured") != "1" { return false }
             guard let c = CustomGameConfig.load(contents: ctx.contents),
                   let sha = try? Hashing.sha256(file: ctx.contents.appendingPathComponent("MacOS/\(CustomGames.launcherName)")) else { return false }
             return sha == c.launcherSHA && FileManager.default.fileExists(atPath: ctx.contents.appendingPathComponent("Info.plist").path)
@@ -465,6 +466,9 @@ public enum CustomInstall {
                                      disc: disc,
                                      is64Bit: ctx.input("is64").map { $0 == "1" },
                                      detectedAPIs: (ctx.input("apis") ?? "").split(separator: ",").map(String.init))
+            if let existing = GameLibrary.inspect(ctx.targetApp) {
+                c = CompatibilityFixes.preservingInstalledSettings(c, for: existing)
+            }
             c.extraDiscs = extra
             if let k = ctx.input("store.kind").flatMap(Store.init(rawValue:)), let sid = ctx.input("store.id") { c.store = StoreLink(store: k, id: sid) }
             let script = CustomGames.launcherScript(for: c)
@@ -505,6 +509,11 @@ public enum CustomInstall {
             ]
             try PropertyListSerialization.data(fromPropertyList: plist.merging(AppPrivacy.keys) { a, _ in a }, format: .xml, options: 0)
                 .write(to: ctx.contents.appendingPathComponent("Info.plist"))
+            if ctx.input("launcherKind") == PCLauncher.ea.rawValue, let game = GameLibrary.inspect(ctx.targetApp) {
+                try await EAAppInstaller.configureClient(game, log: ctx.log)
+                ctx.state.inputs["ea.client-configured"] = "1"
+                try ctx.saveState()
+            }
             _ = try? Shell.run("/usr/bin/touch", [ctx.targetApp.path])
         }
     }
