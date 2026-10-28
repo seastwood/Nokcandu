@@ -60,6 +60,65 @@ final class DiscsTests: XCTestCase {
         XCTAssertEqual(try Discs.detectLayout(b2), Discs.Layout(sectorSize: 2352, dataOffset: 24))
     }
 
+    func testMountCommandSupportsCurrentAndOlderMacOS() throws {
+        let image = URL(fileURLWithPath: "/tmp/A game (disc).iso"), mount = URL(fileURLWithPath: "/tmp/Mounted Disc")
+        let modern = Discs.attachCommand(image: image, mount: mount, majorVersion: 27)
+        XCTAssertEqual(modern.tool, "/usr/sbin/diskutil")
+        XCTAssertEqual(modern.arguments, ["image", "attach", "--readOnly", "--mountOptions", "nobrowse", "--mountPoint", mount.path, image.path])
+        let older = Discs.attachCommand(image: image, mount: mount, majorVersion: 26)
+        XCTAssertEqual(older.tool, "/usr/bin/hdiutil")
+        XCTAssertEqual(older.arguments, ["attach", "-readonly", "-nobrowse", "-mountpoint", mount.path, image.path])
+        // The generated single- and multi-disc launchers must retain both paths and valid shell quoting.
+        var c = CustomGameConfig(id: "disc", name: "Disc test", source: .disc, exe: #"C:\game.exe"#, graphics: .classic3D)
+        c.disc = DiscSpec(imageName: image.lastPathComponent, volumeLabel: "TEST", internalMountDir: "SharedSupport/MountedDisc")
+        for extra in [false, true] {
+            if extra { c.extraDiscs = [DiscSpec(imageName: "Second.iso", volumeLabel: "TEST2", internalMountDir: "SharedSupport/MountedDisc2")] }
+            let script = CustomGames.launcherScript(for: c)
+            XCTAssertTrue(script.contains(Discs.launcherAttach))
+            let path = dir.appendingPathComponent("mount-\(extra).sh")
+            try script.write(to: path, atomically: true, encoding: .utf8)
+            XCTAssertTrue(try Shell.run("/bin/bash", ["-n", path.path]).ok)
+        }
+    }
+
+    func testPermanentMountFailuresDoNotEnterRepeatedRetryLoop() {
+        XCTAssertTrue(Discs.canRetryMount(ShellResult(status: 1, stdout: "", stderr: "Resource busy")))
+        XCTAssertTrue(Discs.canRetryMount(ShellResult(status: 1, stdout: "", stderr: "Permission denied")))
+        XCTAssertFalse(Discs.canRetryMount(ShellResult(status: 1, stdout: "", stderr: "No child processes")))
+        XCTAssertFalse(Discs.canRetryMount(ShellResult(status: 1, stdout: "", stderr: "No mountable file systems")))
+        XCTAssertFalse(Discs.canRetryMount(ShellResult(status: 0, stdout: "", stderr: "")))
+    }
+
+    func testConversionReportsProgressAndCancellationRemovesPartialImage() async throws {
+        let (raw, expected) = rawImage(sectors: 900)
+        let source = dir.appendingPathComponent("progress.bin"), output = dir.appendingPathComponent("progress.iso")
+        try raw.write(to: source)
+        var fractions: [Double] = []
+        try Discs.convert(source, layout: .init(sectorSize: 2352, dataOffset: 16), to: output) { fractions.append($0) }
+        XCTAssertEqual(try Data(contentsOf: output), expected)
+        XCTAssertEqual(fractions.first, 0); XCTAssertEqual(fractions.last, 1)
+        XCTAssertEqual(fractions, fractions.sorted())
+        let cancelled = dir.appendingPathComponent("cancelled.iso")
+        let task = Task.detached {
+            try Discs.convert(source, layout: .init(sectorSize: 2352, dataOffset: 16), to: cancelled) { fraction in
+                if fraction > 0 { withUnsafeCurrentTask { $0?.cancel() } }
+            }
+        }
+        do { try await task.value; XCTFail("Expected cancellation") } catch is CancellationError { }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cancelled.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cancelled.appendingPathExtension("part").path))
+        XCTAssertEqual(try Data(contentsOf: source), raw)
+    }
+
+    func testCancellationStopsSynchronousMountSubprocessPromptly() async throws {
+        let started = Date()
+        let task = Task.detached { try Shell.run("/bin/sleep", ["20"], timeout: 30, cancellable: true) }
+        try await Task.sleep(nanoseconds: 200_000_000)
+        task.cancel()
+        do { _ = try await task.value; XCTFail("Expected cancellation") } catch is CancellationError { }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+    }
+
     func testDiscOrder() {
         let urls = ["Game CD2.iso", "Game CD1.iso", "Game (Disc 3).cue", "Game (Disc 3).bin"].map { dir.appendingPathComponent($0) }
         XCTAssertEqual(Discs.sorted(urls).map(\.lastPathComponent), ["Game CD1.iso", "Game CD2.iso", "Game (Disc 3).cue"])

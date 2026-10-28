@@ -42,6 +42,12 @@ public protocol InstallStage {
     func run(_ ctx: InstallContext) async throws
 }
 
+public struct InstallWorkProgress: Sendable {
+    public let phase: String
+    public let fraction: Double?
+    public init(phase: String, fraction: Double?) { self.phase = phase; self.fraction = fraction }
+}
+
 public final class InstallContext: @unchecked Sendable {
     public let recipe: GameRecipe
     private let stateBox: Locked<InstallState>
@@ -52,6 +58,10 @@ public final class InstallContext: @unchecked Sendable {
     }
     public let journal: ChangeJournal
     public let log: @Sendable (String) -> Void
+    public var onProgress: (@Sendable (InstallWorkProgress) -> Void)?
+    public func reportProgress(_ phase: String, fraction: Double? = nil) {
+        onProgress?(InstallWorkProgress(phase: phase, fraction: fraction))
+    }
     public var library: [InstalledGame]
 
     public var targetApp: URL { URL(fileURLWithPath: state.targetApp) }
@@ -245,6 +255,7 @@ public final class InstallExecutor: @unchecked Sendable {
             }
             statuses[stage.info.id] = .running
             onChange?()
+            ctx.reportProgress(stage.info.title)
             ctx.log("▶︎ \(stage.info.title)")
             do {
                 if !stage.isDone(ctx) {
@@ -291,10 +302,19 @@ public final class InstallExecutor: @unchecked Sendable {
         let report = ctx.journal.revertAll()
         var lines = [report.summary]
         if ctx.state.createdTarget, FileManager.default.fileExists(atPath: ctx.targetApp.path) {
+            // Mounted disc contents prevent macOS from trashing the app directory.
+            if let mounts = try? FileManager.default.contentsOfDirectory(at: ctx.support, includingPropertiesForKeys: nil) {
+                for mount in mounts where mount.lastPathComponent.hasPrefix("MountedDisc") {
+                    _ = try? Shell.run("/usr/bin/hdiutil", ["detach", mount.path, "-force"], timeout: 60)
+                }
+            }
             do {
                 try FileManager.default.trashItem(at: ctx.targetApp, resultingItemURL: nil)
                 lines.append("Moved \(ctx.targetApp.lastPathComponent) to the Trash.")
-            } catch { lines.append("Could not move the new app to the Trash: \(error.localizedDescription)") }
+            } catch {
+                lines.append("Could not move the new app to the Trash: \(error.localizedDescription). Its setup progress was kept so you can retry.")
+                return lines.joined(separator: "\n")
+            }
         }
         try? FileManager.default.trashItem(at: ctx.workDir, resultingItemURL: nil)
         return lines.joined(separator: "\n")

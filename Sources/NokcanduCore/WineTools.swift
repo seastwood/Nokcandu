@@ -139,13 +139,7 @@ extension CustomGames {
         let name = safeFolderName(iso.deletingPathExtension().lastPathComponent) + ".iso"
         let dest = g.support.appendingPathComponent(name)
         if !fm.fileExists(atPath: dest.path) { try fm.cloneItem(at: iso, to: dest) }
-        let probe = fm.temporaryDirectory.appendingPathComponent("nokcandu-disc-\(UUID().uuidString.prefix(6))")
-        try fm.createDirectory(at: probe, withIntermediateDirectories: true)
-        defer { _ = try? Shell.run("/usr/bin/hdiutil", ["detach", probe.path, "-quiet"]); try? fm.removeItem(at: probe) }
-        let r = try Shell.run("/usr/bin/hdiutil", ["attach", "-readonly", "-nobrowse", "-mountpoint", probe.path, dest.path], timeout: 120)
-        guard r.ok else { throw NokError("macOS couldn't open that disc image: \(r.combined)") }
-        let plist = (try? Shell.run("/usr/sbin/diskutil", ["info", "-plist", probe.path]))?.stdout ?? ""
-        let label = ((try? PropertyListSerialization.propertyList(from: Data(plist.utf8), format: nil)) as? [String: Any])?["VolumeName"] as? String ?? ""
+        let label = try Discs.volumeLabel(dest)
         var c = current
         c.disc = DiscSpec(imageName: name, volumeLabel: label, internalMountDir: "SharedSupport/MountedDisc")
         return c

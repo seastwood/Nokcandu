@@ -8,6 +8,8 @@ final class InstallerModel: ObservableObject {
     @Published var executor: InstallExecutor?
     @Published var log: String = ""
     @Published var running = false
+    @Published var cancelling = false
+    @Published var workProgress: InstallWorkProgress?
     @Published var tick = 0
     @Published var saved: [InstallState] = InstallerModel.unfinished()
 
@@ -27,6 +29,7 @@ final class InstallerModel: ObservableObject {
 
     private func wire(_ ex: InstallExecutor) {
         ex.onChange = { [weak self] in Task { @MainActor in self?.tick += 1 } }
+        ex.ctx.onProgress = { [weak self] value in Task { @MainActor in self?.workProgress = value } }
         executor = ex
     }
     private var logger: @Sendable (String) -> Void {
@@ -106,10 +109,10 @@ final class InstallerModel: ObservableObject {
     func continueInstall() {
         guard let ex = executor, !running else { return }
         if let s = ex.nextStage, case .failed = ex.statuses[s.info.id] ?? .pending { ex.resetFailure(s.info.id) }
-        running = true
+        running = true; cancelling = false; workProgress = nil
         task = Task {
             await ex.runUntilBlocked()
-            running = false
+            running = false; cancelling = false; workProgress = nil
             tick += 1
             refreshCandidates()
         }
@@ -124,7 +127,7 @@ final class InstallerModel: ObservableObject {
         }
     }
 
-    func cancel() { task?.cancel() }
+    func cancel() { cancelling = true; task?.cancel() }
 
     func setInput(_ k: String, _ v: String) { executor?.setInput(k, v); tick += 1 }
 }
@@ -357,6 +360,18 @@ struct InstallerView: View {
                     }
                     Text(ex.ctx.targetApp.path).font(.caption).textSelection(.enabled)
                 }
+                if m.running {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text(m.cancelling ? "Cancelling…" : (m.workProgress?.phase ?? "Working…"))
+                            Spacer()
+                            if !m.cancelling, let fraction = m.workProgress?.fraction { Text("\(Int(fraction * 100))%").monospacedDigit() }
+                        }.font(.callout)
+                        if !m.cancelling, let fraction = m.workProgress?.fraction { ProgressView(value: fraction, total: 1) }
+                        else { ProgressView().progressViewStyle(.linear) }
+                    }
+                    .accessibilityElement(children: .combine)
+                }
                 Text("Log").font(.caption.bold()).padding(.top, 6)
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -470,13 +485,25 @@ struct InstallerView: View {
                     }
                 }
                 if inputs["acquire.opened"] == "1" {
-                    Button("Run Setup Again") { m.setInput("acquire.opened", "0"); m.setInput("acquire.finished", "0"); m.continueInstall() }
+                    Button("Run Setup Again") { m.setInput("disc.recoveryFolder", ""); m.setInput("acquire.opened", "0"); m.setInput("acquire.finished", "0"); m.continueInstall() }
+                    Button("Copy Game Folder After Setup…") {
+                        if let u = pick(folder: true, types: []) {
+                            m.setInput("folderMode", "copy"); m.setInput("folderPath", u.path)
+                            m.setInput("disc.recoveryFolder", u.path); m.continueInstall()
+                        }
+                    }
+                    .disabled(m.running)
                 }
             }
         case .folder:
             Button("Choose Game Folder…") {
-                if let u = pick(folder: true, types: []) { m.setInput("folderPath", u.path); m.continueInstall() }
+                if let u = pick(folder: true, types: []) { m.setInput("folderMode", "copy"); m.setInput("folderPath", u.path); m.continueInstall() }
             }
+            Button("Use Existing Folder Without Copying…") {
+                if let u = pick(folder: true, types: []) { m.setInput("folderMode", "existing"); m.setInput("folderPath", u.path); m.continueInstall() }
+            }
+            .disabled(m.running)
+            Text("Existing files stay in that folder and are kept if you remove this game. Its drive must be connected to play.").font(.caption).foregroundStyle(.secondary)
         case .steam:
             HStack {
                 TextField("Steam account name", text: $steamUser).frame(maxWidth: 180)
@@ -552,7 +579,7 @@ struct InstallerView: View {
             Spacer()
             if m.running {
                 ProgressView().controlSize(.small)
-                Button("Cancel") { m.cancel() }
+                Button(m.cancelling ? "Cancelling…" : "Cancel") { m.cancel() }.disabled(m.cancelling)
             } else if let ex = m.executor, !ex.isComplete {
                 Button("Continue") { m.continueInstall() }.keyboardShortcut(.defaultAction)
             }

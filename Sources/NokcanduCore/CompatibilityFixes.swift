@@ -19,7 +19,7 @@ public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable {
         case .directx9Extras: "Downloads Microsoft's shader libraries (d3dx9_43 and d3dcompiler_43) for missing effects or crashes while loading a match."
         case .d3d8to9: "Downloads d3d8to9 1.16.0 and uses the bundled DXVK 2.3 renderer. Try this when Older 3D games has visual glitches. For 32-bit DirectX 8 games."
         case .borderless: "Makes the game's window fill its screen without changing the Mac's display mode. Select Windowed inside the game first."
-        case .cursorVisibility: "Try this if the Mac arrow stays visible during gameplay. Follows the game's cursor visibility requests without changing mouse input. Works with Raw Mouse Capture off. Restart the game after installing or undoing."
+        case .cursorVisibility: "Experimental. Try this if the Mac arrow stays visible during gameplay. Follows the game's cursor visibility requests without changing mouse input. Works with Raw Mouse Capture off. Restart the game after installing or undoing."
         }
     }
 }
@@ -67,6 +67,9 @@ public enum CompatibilityFixes {
         guard let exe = program(g), PEFile.inspect(exe) != nil,
               exe.resolvingSymlinksInPath().path.hasPrefix(g.prefix.appendingPathComponent("drive_c").resolvingSymlinksInPath().path + "/") else {
             return "Choose the game's program inside its own C: drive first."
+        }
+        if fix == .cursorVisibility, BF1942DisplayFix.supports(g) {
+            return "Temporarily unavailable for BF1942 because it can flicker. Leave it off; Fullscreen (Borderless) handles the mouse movement area separately."
         }
         if fix == .d3d8to9 {
             if PEFile.inspect(exe)?.is64Bit != false { return "This fix is for 32-bit DirectX 8 games." }

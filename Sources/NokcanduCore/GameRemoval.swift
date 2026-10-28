@@ -25,9 +25,12 @@ public enum GameRemoval {
     }
 
     /// Everything that would be removed with this game.
-    public static func items(for g: InstalledGame) -> [Item] {
+    public static func items(for g: InstalledGame, library: [InstalledGame] = []) -> [Item] {
         let fm = FileManager.default
         var out = [Item(url: g.appURL, what: "The game app (game files, Windows environment, saves inside it)", bytes: size(g.appURL))]
+        if let external = removableExternalFiles(g, library: library) {
+            out.append(Item(url: external, what: "Game files on \(GameFolders.volumeName(external)): \(external.path) (including saves there)", bytes: size(external)))
+        }
         let scope = g.journalScope
         let s = NokPaths.support
         for (u, what) in [(s.appendingPathComponent("Backups/\(scope)"), "Undo backups"),
@@ -43,6 +46,22 @@ public enum GameRemoval {
             if fm.fileExists(atPath: j.path) { out.append(Item(url: j, what: "Install change history", bytes: size(j))) }
         }
         return out
+    }
+
+    /// Only a game's dedicated folder in a registered library may be removed. Borrowed folders,
+    /// shared launcher data and folders used by another game must stay.
+    static func removableExternalFiles(_ g: InstalledGame, library: [InstalledGame], folders: [URL] = GameFolders.all) -> URL? {
+        let fm = FileManager.default
+        guard g.custom != nil, !g.usesSharedSteam, g.battleNet == nil, g.hosted == nil,
+              !fm.fileExists(atPath: g.support.appendingPathComponent("referenced-game-folder.txt").path),
+              let external = GameMover.externalFiles(g)?.resolvingSymlinksInPath(),
+              fm.isDirectory(external),
+              folders.contains(where: { $0.resolvingSymlinksInPath().path == external.deletingLastPathComponent().path }) else { return nil }
+        for other in library where other.appURL != g.appURL {
+            guard let files = GameMover.gameFilesFolder(other)?.resolvingSymlinksInPath() else { continue }
+            if files.path == external.path || files.path.hasPrefix(external.path + "/") || external.path.hasPrefix(files.path + "/") { return nil }
+        }
+        return external
     }
 
     /// Why this game can't be removed right now (nil = it can).
@@ -71,9 +90,15 @@ public enum GameRemoval {
                 _ = try? Shell.run("/usr/bin/hdiutil", ["detach", m.path, "-force"], timeout: 60)
             }
         }
-        for i in items(for: g) {
+        // Resolve links before trashing the app; the external location is then still available.
+        let removalItems = items(for: g, library: library)
+        for i in removalItems {
             do { try FileManager.default.trashItem(at: i.url, resultingItemURL: nil) }
-            catch { failed.append("\(i.url.lastPathComponent): \(error.localizedDescription)") }
+            catch {
+                failed.append("\(i.url.lastPathComponent): \(error.localizedDescription)")
+                // Keep remaining data and records available for recovery after a partial removal.
+                break
+            }
         }
         return failed
     }

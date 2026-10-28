@@ -47,13 +47,21 @@ final class CompatibilityFixTests: XCTestCase {
         for fix in CompatibilityFix.allCases { XCTAssertNotNil(CompatibilityFixes.unavailable(fix, for: shared)) }
     }
     func testCursorFixIsOptInShareableAndIndependentlyUndoable() async throws {
-        let g = try ProfileCompletenessTests().fixture()
+        var g = try ProfileCompletenessTests().fixture()
         defer { try? FileManager.default.removeItem(at: g.appURL) }
+        let bfGame = g
+        var config = try XCTUnwrap(g.custom)
+        config.exe = #"C:\Games\BF1942\CursorGame.exe"#
+        try config.encoded().write(to: CustomGameConfig.url(in: g.contents))
+        g = try XCTUnwrap(GameLibrary.inspect(g.appURL))
         let exe = try XCTUnwrap(CompatibilityFixes.program(g))
         var pe = Data(repeating: 0, count: 512)
         pe[0] = 0x4d; pe[1] = 0x5a; pe[0x3c] = 0x80
         pe[0x80] = 0x50; pe[0x81] = 0x45; pe[0x94] = 0xe0
         pe[0x98] = 0x0b; pe[0x99] = 0x01
+        try pe.write(to: try XCTUnwrap(CompatibilityFixes.program(bfGame)))
+        XCTAssertTrue(CompatibilityFixes.unavailable(.cursorVisibility, for: bfGame)?.contains("flicker") == true,
+                      "A valid BF1942 executable must still be protected from the reported flicker")
         try pe.write(to: exe)
         let flag = g.nokcanduState.appendingPathComponent("cursor-visibility-fix")
         XCTAssertFalse(FileManager.default.fileExists(atPath: flag.path))

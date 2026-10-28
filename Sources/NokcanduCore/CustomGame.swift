@@ -283,34 +283,43 @@ public enum CustomGames {
                                    "iexplore", "wmplayer", "notepad", "winemenubuilder"]
 
     /// Ranks .exe files under drive_c that look like the game (outside Wine's own folders).
-    public static func findExecutables(prefix: URL, nameHint: String, limit: Int = 12) -> [ExeCandidate] {
+    public static func findExecutables(prefix: URL, nameHint: String, limit: Int = 12, searchFolder: URL? = nil) -> [ExeCandidate] {
         let driveC = prefix.appendingPathComponent("drive_c")
         let fm = FileManager.default
-        guard let en = fm.enumerator(at: driveC, includingPropertiesForKeys: [.fileSizeKey, .isDirectoryKey, .isSymbolicLinkKey],
-                                     options: [.skipsHiddenFiles]) else { return [] }
         let hints = nameHint.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init).filter { $0.count >= 3 }
         var out: [ExeCandidate] = []
-        for case let url as URL in en {
-            let name = url.lastPathComponent.lowercased()
-            let vals = try? url.resourceValues(forKeys: [.fileSizeKey, .isDirectoryKey])
-            if vals?.isDirectory == true {
-                if skipDirs.contains(name) || en.level > 6 { en.skipDescendants() }
-                continue
+        // Enumerators do not descend into symlinks. Follow linked game folders explicitly,
+        // keeping the logical C: path and guarding against cycles and excessive depth.
+        func scan(_ directory: URL, depth: Int, ancestors: Set<String>) {
+            guard depth <= 7 else { return }
+            let real = directory.resolvingSymlinksInPath().standardizedFileURL.path
+            guard !ancestors.contains(real) else { return }
+            var visited = ancestors; visited.insert(real)
+            guard let children = try? fm.contentsOfDirectory(at: URL(fileURLWithPath: real, isDirectory: true), includingPropertiesForKeys: [.fileSizeKey], options: [.skipsHiddenFiles]) else { return }
+            for child in children {
+                let url = directory.appendingPathComponent(child.lastPathComponent)
+                let name = url.lastPathComponent.lowercased()
+                if fm.isDirectory(url.resolvingSymlinksInPath()) {
+                    if !skipDirs.contains(name) { scan(url, depth: depth + 1, ancestors: visited) }
+                    continue
+                }
+                let vals = try? url.resourceValues(forKeys: [.fileSizeKey])
+                guard name.hasSuffix(".exe"), !skipNamePrefixes.contains(where: { name.hasPrefix($0) }) else { continue }
+                guard let win = windowsPath(forUnix: url, prefix: prefix) else { continue }
+                let size = Int64(vals?.fileSize ?? 0)
+                var score = Int(min(size / 200_000, 200))              // bigger usually = the game
+                score += hints.filter { name.contains($0) }.count * 60
+                score += hints.filter { win.lowercased().contains($0) }.count * 15
+                score -= depth * 4
+                if name.contains("launcher") { score -= 10 }
+                // Battle.net: its launcher starts Battle.net.exe with the settings it needs under Wine
+                // (--in-process-gpu --use-gl=swiftshader); starting Battle.net.exe directly crashes its window.
+                if name == "battle.net launcher.exe" { score += 400 }
+                if name.contains("editor") || name.contains("server") || name.contains("config") || name.contains("tool") { score -= 40 }
+                out.append(ExeCandidate(url: url, windowsPath: win, size: size, score: score))
             }
-            guard name.hasSuffix(".exe"), !skipNamePrefixes.contains(where: { name.hasPrefix($0) }) else { continue }
-            guard let win = windowsPath(forUnix: url, prefix: prefix) else { continue }
-            let size = Int64(vals?.fileSize ?? 0)
-            var score = Int(min(size / 200_000, 200))              // bigger usually = the game
-            score += hints.filter { name.contains($0) }.count * 60
-            score += hints.filter { win.lowercased().contains($0) }.count * 15
-            score -= en.level * 4
-            if name.contains("launcher") { score -= 10 }
-            // Battle.net: its launcher starts Battle.net.exe with the settings it needs under Wine
-            // (--in-process-gpu --use-gl=swiftshader); starting Battle.net.exe directly crashes its window.
-            if name == "battle.net launcher.exe" { score += 400 }
-            if name.contains("editor") || name.contains("server") || name.contains("config") || name.contains("tool") { score -= 40 }
-            out.append(ExeCandidate(url: url, windowsPath: win, size: size, score: score))
         }
+        scan(searchFolder ?? driveC, depth: 0, ancestors: [])
         return Array(out.sorted { $0.score > $1.score }.prefix(limit))
     }
 
@@ -437,7 +446,7 @@ public enum CustomGames {
             elif [ "$(info "$MOUNT_DIR" MountPoint)" != "$MOUNT_DIR" ]; then
              [ -f "$DISC_IMAGE" ]
              mkdir -p "$MOUNT_DIR"
-             /usr/bin/hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT_DIR" "$DISC_IMAGE" >/dev/null
+             \(Discs.launcherAttach)
             fi
             DISC_DEVICE=$(info "$MOUNT_DIR" DeviceNode)
             RAW_DEVICE="/dev/r${DISC_DEVICE#/dev/}"
@@ -460,7 +469,7 @@ public enum CustomGames {
             if [ "$(info "$MOUNT_DIR" MountPoint)" != "$MOUNT_DIR" ]; then
              [ -f "$DISC_IMAGE" ]
              mkdir -p "$MOUNT_DIR"
-             /usr/bin/hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT_DIR" "$DISC_IMAGE" >/dev/null
+             \(Discs.launcherAttach)
             fi
             DISC_DEVICE=$(info "$MOUNT_DIR" DeviceNode)
             RAW_DEVICE="/dev/r${DISC_DEVICE#/dev/}"

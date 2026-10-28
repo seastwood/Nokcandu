@@ -22,3 +22,33 @@ final class GameStorageTests: XCTestCase {
         XCTAssertEqual(Storage.driveName(URL(fileURLWithPath: "/Volumes/Offline Games/Game")), "Offline Games")
     }
 }
+
+final class GameRemovalStorageTests: XCTestCase {
+    func testOnlyDedicatedOwnedExternalFolderIsOfferedForRemoval() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("removal-" + UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+        let library = root.appendingPathComponent("Library"), external = library.appendingPathComponent("Test")
+        try NokPaths.ensure(external)
+        func game(_ name: String) throws -> InstalledGame {
+            let app = root.appendingPathComponent(name + ".app")
+            let prefix = app.appendingPathComponent("Contents/SharedSupport/prefix")
+            let games = prefix.appendingPathComponent("drive_c/Games")
+            try NokPaths.ensure(games)
+            try fm.createSymbolicLink(atPath: games.appendingPathComponent("Test").path, withDestinationPath: external.path)
+            let config = CustomGameConfig(id: name, name: name, source: .folder, exe: #"C:\Games\Test\Game.exe"#, graphics: .classic3D)
+            return InstalledGame(appURL: app, name: name, custom: config)
+        }
+        let first = try game("First")
+        XCTAssertEqual(GameRemoval.removableExternalFiles(first, library: [first], folders: [library])?.path, external.path)
+        XCTAssertNil(GameRemoval.removableExternalFiles(first, library: [first], folders: [root]))
+        let second = try game("Second")
+        XCTAssertNil(GameRemoval.removableExternalFiles(first, library: [first, second], folders: [library]))
+        try sourceMarker(first.support)
+        XCTAssertNil(GameRemoval.removableExternalFiles(first, library: [first], folders: [library]))
+        XCTAssertTrue(fm.fileExists(atPath: external.path))
+    }
+    private func sourceMarker(_ support: URL) throws {
+        try "borrowed".write(to: support.appendingPathComponent("referenced-game-folder.txt"), atomically: true, encoding: .utf8)
+    }
+}

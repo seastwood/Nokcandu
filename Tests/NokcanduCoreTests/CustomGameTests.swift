@@ -32,6 +32,24 @@ final class CustomGameTests: XCTestCase {
         XCTAssertEqual(config(disc: false).recipe.gameDirectory, "SharedSupport/prefix/drive_c/Games/Test's Game/bin")
     }
 
+    func testLinkedGameDiscoveryPreservesCDrivePathAndStopsCycles() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("linked-game-" + UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+        let prefix = root.appendingPathComponent("prefix")
+        let games = prefix.appendingPathComponent("drive_c/Games")
+        let external = root.appendingPathComponent("External/OpenUA")
+        try NokPaths.ensure(games); try NokPaths.ensure(external)
+        try Data([1, 2, 3]).write(to: external.appendingPathComponent("OpenUA.exe"))
+        try fm.createSymbolicLink(atPath: games.appendingPathComponent("OpenUA").path, withDestinationPath: external.path)
+        try fm.createSymbolicLink(atPath: external.appendingPathComponent("loop").path, withDestinationPath: external.path)
+        let hits = CustomGames.findExecutables(prefix: prefix, nameHint: "OpenUA")
+        XCTAssertEqual(hits.count, 1)
+        XCTAssertEqual(hits.first?.windowsPath, #"C:\Games\OpenUA\OpenUA.exe"#)
+        // Exercise the same discovery used by the post-copy check without a running Wine process.
+        if let hit = hits.first { XCTAssertEqual(CustomGames.windowsPath(forUnix: hit.url, prefix: prefix), hit.windowsPath) }
+    }
+
     func testGraphicsSuggestion() {
         XCTAssertEqual(GraphicsPreset.suggest(for: PEInfo(is64Bit: false, imports: ["KERNEL32.dll", "d3d9.dll"])), .classic3D)
         XCTAssertEqual(GraphicsPreset.suggest(for: PEInfo(is64Bit: true, imports: ["D3D12.dll"])), .appleMetal)
@@ -105,5 +123,47 @@ final class GameDisplayTests: XCTestCase {
         XCTAssertTrue(u.contains("dword:000000c0"))
         try GameDisplay.setRetina(false, prefix: dir)
         XCTAssertFalse(GameDisplay.retinaOn(prefix: dir))
+    }
+}
+
+final class FolderImportTests: XCTestCase {
+    func testCopyToExternalIsRecognizedAndRetryDoesNotEraseFiles() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("folder-import-" + UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+        let source = root.appendingPathComponent("Source"), external = root.appendingPathComponent("External/Test")
+        try NokPaths.ensure(source); try NokPaths.ensure(external)
+        try Data([1,2,3]).write(to: source.appendingPathComponent("Game.exe"))
+        var state = InstallState(installID: "test", recipeID: "custom", targetApp: root.appendingPathComponent("Test.app").path)
+        state.inputs = ["name": "Test", "folderPath": source.path]
+        let ctx = InstallContext(recipe: CustomInstall.installRecipe(name: "Test"), state: state, library: [], log: { _ in })
+        let destination = CustomInstall.gamesFolder(ctx)
+        try NokPaths.ensure(destination.deletingLastPathComponent())
+        try fm.createSymbolicLink(atPath: destination.path, withDestinationPath: external.path)
+        let acquire = CustomInstall.Acquire(source: .folder)
+        try acquire.copyFolder(ctx)
+        XCTAssertTrue(acquire.isDone(ctx))
+        try Data([9]).write(to: external.appendingPathComponent("save.dat"))
+        XCTAssertThrowsError(try acquire.copyFolder(ctx))
+        XCTAssertEqual(try Data(contentsOf: external.appendingPathComponent("save.dat")), Data([9]))
+    }
+
+    func testUseExistingFolderPreservesSourceAndMarksItBorrowed() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("folder-existing-" + UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+        let source = root.appendingPathComponent("Source")
+        try NokPaths.ensure(source)
+        try Data([1]).write(to: source.appendingPathComponent("Game.exe"))
+        var state = InstallState(installID: "test", recipeID: "custom", targetApp: root.appendingPathComponent("Test.app").path)
+        state.inputs = ["name": "Test", "folderPath": source.path, "folderMode": "existing", "filesFolder": root.path]
+        let ctx = InstallContext(recipe: CustomInstall.installRecipe(name: "Test"), state: state, library: [], log: { _ in })
+        try NokPaths.ensure(ctx.support)
+        let acquire = CustomInstall.Acquire(source: .folder)
+        try acquire.copyFolder(ctx)
+        XCTAssertTrue(acquire.isDone(ctx))
+        XCTAssertEqual(CustomInstall.gamesFolder(ctx).resolvingSymlinksInPath().path, source.resolvingSymlinksInPath().path)
+        XCTAssertTrue(fm.fileExists(atPath: ctx.support.appendingPathComponent("referenced-game-folder.txt").path))
+        XCTAssertTrue(CustomInstall.StoreFiles().isDone(ctx))
     }
 }

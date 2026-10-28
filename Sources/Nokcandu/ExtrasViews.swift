@@ -549,11 +549,11 @@ struct RemoveGameSection: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Remove \(game.name)").font(.body.bold())
-                    Text("Moves the app and everything Nokcandu keeps for it (undo backups, change history, install progress, notes) to the Trash. Your saved profiles stay.")
+                    Text("Moves the app, its dedicated external game folder when listed, and Nokcandu’s records to the Trash. Existing folders used without copying and your saved profiles stay.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
-                Button("Remove Game…", role: .destructive) { items = GameRemoval.items(for: game); confirm = true }
+                Button("Remove Game…", role: .destructive) { items = GameRemoval.items(for: game, library: model.games); confirm = true }
             }
             .padding(6)
         }

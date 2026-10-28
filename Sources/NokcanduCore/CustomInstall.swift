@@ -76,11 +76,13 @@ public enum CustomInstall {
     struct StoreFiles: InstallStage {
         let info = StageInfo(id: "files-store", title: "Store the game's files", detail: "Moves the installed game onto the drive you chose.", kind: .automatic)
         func isDone(_ ctx: InstallContext) -> Bool {
+            if ctx.input("folderMode") == "existing" { return true }
             guard ctx.input("filesFolder") != nil, let exe = ctx.input("exe"), !exe.isEmpty,
                   let folder = GameMover.gameFilesFolder(exe: exe, prefix: ctx.prefix) else { return true }
             return (try? FileManager.default.destinationOfSymbolicLink(atPath: folder.path)) != nil
         }
         func run(_ ctx: InstallContext) async throws {
+            if ctx.input("folderMode") == "existing" { return }
             guard let f = ctx.input("filesFolder"), let exe = ctx.input("exe"),
                   let folder = GameMover.gameFilesFolder(exe: exe, prefix: ctx.prefix) else { return }
             try GameMover.relocate(folder, to: URL(fileURLWithPath: f), progress: { ctx.log($0) })
@@ -133,7 +135,7 @@ public enum CustomInstall {
                       let node = try? VDF.parse(text), let flags = node["AppState"]?["StateFlags"]?.string.flatMap(Int.init) else { return false }
                 return flags & 4 != 0   // "fully installed"
             case .steam, .folder:
-                return !CustomGames.findExecutables(prefix: ctx.prefix, nameHint: CustomInstall.name(ctx), limit: 1).isEmpty
+                return !CustomGames.findExecutables(prefix: ctx.prefix, nameHint: CustomInstall.name(ctx), limit: 1, searchFolder: CustomInstall.gamesFolder(ctx)).isEmpty
                     && FileManager.default.fileExists(atPath: CustomInstall.gamesFolder(ctx).path)
             case .store:
                 return ctx.state.inputs["acquire.finished"] == "1"
@@ -148,7 +150,11 @@ public enum CustomInstall {
             case .folder: try copyFolder(ctx)
             case .store: try await storeDownload(ctx)
             case .installer: try await runInstaller(ctx)
-            case .disc: try await installFromDisc(ctx)
+            case .disc:
+                if ctx.input("disc.recoveryFolder") != nil {
+                    try copyFolder(ctx)
+                    markFinished(ctx)
+                } else { try await installFromDisc(ctx) }
             case .steam: try steamCMD(ctx)
             case .steamLibrary: try await steamLibrary(ctx)
             }
@@ -159,16 +165,41 @@ public enum CustomInstall {
             let src = URL(fileURLWithPath: p)
             let dst = CustomInstall.gamesFolder(ctx)
             guard FileManager.default.isDirectory(src) else { throw NokError("That isn't a folder.") }
-            ctx.log("Copying \(src.path)…")
-            if let real = try? FileManager.default.destinationOfSymbolicLink(atPath: dst.path) {
-                // Game files go on another drive: copy straight there.
-                let r = URL(fileURLWithPath: real, isDirectory: true)
-                try? FileManager.default.removeItem(at: r)
-                try GameMover.copyPlain(src, r)
+            let fm = FileManager.default
+            if ctx.input("folderMode") == "existing" {
+                guard src.resolvingSymlinksInPath().path != dst.resolvingSymlinksInPath().path,
+                      !src.path.hasPrefix(ctx.prefix.path + "/") else {
+                    throw NokError("Choose the original game folder outside this app.")
+                }
+                if let _ = try? fm.destinationOfSymbolicLink(atPath: dst.path) { try fm.removeItem(at: dst) }
+                else if fm.fileExists(atPath: dst.path) {
+                    guard (try fm.contentsOfDirectory(atPath: dst.path)).isEmpty else {
+                        throw NokError("The app already has game files. Use Continue to check them, or start a separate setup.")
+                    }
+                    try fm.removeItem(at: dst)
+                }
+                try fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try fm.createSymbolicLink(atPath: dst.path, withDestinationPath: src.path)
+                try src.path.write(to: ctx.support.appendingPathComponent("referenced-game-folder.txt"), atomically: true, encoding: .utf8)
+                ctx.log("Using existing files without copying: \(src.path). They will be kept when this app is removed.")
                 return
             }
-            if FileManager.default.fileExists(atPath: dst.path) { try FileManager.default.removeItem(at: dst) }
-            try FileManager.default.cloneItem(at: src, to: dst)
+            ctx.log("Copying \(src.path)…")
+            let target = dst.resolvingSymlinksInPath()
+            let sourcePath = src.resolvingSymlinksInPath().path
+            guard sourcePath != target.path, !target.path.hasPrefix(sourcePath + "/"), !sourcePath.hasPrefix(target.path + "/") else {
+                throw NokError("The source and destination overlap. Choose a separate original game folder.")
+            }
+            // Never erase an existing folder when retrying a failed import.
+            if fm.fileExists(atPath: target.path), !(try fm.contentsOfDirectory(atPath: target.path)).isEmpty {
+                throw NokError("The destination already contains files. Press Continue to check them, or choose Use Existing Folder Without Copying.")
+            }
+            let staging = target.deletingLastPathComponent().appendingPathComponent(".nok-import-" + UUID().uuidString)
+            defer { try? fm.removeItem(at: staging) }
+            if GameFolders.holdsApps(target.deletingLastPathComponent()) { try fm.cloneItem(at: src, to: staging) }
+            else { try GameMover.copyPlain(src, staging) }
+            if fm.fileExists(atPath: target.path) { try fm.removeItem(at: target) }
+            try fm.moveItem(at: staging, to: target)
         }
 
         func storeDownload(_ ctx: InstallContext) async throws {
@@ -210,16 +241,25 @@ public enum CustomInstall {
 
         func installFromDisc(_ ctx: InstallContext) async throws {
             guard let p = ctx.input("isoPath") else { return }
-            if ZeroHourInstall.opened(ctx, info.id) { return markFinished(ctx) }
+            if ZeroHourInstall.opened(ctx, info.id) {
+                markFinished(ctx)
+                guard !CustomGames.findExecutables(prefix: ctx.prefix, nameHint: CustomInstall.name(ctx), limit: 1).isEmpty else {
+                    throw NokError("Setup closed, but no game program was found on C:. Run Setup Again, or choose Copy Game Folder After Setup to import installed files or loose game files from the disc. A completed setup screen alone does not confirm that files were installed.")
+                }
+                return
+            }
             // One or more discs (Disc 1 first): keep each inside the app, converting .bin/.cue etc. to .iso.
             let picked = (ctx.input("isoPaths") ?? p).split(separator: "\n").map { URL(fileURLWithPath: String($0)) }
             var images: [String] = [], labels: [String] = []
-            for u in picked {
-                let i = try Discs.importImage(u, into: ctx.support, log: ctx.log)
+            for (index, u) in picked.enumerated() {
+                let i = try Discs.importImage(u, into: ctx.support, log: ctx.log) { phase, fraction in
+                    ctx.reportProgress("Disc \(index + 1) of \(picked.count): " + phase, fraction: fraction)
+                }
                 if let n = i.note { ctx.log(n) }
                 images.append(i.imageName); labels.append(i.label)
             }
             guard !images.isEmpty else { return }
+            ctx.reportProgress("Mounting disc 1")
             try Discs.insert(0, images: images, support: ctx.support, prefix: ctx.prefix)
             let mount = Discs.mountDir(ctx.support, index: 0)
             let reg = ctx.workDir.appendingPathComponent("cdrom.reg")
@@ -238,11 +278,15 @@ public enum CustomInstall {
             }
             try FileManager.default.createDirectory(at: CustomInstall.gamesFolder(ctx), withIntermediateDirectories: true)
             try ZeroHourInstall.markOpened(ctx, info.id)
+            ctx.reportProgress("Starting Windows setup — finish it in its own window")
             try await Discs.runSetup(0, images: images, support: ctx.support, prefix: ctx.prefix, env: ctx.wineEnvironment, log: ctx.log)
             if images.count > 1 {
                 ctx.log("If the other discs are expansions (their own setup), install them now with Run Setup for each disc above, then press Continue.")
             }
             markFinished(ctx)
+            guard !CustomGames.findExecutables(prefix: ctx.prefix, nameHint: CustomInstall.name(ctx), limit: 1).isEmpty else {
+                throw NokError("Setup closed, but no game program was found on C:. Run Setup Again, or use Copy Game Folder After Setup to import installed files or loose game files from the disc.")
+            }
         }
 
         /// autorun.inf's open= entry, else a setup/install program at the disc root.

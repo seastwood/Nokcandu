@@ -96,7 +96,8 @@ public enum Shell {
     /// so paths with spaces and quotes are passed exactly.
     @discardableResult
     public static func run(_ tool: String, _ args: [String], cwd: URL? = nil,
-                           env: [String: String]? = nil, timeout: TimeInterval = 120) throws -> ShellResult {
+                           env: [String: String]? = nil, timeout: TimeInterval = 120, cancellable: Bool = false) throws -> ShellResult {
+        if cancellable { try Task.checkCancellation() }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: tool)
         p.arguments = args
@@ -111,8 +112,12 @@ public enum Shell {
         err.fileHandleForReading.readabilityHandler = { collector.append(err: $0.availableData) }
         try p.run()
         let deadline = Date().addingTimeInterval(timeout)
+        var cancelled = false
+        var stoppingAt: Date?
         while p.isRunning {
-            if Date() > deadline { p.terminate(); break }
+            if cancellable && Task.isCancelled { cancelled = true }
+            if stoppingAt == nil && (cancelled || Date() > deadline) { p.terminate(); stoppingAt = Date() }
+            if let stoppingAt, Date().timeIntervalSince(stoppingAt) > 2 { kill(p.processIdentifier, SIGKILL) }
             Thread.sleep(forTimeInterval: 0.05)
         }
         p.waitUntilExit()
@@ -120,6 +125,7 @@ public enum Shell {
         err.fileHandleForReading.readabilityHandler = nil
         collector.append(out: out.fileHandleForReading.readDataToEndOfFile())
         collector.append(err: err.fileHandleForReading.readDataToEndOfFile())
+        if cancelled { throw CancellationError() }
         return ShellResult(status: p.terminationStatus, stdout: collector.stdout, stderr: collector.stderr)
     }
 

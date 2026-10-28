@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// Disc images for games that came on discs — one or several. Every disc is kept inside the game's app;
 /// drive D: holds one at a time and can be swapped while the game or its installer runs, like a real CD
@@ -26,7 +27,7 @@ public enum Discs {
     public struct Imported: Equatable { public var imageName: String; public var label: String; public var note: String? }
 
     /// Copies (or converts) a disc image into `support` as .iso/.cdr and reads its volume label.
-    public static func importImage(_ src: URL, into support: URL, log: (String) -> Void = { _ in }) throws -> Imported {
+    public static func importImage(_ src: URL, into support: URL, log: (String) -> Void = { _ in }, progress: (String, Double?) -> Void = { _, _ in }) throws -> Imported {
         let fm = FileManager.default
         var url = src
         var note: String?
@@ -44,13 +45,13 @@ public enum Discs {
         var dest: URL
         if ["iso", "cdr"].contains(url.pathExtension.lowercased()) {
             dest = support.appendingPathComponent(base + "." + url.pathExtension.lowercased())
-            if !fm.fileExists(atPath: dest.path) { log("Keeping a copy of \(src.lastPathComponent) inside the app…"); try fm.cloneItem(at: url, to: dest) }
+            if !fm.fileExists(atPath: dest.path) { log("Keeping a copy of \(src.lastPathComponent) inside the app…"); try copyImage(url, to: dest) { progress("Copying disc image", $0) } }
         } else {
             var track = url, layout: Layout?
             if url.pathExtension.lowercased() == "cue" {
                 let (file, mode, audio) = try parseCue(url)
                 track = file; layout = mode
-                if audio { note = "This disc's CD-audio music tracks can't be used under Wine; the game's data is all there." }
+                if audio { note = "This disc includes separate CD music tracks. The ISO import keeps the game files but omits those tracks; LAV codecs cannot restore them. Keep the original CUE/BIN files." }
             }
             guard let l = try layout ?? detectLayout(track) else {
                 throw NokError("\(src.lastPathComponent) isn't a disc image format Nokcandu can read (audio-only or unusual layout).")
@@ -58,9 +59,11 @@ public enum Discs {
             dest = support.appendingPathComponent(base + ".iso")
             if !fm.fileExists(atPath: dest.path) {
                 log("Converting \(src.lastPathComponent) to a standard disc image…")
-                try convert(track, layout: l, to: dest)
+                try convert(track, layout: l, to: dest) { progress("Converting disc image", $0) }
             }
         }
+        try Task.checkCancellation()
+        progress("Opening disc image", nil)
         return Imported(imageName: dest.lastPathComponent, label: try volumeLabel(dest), note: note)
     }
 
@@ -109,30 +112,79 @@ public enum Discs {
         return size > 0 && size % 2048 == 0 ? Layout(sectorSize: 2048, dataOffset: 0) : nil
     }
 
-    static func convert(_ src: URL, layout l: Layout, to dest: URL) throws {
+    static func copyImage(_ src: URL, to dest: URL, progress: (Double) -> Void) throws {
+        try Task.checkCancellation()
+        try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+        progress(0)
+        try Task.checkCancellation()
+        if clonefile(src.path, dest.path, 0) == 0 { progress(1); return }
+        try convert(src, layout: Layout(sectorSize: 2048, dataOffset: 0), to: dest, progress: progress)
+    }
+
+    static func convert(_ src: URL, layout l: Layout, to dest: URL, progress: (Double) -> Void = { _ in }) throws {
         let fm = FileManager.default
         let tmp = dest.appendingPathExtension("part")
         try? fm.removeItem(at: tmp)
-        if l.sectorSize == 2048 { try fm.copyItem(at: src, to: tmp) }
-        else {
-            fm.createFile(atPath: tmp.path, contents: nil)
-            let input = try FileHandle(forReadingFrom: src), output = try FileHandle(forWritingTo: tmp)
-            defer { try? input.close(); try? output.close() }
-            let per = 512
-            while true {
-                let chunk = input.readData(ofLength: l.sectorSize * per)
-                if chunk.isEmpty { break }
-                var out = Data(capacity: 2048 * per)
-                var o = 0
-                while o + l.dataOffset + 2048 <= chunk.count {
-                    out.append(chunk.subdata(in: (o + l.dataOffset)..<(o + l.dataOffset + 2048)))
-                    o += l.sectorSize
+        defer { try? fm.removeItem(at: tmp) }
+        try Task.checkCancellation()
+        let total = ((try fm.attributesOfItem(atPath: src.path)[.size]) as? NSNumber)?.int64Value ?? 0
+        guard total > 0 else { throw NokError("The disc image is empty.") }
+        fm.createFile(atPath: tmp.path, contents: nil)
+        let input = try FileHandle(forReadingFrom: src), output = try FileHandle(forWritingTo: tmp)
+        defer { try? input.close(); try? output.close() }
+        let per = 512
+        var processed: Int64 = 0, lastPercent = -1
+        progress(0)
+        while true {
+            try Task.checkCancellation()
+            let chunk = try input.read(upToCount: l.sectorSize * per) ?? Data()
+            if chunk.isEmpty { break }
+            if l.sectorSize == 2048 { try output.write(contentsOf: chunk) }
+            else {
+                var out = Data(capacity: 2048 * per), offset = 0
+                while offset + l.dataOffset + 2048 <= chunk.count {
+                    out.append(chunk.subdata(in: (offset + l.dataOffset)..<(offset + l.dataOffset + 2048)))
+                    offset += l.sectorSize
                 }
-                output.write(out)
+                try output.write(contentsOf: out)
             }
+            processed += Int64(chunk.count)
+            let fraction = min(1, Double(processed) / Double(total)), percent = Int(fraction * 100)
+            if percent != lastPercent { progress(fraction); lastPercent = percent }
         }
+        try output.close()
+        try Task.checkCancellation()
         try fm.moveItem(at: tmp, to: dest)
+        progress(1)
     }
+
+    /// macOS 27 replaces the legacy attach frontend. Keep the old command for supported older Macs.
+    static func attachCommand(image: URL, mount: URL, majorVersion: Int = ProcessInfo.processInfo.operatingSystemVersion.majorVersion) -> (tool: String, arguments: [String]) {
+        if majorVersion >= 27 {
+            return ("/usr/sbin/diskutil", ["image", "attach", "--readOnly", "--mountOptions", "nobrowse", "--mountPoint", mount.path, image.path])
+        }
+        return ("/usr/bin/hdiutil", ["attach", "-readonly", "-nobrowse", "-mountpoint", mount.path, image.path])
+    }
+    static func attach(_ image: URL, at mount: URL) throws -> ShellResult {
+        try Task.checkCancellation()
+        let command = attachCommand(image: image, mount: mount)
+        let result = try Shell.run(command.tool, command.arguments, timeout: 120, cancellable: true)
+        try Task.checkCancellation()
+        return result
+    }
+    static func canRetryMount(_ result: ShellResult) -> Bool {
+        guard !result.ok else { return false }
+        let why = result.combined.lowercased()
+        return ["permission denied", "resource busy", "device busy", "temporarily unavailable"].contains { why.contains($0) }
+    }
+    /// Generated launchers choose at run time, so moved/shared apps also work on older macOS.
+    static let launcherAttach = #"""
+    if [ "$(/usr/bin/sw_vers -productVersion | /usr/bin/cut -d. -f1)" -ge 27 ]; then
+     /usr/sbin/diskutil image attach --readOnly --mountOptions nobrowse --mountPoint "$MOUNT_DIR" "$DISC_IMAGE" >/dev/null
+    else
+     /usr/bin/hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT_DIR" "$DISC_IMAGE" >/dev/null
+    fi
+    """#
 
     /// Disc images macOS has open now: image path → mount points.
     static func attached() -> [String: [String]] {
@@ -167,7 +219,7 @@ public enum Discs {
         let probe = fm.temporaryDirectory.appendingPathComponent("nokcandu-disc-\(UUID().uuidString.prefix(6))")
         try fm.createDirectory(at: probe, withIntermediateDirectories: true)
         defer { _ = try? Shell.run("/usr/bin/hdiutil", ["detach", probe.path, "-quiet"]); try? fm.removeItem(at: probe) }
-        let r = try Shell.run("/usr/bin/hdiutil", ["attach", "-readonly", "-nobrowse", "-mountpoint", probe.path, image.path], timeout: 120)
+        let r = try attach(image, at: probe)
         guard r.ok else { throw NokError("macOS couldn't open \(image.lastPathComponent): \(r.combined)") }
         let plist = (try? Shell.run("/usr/sbin/diskutil", ["info", "-plist", probe.path]))?.stdout ?? ""
         return ((try? PropertyListSerialization.propertyList(from: Data(plist.utf8), format: nil)) as? [String: Any])?["VolumeName"] as? String ?? ""
@@ -198,11 +250,12 @@ public enum Discs {
             for m in open[image] ?? [] { _ = try? Shell.run("/usr/bin/hdiutil", ["detach", m, "-force"], timeout: 60) }
             try fm.createDirectory(at: mount, withIntermediateDirectories: true)
             // Right after a detach macOS can still be releasing the image ("Permission denied"/"busy"): retry briefly.
-            var r = try Shell.run("/usr/bin/hdiutil", ["attach", "-readonly", "-nobrowse", "-mountpoint", mount.path, image], timeout: 120)
-            for _ in 0..<6 where !r.ok {
+            var r = try attach(URL(fileURLWithPath: image), at: mount)
+            for _ in 0..<3 where canRetryMount(r) {
+                try Task.checkCancellation()
                 Thread.sleep(forTimeInterval: 0.5)
                 try fm.createDirectory(at: mount, withIntermediateDirectories: true)
-                r = try Shell.run("/usr/bin/hdiutil", ["attach", "-readonly", "-nobrowse", "-mountpoint", mount.path, image], timeout: 120)
+                r = try attach(URL(fileURLWithPath: image), at: mount)
             }
             guard r.ok else {
                 let why = r.combined.components(separatedBy: "\n").filter { !$0.contains("deprecated") && !$0.isEmpty }.joined(separator: " ")
