@@ -107,6 +107,7 @@ public struct GameProfile: Codable, Hashable {
             if !BF1942DisplayFix.resolutions.contains(d.resolution) { p.append("unsupported BF1942 game resolution") }
             if match.exeName?.lowercased() != "bf1942.exe" { p.append("BF1942 display settings require the BF1942.exe game match") }
         }
+        if fixes?.contains("openua-display") == true, match.exeName?.lowercased() != "ua_source.exe" { p.append("OpenUA display settings require the UA_source.exe game match") }
         if !Self.sources.contains(source) { p.append("source must be one of \(Self.sources.joined(separator: ", "))") }
         if match.steamAppID == nil && match.battleNetUID == nil && (match.exeName ?? "").isEmpty { p.append("match needs steamAppID, battleNetUID or exeName") }
         if let e = match.exeName, e.range(of: #"^[^/\\:*?"<>|]{1,80}\.exe$"#, options: [.regularExpression, .caseInsensitive]) == nil { p.append("exeName must be a plain .exe file name") }
@@ -349,6 +350,7 @@ public enum Profiles {
                             tested: GameProfile.Tested(mac: macModel, macOS: ProcessInfo.processInfo.operatingSystemVersionString,
                                                        engine: host.wineVersion ?? g.wineVersion, nokcandu: AppUpdate.currentVersion),
                             notes: notes)
+        if OpenUASettings.isConfigured(g), p.fixes?.contains("openua-display") != true { p.fixes = (p.fixes ?? []) + ["openua-display"] }
         if !g.usesSharedSteam, g.battleNet == nil, let exe = c?.exe { p.program = exe }
         if g.battleNet != nil, let a = hc?.arguments, !a.isEmpty { p.hostArguments = a }
         if !drives.isEmpty { p.drives = drives.sorted() }

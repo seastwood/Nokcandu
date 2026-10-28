@@ -37,7 +37,7 @@ final class CompatibilityFixTests: XCTestCase {
 
     func testProfilesReferenceOnlyBuiltInComponents() throws {
         var p = GameProfile(title: "T", match: .init(exeName: "T.exe"), source: "folder", rating: .playable)
-        p.fixes = CompatibilityFix.allCases.map(\.id)
+        p.fixes = CompatibilityFix.allCases.filter { $0 != .openUA }.map(\.id)
         XCTAssertEqual(p.problems, [])
         XCTAssertEqual(try GameProfile.parse("```json\n" + p.json() + "\n```"), p)
         p.fixes = ["https://example.com/arbitrary.dll"]

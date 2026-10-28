@@ -4,10 +4,11 @@ import Foundation
 /// downloads or patch bytes. DLLs are private to the selected executable's folder; Wine's system DLLs
 /// and registry are untouched. File undo uses the same conflict-aware journal as other Nokcandu edits.
 public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable {
-    case directx9Extras = "directx9-extras", d3d8to9, borderless, cursorVisibility = "cursor-visibility"
+    case directx9Extras = "directx9-extras", d3d8to9, borderless, cursorVisibility = "cursor-visibility", openUA = "openua-display"
     public var id: String { rawValue }
     public var title: String {
         switch self {
+        case .openUA: "OpenUA recommended display settings"
         case .directx9Extras: "DirectX 9 extras"
         case .d3d8to9: "DirectX 8 compatibility"
         case .borderless: "Fullscreen (Borderless)"
@@ -16,6 +17,7 @@ public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable {
     }
     public var detail: String {
         switch self {
+        case .openUA: "Fixes the invisible game window and tiny menu text. Uses OpenUA’s older OpenGL path and adds the original menu resolution. Only for OpenUA; restart the game afterward. Saved and shared profiles include this fix."
         case .directx9Extras: "Downloads Microsoft's shader libraries (d3dx9_43 and d3dcompiler_43) for missing effects or crashes while loading a match."
         case .d3d8to9: "Downloads d3d8to9 1.16.0 and uses the bundled DXVK 2.3 renderer. Try this when Older 3D games has visual glitches. For 32-bit DirectX 8 games."
         case .borderless: "Makes the game's window fill its screen without changing the Mac's display mode. Select Windowed inside the game first."
@@ -59,15 +61,27 @@ public enum CompatibilityFixes {
     static func program(_ g: InstalledGame) -> URL? {
         g.custom.flatMap { BattleNet.unixPath($0.exe, prefix: g.prefix) }
     }
+    /// A linked game folder is still C: to Windows. Resolve both the selected program and
+    /// the managed game-folder link, rejecting further links that escape either allowed root.
+    static func managedProgram(_ g: InstalledGame) -> URL? {
+        guard let windows = g.custom?.exe, CustomGames.driveCRelative(windowsPath: windows) != nil,
+              let exe = program(g) else { return nil }
+        let resolved = exe.resolvingSymlinksInPath().path
+        let root = g.prefix.appendingPathComponent("drive_c").resolvingSymlinksInPath().path
+        if resolved.hasPrefix(root + "/") { return exe }
+        if let external = GameMover.externalFiles(g)?.resolvingSymlinksInPath().path,
+           resolved.hasPrefix(external + "/") { return exe }
+        return nil
+    }
     /// Restrict changes to standalone managed apps: shared launcher environments need per-program
     /// routing before these can safely be offered there.
     public static func unavailable(_ fix: CompatibilityFix, for g: InstalledGame) -> String? {
         guard g.custom != nil, !g.usesSharedSteam, g.battleNet == nil, g.hosted == nil,
               g.native == nil else { return "Available for games with their own Nokcandu Windows environment." }
-        guard let exe = program(g), PEFile.inspect(exe) != nil,
-              exe.resolvingSymlinksInPath().path.hasPrefix(g.prefix.appendingPathComponent("drive_c").resolvingSymlinksInPath().path + "/") else {
-            return "Choose the game's program inside its own C: drive first."
+        guard let exe = managedProgram(g), PEFile.inspect(exe) != nil else {
+            return "The selected program is missing or outside this game's C: folders. Choose it under Settings → Program."
         }
+        if fix == .openUA, !OpenUASettings.supports(g) { return "Only available for OpenUA (UA_source.exe) with its game data and NUCLEUS.INI." }
         if fix == .cursorVisibility, BF1942DisplayFix.supports(g) {
             return "Temporarily unavailable for BF1942 because it can flicker. Leave it off; Fullscreen (Borderless) handles the mouse movement area separately."
         }
@@ -163,6 +177,8 @@ public enum CompatibilityFixes {
         try NokPaths.ensure(work); defer { try? FileManager.default.removeItem(at: work) }
         var files: [URL: Data] = [:], applied: [String: String] = [:]
         switch fix {
+        case .openUA:
+            files = try OpenUASettings.plannedFiles(for: g)
         case .directx9Extras:
             for (name, data) in try await extras(for: g, work: work, log: log) { files[exe.deletingLastPathComponent().appendingPathComponent(name)] = data }
             applied = ["d3dx9_43": "n,b", "d3dcompiler_43": "n,b"]

@@ -370,7 +370,13 @@ struct GameResolutionSection: View {
                     Text("Choose Windowed inside the game before using Fullscreen (Borderless). This uses the same optional borderless fix as the Fixes panel and leaves the Mac's display mode alone.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                if BF1942DisplayFix.supports(game) {
+                if OpenUASettings.supports(game) {
+                    Divider()
+                    Text("OpenUA display").font(.body.bold())
+                    Text("Fixes the invisible window and tiny menu text using the settings confirmed on this Mac. The original menu fills the screen; mission resolution stays under the game’s control. These settings are included when you save or share a profile.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button(CompatibilityFixes.isInstalled(.openUA, for: game) ? "Undo OpenUA Display Settings" : "Apply Recommended OpenUA Display Settings") { openUASettings() }
+                } else if BF1942DisplayFix.supports(game) {
                     Divider()
                     HStack {
                         Text("Game resolution")
@@ -425,6 +431,17 @@ struct GameResolutionSection: View {
         Task {
             do { try await GameWindowStyle.apply(borderless: borderless, to: game, log: logger); model.refresh() }
             catch { model.fail(error) }
+            working = false
+        }
+    }
+    func openUASettings() {
+        working = true; status = ""
+        Task {
+            do {
+                if CompatibilityFixes.isInstalled(.openUA, for: game) { try CompatibilityFixes.undo(.openUA, for: game, log: logger) }
+                else { try await CompatibilityFixes.install(.openUA, for: game, log: logger) }
+                model.refresh()
+            } catch { model.fail(error) }
             working = false
         }
     }

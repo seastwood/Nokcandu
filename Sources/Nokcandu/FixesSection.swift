@@ -127,7 +127,7 @@ private struct ComponentFixesView: View {
     @State private var status = ""
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ForEach(CompatibilityFix.allCases) { fix in
+            ForEach(CompatibilityFix.allCases.filter { $0 != .openUA || OpenUASettings.supports(game) || CompatibilityFixes.isInstalled(.openUA, for: game) }) { fix in
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(fix.title).font(.body.bold())
@@ -139,7 +139,7 @@ private struct ComponentFixesView: View {
                     Spacer()
                     if working == fix { ProgressView().controlSize(.small) }
                     else {
-                        Button(installed.contains(fix.id) ? "Undo" : "Install Fix") { run(fix) }
+                        Button(installed.contains(fix.id) ? "Undo" : (fix == .openUA ? "Apply Recommended Settings" : "Install Fix")) { run(fix) }
                             .disabled(working != nil || (!installed.contains(fix.id) && CompatibilityFixes.unavailable(fix, for: game) != nil))
                     }
                 }
