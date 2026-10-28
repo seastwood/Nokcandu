@@ -4,8 +4,10 @@ import Foundation
 /// The original EXE is read-only. Only two independently observed full-file fingerprints are accepted.
 public enum BF1942DisplayFix {
     public static let copyName = "BF1942-Nokcandu.exe"
+    static let restartCopyName = "BF194N.exe"
+    static let previousCorrectedSHA = "3b8033a58197ee844f4c4238b0bb873d1fcc6ba0a0f918b4fb247c9ac1ee01f2"
     static let originalSHA = "3a3eab9af4ad711f9faf6a17d8e31a3bacbbace99fe8356a700e1071c143cd7f"
-    static let correctedSHA = "3b8033a58197ee844f4c4238b0bb873d1fcc6ba0a0f918b4fb247c9ac1ee01f2"
+    static let correctedSHA = "e3b58cc22cd5d638b3d915cf3527b2af700f98dc97e2d6b6373601f4c3204801"
     public static let resolutions = [[800, 600], [1024, 768], [1280, 800], [1280, 960], [1440, 900], [1600, 900], [1920, 1080], [1920, 1200]]
     struct State: Codable {
         var width: Int
@@ -48,7 +50,7 @@ public enum BF1942DisplayFix {
     public static func menuUnavailable(for g: InstalledGame) -> String? {
         guard let root = folder(g) else { return "Choose a standalone BF1942 installation first." }
         let sha = try? Hashing.sha256(file: root.appendingPathComponent("BF1942.exe"))
-        guard sha == originalSHA || sha == correctedSHA else {
+        guard sha == originalSHA || sha == previousCorrectedSHA || sha == correctedSHA else {
             return "This BF1942 executable isn't a verified version. Game resolution can still be changed; the menu correction is unavailable."
         }
         return nil
@@ -56,11 +58,48 @@ public enum BF1942DisplayFix {
     static func checkedMenuCopy(_ data: Data) throws -> Data {
         let sha = Hashing.sha256(data: data)
         if sha == correctedSHA { return data }
-        guard sha == originalSHA else { throw NokError("This BF1942 executable doesn't match a verified version. It was left untouched.") }
-        let result = try replacingMenuDimensions(data)
+        guard sha == originalSHA || sha == previousCorrectedSHA else { throw NokError("This BF1942 executable doesn't match a verified version. It was left untouched.") }
+        let menu = sha == previousCorrectedSHA ? data : try replacingMenuDimensions(data)
+        let result = try replacingRestartName(menu)
         guard Hashing.sha256(data: result) == correctedSHA else { throw NokError("The menu correction didn't match the expected result.") }
         return result
     }
+    // BF1942 hard-codes its original filename for mod activation. Keep its working directory,
+    // restart arguments and original EXE, but route that restart to the verified display copy.
+    // The replacement is exactly the same byte length; no sections or other strings are changed.
+    static func replacingRestartName(_ input: Data) throws -> Data {
+        let offset = 0x4d369c, name = Data("BF1942.exe\0".utf8)
+        guard input.count == 5_648_384, input.subdata(in: offset..<(offset + name.count)) == name else {
+            throw NokError("The expected BF1942 restart name wasn't found. Its executable was left untouched.")
+        }
+        var result = input
+        result.replaceSubrange(offset..<(offset + name.count), with: Data((restartCopyName + "\0").utf8))
+        return result
+    }
+
+    /// Upgrade only the owned display copies, leaving the user's chosen resolution and settings alone.
+    static func refreshMenuCopies(_ g: InstalledGame) throws {
+        guard g.custom?.bf1942MenuCopy == true, state(g)?.recommended == true, let root = folder(g) else { return }
+        let target = try checkedURL(root.appendingPathComponent(copyName), root: root)
+        let alias = try checkedURL(root.appendingPathComponent(restartCopyName), root: root)
+        let current = try Hashing.sha256(file: target)
+        if current == correctedSHA, (try? Hashing.sha256(file: alias)) == correctedSHA { return }
+        try CompatibilityFixes.begin(g); defer { CompatibilityFixes.end(g) }
+        try CompatibilityFixes.requireClosed(g)
+        try validateJournal(g)
+        let ledger = journal(g)
+        guard ledger.entries.contains(where: { $0.path == target.path }),
+              current == previousCorrectedSHA || current == correctedSHA else {
+            throw NokError("BF1942's menu copy changed. It was left untouched.")
+        }
+        if FileManager.default.fileExists(atPath: alias.path), (try? Hashing.sha256(file: alias)) != correctedSHA {
+            throw NokError("BF194N.exe is already in use. It was left untouched.")
+        }
+        let data = try checkedMenuCopy(Data(contentsOf: root.appendingPathComponent("BF1942.exe")))
+        try ledger.write(data, to: alias, reason: "BF1942 mod restart display copy")
+        if current != correctedSHA { try ledger.write(data, to: target, reason: "BF1942 mod restart display copy") }
+    }
+
     /// Separate, testable byte transformation after full-file verification above.
     static func replacingMenuDimensions(_ input: Data) throws -> Data {
         let width = 0x631ef, height = 0x631f7
@@ -184,8 +223,13 @@ public enum BF1942DisplayFix {
             let copy = try checkedMenuCopy(Data(contentsOf: original))
             let target = try checkedURL(root.appendingPathComponent(copyName), root: root)
             if FileManager.default.fileExists(atPath: target.path),
-               (try? Hashing.sha256(file: target)) != correctedSHA { throw NokError("The display-copy filename is already in use. That file was left untouched.") }
+               ![correctedSHA, previousCorrectedSHA].contains((try? Hashing.sha256(file: target)) ?? "") { throw NokError("The display-copy filename is already in use. That file was left untouched.") }
+            let alias = try checkedURL(root.appendingPathComponent(restartCopyName), root: root)
+            if FileManager.default.fileExists(atPath: alias.path), (try? Hashing.sha256(file: alias)) != correctedSHA {
+                throw NokError("BF194N.exe is already in use. That file was left untouched.")
+            }
             files[target] = copy
+            files[alias] = copy
             // Normalize older manually created wrappers, while retaining the original program for Undo.
             guard let canonical = CustomGames.windowsPath(forUnix: original, prefix: g.prefix) else { throw NokError("Couldn't locate BF1942 on C:.") }
             if c.exe != canonical, !CompatibilityFixes.installedIDs(for: g).isEmpty {
@@ -272,7 +316,10 @@ public enum BF1942DisplayFix {
         try validateJournal(g)
         let recommended = menuCorrection || isRecommended(for: g)
         var urls = Array(try plannedFiles(root: root, size: size, recommended: recommended).keys)
-        if recommended { urls.append(try checkedURL(root.appendingPathComponent(copyName), root: root)) }
+        if recommended {
+            urls.append(try checkedURL(root.appendingPathComponent(copyName), root: root))
+            urls.append(try checkedURL(root.appendingPathComponent(restartCopyName), root: root))
+        }
         urls += [record(g), g.nokcanduState.appendingPathComponent("Journals/bf1942-display.json"), g.nokcanduState.appendingPathComponent("Journals/bf1942-display.json.root")]
         return try Checkpoint(game: g, urls: urls)
     }

@@ -75,6 +75,7 @@ public enum HelperPatch {
         for g in games {
             guard let url = g.launcherURL, let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
             if case .launcherRunning = GameLauncher.runState(of: g) { continue }
+            do { try BF1942DisplayFix.refreshMenuCopies(g) } catch { continue }
             CompatibilityFixes.refreshBundledHelpers(g)
             if let config = g.custom {
                 guard config.launcherSHA == Hashing.sha256(data: Data(text.utf8)), CustomGames.launcherScript(for: config) != text else { continue }

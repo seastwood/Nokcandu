@@ -482,12 +482,15 @@ public enum CustomGames {
         if c.bf1942MenuCopy == true {
             let target = c.exe.split(separator: "\\").dropLast().joined(separator: "\\") + "\\" + BF1942DisplayFix.copyName
             s += "GAME_EXE=\(shellQuote(target))\n"
-            s += "export NOKCANDU_BORDERLESS_RESTART_TARGET=\(shellQuote(c.exe))\n"
+            let restart = c.exe.split(separator: "\\").dropLast().joined(separator: "\\") + "\\" + BF1942DisplayFix.restartCopyName
+            s += "export NOKCANDU_BORDERLESS_RESTART_TARGET=\(shellQuote(restart))\n"
             s += #"[ -f "$GAME_DIR/BF1942-Nokcandu.exe" ] || { echo 'Nokcandu: BF1942 display copy is missing. Undo or reapply its display fix.'; exit 1; }"# + "\n"
             s += #"BF_SOURCE_SHA=$(/usr/bin/shasum -a 256 "$GAME_DIR/BF1942.exe" | /usr/bin/awk '{print $1}')"# + "\n"
-            s += #"case "$BF_SOURCE_SHA" in \#(BF1942DisplayFix.originalSHA)|\#(BF1942DisplayFix.correctedSHA)) ;; *) echo 'Nokcandu: BF1942 changed since the menu fix. Undo its display settings before using this version.'; exit 1 ;; esac"# + "\n"
+            s += #"case "$BF_SOURCE_SHA" in \#(BF1942DisplayFix.originalSHA)|\#(BF1942DisplayFix.previousCorrectedSHA)|\#(BF1942DisplayFix.correctedSHA)) ;; *) echo 'Nokcandu: BF1942 changed since the menu fix. Undo its display settings before using this version.'; exit 1 ;; esac"# + "\n"
             s += #"BF_COPY_SHA=$(/usr/bin/shasum -a 256 "$GAME_DIR/BF1942-Nokcandu.exe" | /usr/bin/awk '{print $1}')"# + "\n"
             s += #"[ "$BF_COPY_SHA" = \#(shellQuote(BF1942DisplayFix.correctedSHA)) ] || { echo 'Nokcandu: BF1942 display copy changed. Restore it before launching.'; exit 1; }"# + "\n"
+            s += #"BF_RESTART_SHA=$(/usr/bin/shasum -a 256 "$GAME_DIR/BF194N.exe" | /usr/bin/awk '{print $1}')"# + "\n"
+            s += #"[ "$BF_RESTART_SHA" = \#(shellQuote(BF1942DisplayFix.correctedSHA)) ] || { echo 'Nokcandu: BF1942 mod restart copy changed. Reapply its display fix.'; exit 1; }"# + "\n"
         }
         let args = splitArguments(c.arguments).map(shellQuote).joined(separator: " ")
         if let link = c.store { s += StoreAccounts.launcherLines(link) }
