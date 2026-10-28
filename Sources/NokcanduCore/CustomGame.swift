@@ -482,6 +482,7 @@ public enum CustomGames {
         if c.bf1942MenuCopy == true {
             let target = c.exe.split(separator: "\\").dropLast().joined(separator: "\\") + "\\" + BF1942DisplayFix.copyName
             s += "GAME_EXE=\(shellQuote(target))\n"
+            s += "export NOKCANDU_BORDERLESS_RESTART_TARGET=\(shellQuote(c.exe))\n"
             s += #"[ -f "$GAME_DIR/BF1942-Nokcandu.exe" ] || { echo 'Nokcandu: BF1942 display copy is missing. Undo or reapply its display fix.'; exit 1; }"# + "\n"
             s += #"BF_SOURCE_SHA=$(/usr/bin/shasum -a 256 "$GAME_DIR/BF1942.exe" | /usr/bin/awk '{print $1}')"# + "\n"
             s += #"case "$BF_SOURCE_SHA" in \#(BF1942DisplayFix.originalSHA)|\#(BF1942DisplayFix.correctedSHA)) ;; *) echo 'Nokcandu: BF1942 changed since the menu fix. Undo its display settings before using this version.'; exit 1 ;; esac"# + "\n"

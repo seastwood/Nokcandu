@@ -12,6 +12,8 @@ public struct JournalEntry: Codable, Identifiable, Hashable {
     public var shaBefore: String?
     public var shaAfter: String?
     public var reason: String
+    /// Nil = whole-file ownership; otherwise Undo restores only these setting commands.
+    public var settingsKeys: [String]? = nil
 }
 
 public final class ChangeJournal {
@@ -73,6 +75,33 @@ public final class ChangeJournal {
         try append(JournalEntry(path: url.path, backupPath: backup, shaBefore: before, shaAfter: after, reason: reason))
     }
 
+    /// Adopt an older settings ledger without changing the file. Empty keys preserve routing
+    /// files managed by the game. Executables and DLLs never use settings ownership.
+    func manageSettings(_ url: URL, keys: [String]) throws {
+        for i in entries.indices where entries[i].path == url.path { entries[i].settingsKeys = keys }
+        try save()
+    }
+    func writeSettings(_ data: Data, to url: URL, keys: [String], reason: String) throws {
+        try write(data, to: url, reason: reason)
+        try manageSettings(url, keys: keys)
+    }
+    /// Verify before changing app settings. Text settings can evolve normally inside the game.
+    func validateForUndo() throws {
+        for path in touchedPaths {
+            guard let last = entries.last(where: { $0.path == path }) else { continue }
+            if let keys = last.settingsKeys {
+                if keys.isEmpty { continue }
+                let url = URL(fileURLWithPath: path)
+                guard let text = try? TextSettings.read(url),
+                      TextSettings.lines(text).contains(where: { keys.contains(TextSettings.key($0) ?? "") }) else {
+                    throw NokError("\(url.lastPathComponent) no longer contains the expected settings. Open Settings Backups to restore a saved version.")
+                }
+            } else if let sha = last.shaAfter, (try? Hashing.sha256(file: URL(fileURLWithPath: path))) != sha {
+                throw NokError("\((path as NSString).lastPathComponent) changed after installation. Its files were kept.")
+            }
+        }
+    }
+
     /// Record something Nokcandu created that is not a single file write (a symlink, a folder, an app bundle).
     public func recordCreated(_ url: URL, reason: String) throws {
         try append(JournalEntry(path: url.path, backupPath: nil, shaBefore: nil, shaAfter: nil, reason: reason))
@@ -112,7 +141,7 @@ public final class ChangeJournal {
             guard let first = forPath.first, let last = forPath.last else { continue }
             let url = URL(fileURLWithPath: path)
             // Plain file writes are verified against the last hash Nokcandu wrote.
-            if let expected = last.shaAfter {
+            if last.settingsKeys == nil, let expected = last.shaAfter {
                 let current = fm.fileExists(atPath: path) ? (try? Hashing.sha256(file: url)) : nil
                 if current != expected {
                     report.skipped.append((path, "it changed after Nokcandu edited it."))
@@ -121,7 +150,20 @@ public final class ChangeJournal {
                 }
             }
             do {
-                if let backup = first.backupPath {
+                if let keys = last.settingsKeys {
+                    if keys.isEmpty { continue } // Keep the game's current profile routing.
+                    let bytes = try Data(contentsOf: url)
+                    let current = try TextSettings.decode(bytes)
+                    guard TextSettings.lines(current).contains(where: { keys.contains(TextSettings.key($0) ?? "") }) else {
+                        throw NokError("The expected settings are missing. Restore a saved version with Settings Backups.")
+                    }
+                    let before = try first.backupPath.map { try TextSettings.read(URL(fileURLWithPath: $0)) } ?? ""
+                    let merged = TextSettings.merge(current: current, valuesFrom: before, keys: keys)
+                    // Preserve the complete current file as an accessible recovery version too.
+                    let recovery = ChangeJournal(scope: "settings-recovery", root: backupDir.deletingLastPathComponent().deletingLastPathComponent(), portableRoot: portableRoot)
+                    try recovery.write(try TextSettings.encode(merged, like: bytes), to: url, reason: "Before undoing settings")
+                    report.restored.append(path)
+                } else if let backup = first.backupPath {
                     let tmp = url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).nokcandu-restore")
                     try? fm.removeItem(at: tmp)
                     try fm.copyItem(at: URL(fileURLWithPath: backup), to: tmp)

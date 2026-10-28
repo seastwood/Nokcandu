@@ -4,11 +4,11 @@
 #include <tlhelp32.h>
 #include <stdio.h>
 #include <string.h>
-static WCHAR target_name[MAX_PATH];
+static WCHAR target_name[MAX_PATH], restart_name[MAX_PATH];
 static DWORD game_pid(void) {
  HANDLE s=CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0);if(s==INVALID_HANDLE_VALUE)return 0;
  PROCESSENTRY32W e={0};e.dwSize=sizeof e;DWORD p=0;
- if(Process32FirstW(s,&e))do{if(!_wcsicmp(e.szExeFile,target_name)){p=e.th32ProcessID;break;}}while(Process32NextW(s,&e));
+ if(Process32FirstW(s,&e))do{if(!_wcsicmp(e.szExeFile,target_name)||(restart_name[0]&&!_wcsicmp(e.szExeFile,restart_name))){p=e.th32ProcessID;break;}}while(Process32NextW(s,&e));
  CloseHandle(s);return p;
 }
 static BOOL load_helper(HANDLE process,DWORD pid,const char *dll) {
@@ -40,6 +40,14 @@ int main(int argc,char **argv){
     !GetEnvironmentVariableA("NOKCANDU_BORDERLESS_DLL",dll,sizeof dll))return 2;
  const WCHAR *name=wcsrchr(target,L'\\');name=name?name+1:target;
  wcsncpy(target_name,name,MAX_PATH-1);
+ // A verified menu/display copy may restart the original program when changing mods.
+ // Follow that alternate process within this Wine environment and reapply the same window helper.
+ WCHAR restart[MAX_PATH];
+ if(GetEnvironmentVariableW(L"NOKCANDU_BORDERLESS_RESTART_TARGET",restart,MAX_PATH)){
+  const WCHAR *other=wcsrchr(restart,L'\\');other=other?other+1:restart;
+  wcsncpy(restart_name,other,MAX_PATH-1);
+ }
+
  // Forward the original Windows command line verbatim; reparsing argv loses quotes/backslashes.
  const WCHAR *args=GetCommandLineW();
  if(*args=='"'){args++;while(*args&&*args!='"')args++;if(*args)args++;}

@@ -145,14 +145,21 @@ public enum BF1942DisplayFix {
         }
         return files
     }
+    static func settingKeys(_ url: URL) -> [String]? {
+        if url.lastPathComponent.lowercased() == "videodefault.con" { return ["renderer.setfullscreen"] }
+        if url.lastPathComponent.lowercased() == "video.con" {
+            return url.path.contains("/Profiles/") ? ["game.setgamedisplaymode"] : []
+        }
+        return nil
+    }
     static func validateJournal(_ g: InstalledGame) throws {
         let j = journal(g)
         guard let root = folder(g) else { throw NokError("The BF1942 installation moved or its program changed. Its display files were left untouched.") }
         for path in j.touchedPaths {
-            _ = try checkedURL(URL(fileURLWithPath: path), root: root)
-            if let sha = j.entries.last(where: { $0.path == path })?.shaAfter,
-               (try? Hashing.sha256(file: URL(fileURLWithPath: path))) != sha {
-                throw NokError("\((path as NSString).lastPathComponent) changed after the display fix. Your changes were kept; restore that file before applying or undoing these settings.")
+            let url = try checkedURL(URL(fileURLWithPath: path), root: root)
+            if let keys = settingKeys(url) { try j.manageSettings(url, keys: keys) }
+            else if let sha = j.entries.last(where: { $0.path == path })?.shaAfter, (try? Hashing.sha256(file: url)) != sha {
+                throw NokError("\(url.lastPathComponent) changed. Its original was kept; use Settings Backups for configuration recovery.")
             }
         }
     }
@@ -192,7 +199,11 @@ public enum BF1942DisplayFix {
         let needsBorderless = recommended && includePresentation && !CompatibilityFixes.isInstalled(.borderless, for: g)
         if needsBorderless { st.ownsBorderless = true }
         try save(st, g)
-        for (url, data) in files { try journal(g).write(data, to: url, reason: "BF1942 display settings") }
+        let ledger = journal(g)
+        for (url, data) in files {
+            if let keys = settingKeys(url) { try ledger.writeSettings(data, to: url, keys: keys, reason: "BF1942 display settings") }
+            else { try ledger.write(data, to: url, reason: "BF1942 display settings") }
+        }
         try CustomGames.save(c, to: g, allowDisplayProgramChange: true)
         if needsBorderless { try await CompatibilityFixes.installReserved(.borderless, for: CompatibilityFixes.fresh(g), log: log) }
         log(wantsRecommended ? "Applied BF1942's recommended display settings. The original executable is unchanged." : "Saved BF1942's game resolution.")
@@ -226,13 +237,26 @@ public enum BF1942DisplayFix {
             guard sealed else { throw NokError("The display changes couldn't be verified for Undo. Use the game's Display controls to recover them.") }
             for file in files {
                 let current = try? Hashing.sha256(file: file.url)
+                if let keys = BF1942DisplayFix.settingKeys(file.url) {
+                    if keys.isEmpty { continue }
+                    guard let text = try? TextSettings.read(file.url), TextSettings.lines(text).contains(where: { keys.contains(TextSettings.key($0) ?? "") }) else {
+                        throw NokError("The expected display settings are missing. Open Settings Backups to restore a saved version.")
+                    }
+                    continue
+                }
                 guard current == file.after,
                       !FileManager.default.fileExists(atPath: file.url.path) || current != nil else {
                     throw NokError("\(file.url.lastPathComponent) changed after the profile. Undo kept your files and settings.")
                 }
             }
             for file in files {
-                if let before = file.before {
+                if let keys = BF1942DisplayFix.settingKeys(file.url) {
+                    if keys.isEmpty { continue }
+                    let bytes = try Data(contentsOf: file.url), current = try TextSettings.decode(bytes)
+                    let before = try file.before.map(TextSettings.decode) ?? ""
+                    let merged = TextSettings.merge(current: current, valuesFrom: before, keys: keys)
+                    try ChangeJournal(scope: "settings-recovery", root: game.nokcanduState, portableRoot: game.appURL).write(try TextSettings.encode(merged, like: bytes), to: file.url, reason: "Before undoing profile display settings")
+                } else if let before = file.before {
                     try NokPaths.ensure(file.url.deletingLastPathComponent())
                     try before.write(to: file.url, options: .atomic)
                 } else if FileManager.default.fileExists(atPath: file.url.path) {
@@ -259,6 +283,7 @@ public enum BF1942DisplayFix {
         try CompatibilityFixes.requireClosed(g)
         guard let st = state(g), var c = g.custom else { throw NokError("No BF1942 display changes to undo.") }
         try validateJournal(g)
+        try journal(g).validateForUndo()
         guard c.exe == st.appliedProgram || c.exe == st.previousProgram else {
             throw NokError("The selected BF1942 program changed. Restore it before undoing display settings.")
         }

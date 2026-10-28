@@ -9,6 +9,7 @@ struct GameDetailView: View {
     @State private var checking = false
     @State private var checkResult: ShellResult?
     @State private var showDiagnostics = false
+    @State private var showSettingsBackups = false
     @State private var confirmReset = false
     @State private var busy = false
     @State private var confirmRepair = false
@@ -114,6 +115,7 @@ struct GameDetailView: View {
         .onAppear { reloadDisplay(); cinematicDiagnosis = CinematicFix.diagnoseLastRun(game); graphicsHint = CrashHints.diagnose(game) }
         .onChange(of: running) { if !running { cinematicDiagnosis = CinematicFix.diagnoseLastRun(game); graphicsHint = CrashHints.diagnose(game) } }
         .sheet(isPresented: $showDiagnostics) { DiagnosticsView(game: game) }
+        .sheet(isPresented: $showSettingsBackups) { SettingsBackupsView(game: game).environmentObject(model) }
         .confirmationDialog("Repair \(game.name)?", isPresented: $confirmRepair) {
             Button("Repair") { runRepair() }
         } message: {
@@ -215,6 +217,7 @@ struct GameDetailView: View {
                         }
                     } label: { Label("Check Game", systemImage: "stethoscope") }
                     .disabled(checking || running)
+                    Button("Settings Backups…") { showSettingsBackups = true }
                     Button { showDiagnostics = true } label: { Label("Diagnostics…", systemImage: "list.bullet.clipboard") }
                     Button { confirmRepair = true } label: { Label("Repair…", systemImage: "wrench.and.screwdriver") }
                         .disabled(running || repairing || !game.isManaged)

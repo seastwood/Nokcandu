@@ -90,6 +90,7 @@ final class BF1942DisplayTests: XCTestCase {
         c.bf1942MenuCopy = true; c.borderless = true
         let script = CustomGames.launcherScript(for: c)
         XCTAssertTrue(script.contains(#"GAME_EXE='C:\Games\Battlefield 1942\BF1942-Nokcandu.exe'"#))
+        XCTAssertTrue(script.contains(#"export NOKCANDU_BORDERLESS_RESTART_TARGET='C:\Games\Battlefield 1942\BF1942.exe'"#))
         XCTAssertLessThan(try XCTUnwrap(script.range(of: BF1942DisplayFix.copyName)?.lowerBound), try XCTUnwrap(script.range(of: "export NOKCANDU_BORDERLESS_TARGET")?.lowerBound))
         let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".sh")
         defer { try? FileManager.default.removeItem(at: temp) }

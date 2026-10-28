@@ -207,7 +207,10 @@ public enum CompatibilityFixes {
         try JSONEncoder().encode(st).write(to: record, options: .atomic) // retain recovery if interrupted
         let j = journal(fix, g)
         do {
-            for (url, data) in files { try j.write(data, to: url, reason: fix.title) }
+            for (url, data) in files {
+                if fix == .openUA { try j.writeSettings(data, to: url, keys: ["gfx.vbo", "menu.windowed", "gfx.custommodes"], reason: fix.title) }
+                else { try j.write(data, to: url, reason: fix.title) }
+            }
             var rules = previous; for (dll, order) in applied { rules[dll] = order }
             if !applied.isEmpty { setOverrides(rules, in: &c) }
             if fix == .d3d8to9 { c.legacyD3D9 = true }
@@ -219,6 +222,21 @@ public enum CompatibilityFixes {
             throw error
         }
         log("Installed \(fix.title). Undo is available in Fixes.")
+    }
+    /// Refresh only app-owned bundled helper files, independently of game settings or downloads.
+    /// This keeps improvements to the shared window helper available to existing installations.
+    static func refreshBundledHelpers(_ g: InstalledGame) {
+        guard let st = state(.borderless, g), st.executable == g.custom?.exe,
+              (try? requireClosed(g)) != nil, (try? begin(g)) != nil else { return }
+        defer { end(g) }
+        let ledger = journal(.borderless, g)
+        guard (try? ledger.validateForUndo()) != nil else { return }
+        let arch = program(g).flatMap(PEFile.inspect)?.is64Bit == true ? "x86_64" : "x86"
+        for (name, ext) in [("launcher", "exe"), ("window", "dll")] {
+            guard let source = NokPaths.bundledResource("borderless-\(arch).\(ext)"), let data = try? Data(contentsOf: source) else { continue }
+            let target = g.prefix.appendingPathComponent("drive_c/nokcandu/borderless/\(name).\(ext)")
+            try? ledger.write(data, to: target, reason: "Updated bundled window helper")
+        }
     }
     public static func undo(_ fix: CompatibilityFix, for game: InstalledGame, log: @escaping @Sendable (String) -> Void) throws {
         let g = fresh(game)
@@ -238,13 +256,13 @@ public enum CompatibilityFixes {
         if fix == .d3d8to9, c.legacyD3D9 == true { c.legacyD3D9 = st.previousLegacy }
         if fix == .borderless, c.borderless == true { c.borderless = st.previousBorderless }
         let j = journal(fix, g)
-        // Check every owned file before changing settings or moving any files.
-        for path in j.touchedPaths {
-            if let last = j.entries.last(where: { $0.path == path }), let sha = last.shaAfter,
-               (try? Hashing.sha256(file: URL(fileURLWithPath: path))) != sha {
-                throw NokError("\((path as NSString).lastPathComponent) changed after installation. Undo kept your files and settings.")
+        // Migrate settings ownership for earlier installations of the built-in recipe.
+        if fix == .openUA {
+            for path in j.touchedPaths where URL(fileURLWithPath: path).lastPathComponent == "NUCLEUS.INI" {
+                try j.manageSettings(URL(fileURLWithPath: path), keys: ["gfx.vbo", "menu.windowed", "gfx.custommodes"])
             }
         }
+        try j.validateForUndo()
         try CustomGames.save(c, to: g)
         let report = j.revertAll(); log(report.summary)
         guard report.skipped.isEmpty else { throw NokError(report.summary) }

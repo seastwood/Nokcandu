@@ -334,6 +334,7 @@ struct GameResolutionSection: View {
     @State private var working = false
     @State private var status = ""
 
+    @State private var showSettingsBackups = false
     var current: [Int]? { game.custom?.displayPixels }
     var selection: String { current.map { "\($0[0])x\($0[1])" } ?? "desktop" }
     var gameSelection: String { BF1942DisplayFix.resolution(for: game).map { "\($0[0])x\($0[1])" } ?? "current" }
@@ -404,6 +405,7 @@ struct GameResolutionSection: View {
                     Text("Set this game's own resolution inside the game.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                Button("Settings Backups…") { showSettingsBackups = true }
                 if working { ProgressView().controlSize(.small) }
                 if !status.isEmpty { Text(status).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
             }
@@ -411,6 +413,7 @@ struct GameResolutionSection: View {
             .padding(6).frame(maxWidth: .infinity, alignment: .leading)
         } label: { Text("Display").font(.headline) }
         .onAppear { options = GameDisplay.resolutions() }
+        .sheet(isPresented: $showSettingsBackups) { SettingsBackupsView(game: game).environmentObject(model) }
     }
     var logger: @Sendable (String) -> Void { { line in Task { @MainActor in status = line } } }
     func choose(_ tag: String) {
@@ -731,5 +734,49 @@ struct GameStorageSummary: View {
             let result = await Task.detached(priority: .utility) { Storage.usage(for: g) }.value
             if !Task.isCancelled { usage = result }
         }
+    }
+}
+
+/// Shared settings recovery: readable versions and an in-app Restore action.
+struct SettingsBackupsView: View {
+    @EnvironmentObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    let game: InstalledGame
+    @State private var items: [SettingsBackups.Item] = []
+    @State private var selected: SettingsBackups.Item?
+    @State private var confirmRestore = false
+    @State private var message = ""
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Settings Backups — \(game.name)").font(.title2.bold())
+            Text("Restore a saved settings file here. Your current file is backed up first. Quit the game before restoring.").foregroundStyle(.secondary)
+            if items.isEmpty { Text("No settings backups are available for this game yet.").padding() }
+            else {
+                List(items) { item in
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.original.lastPathComponent).bold()
+                            Text(item.original.deletingLastPathComponent().path).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                            Text(item.date.formatted(date: .abbreviated, time: .standard) + " · " + item.reason).font(.caption)
+                        }
+                        Spacer()
+                        Button("Show in Finder") { model.reveal(item.backup) }
+                        Button("Restore…") { selected = item; confirmRestore = true }
+                    }.padding(.vertical, 5)
+                }.frame(minHeight: 260)
+            }
+            if !message.isEmpty { Text(message).foregroundStyle(.secondary) }
+            HStack { Spacer(); Button("Close") { dismiss() }.keyboardShortcut(.cancelAction) }
+        }.padding(20).frame(minWidth: 720, minHeight: 360)
+            .onAppear { items = SettingsBackups.list(for: game) }
+            .confirmationDialog("Restore this saved settings file?", isPresented: $confirmRestore) {
+                Button("Restore Saved Version") {
+                    guard let item = selected else { return }
+                    do { try SettingsBackups.restore(item, for: game); message = "Restored \(item.original.lastPathComponent). The previous file is also backed up."; items = SettingsBackups.list(for: game); model.refresh() }
+                    catch { model.fail(error) }
+                    selected = nil
+                }
+                Button("Cancel", role: .cancel) { selected = nil }
+            } message: { Text("This replaces \(selected?.original.lastPathComponent ?? "the settings file"). Your current version is backed up first.") }
     }
 }
