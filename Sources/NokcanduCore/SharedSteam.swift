@@ -55,7 +55,7 @@ public enum SharedSteam {
             for line in p.launcherExports { modes += "  \(line)\n" }
             modes += "  ;;\n"
         }
-        return """
+        return HelperPatch.scopeWineLibrary("""
         #!/bin/bash
         # Nokcandu shared Steam helper. Usage:
         #   nokcandu-steam [--mode <graphics>] [--applaunch <AppID>] [--url steam://…] [--restart-steam] [--check] [--shutdown]
@@ -215,7 +215,7 @@ public enum SharedSteam {
          disown $! 2>/dev/null || true
         fi
 
-        """
+        """)
     }
 
     /// Steam.app's own launcher: opens Steam (its default graphics mode).

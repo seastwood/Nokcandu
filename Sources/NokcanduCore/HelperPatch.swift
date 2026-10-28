@@ -7,7 +7,7 @@ import Foundation
 public enum HelperPatch {
     public static let marker = "# nokcandu-helper-library"
 
-    static let block = """
+    static let legacyBlock = """
     \(marker) (added by Nokcandu: real app names, Game Mode, raw mouse)
     if [ -f "$SUPPORT/nokcandu/nokcandu-rawmouse.dylib" ]; then
      export DYLD_INSERT_LIBRARIES="$SUPPORT/nokcandu/nokcandu-rawmouse.dylib"
@@ -22,34 +22,69 @@ public enum HelperPatch {
 
     """
 
-    /// The launcher with the block added after its `export PATH=` line; nil if it already has it or has no such line.
+    static let globalExport = #"export DYLD_INSERT_LIBRARIES="$SUPPORT/nokcandu/nokcandu-rawmouse.dylib""#
+    static let scopedPrefix = #"DYLD_INSERT_LIBRARIES="${NOKCANDU_HELPER_LIBRARY:-}" "#
+    static let block = legacyBlock.replacingOccurrences(of: globalExport,
+        with: #"NOKCANDU_HELPER_LIBRARY="$SUPPORT/nokcandu/nokcandu-rawmouse.dylib""#)
+
+    /// Keep the Intel Wine helper out of native utilities (Python, display tools, store helpers).
+    /// Shared by built-in recipes, general game launchers and the shared Steam helper.
+    static func scopeWineLibrary(_ text: String) -> String {
+        var result = text.replacingOccurrences(of: globalExport,
+            with: #"NOKCANDU_HELPER_LIBRARY="$SUPPORT/nokcandu/nokcandu-rawmouse.dylib""#)
+        result = result.components(separatedBy: "\n").map { line in
+            let body = line.drop(while: { $0 == " " || $0 == "\t" })
+            let command = body.hasPrefix("exec ") ? body.dropFirst(5) : body
+            guard command.hasPrefix(#""$SUPPORT/wine/bin/wine" "#) || command.hasPrefix(#""$WINE" "#) else { return line }
+            return String(line.prefix(line.count - body.count)) + scopedPrefix + body
+        }.joined(separator: "\n")
+        // Wine's child-process registry still needs the helper path. This is a non-exported
+        // shell variable inside a command substitution containing only shell builtins.
+        return result.replacingOccurrences(of: #"WANT="$(for v in DYLD_INSERT_LIBRARIES"#,
+            with: #"WANT="$(DYLD_INSERT_LIBRARIES="${NOKCANDU_HELPER_LIBRARY:-}"; for v in DYLD_INSERT_LIBRARIES"#)
+    }
+
+    /// Adds or upgrades the recognised helper block. Already-current launchers are unchanged.
     public static func add(to text: String) -> String? {
-        guard !text.contains(marker) else { return nil }
-        var lines = text.components(separatedBy: "\n")
+        let original = strip(text)
+        guard !original.contains(marker) else { return nil }
+        var lines = original.components(separatedBy: "\n")
         guard let i = lines.firstIndex(where: { $0.hasPrefix("export PATH=") }) else { return nil }
         lines.insert(contentsOf: block.components(separatedBy: "\n").dropLast(), at: i + 1)
-        return lines.joined(separator: "\n")
+        let patched = scopeWineLibrary(lines.joined(separator: "\n"))
+        return patched == text ? nil : patched
     }
 
-    /// The launcher without the block (exactly as it was before `add`).
+    /// Both helper versions normalise to the exact tested launcher for fingerprint checks.
     public static func strip(_ text: String) -> String {
-        guard text.contains(marker) else { return text }
-        return text.replacingOccurrences(of: block, with: "")
+        if text.contains(block) {
+            return text.replacingOccurrences(of: block, with: "").components(separatedBy: "\n").map { line in
+                let body = line.drop(while: { $0 == " " || $0 == "\t" })
+                guard body.hasPrefix(scopedPrefix) else { return line }
+                return String(line.prefix(line.count - body.count)) + body.dropFirst(scopedPrefix.count)
+            }.joined(separator: "\n")
+        }
+        return text.replacingOccurrences(of: legacyBlock, with: "")
     }
 
-    /// Adds the block to recipe games' launchers that are the tested original (possibly display-patched).
-    /// Skips running games. Returns the names of the games it changed.
+    /// Upgrade recognised recipe launchers and hash-verified generated launchers. Native tools
+    /// stay outside Wine's injection environment. Running games and manual launcher edits stay intact.
     @discardableResult
     public static func refresh(_ games: [InstalledGame]) -> [String] {
         var changed: [String] = []
-        for g in games where g.recipe != nil && g.custom == nil {
-            guard let url = g.launcherURL, let text = try? String(contentsOf: url, encoding: .utf8),
-                  !text.contains(marker) else { continue }
+        for g in games {
+            guard let url = g.launcherURL, let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            if case .launcherRunning = GameLauncher.runState(of: g) { continue }
+            if let config = g.custom {
+                guard text.contains(globalExport), config.launcherSHA == Hashing.sha256(data: Data(text.utf8)) else { continue }
+                do { try CustomGames.save(config, to: g); changed.append(g.name) } catch { continue }
+                continue
+            }
+            guard g.recipe != nil else { continue }
             switch DisplayController.launcherState(g) {
             case .original, .nokcanduPatched: break
             default: continue
             }
-            if case .launcherRunning = GameLauncher.runState(of: g) { continue }
             guard let patched = add(to: text) else { continue }
             do {
                 try ChangeJournal(scope: g.journalScope).write(Data(patched.utf8), to: url, reason: "Launcher loads Nokcandu's helper library")

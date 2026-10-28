@@ -504,7 +504,7 @@ public enum CustomGames {
         exit $STATUS
 
         """
-        return s
+        return HelperPatch.scopeWineLibrary(s)
     }
 
     // MARK: Changing settings of an installed general game

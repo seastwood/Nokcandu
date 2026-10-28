@@ -118,6 +118,8 @@ public enum GameLauncher {
     /// Opens the game's own app through LaunchServices so it behaves exactly like a Finder double-click.
     /// `arguments` are passed through to the launcher (e.g. ["--windowed"]).
     public static func launch(_ game: InstalledGame, arguments: [String] = []) throws {
+        HelperPatch.refresh([game])
+        if game.isSteamHost || game.usesSharedSteam { SharedSteam.refreshHostScriptsIfNeeded() }
         var args = [game.appURL.path]
         if !arguments.isEmpty { args += ["--args"] + arguments }
         let r = try Shell.run("/usr/bin/open", args, timeout: 30)
@@ -126,6 +128,8 @@ public enum GameLauncher {
 
     /// The launcher's own preflight (`--check`): validates game files, engine, and (Worms) the disc.
     public static func preflight(_ game: InstalledGame) async -> ShellResult {
+        HelperPatch.refresh([game])
+        if game.isSteamHost || game.usesSharedSteam { SharedSteam.refreshHostScriptsIfNeeded() }
         guard let launcher = game.launcherURL else {
             return ShellResult(status: -1, stdout: "", stderr: "No launcher found in the app.")
         }
