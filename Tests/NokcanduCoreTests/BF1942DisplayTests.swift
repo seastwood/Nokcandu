@@ -44,6 +44,18 @@ final class BF1942DisplayTests: XCTestCase {
         XCTAssertThrowsError(try BF1942DisplayFix.checkedMenuCopy(data), "correct offsets alone must never bypass the full fingerprint")
         XCTAssertThrowsError(try BF1942DisplayFix.replacingMenuDimensions(Data()))
     }
+    func testCompleteSetupRejectsUnverifiedGameBeforeInstallingComponents() async throws {
+        let g = try fixture(); defer { try? FileManager.default.removeItem(at: g.appURL) }
+        let before = try Data(contentsOf: CustomGameConfig.url(in: g.contents))
+        do {
+            try await BF1942DisplayFix.applyRecommendedSetup(to: g) { _ in }
+            XCTFail("unverified game accepted")
+        } catch { }
+        XCTAssertTrue(CompatibilityFixes.installedIDs(for: g).isEmpty)
+        XCTAssertFalse(BF1942DisplayFix.hasChanges(for: g))
+        XCTAssertEqual(try Data(contentsOf: CustomGameConfig.url(in: g.contents)), before)
+    }
+
     func testResolutionApplyRepeatAndUndo() async throws {
         let g = try fixture(); defer { try? FileManager.default.removeItem(at: g.appURL) }
         let folder = try XCTUnwrap(BF1942DisplayFix.folder(g)), file = folder.appendingPathComponent("Mods/bf1942/Settings/Profiles/Custom/Video.con")

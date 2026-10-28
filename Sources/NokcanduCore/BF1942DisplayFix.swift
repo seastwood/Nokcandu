@@ -202,6 +202,37 @@ public enum BF1942DisplayFix {
             }
         }
     }
+    /// Complete, repeatable setup for a clean owned BF1942 installation. Runtime components use
+    /// the same shared installers, fingerprints, receipts and profile IDs as the individual Fixes.
+    public static func applyRecommendedSetup(to game: InstalledGame,
+                                            log: @escaping @Sendable (String) -> Void) async throws {
+        var g = CompatibilityFixes.fresh(game)
+        guard supports(g), menuUnavailable(for: g) == nil else {
+            throw NokError("Choose a verified standalone Battlefield 1942 installation first.")
+        }
+        try CompatibilityFixes.requireClosed(g)
+        if !CompatibilityFixes.isInstalled(.directx9Extras, for: g) {
+            try await CompatibilityFixes.install(.directx9Extras, for: g, log: log)
+        }
+        g = CompatibilityFixes.fresh(g)
+        if var config = g.custom, config.graphics != .classic3D {
+            config.graphics = .classic3D
+            try CustomGames.save(config, to: g)
+            g = CompatibilityFixes.fresh(g)
+        }
+        for fix in [CompatibilityFix.d3d8to9, .borderless] {
+            if !CompatibilityFixes.isInstalled(fix, for: g) {
+                try await CompatibilityFixes.install(fix, for: g, log: log)
+                g = CompatibilityFixes.fresh(g)
+            }
+        }
+        // An existing display receipt is the user's chosen resolution, not a reason to reset it.
+        let existing = resolution(for: g)
+        try await apply(to: g, size: existing ?? [1280, 800], recommended: true,
+                        includePresentation: existing == nil, log: log)
+        log("Applied recommended BF1942 setup. Individual components can be undone in Fixes; display settings in Display.")
+    }
+
     /// `recommended` also adds the verified menu copy and borderless component. Resolution-only edits
     /// never patch an executable or change the Mac's screen. All mutations have a recovery receipt.
     public static func apply(to game: InstalledGame, size: [Int] = [1280, 800], recommended: Bool, includePresentation: Bool = true,

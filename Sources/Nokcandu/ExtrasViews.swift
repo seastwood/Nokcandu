@@ -335,6 +335,7 @@ struct GameResolutionSection: View {
     @State private var status = ""
 
     @State private var showSettingsBackups = false
+    @State private var confirmBFSetup = false
     var current: [Int]? { game.custom?.displayPixels }
     var selection: String { current.map { "\($0[0])x\($0[1])" } ?? "desktop" }
     var gameSelection: String { BF1942DisplayFix.resolution(for: game).map { "\($0[0])x\($0[1])" } ?? "current" }
@@ -390,6 +391,10 @@ struct GameResolutionSection: View {
                     }
                     Text("Updates BF1942's gameplay resolution in its video profiles, with a backup for Undo. The game's menu resolution is handled separately below.")
                         .font(.caption).foregroundStyle(.secondary)
+                    Button("Apply Recommended BF1942 Setup…") { confirmBFSetup = true }
+                        .disabled(BF1942DisplayFix.menuUnavailable(for: game) != nil)
+                    Text("Includes Older 3D graphics, DirectX 8 compatibility, Microsoft shader libraries, the menu and mod-restart correction, and Fullscreen (Borderless). Keeps your saved game resolution; new setups start at 1280 × 800. Saved and shared profiles include these fixes.")
+                        .font(.caption).foregroundStyle(.secondary)
                     HStack {
                         Button(BF1942DisplayFix.isRecommended(for: game) ? "Reapply Recommended BF1942 Display Settings" : "Apply Recommended BF1942 Display Settings") {
                             applyRecommended()
@@ -413,6 +418,12 @@ struct GameResolutionSection: View {
             .padding(6).frame(maxWidth: .infinity, alignment: .leading)
         } label: { Text("Display").font(.headline) }
         .onAppear { options = GameDisplay.resolutions() }
+        .confirmationDialog("Apply recommended Battlefield 1942 setup?", isPresented: $confirmBFSetup, titleVisibility: .visible) {
+            Button("Apply Recommended Setup") { completeBFSetup() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Downloads missing DirectX components from Microsoft and the d3d8to9 project, uses Older 3D graphics, and applies the verified menu/mod restart correction and borderless window. Keeps your saved game resolution. Originals and settings backups are retained; each fix has Undo. If a step fails, completed fixes remain available and you can retry.")
+        }
         .sheet(isPresented: $showSettingsBackups) { SettingsBackupsView(game: game).environmentObject(model) }
     }
     var logger: @Sendable (String) -> Void { { line in Task { @MainActor in status = line } } }
@@ -452,6 +463,16 @@ struct GameResolutionSection: View {
         guard tag != "current" else { return }
         let size = tag.split(separator: "x").compactMap { Int($0) }
         applyGameDisplay(size: size, recommended: false)
+    }
+    func completeBFSetup() {
+        working = true; status = ""
+        Task {
+            do {
+                try await BF1942DisplayFix.applyRecommendedSetup(to: game, log: logger)
+                model.refresh(); model.say("Applied recommended BF1942 setup. Undo is available in Display and Fixes.")
+            } catch { model.fail(error); model.refresh() }
+            working = false
+        }
     }
     func applyRecommended() { applyGameDisplay(size: [1280, 800], recommended: true) }
     func applyGameDisplay(size: [Int], recommended: Bool) {
