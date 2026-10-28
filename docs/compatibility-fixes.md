@@ -28,3 +28,12 @@ Validation: Swift unit tests cover grouped DLL rules, component references, old 
 Private fix journals retain their app-relative origin so Undo follows a whole-app move. BF1942 settings operations use logical C: paths after validating their physical target, retaining one consistent file history when managed game files move to a separate drive.
 
 The native helper also watches confinement for the installed borderless component. It checks the known Wine confinement handler, active owning game window, and Wine's own coordinate conversion. If the actual native rectangle differs from Wine's projected request after a resize, it resubmits that same request. It does not synthesize focus events, move the pointer, enable raw capture, or expand beyond the requested region. Matching rectangles are untouched, and repeated identical failed attempts are suppressed. Runtime verification caught a stale 989 × 756 native region while Wine requested 1468 × 954; the refresh restored the requested region without Cmd-Tab.
+
+
+### OpenUA: invisible window and tiny menu on Wine/macOS
+
+Observed with the user-provided OpenUA standalone package (UA_source.exe, build 2025-03-09) and Sikarugir Wine 10.0_8 on Apple Silicon. The program reached its menu and played music but its window was transparent. Setting `gfx.vbo = off` in the game's `NUCLEUS.INI` made the intro and menu render. OpenUA's source reads this setting before `System::Init(!gfxVbo)`; the old path requests OpenGL 2.1 instead of a 3.1 compatibility context. This is a game-specific setting, not a global Wine rendering switch.
+
+The menu then appeared with very small text: the original `DATA/world.ini` requested `shell_default_res = 640_480`, but that mode was absent from the reported display modes, and `ENV/vid.def` showed 2560 x 1600. Adding `gfx.custommodes = 640x480,800x600,1024x768,1280x800` in `NUCLEUS.INI` preserved the original menu mode. With `menu.windowed = off`, the menu rendered fullscreen with readable text and `ENV/vid.def` reported 640 x 480. The windowed-only experiment did not resolve the rendering failure. Menu and intro rendering are verified; mission performance still needs a play test. Back up the game's original INI before editing. These settings were applied manually to this installation; there is no automatic OpenUA recipe yet.
+
+Upstream references: https://github.com/Marisa-Chan/UA_source/blob/master/src/main.cpp and https://github.com/Marisa-Chan/UA_source/blob/master/src/system/system.cpp .
