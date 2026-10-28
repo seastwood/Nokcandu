@@ -75,7 +75,7 @@ final class InstallerModel: ObservableObject {
         Task {
             do {
                 let setup = try await PCLaunchers.downloadSetup(k)
-                startCustom(name: k.title, source: .installer, library: library, folder: NokPaths.gameAppsFolder, inputs: ["installerPath": setup.path])
+                startCustom(name: k.title, source: .installer, library: library, folder: NokPaths.gameAppsFolder, inputs: ["installerPath": setup.path, "launcherKind": k.rawValue])
                 if executor != nil { continueInstall() }
             } catch { append("✗ \(error.localizedDescription)"); startError = error.localizedDescription }
         }

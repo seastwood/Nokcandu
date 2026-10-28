@@ -227,6 +227,10 @@ public enum CustomInstall {
 
         func runInstaller(_ ctx: InstallContext) async throws {
             guard let p = ctx.input("installerPath") else { return }
+            if ctx.input("launcherKind") == PCLauncher.ea.rawValue || URL(fileURLWithPath: p).lastPathComponent.lowercased() == "eaappinstaller.exe" {
+                try await EAAppInstaller.run(ctx, installer: URL(fileURLWithPath: p))
+                return
+            }
             if ZeroHourInstall.opened(ctx, info.id) { return markFinished(ctx) }
             let url = URL(fileURLWithPath: p)
             guard ["exe", "msi"].contains(url.pathExtension.lowercased()), FileManager.default.fileExists(atPath: p) else {
