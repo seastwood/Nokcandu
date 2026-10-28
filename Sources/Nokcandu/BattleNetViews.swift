@@ -210,6 +210,9 @@ struct LauncherGamesSection: View {
     let host: InstalledGame
     let kind: PCLauncher
     @State private var games: [PCLaunchers.HostedGame] = []
+    @State private var finishingSetup: String?
+    @State private var setupMessage: String?
+    @State private var setupLog: URL?
 
     var body: some View {
         GroupBox {
@@ -231,7 +234,19 @@ struct LauncherGamesSection: View {
                         } else {
                             Button("Add to Nokcandu") { add(hg) }
                         }
+                    }.disabled(finishingSetup != nil)
+                }
+                if kind == .ea {
+                    Divider()
+                    if let name = finishingSetup {
+                        HStack { ProgressView().controlSize(.small); Text("Finishing setup for \(name)…") }
+                    } else {
+                        Button("Finish EA Game Setup…", action: finishSetup)
+                        Text("If EA downloads a game but fails at the final installation step, run the game’s own setup here. Quit that game first; EA can stay open.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
+                    if let message = setupMessage { Text(message).font(.caption).textSelection(.enabled) }
+                    if let log = setupLog { Button("Show Setup Log") { NSWorkspace.shared.open(log) }.buttonStyle(.link) }
                 }
                 Text("Each game gets its own app that opens \(kind.title) (signed in) and starts the game, using this app's graphics and performance settings. \(kind == .ea ? "The EA app runs in Wine with mixed results; if it won't open, try another graphics mode here." : "Games with anti-cheat may not run.")")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -241,13 +256,33 @@ struct LauncherGamesSection: View {
             HStack {
                 Text("\(kind.title) Games").font(.headline)
                 Spacer()
-                Button("Refresh", action: load).buttonStyle(.link)
+                Button("Refresh", action: load).buttonStyle(.link).disabled(finishingSetup != nil)
             }
         }
         .onAppear(perform: load)
     }
 
     func load() { games = PCLaunchers.installedGames(kind, host: host) }
+
+    func finishSetup() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true; panel.canChooseFiles = false
+        panel.prompt = "Finish Setup"
+        panel.message = "Choose the game folder downloaded by EA. Nokcandu will run its original EA setup program and install its included requirements in this EA app’s Windows environment. Keep the game closed while setup runs."
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        do {
+            let plan = try EASetupRecovery.plan(folder: folder, host: host)
+            finishingSetup = plan.name; setupMessage = nil; setupLog = nil
+            Task {
+                do {
+                    setupLog = try await EASetupRecovery.finish(plan, host: host)
+                    setupMessage = "Setup finished for \(plan.name). If EA still shows an installation error, quit and reopen EA, then press Refresh here."
+                    load(); model.refresh()
+                } catch { setupMessage = error.localizedDescription }
+                finishingSetup = nil
+            }
+        } catch { setupMessage = error.localizedDescription }
+    }
 
     func add(_ hg: PCLaunchers.HostedGame) {
         do {
