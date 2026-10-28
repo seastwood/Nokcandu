@@ -52,3 +52,19 @@ final class GameRemovalStorageTests: XCTestCase {
         try "borrowed".write(to: support.appendingPathComponent("referenced-game-folder.txt"), atomically: true, encoding: .utf8)
     }
 }
+
+final class CopiedMetadataTests: XCTestCase {
+    func testRemovesOnlyVerifiedAppleDoubleFromNewCopy() throws {
+        let fm = FileManager.default, root = fm.temporaryDirectory.appendingPathComponent("metadata-" + UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+        try NokPaths.ensure(root)
+        let sidecar = root.appendingPathComponent("._L0101.ldf")
+        try Data([0,5,0x16,7,0,2,0,0]).write(to: sidecar)
+        let gameFile = root.appendingPathComponent("L0101.ldf"), unusual = root.appendingPathComponent("._actual-game-data")
+        try Data([42]).write(to: gameFile); try Data([43]).write(to: unusual)
+        try GameMover.removeCopiedMacMetadata(in: root)
+        XCTAssertFalse(fm.fileExists(atPath: sidecar.path))
+        XCTAssertEqual(try Data(contentsOf: gameFile), Data([42]))
+        XCTAssertEqual(try Data(contentsOf: unusual), Data([43]))
+    }
+}

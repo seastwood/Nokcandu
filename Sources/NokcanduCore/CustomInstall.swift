@@ -198,6 +198,7 @@ public enum CustomInstall {
             defer { try? fm.removeItem(at: staging) }
             if GameFolders.holdsApps(target.deletingLastPathComponent()) { try fm.cloneItem(at: src, to: staging) }
             else { try GameMover.copyPlain(src, staging) }
+            try GameMover.removeCopiedMacMetadata(in: staging)
             if fm.fileExists(atPath: target.path) { try fm.removeItem(at: target) }
             try fm.moveItem(at: staging, to: target)
         }

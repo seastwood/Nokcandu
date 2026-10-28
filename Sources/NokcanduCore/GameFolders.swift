@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// Folders that hold game apps. The first is always the standard one (~/Applications/Sikarugir or
 /// ~/Applications/Nokcandu Games); people can add more, e.g. a folder on an external drive.
@@ -196,6 +197,35 @@ public enum GameMover {
     public static func copyPlain(_ from: URL, _ to: URL) throws {
         let r = try Shell.run("/usr/bin/ditto", ["--norsrc", "--noextattr", "--noacl", from.path, to.path], timeout: 6 * 3600)
         guard r.ok else { throw NokError("Copying failed: \(r.combined.suffix(300))") }
+        try removeCopiedMacMetadata(in: to)
+    }
+
+    /// Called only on a newly created copy. Some Windows engines scan every filename and crash
+    /// when AppleDouble sidecars look like game data. Do not touch the source or arbitrary ._ files.
+    static func removeCopiedMacMetadata(in folder: URL) throws {
+        let fm = FileManager.default
+        func scan(_ directory: URL) throws {
+            guard let stream = opendir(directory.path) else { throw NokError("Cannot check copied game files: \(directory.path)") }
+            defer { closedir(stream) }
+            while let entry = readdir(stream) {
+                let name = withUnsafePointer(to: entry.pointee.d_name) {
+                    $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXNAMLEN) + 1) { String(cString: $0) }
+                }
+                if name == "." || name == ".." { continue }
+                let file = directory.appendingPathComponent(name)
+                var attributes = stat()
+                guard lstat(file.path, &attributes) == 0 else { continue }
+                let type = attributes.st_mode & S_IFMT
+                if type == S_IFDIR { try scan(file); continue }
+                guard type == S_IFREG, name.hasPrefix("._"), let handle = try? FileHandle(forReadingFrom: file) else { continue }
+                let header = try? handle.read(upToCount: 4)
+                try? handle.close()
+                if header == Data([0x00, 0x05, 0x16, 0x07]) { try fm.removeItem(at: file) }
+            }
+        }
+        // Foundation's URL enumerator can omit AppleDouble files, so inspect directory entries.
+        try scan(folder)
+
     }
 
     /// Moves just the game's files to `folder` (any drive) and leaves a link in their place, so the app,
