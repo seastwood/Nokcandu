@@ -78,9 +78,10 @@ struct PerformanceSection: View {
     @State private var buffer: Int?
 
     var steam: Bool { game.usesSharedSteam || game.isSteamHost }
-    var metal: Bool { game.custom?.graphics == .appleMetal || game.custom?.graphics == .dxmt }
-    var d3dmetal: Bool { game.custom?.graphics == .appleMetal }
-    var dxmt: Bool { game.custom?.graphics == .dxmt }
+    var graphics: GraphicsPreset? { game.hosted != nil ? HostedSettings.graphics(game) : game.custom?.graphics }
+    var metal: Bool { graphics == .appleMetal || graphics == .dxmt }
+    var d3dmetal: Bool { graphics == .appleMetal }
+    var dxmt: Bool { graphics == .dxmt }
 
     var body: some View {
         GroupBox {
@@ -151,7 +152,7 @@ struct PerformanceSection: View {
             .toggleStyle(.switch)
             .padding(6).frame(maxWidth: .infinity, alignment: .leading)
         } label: { Text("Performance").font(.headline) }
-        .onAppear { s = Performance.settings(for: game); buffer = AudioBuffer.current(for: game); loaded = true }
+        .onAppear { s = Performance.settings(for: game); buffer = game.hosted == nil ? AudioBuffer.current(for: game) : nil; loaded = true }
     }
 
     /// Fastest refresh among connected screens (ProMotion and external monitors report 120+).

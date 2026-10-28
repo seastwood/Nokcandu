@@ -957,6 +957,7 @@ static void gl_limit_wine(void) {
 // keeps a small app wrapper next to this library (SharedSupport/GameApp/<Name>.app, marked as a game) with a
 // copy of the loader in Contents/MacOS. Before Wine starts, relaunch this process from there: same process,
 // same arguments and inherited connection to wineserver — but macOS now sees the game's app.
+#include "program-input-settings.h"
 #include <crt_externs.h>
 #include <dirent.h>
 #include <libgen.h>
@@ -1021,11 +1022,14 @@ __attribute__((constructor)) static void start(void) {
     run_from_game_app();
     const char *s = getenv("NOKCANDU_RAW_MOUSE_SCALE");
     if (s && atof(s) > 0.01 && atof(s) < 20) scale = atof(s);
+    bool per_game_input = false;
     Dl_info self;
     if (dladdr((const void *)start, &self) && self.dli_fname) {
         char me[PATH_MAX]; strlcpy(me, self.dli_fname, sizeof me);
         const char *state = dirname(me);
         snprintf(settings_path, sizeof settings_path, "%s/raw-mouse", state);
+        char routes[PATH_MAX]; snprintf(routes, sizeof routes, "%s/program-input.tsv", state);
+        if (argc > 1) per_game_input = nokcandu_program_input(routes, argv[1], settings_path, sizeof settings_path);
         snprintf(visibility_flag, sizeof visibility_flag, "%s/cursor-visibility-fix", state);
         snprintf(borderless_confinement_record, sizeof borderless_confinement_record, "%s/fix-borderless.json", state);
     }
@@ -1035,8 +1039,9 @@ __attribute__((constructor)) static void start(void) {
     // Once-per-frame delivery is opt-in (NOKCANDU_RAW_MOUSE_FRAME_SYNC=1): it didn't cure CS2's hitches and
     // can add up to a frame of delay.
     frame_sync_env = getenv("NOKCANDU_RAW_MOUSE_FRAME_SYNC") && strcmp(getenv("NOKCANDU_RAW_MOUSE_FRAME_SYNC"), "1") == 0;
+    if (per_game_input) frame_sync_env = false;
     frame_sync_off = !frame_sync_env;
-    atomic_store(&raw_enabled, getenv("NOKCANDU_RAW_MOUSE_SCALE") != NULL);
+    atomic_store(&raw_enabled, !per_game_input && getenv("NOKCANDU_RAW_MOUSE_SCALE") != NULL);
     mach_timebase_info(&timebase);
     gl_limit_setup();
     raw_q = dispatch_queue_create("nokcandu.rawmouse", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));

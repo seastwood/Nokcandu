@@ -93,7 +93,7 @@ public enum PCLaunchers {
     }
     static func value(_ block: String, _ k: String) -> String? {
         guard let line = block.components(separatedBy: "\n").first(where: { $0.hasPrefix("\"\(k)\"=\"") }) else { return nil }
-        return String(line.dropFirst(k.count + 4).dropLast()).replacingOccurrences(of: "\\\\", with: "\\").replacingOccurrences(of: "\\\"", with: "\"")
+        return WineRegistry.decode(String(line.dropFirst(k.count + 4).dropLast()))
     }
 
     /// Games installed in the launcher, from what it writes to the Windows registry.
@@ -128,6 +128,16 @@ public enum PCLaunchers {
         return out.filter { seen.insert($0.id).inserted }.sorted { $0.name < $1.name }
     }
 
+    /// The store's registered installation root, rather than an executable's bin/ subfolder.
+    /// Shared by storage accounting and Show Game Folder for every supported launcher.
+    public static func installFolder(_ link: HostedGameLink, host: InstalledGame) -> URL? {
+        if let game = installedGames(link.launcher, host: host).first(where: { $0.id == link.id }),
+           let folder = BattleNet.unixPath(game.installLocation, prefix: host.prefix), folder.path != "/" {
+            return folder
+        }
+        return link.exe.flatMap { BattleNet.unixPath($0, prefix: host.prefix)?.deletingLastPathComponent() }
+    }
+
     public static func addedApp(for game: HostedGame, kind: PCLauncher, in games: [InstalledGame]) -> InstalledGame? {
         games.first { $0.hosted?.launcher == kind && $0.hosted?.id == game.id }
     }
@@ -144,7 +154,7 @@ public enum PCLaunchers {
         let link = HostedGameLink(hostApp: host.appURL.path, launcher: kind, id: game.id, name: game.name, exe: game.exe)
         try JSONEncoder().encode(link).write(to: HostedGameLink.url(c))
         let launcher = c.appendingPathComponent("MacOS/\(CustomGames.launcherName)")
-        try Data(launcherScript(link).utf8).write(to: launcher)
+        try HostedSettings.initialize(link, contents: c, host: host)
         try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: launcher.path)
         var iconFile = ""
         var iconSource = game.exe.flatMap { BattleNet.unixPath($0, prefix: host.prefix) }
@@ -173,8 +183,9 @@ public enum PCLaunchers {
 
     /// Opens the launcher app (signed in) if it isn't running, waits for it, then starts the game.
     public static func launcherScript(_ l: HostedGameLink) -> String {
-        launcherScript(l, legacyProcessDetection: false)
+        HostedSettings.script(l, settings: HostedSettings.Settings())
     }
+    static func legacyLauncherScript(_ l: HostedGameLink) -> String { launcherScript(l, legacyProcessDetection: false) }
     static func launcherScript(_ l: HostedGameLink, legacyProcessDetection: Bool) -> String {
         let q = CustomGames.shellQuote
         let start: String
@@ -235,11 +246,13 @@ public enum PCLaunchers {
         for g in games {
             guard let l = g.hosted else { continue }
             let f = g.appURL.appendingPathComponent("Contents/MacOS/\(CustomGames.launcherName)")
-            let want = launcherScript(l)
-            guard let current = try? String(contentsOf: f, encoding: .utf8), current != want,
-                  current == launcherScript(l, legacyProcessDetection: true) else { continue }
-            if (try? Data(want.utf8).write(to: f, options: .atomic)) != nil {
-                try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: f.path)
+            guard let current = try? String(contentsOf: f, encoding: .utf8) else { continue }
+            let settings = HostedSettings.load(g), want = HostedSettings.script(l, settings: settings)
+            guard current != want else { continue }
+            // Known older generated scripts and fingerprinted scripts migrate; manual edits stay.
+            if current == legacyLauncherScript(l) || current == launcherScript(l, legacyProcessDetection: true) ||
+                settings.launcherSHA == Hashing.sha256(data: Data(current.utf8)) {
+                try? HostedSettings.save(settings, for: g)
             }
         }
     }

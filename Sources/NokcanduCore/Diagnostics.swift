@@ -67,6 +67,7 @@ public enum Diagnostics {
     public static func collect(_ g: InstalledGame, includeHashes: Bool = true) -> DiagReport {
         if g.usesSharedSteam { return collectSteamGame(g) }
         if g.battleNet != nil { return collectBattleNetGame(g) }
+        if g.hosted != nil { return collectHostedGame(g) }
         var c: [DiagCheck] = []
         let fm = FileManager.default
         func add(_ l: DiagLayer, _ t: String, _ s: DiagStatus, _ d: String) { c.append(DiagCheck(layer: l, title: t, status: s, detail: d)) }
@@ -231,6 +232,24 @@ public enum Diagnostics {
         if let t = tailOfFile(steamLog, maxLines: 40) { logs.append(("steam.log (shared Steam)", t)) }
         c.append(contentsOf: audioDriverChecks(g))
         return DiagReport(game: g, checks: c, logs: logs)
+    }
+
+    static func collectHostedGame(_ game: InstalledGame) -> DiagReport {
+        let link = game.hosted!, fm = FileManager.default
+        var checks: [DiagCheck] = []
+        func add(_ layer: DiagLayer, _ title: String, _ status: DiagStatus, _ detail: String) { checks.append(.init(layer: layer, title: title, status: status, detail: detail)) }
+        let host = GameLibrary.inspect(URL(fileURLWithPath: link.hostApp))
+        add(.runtime, link.launcher.title, WineTools.hostContents(for: game) != nil ? .ok : .failure, link.hostApp)
+        if let launcher = game.launcherURL, let sha = try? Hashing.sha256(file: launcher) {
+            add(.app, "Launcher", sha == HostedSettings.load(game).launcherSHA ? .ok : .warning, sha == HostedSettings.load(game).launcherSHA ? "Generated launcher with per-game settings" : "Changed outside Nokcandu or needs migration")
+        } else { add(.app, "Launcher", .failure, "Missing") }
+        if let host, let exe = link.exe, let file = BattleNet.unixPath(exe, prefix: host.prefix) {
+            add(.app, "Game program", fm.fileExists(atPath: file.path) ? .ok : .failure, file.path)
+        }
+        add(.rendering, "Graphics", .info, HostedSettings.graphics(game).title + " (this game's shortcut)")
+        var logs: [(String, String)] = []
+        if let text = try? String(contentsOf: game.logs.appendingPathComponent("launch.log"), encoding: .utf8) { logs.append(("Game launch", text.split(separator: "\n").suffix(60).joined(separator: "\n"))) }
+        return DiagReport(game: game, checks: checks, logs: logs)
     }
 
     static func collectBattleNetGame(_ g: InstalledGame) -> DiagReport {

@@ -20,10 +20,12 @@ public enum Performance {
         public var isDefault: Bool { self == Settings() }
     }
 
+    static func settingsContents(_ g: InstalledGame) -> URL? { g.hosted != nil ? g.contents : WineTools.hostContents(for: g) }
+
     static func folder(_ h: URL) -> URL { h.appendingPathComponent("SharedSupport/nokcandu", isDirectory: true) }
 
     public static func settings(for g: InstalledGame) -> Settings {
-        guard let h = WineTools.hostContents(for: g),
+        guard let h = settingsContents(g),
               let d = try? Data(contentsOf: folder(h).appendingPathComponent("perf.json")),
               let s = try? JSONDecoder().decode(Settings.self, from: d) else { return Settings() }
         return s
@@ -68,7 +70,7 @@ public enum Performance {
     public static func refreshEnvFiles(_ games: [InstalledGame]) {
         var seen = Set<String>()
         for g in games {
-            guard let h = WineTools.hostContents(for: g), seen.insert(h.path).inserted else { continue }
+            guard let h = settingsContents(g), seen.insert(h.path).inserted else { continue }
             let f = folder(h), env = f.appendingPathComponent("perf.env")
             guard let d = try? Data(contentsOf: f.appendingPathComponent("perf.json")),
                   let s = try? JSONDecoder().decode(Settings.self, from: d), !s.isDefault else { continue }
@@ -78,7 +80,7 @@ public enum Performance {
     }
 
     public static func apply(_ s: Settings, for g: InstalledGame) throws {
-        guard let h = WineTools.hostContents(for: g) else { throw NokError("This game has no Windows environment.") }
+        guard let h = settingsContents(g) else { throw NokError("This game has no Windows environment.") }
         let f = folder(h)
         try FileManager.default.createDirectory(at: f, withIntermediateDirectories: true)
         try JSONEncoder().encode(s).write(to: f.appendingPathComponent("perf.json"), options: .atomic)

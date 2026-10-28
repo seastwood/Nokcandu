@@ -73,6 +73,7 @@ struct GameDetailView: View {
                     CinematicCrashBanner(game: game, diagnosis: d) { fixFromBanner() }
                 }
                 if DisplayController.supports(game) { displaySection }
+                if game.hosted?.exe != nil { HostedGameSettingsSection(game: game).id("hosted-\(game.id)") }
                 if game.custom != nil {
                     GroupBox {
                         GraphicsPicker(game: game).padding(6).frame(maxWidth: .infinity, alignment: .leading)
@@ -91,19 +92,20 @@ struct GameDetailView: View {
                     LauncherDriveBox(host: game, name: game.isSteamHost ? "Steam" : BattleNet.isHost(game) ? "Battle.net" : PCLaunchers.kind(of: game)!.title)
                         .id("drives-\(game.id)")
                 }
-                if game.custom != nil || game.isSteamHost {
+                if game.custom != nil || game.isSteamHost || game.hosted?.exe != nil {
                     PerformanceSection(game: game).id("perf-\(game.id)")
                 }
-                if WineTools.hostContents(for: game) != nil {
+                if WineTools.hostContents(for: game) != nil, game.hosted == nil || game.hosted?.exe != nil {
                     MouseSection(game: game).id("mouse-\(game.id)")
                 }
                 if game.custom != nil {
                     GameSettingsSection(game: game).id(game.custom)
                 }
+                if WineTools.hostContents(for: game) != nil { PhysXRuntimeSection(game: game).id("physx-\(game.id)") }
                 checkSection
                 if !WineTools.places(for: game).isEmpty { FilesToolsSection(game: game) }
-                if WineTools.hostContents(for: game) != nil { FixesSection(game: game).id("\(game.id)-\(fixVersion)") }
-                if game.custom != nil || game.battleNet != nil { ProfilesSection(game: game).id("profiles-\(game.id)") }
+                if WineTools.hostContents(for: game) != nil, game.hosted == nil { FixesSection(game: game).id("\(game.id)-\(fixVersion)") }
+                if game.custom != nil || game.battleNet != nil || game.hosted?.exe != nil { ProfilesSection(game: game).id("profiles-\(game.id)") }
                 if game.isManaged { NotesSection(game: game).id(game.id) }
                 aboutSection
                 GameLocationSection(game: game).id("location-\(game.id)")

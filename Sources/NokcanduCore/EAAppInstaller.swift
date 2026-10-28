@@ -79,6 +79,23 @@ enum EAAppInstaller {
             }
         }
     }
+    /// EA re-launches some activation-protected games itself, losing a shortcut's environment.
+    /// Keep its working DXMT browser renderer while providing the same tested DX9 renderer for
+    /// older child games. Explicit user DLL rules take precedence.
+    static func gameRendererExports(_ config: CustomGameConfig) -> String {
+        guard config.exe.lowercased().hasSuffix("\\eadesktop.exe"), config.graphics == .dxmt else { return "" }
+        let rules = CompatibilityFixes.overrides(config.environment?["WINEDLLOVERRIDES"])
+        var result = [
+            #"export WINEDLLPATH_D9VK="$SUPPORT/renderer/d9vk/wine""#,
+            #"export VK_DRIVER_FILES="$CONTENTS/Resources/vulkan/icd.d/kosmickrisp_mesa_icd.json""#,
+            #"export DXVK_LOG_PATH="$SUPPORT/Logs""#,
+        ]
+        let missing = ["d3d8", "d3d9"].filter { rules[$0] == nil }
+        if !missing.isEmpty {
+            result.append(#"export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:+$WINEDLLOVERRIDES;}""# + CustomGames.shellQuote(missing.joined(separator: ",") + "=b"))
+        }
+        return result.joined(separator: "\n") + "\n"
+    }
     static let program = #"C:\Program Files\Electronic Arts\EA Desktop\EA Desktop\EADesktop.exe"#
     static func run(_ ctx: InstallContext, installer: URL) async throws {
         guard let cab = NokPaths.bundledResource("cabextract") else { throw NokError("Nokcandu's installer reader is missing. Update Nokcandu first.") }

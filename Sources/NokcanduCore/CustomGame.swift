@@ -411,6 +411,7 @@ public enum CustomGames {
             s += "# Your extra settings\n"
             for (k, v) in env { s += "export \(k)=\(shellQuote(v))\n" }
         }
+        s += EAAppInstaller.gameRendererExports(c)
         s += """
         GAME_DIR="$WINEPREFIX/drive_c/"\(shellQuote(dirRel))
         GAME_EXE=\(shellQuote(c.exe))

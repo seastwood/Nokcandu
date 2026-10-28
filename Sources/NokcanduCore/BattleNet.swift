@@ -48,8 +48,7 @@ public enum BattleNet {
         for block in reg.components(separatedBy: "\n\n") where block.contains("CurrentVersion\\\\Uninstall\\\\") {
             func value(_ k: String) -> String? {
                 guard let line = block.components(separatedBy: "\n").first(where: { $0.hasPrefix("\"\(k)\"=\"") }) else { return nil }
-                return String(line.dropFirst(k.count + 4).dropLast()).replacingOccurrences(of: "\\\\", with: "\\")
-                    .replacingOccurrences(of: "\\\"", with: "\"")
+                return WineRegistry.decode(String(line.dropFirst(k.count + 4).dropLast()))
             }
             guard let un = value("UninstallString"), un.contains("Blizzard Uninstaller"),
                   let m = un.range(of: #"--uid=([A-Za-z0-9_.\-]+)"#, options: .regularExpression) else { continue }

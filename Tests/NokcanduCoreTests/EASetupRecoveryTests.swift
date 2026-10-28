@@ -32,6 +32,7 @@ final class EASetupRecoveryTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: p.arguments[0])),
                        try Data(contentsOf: folder.appendingPathComponent("__Installer/Touchup.exe")))
         XCTAssertEqual(try EASetupRecovery.manifestLocale(Data(manifest.utf8), preferred: "de_DE"), "en_US")
+        XCTAssertEqual(try EASetupRecovery.manifestLocale(Data(manifest.replacingOccurrences(of: "executable", with: "touchup").utf8), preferred: "en_US"), "en_US")
         try EASetupRecovery.verifyUnchanged(p)
         let installer = folder.appendingPathComponent("__Installer")
         try FileManager.default.moveItem(at: installer.appendingPathComponent("Touchup.exe"), to: installer.appendingPathComponent("touchup.exe"))
@@ -91,6 +92,43 @@ final class EASetupRecoveryTests: XCTestCase {
         XCTAssertTrue(PCLaunchers.installedGames(.ea, host: host).contains { game in
             BattleNet.unixPath(game.installLocation, prefix: host.prefix)?.resolvingSymlinksInPath().standardizedFileURL == target.resolvingSymlinksInPath().standardizedFileURL
         })
+    }
+
+    func testDLCDiscoveryUsesBaseRootAndDoesNotFollowLinks() throws {
+        let (host, folder) = try fixture(), fm = FileManager.default
+        defer { try? fm.removeItem(at: host.appURL) }
+        let addon = folder.appendingPathComponent("addins/An add-on")
+        let installer = addon.appendingPathComponent("__Installer")
+        try NokPaths.ensure(addon)
+        try fm.copyItem(at: folder.appendingPathComponent("__Installer"), to: installer)
+        let xml = manifest.replacingOccurrences(of: "install -locale", with: "pdlcinstall -locale")
+            .replacingOccurrences(of: "-installPath", with: "-pdlcInstallPath")
+        try Data(xml.utf8).write(to: installer.appendingPathComponent("installerdata.xml"))
+        let plans = try EASetupRecovery.plans(folder: folder, host: host)
+        XCTAssertEqual(plans.count, 2)
+        XCTAssertFalse(plans[0].isDLC); XCTAssertTrue(plans[1].isDLC)
+        XCTAssertEqual(plans[1].windowsFolder, plans[0].windowsFolder)
+        XCTAssertEqual(Array(plans[1].arguments.dropFirst()), ["pdlcinstall", "-locale", "en_US", "-pdlcInstallPath", plans[0].windowsFolder, "-autologging"])
+        XCTAssertThrowsError(try EASetupRecovery.plan(folder: addon, host: host))
+        try fm.createSymbolicLink(at: folder.appendingPathComponent("linked-addon"), withDestinationURL: addon)
+        XCTAssertEqual(try EASetupRecovery.plans(folder: folder, host: host).count, 2)
+        try Data(xml.replacingOccurrences(of: " -autologging", with: " & other.exe").utf8).write(to: installer.appendingPathComponent("installerdata.xml"))
+        XCTAssertThrowsError(try EASetupRecovery.plans(folder: folder, host: host))
+    }
+    func testDownloadedDLCSetupE2E() async throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let app = env["NOKCANDU_EA_TEST_HOST"], let folder = env["NOKCANDU_EA_TEST_DLC_GAME"] else {
+            throw XCTSkip("Requires an authorized EA game with downloaded add-ons")
+        }
+        let host = try XCTUnwrap(GameLibrary.inspect(URL(fileURLWithPath: app)))
+        let plans = try EASetupRecovery.plans(folder: URL(fileURLWithPath: folder), host: host)
+        XCTAssertTrue(plans.count > 1)
+        for plan in plans where plan.isDLC {
+            let log = try await EASetupRecovery.finish(plan, host: host)
+            let text = try String(contentsOf: log, encoding: .utf8)
+            XCTAssertTrue(text.contains("Exit code: 0"), plan.name)
+            XCTAssertTrue(text.contains("Installer finished with exit code: 0"), plan.name)
+        }
     }
 
 }

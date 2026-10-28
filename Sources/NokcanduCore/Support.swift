@@ -107,26 +107,22 @@ public enum Shell {
         p.standardOutput = out
         p.standardError = err
         p.standardInput = FileHandle.nullDevice
-        let collector = OutputCollector()
-        out.fileHandleForReading.readabilityHandler = { collector.append(out: $0.availableData) }
-        err.fileHandleForReading.readabilityHandler = { collector.append(err: $0.availableData) }
+        let output = ProcessOutput(out: out, err: err)
+        defer { output.close() }
         try p.run()
         let deadline = Date().addingTimeInterval(timeout)
         var cancelled = false
         var stoppingAt: Date?
         while p.isRunning {
+            output.drain()
             if cancellable && Task.isCancelled { cancelled = true }
             if stoppingAt == nil && (cancelled || Date() > deadline) { p.terminate(); stoppingAt = Date() }
             if let stoppingAt, Date().timeIntervalSince(stoppingAt) > 2 { kill(p.processIdentifier, SIGKILL) }
             Thread.sleep(forTimeInterval: 0.05)
         }
-        p.waitUntilExit()
-        out.fileHandleForReading.readabilityHandler = nil
-        err.fileHandleForReading.readabilityHandler = nil
-        collector.append(out: out.fileHandleForReading.readDataToEndOfFile())
-        collector.append(err: err.fileHandleForReading.readDataToEndOfFile())
+        output.drain()
         if cancelled { throw CancellationError() }
-        return ShellResult(status: p.terminationStatus, stdout: collector.stdout, stderr: collector.stderr)
+        return ShellResult(status: p.terminationStatus, stdout: output.collector.stdout, stderr: output.collector.stderr)
     }
 
     /// Async wrapper with cooperative cancellation (terminates the child on cancel).
@@ -142,35 +138,27 @@ public enum Shell {
         p.standardOutput = out
         p.standardError = err
         p.standardInput = FileHandle.nullDevice
-        let collector = OutputCollector()
-        out.fileHandleForReading.readabilityHandler = { h in
-            let d = h.availableData
-            collector.append(out: d)
-            if let onOutput, let s = String(data: d, encoding: .utf8), !s.isEmpty { onOutput(s) }
-        }
-        err.fileHandleForReading.readabilityHandler = { h in
-            let d = h.availableData
-            collector.append(err: d)
-            if let onOutput, let s = String(data: d, encoding: .utf8), !s.isEmpty { onOutput(s) }
-        }
+        let output = ProcessOutput(out: out, err: err)
+        defer { output.close() }
+        try Task.checkCancellation()
         try p.run()
         let deadline = Date().addingTimeInterval(timeout)
+        defer { if p.isRunning { kill(p.processIdentifier, SIGKILL) } }
         try await withTaskCancellationHandler {
             while p.isRunning {
-                if Date() > deadline { p.terminate(); throw NokError("Timed out: \(URL(fileURLWithPath: tool).lastPathComponent)") }
-                try await Task.sleep(nanoseconds: 100_000_000)
+                output.drain(onOutput: onOutput)
+                try Task.checkCancellation()
+                if Date() > deadline { throw NokError("Timed out: \(URL(fileURLWithPath: tool).lastPathComponent)") }
+                try await Task.sleep(nanoseconds: 25_000_000)
             }
         } onCancel: {
-            p.terminate()
+            if p.isRunning { p.terminate() }
         }
-        p.waitUntilExit()
-        out.fileHandleForReading.readabilityHandler = nil
-        err.fileHandleForReading.readabilityHandler = nil
-        // Whatever was still in the pipes when the program exited.
-        collector.append(out: out.fileHandleForReading.readDataToEndOfFile())
-        collector.append(err: err.fileHandleForReading.readDataToEndOfFile())
+        // Don't wait for EOF: Windows launchers can leave descendants holding these pipes open.
+        // Nonblocking reads also avoid macOS NSFileHandle EOF callbacks spinning in waitUntilExit.
+        output.drain(onOutput: onOutput)
         try Task.checkCancellation()
-        return ShellResult(status: p.terminationStatus, stdout: collector.stdout, stderr: collector.stderr)
+        return ShellResult(status: p.terminationStatus, stdout: output.collector.stdout, stderr: output.collector.stderr)
     }
 
     public static func which(_ name: String, extra: [String] = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]) -> String? {
@@ -276,4 +264,35 @@ public func isCloudOnly(_ url: URL) -> Bool {
     guard let v = try? url.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey]),
           let s = v.ubiquitousItemDownloadingStatus else { return false }
     return s == .notDownloaded
+}
+
+/// Poll the child pipes without blocking on descendants or registering Foundation EOF callbacks.
+private final class ProcessOutput {
+    let collector = OutputCollector()
+    let out: Pipe, err: Pipe
+    init(out: Pipe, err: Pipe) {
+        self.out = out; self.err = err
+        for file in [out.fileHandleForReading, err.fileHandleForReading] {
+            let fd = file.fileDescriptor
+            _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+        }
+    }
+    func drain(onOutput: (@Sendable (String) -> Void)? = nil) {
+        for (pipe, stderr) in [(out, false), (err, true)] {
+            var buffer = [UInt8](repeating: 0, count: 32_768)
+            // Bound each turn so an endlessly chatty child cannot starve cancellation/timeouts.
+            for _ in 0..<32 {
+                let count = buffer.withUnsafeMutableBytes { read(pipe.fileHandleForReading.fileDescriptor, $0.baseAddress, $0.count) }
+                if count < 0, errno == EINTR { continue }
+                guard count > 0 else { break }
+                let data = Data(buffer.prefix(count))
+                if stderr { collector.append(err: data) } else { collector.append(out: data) }
+                if let onOutput, let text = String(data: data, encoding: .utf8) { onOutput(text) }
+            }
+        }
+    }
+    func close() {
+        try? out.fileHandleForReading.close(); try? err.fileHandleForReading.close()
+        try? out.fileHandleForWriting.close(); try? err.fileHandleForWriting.close()
+    }
 }

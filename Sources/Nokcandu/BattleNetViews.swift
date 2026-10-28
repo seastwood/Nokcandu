@@ -213,6 +213,7 @@ struct LauncherGamesSection: View {
     @State private var finishingSetup: String?
     @State private var setupMessage: String?
     @State private var setupLog: URL?
+    @State private var restarting = false
 
     var body: some View {
         GroupBox {
@@ -238,6 +239,15 @@ struct LauncherGamesSection: View {
                 }
                 if kind == .ea {
                     Divider()
+                    Button(restarting ? "Restarting EA…" : "Restart EA and Windows Programs") {
+                        restarting = true
+                        Task {
+                            do { try await WineTools.restartHost(for: host) }
+                            catch { model.fail(error) }
+                            restarting = false
+                        }
+                    }.disabled(restarting || finishingSetup != nil)
+                    Text("Closes all EA games and clears stuck Windows services before reopening EA.").font(.caption).foregroundStyle(.secondary)
                     if let name = finishingSetup {
                         HStack { ProgressView().controlSize(.small); Text("Finishing setup for \(name)…") }
                     } else {
@@ -248,7 +258,7 @@ struct LauncherGamesSection: View {
                     if let message = setupMessage { Text(message).font(.caption).textSelection(.enabled) }
                     if let log = setupLog { Button("Show Setup Log") { NSWorkspace.shared.open(log) }.buttonStyle(.link) }
                 }
-                Text("Each game gets its own app that opens \(kind.title) (signed in) and starts the game, using this app's graphics and performance settings. \(kind == .ea ? "The EA app runs in Wine with mixed results; if it won't open, try another graphics mode here." : "Games with anti-cheat may not run.")")
+                Text("Each game gets its own app that opens \(kind.title) (signed in) and starts the game, with its own graphics, launch options and performance settings in Nokcandu. \(kind == .ea ? "The EA app runs in Wine with mixed results; if it won't open, try another graphics mode here." : "Games with anti-cheat may not run.")")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             .padding(6).frame(maxWidth: .infinity, alignment: .leading)
@@ -271,12 +281,15 @@ struct LauncherGamesSection: View {
         panel.message = "Choose the game folder downloaded by EA. Nokcandu will run its original EA setup program and install its included requirements in this EA app’s Windows environment. Keep the game closed while setup runs."
         guard panel.runModal() == .OK, let folder = panel.url else { return }
         do {
-            let plan = try EASetupRecovery.plan(folder: folder, host: host)
-            finishingSetup = plan.name; setupMessage = nil; setupLog = nil
+            let plans = try EASetupRecovery.plans(folder: folder, host: host)
+            finishingSetup = folder.lastPathComponent; setupMessage = nil; setupLog = nil
             Task {
                 do {
-                    setupLog = try await EASetupRecovery.finish(plan, host: host)
-                    setupMessage = "Setup finished for \(plan.name). If EA still shows an installation error, quit and reopen EA, then press Refresh here."
+                    for (index, plan) in plans.enumerated() {
+                        finishingSetup = "\(plan.name) (\(index + 1) of \(plans.count))"
+                        setupLog = try await EASetupRecovery.finish(plan, host: host)
+                    }
+                    setupMessage = "Finished \(plans.count) setup package(s), including downloaded add-ons. If EA still shows an installation error, restart EA, then press Refresh here."
                     load(); model.refresh()
                 } catch { setupMessage = error.localizedDescription }
                 finishingSetup = nil
@@ -285,11 +298,17 @@ struct LauncherGamesSection: View {
     }
 
     func add(_ hg: PCLaunchers.HostedGame) {
-        do {
-            let url = try PCLaunchers.addGame(hg, kind: kind, host: host)
-            model.refresh(); model.selection = url.path
-            model.say("Added \(hg.name). Play starts it through \(kind.title).")
-        } catch { model.fail(error) }
+        finishingSetup = hg.name
+        Task {
+            do {
+                if kind == .ea, let folder = BattleNet.unixPath(hg.installLocation, prefix: host.prefix),
+                   PhysXRuntime.required(in: folder) { try await PhysXRuntime.install(for: host) }
+                let url = try PCLaunchers.addGame(hg, kind: kind, host: host)
+                model.refresh(); model.selection = url.path
+                model.say("Added \(hg.name). Play uses its own game settings through \(kind.title).")
+            } catch { model.fail(error) }
+            finishingSetup = nil
+        }
     }
 }
 

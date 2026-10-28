@@ -145,7 +145,7 @@ public enum GameMover {
         if g.usesSharedSteam { return "Steam games are stored inside Steam, so they move with it, not on their own." }
         if BattleNet.isHost(g) { return "Battle.net stays in the standard folder — your Blizzard games run inside it." }
         if g.battleNet != nil { return "Blizzard games are stored inside Battle.net, so they can't be moved on their own." }
-        if let h = g.hosted { return "This game is stored inside the \(h.launcher.title) app, so it can't be moved on its own." }
+        if let h = g.hosted { return "Use \(h.launcher.title)’s storage controls to move its installed game files. This small Nokcandu app is only a shortcut." }
         if let k = PCLaunchers.kind(of: g) { return "\(k.title) stays in the standard folder — your \(k.title) games run inside it." }
         if case .launcherRunning = GameLauncher.runState(of: g) { return "Quit the game first." }
         return nil

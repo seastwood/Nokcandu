@@ -11,11 +11,12 @@ public enum EASetupRecovery {
         public let program: URL
         public let locale: String
         public let windowsFolder: String
+        public let isDLC: Bool
         let hostApp: URL
         let fingerprints: [URL: String]
         public var name: String { folder.lastPathComponent }
         public var arguments: [String] {
-            [program.path, "install", "-locale", locale, "-installPath", windowsFolder, "-autologging"]
+            [program.path, isDLC ? "pdlcinstall" : "install", "-locale", locale, isDLC ? "-pdlcInstallPath" : "-installPath", windowsFolder, "-autologging"]
         }
     }
     private final class Manifest: NSObject, XMLParserDelegate {
@@ -30,23 +31,51 @@ public enum EASetupRecovery {
         }
         func parser(_ parser: XMLParser, foundCharacters string: String) { text += string }
         func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName: String?) {
-            if stack == ["game", "executable", "filePath"] { paths.append(text.trimmingCharacters(in: .whitespacesAndNewlines)) }
-            if stack == ["game", "executable", "parameters"] { parameters.append(text.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            if stack == ["game", "executable", "filePath"] || stack == ["game", "touchup", "filePath"] { paths.append(text.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            if stack == ["game", "executable", "parameters"] || stack == ["game", "touchup", "parameters"] { parameters.append(text.trimmingCharacters(in: .whitespacesAndNewlines)) }
             _ = stack.popLast(); text = ""
         }
     }
-    static func manifestLocale(_ data: Data, preferred: String) throws -> String {
+    static func manifest(_ data: Data, preferred: String) throws -> (locale: String, dlc: Bool) {
         guard data.count < 2_000_000 else { throw NokError("This EA setup manifest is too large.") }
         let reader = Manifest(), parser = XMLParser(data: data)
         parser.shouldResolveExternalEntities = false; parser.delegate = reader
         guard parser.parse(), reader.root == "game", reader.paths.count == 1,
               reader.paths[0].lowercased() == "/__installer/touchup.exe",
-              reader.parameters == [#"install -locale {locale} -installPath "{installLocation}" -autologging"#],
+              (reader.parameters == [#"install -locale {locale} -installPath "{installLocation}" -autologging"#] ||
+               reader.parameters == [#"pdlcinstall -locale {locale} -pdlcInstallPath "{installLocation}" -autologging"#]),
               !reader.locales.isEmpty else {
             throw NokError("This folder doesn't have a supported EA game setup package. Choose the game folder downloaded by EA.")
         }
-        if reader.locales.contains(preferred) { return preferred }
-        return reader.locales.contains("en_US") ? "en_US" : reader.locales[0]
+        let locale = reader.locales.contains(preferred) ? preferred : reader.locales.contains("en_US") ? "en_US" : reader.locales[0]
+        return (locale, reader.parameters[0].hasPrefix("pdlcinstall "))
+    }
+    static func manifestLocale(_ data: Data, preferred: String) throws -> String {
+        try manifest(data, preferred: preferred).locale
+    }
+    /// EA DLC manifests use the base game's installLocation, even when Touchup lives in an add-on.
+    /// Discover only bounded, contained original packages; never follow directory links out of the game.
+    public static func plans(folder: URL, host: InstalledGame) throws -> [Plan] {
+        let base = try plan(folder: folder, host: host)
+        guard !base.isDLC else { throw NokError("Choose the base game folder, so add-ons use the correct installation location.") }
+        var result = [base]
+        let fm = FileManager.default, canonical = folder.resolvingSymlinksInPath().path
+        guard let walk = fm.enumerator(at: folder, includingPropertiesForKeys: [.isSymbolicLinkKey, .isDirectoryKey], options: [.skipsHiddenFiles]) else { return result }
+        for case let file as URL in walk {
+            let info = try file.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
+            if info.isSymbolicLink == true { continue }
+            if walk.level > 4 { if info.isDirectory == true { walk.skipDescendants() }; continue }
+            guard info.isDirectory == true, file.lastPathComponent == "__Installer" else { continue }
+            walk.skipDescendants()
+            let package = file.deletingLastPathComponent()
+            guard package.standardizedFileURL != folder.standardizedFileURL,
+                  package.resolvingSymlinksInPath().path.hasPrefix(canonical + "/"),
+                  fm.fileExists(atPath: file.appendingPathComponent("installerdata.xml").path) else { continue }
+            // An unsupported manifest is reported, not silently counted as installed.
+            let addOn = try plan(folder: package, host: host, installRoot: folder)
+            if addOn.isDLC { result.append(addOn) }
+        }
+        return [base] + result.dropFirst().sorted { $0.folder.path < $1.folder.path }
     }
     static func windowsFolder(_ folder: URL, host: InstalledGame) throws -> String {
         if let path = CustomGames.windowsPath(forUnix: folder, prefix: host.prefix) { return path }
@@ -66,7 +95,7 @@ public enum EASetupRecovery {
         }
         throw NokError("This game folder isn't available inside EA's Windows environment. Add its drive under Game Drives first.")
     }
-    public static func plan(folder selected: URL, host: InstalledGame, preferredLocale: String = Locale.current.identifier) throws -> Plan {
+    public static func plan(folder selected: URL, host: InstalledGame, preferredLocale: String = Locale.current.identifier, installRoot: URL? = nil) throws -> Plan {
         guard PCLaunchers.kind(of: host) == .ea else { throw NokError("Choose your EA app in Nokcandu first.") }
         let folder = selected.standardizedFileURL, installer = folder.appendingPathComponent("__Installer")
         let fm = FileManager.default
@@ -84,9 +113,11 @@ public enum EASetupRecovery {
               PEFile.inspect(files[0]) != nil else {
             throw NokError("Choose the EA game's folder containing __Installer, Touchup.exe and Touchup.dat. Its setup files must be intact.")
         }
-        let locale = try manifestLocale(Data(contentsOf: files[2]), preferred: preferredLocale)
-        let windows = try windowsFolder(folder, host: host)
-        return Plan(folder: folder, program: files[0], locale: locale, windowsFolder: windows, hostApp: host.appURL.standardizedFileURL,
+        let metadata = try manifest(Data(contentsOf: files[2]), preferred: preferredLocale)
+        if metadata.dlc && installRoot == nil { throw NokError("Choose the base game folder to finish its downloaded add-ons.") }
+        if let installRoot, !folder.resolvingSymlinksInPath().path.hasPrefix(installRoot.resolvingSymlinksInPath().path + "/") { throw NokError("The add-on is outside its game folder.") }
+        let windows = try windowsFolder(installRoot ?? folder, host: host)
+        return Plan(folder: folder, program: files[0], locale: metadata.locale, windowsFolder: windows, isDLC: metadata.dlc, hostApp: host.appURL.standardizedFileURL,
                     fingerprints: try Dictionary(uniqueKeysWithValues: files.map { ($0, try Hashing.sha256(file: $0)) }))
     }
     static func verifyUnchanged(_ plan: Plan) throws {
@@ -123,6 +154,9 @@ public enum EASetupRecovery {
         }
         try Data(diagnostic.utf8).write(to: log, options: .atomic)
         guard result.ok else { throw NokError("EA's game setup didn't finish (exit \(result.status)). Details: \(log.path)") }
+        if !plan.isDLC, PhysXRuntime.required(in: plan.folder) {
+            try await PhysXRuntime.install(for: host)
+        }
         return log
     }
 }

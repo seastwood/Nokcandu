@@ -58,7 +58,7 @@ struct MouseSection: View {
                     Text("Raw mouse capture currently has a reported compatibility issue in Battlefield 1942. Leave it off and use the game's normal mouse input.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Text(steam ? "Applies to all Steam games. You can turn it on or off while playing; changes apply within a second."
+                Text(game.hosted != nil ? "Applies only to this game, including when EA starts it. You can change it while playing; changes apply within a second." : steam ? "Applies to all Steam games. You can turn it on or off while playing; changes apply within a second."
                            : "You can turn it on or off while playing; changes apply within a second.")
                     .font(.caption).foregroundStyle(.secondary)
             }

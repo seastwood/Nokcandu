@@ -36,8 +36,8 @@ public enum WineTools {
     /// The app whose Wine engine and prefix a game uses (Steam games use the shared Steam app).
     public static func hostContents(for g: InstalledGame) -> URL? {
         if g.usesSharedSteam { return SharedSteam.isSetUp ? SharedSteam.contents : nil }
-        if let l = g.battleNet {
-            let h = URL(fileURLWithPath: l.hostApp).appendingPathComponent("Contents")
+        if let hostApp = g.battleNet?.hostApp ?? g.hosted?.hostApp {
+            let h = URL(fileURLWithPath: hostApp).appendingPathComponent("Contents")
             return FileManager.default.isExecutableFile(atPath: h.appendingPathComponent("SharedSupport/wine/bin/wine").path) ? h : nil
         }
         let c = g.contents
@@ -77,10 +77,32 @@ public enum WineTools {
     public static func stopAll(for g: InstalledGame) async throws {
         guard let c = hostContents(for: g) else { throw NokError("This game has no Windows environment.") }
         let ws = c.appendingPathComponent("SharedSupport/wine/bin/wineserver").path
-        _ = try await Shell.runAsync(ws, ["-k"], env: environment(contents: c), timeout: 60)
+        let stopped = try await Shell.runAsync(ws, ["-k"], env: environment(contents: c), timeout: 60)
+        guard stopped.ok else { throw NokError("Couldn’t stop this Windows environment. Try again before restarting it.") }
+        let waited = try await Shell.runAsync(ws, ["-w"], env: environment(contents: c), timeout: 60)
+        guard waited.ok else { throw NokError("Windows programs are still closing. Wait before restarting the launcher.") }
+        // The shell supervisor may briefly outlive wineserver; wait before removing its lock.
+        let pidFile = c.appendingPathComponent("SharedSupport/Logs/game.lock/pid")
+        if let text = try? String(contentsOf: pidFile, encoding: .utf8), let pid = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 1 {
+            for _ in 0..<100 {
+                if kill(pid, 0) != 0 { break }
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            if kill(pid, 0) == 0 { throw NokError("The launcher is still closing. Wait a moment and try again.") }
+        }
         for lock in ["game.lock", "steam.lock"] {
             try? FileManager.default.removeItem(at: c.appendingPathComponent("SharedSupport/Logs/\(lock)"))
         }
+    }
+
+    /// Close this shared environment, migrate only fingerprinted generated launchers while closed,
+    /// then reopen its host. Reopening immediately can otherwise skip a pending launcher upgrade.
+    public static func restartHost(for game: InstalledGame) async throws {
+        guard let contents = hostContents(for: game) else { throw NokError("This game has no Windows environment.") }
+        try await stopAll(for: game)
+        guard let host = GameLibrary.inspect(contents.deletingLastPathComponent()) else { throw NokError("The launcher app is missing.") }
+        CustomGames.upgradeLaunchers([host])
+        try GameLauncher.launch(GameLibrary.inspect(host.appURL) ?? host)
     }
 
     /// Runs any Windows program (an installer, a patch, a tool) once inside this game's environment.
@@ -108,6 +130,11 @@ public enum WineTools {
             let loc = BattleNet.installedGames(host: host).first { $0.uid == l.uid }?.installLocation
             add("Game folder", loc.flatMap { BattleNet.unixPath($0, prefix: host.prefix) }, "folder")
             add("Battle.net's C: drive", host.prefix.appendingPathComponent("drive_c"), "internaldrive")
+            return out
+        }
+        if let link = g.hosted, let host = GameLibrary.inspect(URL(fileURLWithPath: link.hostApp)) {
+            add("Game folder", PCLaunchers.installFolder(link, host: host), "folder")
+            add("\(link.launcher.title)'s C: drive", host.prefix.appendingPathComponent("drive_c"), "internaldrive")
             return out
         }
         if g.usesSharedSteam, let id = g.custom?.steamAppID {

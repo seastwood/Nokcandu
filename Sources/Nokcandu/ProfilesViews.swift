@@ -419,7 +419,10 @@ enum ProfileText {
         if let e = p.environment, !e.isEmpty { s.append(e.keys.sorted().joined(separator: ", ")) }
         if let r = p.rawMouse, r > 0 { s.append("raw mouse \(String(format: "%.2g", r))×") }
         if p.rawMouseFrameSync == true { s.append("once-per-frame mouse") }
-        if let d = p.gameDisplay, d.resolution.count == 2 { s.append("BF1942 \(d.resolution[0]) × \(d.resolution[1])" + (d.menuCorrection ? "; menu correction" : "")) }
+        if let d = p.gameDisplay, d.resolution.count == 2 {
+            if d.recipe == "bfbc2-desktop" { s.append("BC2: fullscreen at this Mac's desktop size") }
+            else { s.append("\(d.recipe == "bfbc2" ? "BC2" : "BF1942") \(d.resolution[0]) × \(d.resolution[1])" + (d.menuCorrection ? "; menu correction" : "")) }
+        }
         if p.fixes?.contains("cinematic") == true { s.append("cinematic fix") }
         for fix in CompatibilityFix.allCases where p.fixes?.contains(fix.id) == true { s.append(fix.title) }
         if let d = p.drives { s.append(d.map { "\($0):" }.joined(separator: " ")) }
