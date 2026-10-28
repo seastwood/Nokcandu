@@ -72,7 +72,7 @@ enum EAAppInstaller {
     }
     static func configureClient(_ game: InstalledGame, log: @escaping @Sendable (String) -> Void) async throws {
         // Shared optional components, referenced by the same IDs in saved and shared profiles.
-        for fix in [CompatibilityFix.bundledVC, .crossProcessWindows] {
+        for fix in [CompatibilityFix.bundledVC, .crossProcessWindows, .shaderCompiler47, .borderless] {
             let current = CompatibilityFixes.fresh(game)
             if !CompatibilityFixes.isInstalled(fix, for: current) {
                 try await CompatibilityFixes.install(fix, for: current, log: log)

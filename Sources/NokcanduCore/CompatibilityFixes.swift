@@ -4,10 +4,12 @@ import Foundation
 /// downloads or patch bytes. DLLs are private to the selected executable's folder; Wine's system DLLs
 /// and registry are untouched. File undo uses the same conflict-aware journal as other Nokcandu edits.
 public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable {
+    case shaderCompiler47 = "shader-compiler-47"
     case directx9Extras = "directx9-extras", d3d8to9, borderless, cursorVisibility = "cursor-visibility", openUA = "openua-display", bundledVC = "bundled-vc-runtime", crossProcessWindows = "cross-process-windows"
     public var id: String { rawValue }
     public var title: String {
         switch self {
+        case .shaderCompiler47: "Microsoft shader compiler"
         case .bundledVC: "Use bundled Visual C++ libraries"
         case .crossProcessWindows: "Fix launcher windows (DXMT)"
         case .openUA: "OpenUA recommended display settings"
@@ -19,6 +21,7 @@ public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable {
     }
     public var detail: String {
         switch self {
+        case .shaderCompiler47: "Downloads Microsoft’s d3dcompiler_47 library for shaders Wine cannot compile, which can cause missing icons, blank browser content, or effects. Restart afterward."
         case .bundledVC: "Uses the Microsoft Visual C++ libraries already beside this program, instead of Wine’s replacements. Try this when an app waits before opening a window. Downloads nothing; restart afterward."
         case .crossProcessWindows: "Allows DXMT to display windows drawn by another process, as used by some game launchers and embedded browsers. Requires DXMT graphics; restart afterward."
         case .openUA: "Fixes the invisible game window and tiny menu text. Uses OpenUA’s older OpenGL path and adds the original menu resolution. Only for OpenUA; restart the game afterward. Saved and shared profiles include this fix."
@@ -148,6 +151,27 @@ public enum CompatibilityFixes {
         try Data(contentsOf: temp).write(to: cached, options: .atomic)
         return cached
     }
+    struct ShaderCompilerPackage {
+        var cab, member, sha256: String
+        static func microsoft(is64Bit: Bool) -> Self {
+            is64Bit ? Self(cab: "61d57a7a82309cd161a854a6f4619e52", member: "fil3585cb2ea5db13cc0838f8d06b5c9679",
+                sha256: "f736e161547095bb8d98c636b85fdfeb4070fefeee3c3745db3ce88f6eb1d9de") :
+                Self(cab: "2630bae9681db6a9f6722366f47d055c", member: "fila319f706acfa16d6707473ebf29bdc7f",
+                sha256: "d0440eb81c532dc23639c0c63f2fcde9deddb23bb4cce01c19ac6b96cc3e269d")
+        }
+    }
+    static func shaderCompiler47(for g: InstalledGame, work: URL, log: @escaping @Sendable (String) -> Void) async throws -> Data {
+        guard let arch = program(g).flatMap(PEFile.inspect)?.is64Bit else { throw NokError("The game's program is missing or invalid.") }
+        let package = ShaderCompilerPackage.microsoft(is64Bit: arch)
+        let source = try await verifiedDownload("shader47-\(package.cab).cab",
+            url: "https://download.microsoft.com/download/B/0/C/B0C80BA3-8AD6-4958-810B-6882485230B5/standalonesdk/Installers/\(package.cab).cab",
+            sha: package.sha256, log: log)
+        guard let cab = NokPaths.bundledResource("cabextract") else { throw NokError("Nokcandu's installer reader is missing. Update Nokcandu first.") }
+        let r = try await Shell.runAsync(cab.path, ["-q", "-L", "-F", package.member, "-d", work.path, source.path], timeout: 120)
+        let file = work.appendingPathComponent(package.member)
+        guard r.ok, PEFile.inspect(file)?.is64Bit == arch else { throw NokError("Microsoft's shader library could not be extracted or has the wrong architecture.") }
+        return try Data(contentsOf: file)
+    }
     static func extras(for g: InstalledGame, work: URL, log: @escaping @Sendable (String) -> Void) async throws -> [String: Data] {
         // Pin for the current Microsoft-hosted June 2010 redistributable. Fetch from Microsoft;
         // extract only these two libraries, rather than installing the entire DirectX runtime.
@@ -201,6 +225,9 @@ public enum CompatibilityFixes {
         try NokPaths.ensure(work); defer { try? FileManager.default.removeItem(at: work) }
         var files: [URL: Data] = [:], applied: [String: String] = [:], appliedEnv: [String: String] = [:]
         switch fix {
+        case .shaderCompiler47:
+            files[exe.deletingLastPathComponent().appendingPathComponent("d3dcompiler_47.dll")] = try await shaderCompiler47(for: g, work: work, log: log)
+            applied = ["d3dcompiler_47": "n,b"]
         case .bundledVC: applied = bundledVCRules(g)
         case .crossProcessWindows: appliedEnv = ["DXMT_ALLOW_CROSS_PROCESS_SWAPCHAIN": "1"]
         case .openUA:

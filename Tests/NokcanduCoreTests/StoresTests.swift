@@ -50,6 +50,44 @@ final class StoresTests: XCTestCase {
         XCTAssertTrue(try Shell.run("/bin/bash", ["-n", f.path]).ok)
     }
 
+    func testHostedLauncherUsesOnlyItsOwnLiveHostAndPreservesManualEdits() throws {
+        let fm = FileManager.default
+        let app = fm.temporaryDirectory.appendingPathComponent("Host with spaces-\(UUID().uuidString).app")
+        defer { try? fm.removeItem(at: app) }
+        let contents = app.appendingPathComponent("Contents")
+        let support = contents.appendingPathComponent("SharedSupport")
+        let lock = support.appendingPathComponent("Logs/game.lock")
+        let launcher = contents.appendingPathComponent("MacOS/game-launcher")
+        try fm.createDirectory(at: launcher.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fm.createDirectory(at: lock, withIntermediateDirectories: true)
+        try "#!/bin/bash\nsleep 30\n".write(to: launcher, atomically: true, encoding: .utf8)
+        let running = Process(); running.executableURL = URL(fileURLWithPath: "/bin/bash"); running.arguments = [launcher.path]
+        try running.run()
+        defer { running.terminate() }
+        let link = HostedGameLink(hostApp: app.path, launcher: .ea, id: "game", name: "Game", exe: nil)
+        let check = CustomGames.shellQuote
+        let script = "SUPPORT=\(check(support.path))\nHC=\(check(contents.path))\n" + PCLaunchers.hostRunningCheck(link) + "\nup\n"
+        let probe = app.appendingPathComponent("check.sh")
+        try script.write(to: probe, atomically: true, encoding: .utf8)
+        // An unrelated live process cannot make another host appear ready.
+        try "\(ProcessInfo.processInfo.processIdentifier)".write(to: lock.appendingPathComponent("pid"), atomically: true, encoding: .utf8)
+        XCTAssertFalse(try Shell.run("/bin/bash", [probe.path]).ok)
+        try "\(running.processIdentifier)".write(to: lock.appendingPathComponent("pid"), atomically: true, encoding: .utf8)
+        XCTAssertTrue(try Shell.run("/bin/bash", [probe.path]).ok)
+        try "bad".write(to: lock.appendingPathComponent("pid"), atomically: true, encoding: .utf8)
+        XCTAssertFalse(try Shell.run("/bin/bash", [probe.path]).ok)
+
+        let game = InstalledGame(appURL: app, name: "Game", hosted: link)
+        let legacy = PCLaunchers.launcherScript(link, legacyProcessDetection: true)
+        try legacy.write(to: launcher, atomically: true, encoding: .utf8)
+        PCLaunchers.refreshLaunchers([game])
+        XCTAssertEqual(try String(contentsOf: launcher, encoding: .utf8), PCLaunchers.launcherScript(link))
+        let edited = legacy + "\n# My custom launch settings\n"
+        try edited.write(to: launcher, atomically: true, encoding: .utf8)
+        PCLaunchers.refreshLaunchers([game])
+        XCTAssertEqual(try String(contentsOf: launcher, encoding: .utf8), edited)
+    }
+
     func testLauncherGamesFromRegistry() throws {
         let fm = FileManager.default
         let app = fm.temporaryDirectory.appendingPathComponent("nok-pcl-\(UUID().uuidString).app")

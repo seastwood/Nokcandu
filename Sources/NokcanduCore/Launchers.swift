@@ -173,6 +173,9 @@ public enum PCLaunchers {
 
     /// Opens the launcher app (signed in) if it isn't running, waits for it, then starts the game.
     public static func launcherScript(_ l: HostedGameLink) -> String {
+        launcherScript(l, legacyProcessDetection: false)
+    }
+    static func launcherScript(_ l: HostedGameLink, legacyProcessDetection: Bool) -> String {
         let q = CustomGames.shellQuote
         let start: String
         switch l.launcher {
@@ -198,7 +201,7 @@ public enum PCLaunchers {
         export WINEMSYNC=1
         export PATH="$SUPPORT/wine/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         LAUNCHER_EXE=\(q(l.launcher.defaultExe))
-        up() { /bin/ps -axo command= 2>/dev/null | /usr/bin/grep -qiE \(q(l.launcher.processPattern)); }
+        \(hostRunningCheck(l, legacy: legacyProcessDetection))
         mkdir -p "$SUPPORT/Logs"
         if ! up; then
          /usr/bin/open -g "$HOST"
@@ -215,13 +218,26 @@ public enum PCLaunchers {
         """
     }
 
+    static func hostRunningCheck(_ l: HostedGameLink, legacy: Bool = false) -> String {
+        if legacy { return "up() { /bin/ps -axo command= 2>/dev/null | /usr/bin/grep -qiE \(CustomGames.shellQuote(l.launcher.processPattern)); }" }
+        return """
+        up() {
+         local launcher_pid
+         launcher_pid=$(cat "$SUPPORT/Logs/game.lock/pid" 2>/dev/null || true)
+         [[ "$launcher_pid" =~ ^[0-9]+$ ]] && [ "$launcher_pid" -gt 1 ] && kill -0 "$launcher_pid" 2>/dev/null || return 1
+         /bin/ps -p "$launcher_pid" -o command= 2>/dev/null | /usr/bin/grep -Fq -- "$HC/MacOS/"
+        }
+        """
+    }
+
     /// Rewrites launcher-game launchers made by an older Nokcandu.
     public static func refreshLaunchers(_ games: [InstalledGame]) {
         for g in games {
             guard let l = g.hosted else { continue }
             let f = g.appURL.appendingPathComponent("Contents/MacOS/\(CustomGames.launcherName)")
             let want = launcherScript(l)
-            if (try? String(contentsOf: f, encoding: .utf8)) == want { continue }
+            guard let current = try? String(contentsOf: f, encoding: .utf8), current != want,
+                  current == launcherScript(l, legacyProcessDetection: true) else { continue }
             if (try? Data(want.utf8).write(to: f, options: .atomic)) != nil {
                 try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: f.path)
             }

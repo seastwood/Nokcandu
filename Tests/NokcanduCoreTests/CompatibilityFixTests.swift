@@ -35,6 +35,41 @@ final class CompatibilityFixTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: exe), pe)
     }
 
+    func testMicrosoftShaderCompilerBothArchitecturesInstallAndUndoE2E() async throws {
+        guard ProcessInfo.processInfo.environment["NOKCANDU_E2E"] == "1",
+              let root = ProcessInfo.processInfo.environment["NOKCANDU_RESOURCE_ROOT"] else {
+            throw XCTSkip("Requires official Microsoft downloads and built app resources")
+        }
+        let fm = FileManager.default, previousDirectory = fm.currentDirectoryPath
+        XCTAssertTrue(fm.changeCurrentDirectoryPath(root))
+        defer { _ = fm.changeCurrentDirectoryPath(previousDirectory) }
+        for is64 in [false, true] {
+            var g = try ProfileCompletenessTests().fixture()
+            defer { try? fm.removeItem(at: g.appURL) }
+            let exe = try XCTUnwrap(CompatibilityFixes.program(g))
+            var pe = OpenUASettingsTests().pe(); pe[0x99] = is64 ? 2 : 1
+            try pe.write(to: exe)
+            let dll = exe.deletingLastPathComponent().appendingPathComponent("d3dcompiler_47.dll")
+            let original = Data("preserve previous DLL".utf8)
+            try original.write(to: dll)
+            var config = try XCTUnwrap(g.custom)
+            config.environment = ["KEEP": "yes", "WINEDLLOVERRIDES": "d3dcompiler_47=b;dsound=n"]
+            try CustomGames.save(config, to: g); g = CompatibilityFixes.fresh(g)
+            try await CompatibilityFixes.install(.shaderCompiler47, for: g) { print("[shader47]", $0) }
+            g = CompatibilityFixes.fresh(g)
+            XCTAssertEqual(PEFile.inspect(dll)?.is64Bit, is64)
+            XCTAssertEqual(CompatibilityFixes.overrides(g.custom?.environment?["WINEDLLOVERRIDES"])["d3dcompiler_47"], "n,b")
+            XCTAssertEqual(g.custom?.environment?["KEEP"], "yes")
+            let profile = Profiles.make(from: g, rating: .playable, notes: nil, install: nil)
+            XCTAssertTrue(profile.fixes?.contains("shader-compiler-47") == true)
+            try CompatibilityFixes.undo(.shaderCompiler47, for: g) { _ in }
+            XCTAssertEqual(try Data(contentsOf: dll), original)
+            let after = CompatibilityFixes.fresh(g)
+            XCTAssertEqual(CompatibilityFixes.overrides(after.custom?.environment?["WINEDLLOVERRIDES"])["d3dcompiler_47"], "b")
+            XCTAssertEqual(CompatibilityFixes.overrides(after.custom?.environment?["WINEDLLOVERRIDES"])["dsound"], "n")
+        }
+    }
+
     func testGroupedOverridesPreserveOtherComponents() {
         let prior = CompatibilityFixes.overrides("d3d8,d3d9=b;dsound=n;d3dx9_43=n,b")
         XCTAssertEqual(prior["d3d9"], "b")

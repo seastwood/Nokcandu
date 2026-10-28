@@ -846,10 +846,12 @@ static void image_added(const struct mach_header *mh, __unused intptr_t slide) {
 // While a game is in front its busy threads take the performance cores, and Wine's sound mixing threads
 // (translated by Rosetta) can land on efficiency cores and miss their deadlines — choppy, doubled sound
 // that clears up when the game is minimized. Wine names its threads, so raise the sound ones as they start.
+#include "windows-process-role.h"
+static bool helper_enabled = true;
 #include <pthread.h>
 static int my_pthread_setname_np(const char *name) {
     int r = pthread_setname_np(name);
-    if (name && (strstr(name, "dsound") || strstr(name, "audio") || strstr(name, "mmdevapi") || strstr(name, "xaudio")
+    if (helper_enabled && name && (strstr(name, "dsound") || strstr(name, "audio") || strstr(name, "mmdevapi") || strstr(name, "xaudio")
                  || strstr(name, "winmm") || strstr(name, "Miles") || strstr(name, "mss"))) {
         pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
         note(@"sound thread \"%s\" set to top priority", name);
@@ -869,7 +871,7 @@ __attribute__((used)) static const struct { const void *replacement, *original; 
 #include <mach/thread_act.h>
 static kern_return_t my_thread_policy_set(thread_act_t thread, thread_policy_flavor_t flavor,
                                           thread_policy_t info, mach_msg_type_number_t count) {
-    if (flavor == THREAD_TIME_CONSTRAINT_POLICY && getenv("NOKCANDU_NO_REALTIME")) {
+    if (helper_enabled && flavor == THREAD_TIME_CONSTRAINT_POLICY && getenv("NOKCANDU_NO_REALTIME")) {
         static bool told;
         if (!told) { told = true; note(@"real-time thread priority replaced with high normal priority"); }
         thread_precedence_policy_data_t p = { .importance = 63 };
@@ -890,6 +892,7 @@ static __thread bool gl_in_flush;
 
 static void frame_tick(void);
 static void gl_pace(void) {
+    if (!helper_enabled) return;
     frame_tick();
     if (gl_fps_limit <= 0 || gl_in_flush) return;
     static bool told;
@@ -971,14 +974,9 @@ static void run_from_game_app(void) {
     if (!base || strcmp(base + 1, "wine") != 0) return;
     int argc = *_NSGetArgc(); char **argv = *_NSGetArgv();
     if (argc < 2 || !argv[1] || argv[1][0] == '-' || !argv[1][0]) return;
-    // Wine's own background programs stay as they are (no Dock icon, nothing to gain).
+    if (nokcandu_background_program(argv[1])) return;
     const char *prog = argv[1];
     for (const char *q = argv[1]; *q; q++) if (*q == '\\' || *q == '/') prog = q + 1;
-    static const char *skip[] = { "services.exe", "winedevice.exe", "plugplay.exe", "svchost.exe", "explorer.exe",
-        "rpcss.exe", "conhost.exe", "start.exe", "wineboot.exe", "winemenubuilder.exe", "rundll32.exe", "tabtip.exe",
-        "wineconsole.exe", "regedit.exe", "reg.exe", "msiexec.exe", "cmd.exe", "steamerrorreporter.exe", "steamservice.exe", "gldriverquery.exe", "gldriverquery64.exe",
-        "vulkandriverquery.exe", "vulkandriverquery64.exe", "crashhandler.exe", NULL };
-    for (int i = 0; skip[i]; i++) if (strcasecmp(prog, skip[i]) == 0) return;
     Dl_info info;
     if (!dladdr((const void *)run_from_game_app, &info) || !info.dli_fname) return;
     char me[PATH_MAX], dir[PATH_MAX], list[PATH_MAX];
@@ -1018,6 +1016,8 @@ static void run_from_game_app(void) {
 }
 
 __attribute__((constructor)) static void start(void) {
+    int argc = *_NSGetArgc(); char **argv = *_NSGetArgv();
+    if (argc > 1 && nokcandu_background_program(argv[1])) { helper_enabled = false; return; }
     run_from_game_app();
     const char *s = getenv("NOKCANDU_RAW_MOUSE_SCALE");
     if (s && atof(s) > 0.01 && atof(s) < 20) scale = atof(s);
