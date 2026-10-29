@@ -70,3 +70,7 @@ See [EA implementation details](compatibility-fixes.md#ea-app-installation) and 
 ## Keep this knowledge current
 
 For each new issue, follow the [recording checklist](index.md#recording-new-findings). Add durable findings to the relevant implementation notes and update this status summary; retain detailed unsuccessful trials in a dated investigation. Link tests/commits and explicitly correct earlier conclusions when later evidence contradicts them. Do not promote an experiment to a default merely because it sounded plausible.
+
+## Fullscreen containment is a presentation capability, not a window-style flag
+
+Wine 10 explicitly disables virtual desktop configuration for the native Mac driver. The existing borderless helper changes frame styles and geometry; it does not emulate a display or scale/remap game input. A general resizable fullscreen-in-a-window feature needs a verified presentation backend and renderer/input support, then shared settings/profile integration. Do not enable an ineffective checkbox or claim universal support. The [dated feasibility record](investigations/windowed-fullscreen-feasibility-2026-10-29.md) includes primary-source evidence, the proposed prototype boundary and release acceptance tests. No new mode is implemented or tested yet.

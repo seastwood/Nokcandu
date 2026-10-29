@@ -39,3 +39,7 @@ The current update adds drive-aware sizing and verifies the ExFAT files-only pat
 Study workflows and public designs first. Any code or runtime reuse needs its own license and dependency review; MetalSharp identifies its project as AGPL-3.0-or-later, and its components retain their separate licenses. This investigation did not install either product, copy its code, replace the Wine runtime, or change a working game's graphics route. [MetalSharp license and component notices](https://github.com/metalsharp/MetalSharp#license).
 
 Recommended order: actual-renderer reporting, safe test copies, better compatibility evidence, then benchmark-guided defaults and broader renderer/input support.
+
+## Fullscreen inside a resizable window — investigated October 29, 2026
+
+The requested universal window mode would keep a game fullscreen internally while scaling its output into a regular Mac window. Wine's native Mac driver disables its existing virtual desktop option, so this needs a presentation/backend prototype, not merely another picker entry. Correct input mapping and real Steam/EA/Ubisoft handoff are part of the feature. Track capability per engine/renderer and add saved/shared profile support only with verified behavior. See the [feasibility evidence and acceptance tests](investigations/windowed-fullscreen-feasibility-2026-10-29.md). This remains proposed engineering work, with no universal support claim.
