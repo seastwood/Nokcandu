@@ -473,7 +473,8 @@ struct NativeGameDetail: View {
 struct SuggestionsBanner: View {
     @EnvironmentObject var model: AppModel
     let game: InstalledGame
-    @State private var fix: KnownFix?
+    @State private var recs: [Recommendation] = []
+    @State private var unchecked: Set<String> = []
     @State private var profile: CatalogEntry?
     @State private var applying = false
     @State private var log = ""
@@ -504,17 +505,27 @@ struct SuggestionsBanner: View {
                 .padding(12)
                 .background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
             }
-            if let f = fix {
+            if !recs.isEmpty {
                 HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "wrench.and.screwdriver.fill").foregroundStyle(.purple).font(.title3)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Known fixes for this game").font(.body.bold())
-                        if !f.summary.isEmpty { Text(f.summary).font(.callout).foregroundStyle(.secondary) }
-                        ForEach(lines(f), id: \.self) { Text("• " + $0).font(.caption) }
-                        ForEach(f.notApplied, id: \.self) { Text("• " + $0 + " (not applied automatically)").font(.caption).foregroundStyle(.secondary) }
-                        HStack(spacing: 4) {
-                            Text("From Proton's community fixes (umu-protonfixes) —").font(.caption).foregroundStyle(.secondary)
-                            Link("details", destination: f.source).font(.caption)
+                    Image(systemName: "wand.and.stars").foregroundStyle(.purple).font(.title3)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Recommended setup").font(.body.bold())
+                        Text("Based on what this game's files use and how it last ran. Each change can be undone in Settings or Fixes.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        ForEach(recs) { r in
+                            Toggle(isOn: Binding(get: { !unchecked.contains(r.id) },
+                                                 set: { on in if on { unchecked.remove(r.id) } else { unchecked.insert(r.id) } })) {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(r.title).font(.callout)
+                                    Text(r.reason).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                                    if case .knownFix(let f) = r.action {
+                                        ForEach(lines(f), id: \.self) { Text("• " + $0).font(.caption) }
+                                        ForEach(f.notApplied, id: \.self) { Text("• " + $0 + " (not applied automatically)").font(.caption).foregroundStyle(.secondary) }
+                                        Link("From Proton's community fixes (umu-protonfixes)", destination: f.source).font(.caption)
+                                    }
+                                }
+                            }
+                            .toggleStyle(.checkbox).disabled(applying)
                         }
                         if applying || !log.isEmpty { Text(log).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(2) }
                     }
@@ -522,8 +533,9 @@ struct SuggestionsBanner: View {
                     VStack(alignment: .trailing) {
                         if applying { ProgressView().controlSize(.small) }
                         else {
-                            if !f.isEmpty { Button("Apply Fixes") { apply(f) }.buttonStyle(.borderedProminent) }
-                            Button(f.isEmpty ? "Got It" : "Not Now") { KnownFixes.markHandled(game, f); fix = nil }.buttonStyle(.link)
+                            Button("Apply Recommended") { applyRecs() }.buttonStyle(.borderedProminent)
+                                .disabled(recs.allSatisfy { unchecked.contains($0.id) })
+                            Button("Not Now") { dismissRecs() }.buttonStyle(.link)
                         }
                     }
                 }
@@ -537,7 +549,40 @@ struct SuggestionsBanner: View {
                 let best = Profiles.forGame(g, in: Profiles.cached()).first { !$0.reportedBroken && $0.profile.rating != .broken && $0.score >= 0 }
                 if let best, !dismissedProfiles.contains("\(g.id)#\(best.number)") { profile = best }
             }
-            if let f = await KnownFixes.lookup(g), KnownFixes.handled(g) != f.fingerprint { fix = f }
+            await loadRecs()
+        }
+    }
+
+    func loadRecs() async {
+        let g = game
+        let local = await Task.detached(priority: .utility) { Recommendations.forGame(g) }.value
+        recs = Recommendations.withKnownFix(local, await KnownFixes.lookup(g), for: g)
+    }
+
+    func dismissRecs() {
+        Recommendations.dismiss(recs.map(\.id), for: game)
+        for r in recs { if case .knownFix(let f) = r.action { KnownFixes.markHandled(game, f) } }
+        recs = []
+    }
+
+    func applyRecs() {
+        let chosen = recs.filter { !unchecked.contains($0.id) }
+        let rest = recs.filter { unchecked.contains($0.id) }
+        applying = true; log = ""
+        let g = game
+        Task {
+            do {
+                let skipped = try await Recommendations.apply(chosen, to: g) { line in Task { @MainActor in log = line } }
+                // Unchecked ones were a choice: don't offer them again.
+                Recommendations.dismiss(rest.map(\.id), for: g)
+                for r in rest { if case .knownFix(let f) = r.action { KnownFixes.markHandled(g, f) } }
+                model.refresh()
+                if skipped.isEmpty { model.say("Applied the recommended setup to \(g.name).") }
+                else { model.say("Applied what could be applied. Skipped: " + skipped.joined(separator: " ")) }
+                log = ""
+                await loadRecs()
+            } catch { model.fail(error); await loadRecs() }
+            applying = false
         }
     }
 
@@ -550,19 +595,5 @@ struct SuggestionsBanner: View {
             out.append("Use \(o.hasPrefix("n") ? "the game's own" : o.isEmpty ? "no" : "Wine's") \(d).dll")
         }
         return out
-    }
-
-    func apply(_ f: KnownFix) {
-        applying = true; log = ""
-        let g = game
-        Task {
-            do {
-                try await KnownFixes.apply(f, to: g) { line in Task { @MainActor in log = line } }
-                fix = nil
-                model.refresh()
-                model.say("Applied the known fixes to \(g.name).")
-            } catch { model.fail(error) }
-            applying = false
-        }
     }
 }

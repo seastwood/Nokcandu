@@ -129,7 +129,38 @@ public enum StoreTools {
     }
 
     /// Runs a long download, passing each output line to `log`.
-    public static func stream(_ s: Store, _ args: [String], log: @escaping @Sendable (String) -> Void) async throws -> Int32 {
+    /// Download progress from a legendary / gogdl / nile status line ("= Progress: 42.17% …, ETA: 00:03:10").
+    public struct Progress: Sendable, Equatable {
+        public let fraction: Double
+        public let eta: String?
+        public init(fraction: Double, eta: String?) { self.fraction = fraction; self.eta = eta }
+        public static func parse(_ line: String) -> Progress? {
+            guard let r = line.range(of: #"Progress:\s*([0-9]+(?:\.[0-9]+)?)"#, options: .regularExpression) else { return nil }
+            let num = line[r].drop(while: { !$0.isNumber })
+            guard let v = Double(num), v >= 0, v <= 100 else { return nil }
+            var eta: String?
+            if let e = line.range(of: #"ETA:\s*[0-9:]+"#, options: .regularExpression) {
+                let t = line[e].drop(while: { !$0.isNumber })
+                if t != "00:00:00" { eta = String(t) }
+            }
+            return Progress(fraction: v / 100, eta: eta)
+        }
+        /// "42% · about 3 min left"
+        public var label: String {
+            var t = "\(Int(fraction * 100))%"
+            if let eta {
+                let p = eta.split(separator: ":").compactMap { Int($0) }
+                let secs = p.reduce(0) { $0 * 60 + $1 }
+                if secs >= 3600 { t += " · about \(secs / 3600) h \(secs % 3600 / 60) min left" }
+                else if secs >= 60 { t += " · about \(secs / 60) min left" }
+                else if secs > 0 { t += " · less than a minute left" }
+            }
+            return t
+        }
+    }
+
+    public static func stream(_ s: Store, _ args: [String], log: @escaping @Sendable (String) -> Void,
+                              progress: (@Sendable (Progress) -> Void)? = nil) async throws -> Int32 {
         let tool = try await ensure(s)
         try NokPaths.ensure(configDir(s))
         let p = Process()
@@ -145,6 +176,7 @@ public enum StoreTools {
             var parts = (buffer.value + t.replacingOccurrences(of: "\r", with: "\n")).components(separatedBy: "\n")
             buffer.value = parts.removeLast()
             for l in parts where !l.trimmingCharacters(in: .whitespaces).isEmpty {
+                if let progress, let pr = Progress.parse(l) { progress(pr) }
                 // Progress lines come many times a second; pass one every few seconds.
                 let isProgress = l.contains("Progress:") || l.contains("= Progress") || l.contains("%")
                 if isProgress { if Date().timeIntervalSince(lastProgress.value) < 3 { continue }; lastProgress.value = Date() }
@@ -337,7 +369,8 @@ public enum StoreAccounts {
         }
     }
 
-    public static func download(_ g: StoreLink, into folder: URL, log: @escaping @Sendable (String) -> Void) async throws -> (exe: URL, arguments: String) {
+    public static func download(_ g: StoreLink, into folder: URL, log: @escaping @Sendable (String) -> Void,
+                                progress: (@Sendable (StoreTools.Progress) -> Void)? = nil) async throws -> (exe: URL, arguments: String) {
         let fm = FileManager.default
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
         let real = (try? fm.destinationOfSymbolicLink(atPath: folder.path)).map { URL(fileURLWithPath: $0, isDirectory: true) } ?? folder
@@ -345,13 +378,13 @@ public enum StoreAccounts {
         switch g.store {
         case .gog:
             let status = try await StoreTools.stream(.gog, ["download", g.id, "--platform", "windows", "--path", real.path,
-                                                            "--support", real.appendingPathComponent(".gog-support").path, "--skip-dlcs"], log: log)
+                                                            "--support", real.appendingPathComponent(".gog-support").path, "--skip-dlcs"], log: log, progress: progress)
             guard status == 0 else { throw NokError("The GOG download stopped (exit \(status)). Press Continue to resume it.") }
             return try gogPlayTask(in: real, id: g.id)
         case .epic:
             let status = try await StoreTools.stream(.epic, ["install", g.id, "--base-path", real.deletingLastPathComponent().path,
                                                              "--game-folder", real.lastPathComponent, "--platform", "Windows",
-                                                             "--skip-sdl", "-y"], log: log)
+                                                             "--skip-sdl", "-y"], log: log, progress: progress)
             guard status == 0 else { throw NokError("The Epic download stopped (exit \(status)). Press Continue to resume it.") }
             let installed = StoreTools.configDir(.epic).appendingPathComponent("installed.json")
             guard let d = try? Data(contentsOf: installed), let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
@@ -360,7 +393,7 @@ public enum StoreAccounts {
             }
             return (real.appendingPathComponent(exe.replacingOccurrences(of: "\\", with: "/")), "")
         case .amazon:
-            let status = try await StoreTools.stream(.amazon, ["install", g.id, "--path", real.path], log: log)
+            let status = try await StoreTools.stream(.amazon, ["install", g.id, "--path", real.path], log: log, progress: progress)
             guard status == 0 else { throw NokError("The Amazon download stopped (exit \(status)). Press Continue to resume it.") }
             let fuel = real.appendingPathComponent("fuel.json")
             guard let d = try? Data(contentsOf: fuel), let t = String(data: d, encoding: .utf8),

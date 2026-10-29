@@ -82,7 +82,8 @@ public enum NativeGames {
     // MARK: Store Mac versions
 
     /// Downloads a store game's Mac version into `folder/<name>` and adds it to the library.
-    public static func installFromStore(_ g: StoreGame, into folder: URL, log: @escaping @Sendable (String) -> Void) async throws -> NativeGame {
+    public static func installFromStore(_ g: StoreGame, into folder: URL, log: @escaping @Sendable (String) -> Void,
+                                        progress: (@Sendable (StoreTools.Progress) -> Void)? = nil) async throws -> NativeGame {
         try await StoreAccounts.checkSpace(g.store, id: g.id, mac: true, folder: folder)
         let dest = folder.appendingPathComponent(CustomGames.safeFolderName(g.title), isDirectory: true)
         try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
@@ -90,10 +91,10 @@ public enum NativeGames {
         switch g.store {
         case .gog:
             status = try await StoreTools.stream(.gog, ["download", g.id, "--platform", "osx", "--path", dest.path,
-                                                        "--support", dest.appendingPathComponent(".gog-support").path, "--skip-dlcs"], log: log)
+                                                        "--support", dest.appendingPathComponent(".gog-support").path, "--skip-dlcs"], log: log, progress: progress)
         case .epic:
             status = try await StoreTools.stream(.epic, ["install", g.id, "--base-path", folder.path, "--game-folder", dest.lastPathComponent,
-                                                         "--platform", "Mac", "--skip-sdl", "-y"], log: log)
+                                                         "--platform", "Mac", "--skip-sdl", "-y"], log: log, progress: progress)
         case .amazon:
             throw NokError("Amazon Games has no Mac versions.")
         }

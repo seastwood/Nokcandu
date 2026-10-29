@@ -110,7 +110,7 @@ final class BF1942DisplayTests: XCTestCase {
         XCTAssertTrue(try Shell.run("/bin/bash", ["-n", temp.path]).ok)
     }
     func testMenuCopyUpgradePreservesResolutionAndCanUndo() throws {
-        let source = URL(fileURLWithPath: "/Users/seth/Applications/Sikarugir/bf1942-test.app/Contents/SharedSupport/prefix/drive_c/Games/bf1942-test/BF1942.exe")
+        let source = NokPaths.home.appendingPathComponent("Applications/Sikarugir/bf1942-test.app/Contents/SharedSupport/prefix/drive_c/Games/bf1942-test/BF1942.exe")
         guard FileManager.default.fileExists(atPath: source.path) else { throw XCTSkip("local owned game isn't installed") }
         var g = try fixture(); defer { try? FileManager.default.removeItem(at: g.appURL) }
         let root = try XCTUnwrap(BF1942DisplayFix.folder(g))
@@ -143,7 +143,7 @@ final class BF1942DisplayTests: XCTestCase {
     }
 
     func testObservedOriginalWhenAvailable() throws {
-        let p = URL(fileURLWithPath: "/Users/seth/Applications/Sikarugir/bf1942-test.app/Contents/SharedSupport/prefix/drive_c/Games/bf1942-test/BF1942.exe")
+        let p = NokPaths.home.appendingPathComponent("Applications/Sikarugir/bf1942-test.app/Contents/SharedSupport/prefix/drive_c/Games/bf1942-test/BF1942.exe")
         guard FileManager.default.fileExists(atPath: p.path) else { throw XCTSkip("local owned game isn't installed") }
         let original = try Data(contentsOf: p)
         XCTAssertEqual(Hashing.sha256(data: original), BF1942DisplayFix.originalSHA)

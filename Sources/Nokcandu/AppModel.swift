@@ -35,6 +35,11 @@ final class AppModel: ObservableObject {
     @Published var pendingStoreInstall: (name: String, inputs: [String: String], folder: URL)?
     /// Next time the installer opens, go straight to setting up the shared Steam.
     @Published var installerStartsSteamHost = false
+    /// Mac versions downloading from a store right now (job id → latest status), and ones that stopped
+    /// before finishing (saved on disk, so they survive a restart).
+    @Published var storeDownloads: [String: StoreDownload] = [:]
+    @Published var interruptedDownloads: [StoreJob] = []
+    struct StoreDownload: Equatable { var line: String; var progress: StoreTools.Progress? }
     @Published var showUpdates = false
     @Published var showStorage = false
     @Published var showProfiles = false
@@ -58,6 +63,11 @@ final class AppModel: ObservableObject {
     init() {
         SharedSteam.refreshHostScriptsIfNeeded()
         refresh()
+        interruptedDownloads = StoreJobs.all()
+        if let j = interruptedDownloads.first {
+            let more = interruptedDownloads.count > 1 ? " (and \(interruptedDownloads.count - 1) more)" : ""
+            say("\(j.game.title)'s download didn't finish\(more). Resume it in Game Stores.")
+        }
         if Updates.isStale { Task { await checkForUpdates(quiet: true) } }
         Task.detached(priority: .utility) { await AntiCheat.refreshIfStale() }
         timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
@@ -354,6 +364,42 @@ final class AppModel: ObservableObject {
     func setUpLauncher(kind: PCLauncher?) {
         pendingLauncherSetup = .some(kind)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.showInstaller = true }
+    }
+
+    /// Download a store game's Mac version (or pick up one that stopped) — runs here, not in the store
+    /// window, so closing the window doesn't lose it, and is saved so a restart can resume it.
+    func installMac(_ g: StoreGame, into folder: URL) {
+        let job = StoreJob(game: g, folder: folder)
+        guard storeDownloads[job.id] == nil else { return }
+        StoreJobs.add(job)
+        interruptedDownloads.removeAll { $0.id == job.id }
+        storeDownloads[job.id] = StoreDownload(line: "Starting download…", progress: nil)
+        let id = job.id
+        Task {
+            do {
+                let n = try await NativeGames.installFromStore(g, into: folder, log: { line in
+                    Task { @MainActor in self.storeDownloads[id]?.line = line.trimmingCharacters(in: .whitespaces) }
+                }, progress: { p in
+                    Task { @MainActor in self.storeDownloads[id]?.progress = p }
+                })
+                StoreJobs.remove(id)
+                storeDownloads[id] = nil
+                refresh()
+                say("\(n.name) (Mac version) is ready to play.")
+            } catch {
+                storeDownloads[id] = nil
+                interruptedDownloads = StoreJobs.all()
+                banner = Banner(text: "\(g.title): \(error.localizedDescription)", isError: true)
+            }
+        }
+    }
+
+    func resumeDownload(_ j: StoreJob) { installMac(j.game, into: j.folder) }
+
+    func discardDownload(_ j: StoreJob) {
+        StoreJobs.discard(j)
+        interruptedDownloads = StoreJobs.all()
+        say("Stopped \(j.game.title)'s download and moved its files to the Trash.")
     }
 
     func say(_ text: String) { banner = Banner(text: text, isError: false) }

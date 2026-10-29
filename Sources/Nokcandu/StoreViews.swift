@@ -43,8 +43,8 @@ struct StoreLibraryView: View {
         Set(NativeGames.all().compactMap { n in n.store.flatMap { $0.store == store ? $0.id : nil } })
     }
     @State private var wantMac = true
-    /// Mac versions downloading right now: game id → latest status line.
-    @State private var macProgress: [String: String] = [:]
+    func download(_ g: StoreGame) -> AppModel.StoreDownload? { app.storeDownloads[StoreJobs.key(g.store, g.id)] }
+    func interrupted(_ g: StoreGame) -> StoreJob? { app.interruptedDownloads.first { $0.id == StoreJobs.key(g.store, g.id) } }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -160,8 +160,14 @@ struct StoreLibraryView: View {
                     Label(w.short, systemImage: w.verdict == .blocked ? "xmark.shield" : "exclamationmark.shield")
                         .font(.caption).foregroundStyle(w.verdict == .blocked ? .red : .orange).help(w.detail)
                 }
-                if let p = macProgress[g.id] {
-                    Text(p).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                if let d = download(g) {
+                    if let p = d.progress {
+                        ProgressView(value: p.fraction).frame(maxWidth: 260)
+                        Text("Downloading Mac version — \(p.label)").font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                    } else { Text(d.line).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                } else if let j = interrupted(g) {
+                    Text("Download stopped before finishing — Resume picks up where it left off (in \(GameFolders.volumeName(j.folder))).")
+                        .font(.caption).foregroundStyle(.orange)
                 } else if installedMacIDs.contains(g.id) {
                     Text("Mac version installed").font(.caption).foregroundStyle(.green)
                 } else if g.mac {
@@ -169,8 +175,12 @@ struct StoreLibraryView: View {
                 }
             }
             Spacer()
-            if macProgress[g.id] != nil {
-                ProgressView().controlSize(.small)
+            if download(g) != nil {
+                if download(g)?.progress == nil { ProgressView().controlSize(.small) }
+            } else if let j = interrupted(g) {
+                Button("Discard") { app.discardDownload(j) }
+                    .help("Forget this download and move the files downloaded so far to the Trash.")
+                Button("Resume") { app.resumeDownload(j) }.buttonStyle(.borderedProminent)
             } else if installedIDs.contains(g.id) || installedMacIDs.contains(g.id) {
                 Text("Installed").font(.caption).foregroundStyle(.secondary)
             } else if choosing != g.id {
@@ -284,21 +294,7 @@ struct StoreLibraryView: View {
             error = "\(GameFolders.volumeName(folder)) can't hold Mac apps. Pick this Mac or a Mac-formatted drive, or install the Windows version there."
             return
         }
-        let target = folder
-        macProgress[g.id] = "Starting download…"
-        Task {
-            do {
-                let n = try await NativeGames.installFromStore(g, into: target) { line in
-                    Task { @MainActor in macProgress[g.id] = line.trimmingCharacters(in: .whitespaces) }
-                }
-                macProgress[g.id] = nil
-                app.refresh()
-                app.say("\(n.name) (Mac version) is ready to play.")
-            } catch {
-                macProgress[g.id] = nil
-                self.error = error.localizedDescription
-            }
-        }
+        app.installMac(g, into: folder)
     }
 
     func install(_ g: StoreGame) {
