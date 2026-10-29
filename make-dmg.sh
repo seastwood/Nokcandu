@@ -31,5 +31,11 @@ DMG="build/Nokcandu-$VERSION.dmg"
 rm -f "$DMG"
 hdiutil create -volname "Nokcandu $VERSION" -srcfolder "$STAGE" -ov -format UDZO -fs APFS "$DMG" >/dev/null
 rm -rf "$(dirname "$STAGE")"
+# Notarize when Apple credentials are available (Developer ID builds); otherwise the DMG is left as is.
+if [ -n "${NOTARY_APPLE_ID:-}" ] && [ -n "${NOTARY_TEAM_ID:-}" ] && [ -n "${NOTARY_PASSWORD:-}" ] && [ -n "${NOKCANDU_SIGN_IDENTITY:-}" ]; then
+  codesign --force --timestamp --sign "$NOKCANDU_SIGN_IDENTITY" "$DMG"
+  xcrun notarytool submit "$DMG" --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD" --wait
+  xcrun stapler staple "$DMG"
+fi
 shasum -a 256 "$DMG" | tee "$DMG.sha256"
 echo "Packaged $(pwd)/$DMG"

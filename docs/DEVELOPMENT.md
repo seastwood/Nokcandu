@@ -72,3 +72,21 @@ Downloading Wine engines (runtime cache is imported from a working app), checksu
 - `Sources/Nokcandu` — SwiftUI app
 - `Sources/NokcanduScreenSize` — prints the scaled desktop size (installed as each game's `Resources/screen-size`)
 - `Resources` — kit helpers (`refresh-generals-launcher.py`, `build-icu-adapter.py`), launcher template, icon
+
+## Notarized releases (optional)
+
+Releases are built by GitHub Actions. Without Apple credentials they're signed with the self-made
+"Nokcandu Signing" identity (or ad hoc) and macOS asks people to approve the first open. With an Apple
+Developer account, add these repository secrets and the release workflow signs with Developer ID,
+enables the hardened runtime, notarizes and staples the DMG:
+
+| Secret | What |
+| --- | --- |
+| `DEVELOPER_ID_P12` | Developer ID Application certificate + key, exported as .p12, base64-encoded |
+| `DEVELOPER_ID_PASSWORD` | The .p12's password |
+| `NOTARY_APPLE_ID` | Apple ID email of the developer account |
+| `NOTARY_TEAM_ID` | 10-character Team ID |
+| `NOTARY_PASSWORD` | An app-specific password for that Apple ID |
+
+Switching identities changes the app's signature once, so macOS asks again for permissions such as
+Input Monitoring after that update.

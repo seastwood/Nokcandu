@@ -31,7 +31,27 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k ci "$KC" >/dev/null
           security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
           rm -f "$RUNNER_TEMP/id.p12"
+      - name: Developer ID (optional — only when the Apple secrets exist)
+        env:
+          DEVID_P12: ${{ secrets.DEVELOPER_ID_P12 }}
+          DEVID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_PASSWORD }}
+        run: |
+          if [ -z "$DEVID_P12" ]; then echo "No Developer ID: not notarized"; exit 0; fi
+          KC="$RUNNER_TEMP/devid.keychain-db"
+          security create-keychain -p ci "$KC"; security set-keychain-settings "$KC"; security unlock-keychain -p ci "$KC"
+          echo "$DEVID_P12" | base64 --decode > "$RUNNER_TEMP/devid.p12"
+          security import "$RUNNER_TEMP/devid.p12" -k "$KC" -P "$DEVID_P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci "$KC" >/dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/devid.p12"
+          ID="$(security find-identity -v -p codesigning "$KC" | awk -F'"' '/Developer ID Application/ { print $2; exit }')"
+          echo "NOKCANDU_SIGN_IDENTITY=$ID" >> "$GITHUB_ENV"
+          echo "NOKCANDU_HARDENED=1" >> "$GITHUB_ENV"
       - name: Build, test and package
+        env:
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
         run: ./make-dmg.sh
       - name: Publish release
         env:

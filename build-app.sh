@@ -63,6 +63,9 @@ if [ -z "$SIGN_ID" ]; then
   SIGN_ID="$(security find-identity -p codesigning 2>/dev/null | awk '/"Nokcandu Signing"/ { print $2; exit }')"
 fi
 SIGN_ID="${SIGN_ID:--}"
+# Developer ID builds (CI with the Apple secrets) need the hardened runtime and a secure timestamp to notarize.
+HARDEN=()
+if [ "${NOKCANDU_HARDENED:-0}" = 1 ]; then HARDEN=(--options runtime --timestamp); fi
 # The identity's own keychain (scripts/signing-keychain.sh): unlock it so codesign never prompts.
 SIGN_KC=()
 KC="$HOME/Library/Keychains/nokcandu-signing.keychain-db"
@@ -72,9 +75,9 @@ if [ -z "${NOKCANDU_SIGN_IDENTITY:-}" ] && [ -f "$KC" ] && [ -f "$KC_PW" ] && se
   [ -n "$K_ID" ] && { SIGN_ID="$K_ID"; SIGN_KC=(--keychain "$KC"); echo "Signing keychain: nokcandu-signing (unlocked, no prompts)"; }
 fi
 [ "$SIGN_ID" = "-" ] && echo "Signing: ad-hoc (macOS will re-ask for permissions after each build)" || echo "Signing: $SIGN_ID"
-codesign --force ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/nokcandu-rawmouse.dylib"
+codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/nokcandu-rawmouse.dylib"
 
-codesign --force ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/cabextract"
+codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/cabextract"
 
 # App icon (original artwork in Resources/AppIcon.png)
 ICONSET="$(mktemp -d)/AppIcon.iconset"
@@ -121,8 +124,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 PLIST
 
 # Signed with the identity chosen above (not notarized).
-codesign --force ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/screen-size"
-codesign --force ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP"
+codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/screen-size"
+codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP"
 echo "Built $(pwd)/$APP"
 
 if [ "${1:-}" = --install ]; then
