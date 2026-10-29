@@ -100,6 +100,41 @@ public enum RunState: Equatable {
 }
 
 public enum GameLauncher {
+    /// What Quit closes for this app, in words for the confirmation.
+    public static func quitScope(_ g: InstalledGame) -> String {
+        if g.isSteamHost || BattleNet.isHost(g) || PCLaunchers.kind(of: g) != nil {
+            return "Any games running in it will close too, and unsaved progress will be lost."
+        }
+        if g.usesSharedSteam || g.battleNet != nil || g.hosted != nil { return "Only the game closes; its launcher stays open. Unsaved progress will be lost." }
+        return "Unsaved progress will be lost."
+    }
+
+    /// Quits a running game or launcher (not Mac games — the app asks those to quit itself).
+    /// Launcher games: only the game's own programs. Everything else: Windows is asked to end the session
+    /// (programs get a chance to close), and whatever is left after 10 s is stopped.
+    public static func quit(_ g: InstalledGame) async throws {
+        if g.isSteamHost { await SharedSteam.shutdown(); return }
+        if g.usesSharedSteam || g.battleNet != nil || g.hosted != nil {
+            let procs = StuckGames.running(g)
+            guard !procs.isEmpty else { throw NokError("No running program of \(g.name) was found. If it's stuck, use Force Quit Windows Programs in its settings.") }
+            for p in procs { kill(p.pid, SIGTERM) }
+            for _ in 0..<10 {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                if !procs.contains(where: { kill($0.pid, 0) == 0 }) { return }
+            }
+            for p in procs where kill(p.pid, 0) == 0 { kill(p.pid, SIGKILL) }
+            return
+        }
+        guard let c = WineTools.hostContents(for: g) else { throw NokError("This game has no Windows environment.") }
+        let wine = c.appendingPathComponent("SharedSupport/wine/bin/wine").path
+        _ = try? await Shell.runAsync(wine, ["wineboot", "--end-session", "--force"], env: WineTools.environment(contents: c), timeout: 15)
+        for _ in 0..<20 {
+            if WineTools.ownedProcesses(contents: c).isEmpty { break }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+        try await WineTools.stopAll(for: g)
+    }
+
     /// Reads the launcher's single-instance lock (Logs/game.lock/pid).
     public static func runState(of game: InstalledGame) -> RunState {
         if game.isSteamHost {

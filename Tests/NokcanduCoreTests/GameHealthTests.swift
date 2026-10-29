@@ -27,4 +27,17 @@ final class GameHealthTests: XCTestCase {
         XCTAssertEqual(s?.corners.map { $0.action }, [2, 0, 1, 14])
         XCTAssertNil(HotCorners.parse("garbage"))
     }
+
+    func testListCacheRoundTripAndAge() {
+        let key = "test-\(UUID().uuidString)"
+        defer { ListCache.remove(key) }
+        XCTAssertNil(ListCache.load(key, as: [StoreGame].self))
+        let games = [StoreGame(id: "1", store: .gog, title: "Test Game", image: URL(string: "https://example.com/a.jpg"), windows: true)]
+        ListCache.save(games, key)
+        let c = ListCache.load(key, as: [StoreGame].self)
+        XCTAssertEqual(c?.value, games)
+        XCTAssertLessThan(Date().timeIntervalSince(c!.saved), 5)
+        ListCache.remove(key)
+        XCTAssertNil(ListCache.load(key, as: [StoreGame].self))
+    }
 }

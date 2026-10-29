@@ -23,6 +23,8 @@ final class AppModel: ObservableObject {
     @Published var moving: Set<InstalledGame.ID> = []
     @Published var selection: InstalledGame.ID?
     @Published var runStates: [InstalledGame.ID: RunState] = [:]
+    /// Game waiting for Quit to be confirmed.
+    @Published var quitting: InstalledGame?
     @Published var banner: Banner?
     @Published var showInstaller = false
     @Published var showSteamLibrary = false
@@ -60,6 +62,13 @@ final class AppModel: ObservableObject {
         Task.detached(priority: .utility) { await AntiCheat.refreshIfStale() }
         timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshRunStates() }
+        }
+        // A drive plugged in or out: games on it become playable or show "Connect … to play" right away.
+        let ws = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
+            ws.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.refresh() }
+            }
         }
     }
 
@@ -172,6 +181,25 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func isRunning(_ g: InstalledGame) -> Bool {
+        if case .launcherRunning = runStates[g.id] ?? .notRunning { return true }
+        return false
+    }
+
+    /// After the user confirmed: quits the game or launcher.
+    func quit(_ g: InstalledGame) {
+        say("Quitting \(g.name)…")
+        Task {
+            if g.native != nil {
+                for app in NSWorkspace.shared.runningApplications where app.bundleURL?.standardizedFileURL == g.appURL.standardizedFileURL { app.terminate() }
+            } else {
+                do { try await GameLauncher.quit(g) } catch { fail(error) }
+            }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            refreshRunStates()
+        }
+    }
+
     func play(_ g: InstalledGame) {
         if let m = GameMover.missingDrive(g) { fail(NokError(m)); return }
         say("Starting \(g.name)…")
@@ -212,6 +240,17 @@ final class AppModel: ObservableObject {
 
     // MARK: Library organization
 
+    /// Which games' drives are unplugged (reads launcher records, so off the main thread).
+    func refreshDrives() {
+        let list = games
+        Task {
+            let missing = await Task.detached(priority: .utility) {
+                Dictionary(list.compactMap { g in GameMover.offlineDrive(g).map { (g.id, $0) } }, uniquingKeysWith: { a, _ in a })
+            }.value
+            if missing != missingDrive { missingDrive = missing }
+        }
+    }
+
     func reorganize() {
         let launchers = games.filter(LibraryOrganizer.isLauncher)
         let rest = games.filter { !LibraryOrganizer.isLauncher($0) }
@@ -221,13 +260,7 @@ final class AppModel: ObservableObject {
         sortedGames = LibraryOrganizer.sorted(rest.filter { !favs.contains($0) })
         launcherApps = launchers.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         offlineApps = GameFolders.offlineGames() + NativeGames.missing()
-        var missing: [InstalledGame.ID: String] = [:]
-        for g in games {
-            if let ext = GameMover.externalFiles(g), !FileManager.default.fileExists(atPath: ext.path) {
-                missing[g.id] = ext.path.hasPrefix("/Volumes/") && ext.pathComponents.count > 2 ? ext.pathComponents[2] : "its drive"
-            }
-        }
-        missingDrive = missing
+        refreshDrives()
         subtitles = Dictionary(games.compactMap { g in LibraryOrganizer.subtitle(g).map { (g.id, $0) } }, uniquingKeysWith: { a, _ in a })
         sortMode = LibraryOrganizer.sort
     }

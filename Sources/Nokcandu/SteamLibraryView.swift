@@ -17,9 +17,30 @@ final class SteamLibraryModel: ObservableObject {
 
     var hasKey: Bool { SharedSteam.apiKey != nil }
 
-    func refresh() {
-        account = SharedSteam.accounts().first
-        let installed = SharedSteam.installedGames()
+    /// Local Steam state read off the main thread. Collections and recently-seen apps come from large files
+    /// (localconfig.vdf can be megabytes), so the 5-second poll only re-reads what's installed.
+    private var collectionIDs: [Int] = []
+    private var recent: [Int] = []
+    private var loadedCache = false
+
+    func refresh(full: Bool = true) {
+        if !loadedCache {
+            loadedCache = true
+            if let c = ListCache.load("steam-owned", as: [SharedSteam.LibraryGame].self) { owned = c.value; ownedLoaded = !owned.isEmpty }
+            if let n = ListCache.load("steam-names", as: [Int: String].self) { names.merge(n.value) { a, _ in a } }
+        }
+        Task {
+            let (acct, installed, cols, rec) = await Task.detached(priority: .userInitiated) { () -> (SharedSteam.Account?, [SharedSteam.LibraryGame], [SharedSteam.Collection]?, [Int]?) in
+                (SharedSteam.accounts().first, SharedSteam.installedGames(), full ? SharedSteam.collections() : nil, full ? SharedSteam.recentGames() : nil)
+            }.value
+            account = acct
+            if let cols { collections = cols; collectionIDs = cols.filter { $0.id != "hidden" }.flatMap(\.appIDs) }
+            if let rec { recent = rec }
+            merge(installed)
+        }
+    }
+
+    private func merge(_ installed: [SharedSteam.LibraryGame]) {
         var byID: [Int: SharedSteam.LibraryGame] = [:]
         for g in owned { byID[g.appID] = g }
         for g in installed {
@@ -27,14 +48,13 @@ final class SteamLibraryModel: ObservableObject {
             if let o = byID[g.appID] { merged.playtimeMinutes = o.playtimeMinutes; merged.iconURL = o.iconURL }
             byID[g.appID] = merged
         }
-        collections = SharedSteam.collections()
-        let inCollections = collections.filter { $0.id != "hidden" }.flatMap(\.appIDs)
-        for id in SharedSteam.recentGames() + inCollections where byID[id] == nil && id != 228980 && id != 7 {
+        for id in recent + collectionIDs where byID[id] == nil && id != 228980 && id != 7 {
             byID[id] = SharedSteam.LibraryGame(appID: id, name: names[id] ?? "Steam app \(id)", installed: false, installDir: nil,
                                                sizeOnDisk: nil, playtimeMinutes: nil, iconURL: nil, owned: true)
         }
         for id in waiting { if byID[id]?.installed == true { waiting.remove(id) } }
-        games = byID.values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        let sorted = byID.values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        if sorted != games { games = sorted }
         fillMissingNames()
     }
 
@@ -46,6 +66,7 @@ final class SteamLibraryModel: ObservableObject {
             Task {
                 if let info = await SharedSteam.storeInfo(g.appID), let n = info.name {
                     names[g.appID] = n
+                    ListCache.save(names.filter { !$0.value.hasPrefix("Steam app ") }, "steam-names")
                     if let i = games.firstIndex(where: { $0.appID == g.appID }) { games[i].name = n }
                 }
             }
@@ -53,7 +74,7 @@ final class SteamLibraryModel: ObservableObject {
     }
 
     func loadOwned() {
-        guard let key = SharedSteam.apiKey, let acct = account else {
+        guard let key = SharedSteam.apiKey, let acct = account ?? SharedSteam.accounts().first else {
             message = "Sign in to Steam and add your Web API key to see every game you own."
             return
         }
@@ -62,6 +83,7 @@ final class SteamLibraryModel: ObservableObject {
             defer { loadingOwned = false }
             do {
                 owned = try await SharedSteam.ownedGames(apiKey: key, steamID64: acct.steamID64)
+                ListCache.save(owned, "steam-owned")
                 ownedLoaded = true
                 message = nil
                 refresh()
@@ -74,7 +96,7 @@ final class SteamLibraryModel: ObservableObject {
         poll = Task {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
-                refresh()
+                refresh(full: false)
             }
         }
     }

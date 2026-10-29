@@ -165,4 +165,21 @@ final class LauncherRemovalTests: XCTestCase {
         // A game on a drive that isn't mounted is "offline", never "missing" (uninstalled).
         XCTAssertEqual(LauncherInstallation.presence(at: URL(fileURLWithPath: "/Volumes/NokcanduNoSuchDrive-\(UUID().uuidString)/Games/X")), .offline)
     }
+
+    func testSizeCountsOnlySpaceFreedAndSkipsExcludedFolders() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("size-\(UUID().uuidString)")
+        let a = root.appendingPathComponent("a"), b = root.appendingPathComponent("b")
+        try FileManager.default.createDirectory(at: a, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: b, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data(repeating: 1, count: 2_000_000).write(to: a.appendingPathComponent("game.dat"))     // only in a
+        try Data(repeating: 7, count: 4_000_000).write(to: b.appendingPathComponent("engine.bin"))
+        XCTAssertGreaterThan(Storage.size(root, excluding: [a]), 3_900_000)
+        XCTAssertLessThan(Storage.size(root, excluding: [b]), 2_200_000)                          // skips b entirely
+        try FileManager.default.copyItem(at: b.appendingPathComponent("engine.bin"), to: a.appendingPathComponent("engine.bin"))
+        if Storage.privateSize(a.appendingPathComponent("engine.bin")) != nil {
+            // APFS: the copy is a clone; removing a frees only its own game data, not the shared engine.
+            XCTAssertLessThan(Storage.size(a), 2_200_000)
+        }
+    }
 }

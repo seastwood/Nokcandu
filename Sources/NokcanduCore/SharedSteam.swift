@@ -271,7 +271,7 @@ public enum SharedSteam {
         return list.sorted { $0.1 && !$1.1 }.map(\.0)
     }
 
-    public struct LibraryGame: Identifiable, Hashable {
+    public struct LibraryGame: Identifiable, Hashable, Codable {
         public var id: Int { appID }
         public var appID: Int
         public var name: String
@@ -310,6 +310,19 @@ public enum SharedSteam {
             }
         }
         return out
+    }
+
+    /// The drive holding this game's Steam library, when that drive isn't connected. Steam's library list
+    /// (libraryfolders.vdf) records which games each library holds, so this works while the library is unplugged.
+    public static func offlineDrive(appID: Int) -> String? {
+        let vdf = steamDir.appendingPathComponent("steamapps/libraryfolders.vdf")
+        guard let t = try? String(contentsOf: vdf, encoding: .utf8), let root = (try? VDF.parse(t))?["libraryfolders"] else { return nil }
+        for (_, lib) in root.items where lib["apps"]?.items.contains(where: { $0.0 == String(appID) }) == true {
+            guard let win = lib["path"]?.string, let u = BattleNet.unixPath(win, prefix: contents.appendingPathComponent("SharedSupport/prefix")),
+                  LauncherInstallation.presence(at: u) == .offline else { continue }
+            return Storage.driveName(u)
+        }
+        return nil
     }
 
     /// Games installed in the shared Steam (appmanifest_*.acf in every library folder).
@@ -354,7 +367,7 @@ public enum SharedSteam {
         return apps.items.compactMap { Int($0.0) }
     }
 
-    public struct Collection: Identifiable, Hashable {
+    public struct Collection: Identifiable, Hashable, Codable {
         public var id: String
         public var name: String
         public var appIDs: [Int]

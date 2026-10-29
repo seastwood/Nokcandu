@@ -156,9 +156,9 @@ struct GameDetailView: View {
                     .disabled(running && !game.isSteamHost)
                     if game.isSteamHost {
                         Button("Steam Library…") { model.showSteamLibrary = true }
-                        if running { Button("Quit Steam") { Task { await SharedSteam.shutdown(); model.refreshRunStates() } } }
+                        if running { Button("Quit Steam…", role: .destructive) { model.quitting = game }.controlSize(.large) }
                     } else if running {
-                        Text("The game's launcher is running.").font(.callout).foregroundStyle(.secondary)
+                        Button("Quit…", role: .destructive) { model.quitting = game }.controlSize(.large)
                     }
                 }
                 .padding(.top, 4)
@@ -416,6 +416,7 @@ struct NativeGameDetail: View {
                         HStack {
                             Button { model.play(game) } label: { Label(running ? "Running" : "Play", systemImage: "play.fill").frame(minWidth: 90) }
                                 .buttonStyle(.borderedProminent).controlSize(.large).disabled(running)
+                            if running { Button("Quit…", role: .destructive) { model.quitting = game }.controlSize(.large) }
                             Button("Show in Finder") { model.reveal(game.appURL) }
                         }
                         .padding(.top, 4)

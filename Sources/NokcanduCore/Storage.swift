@@ -18,13 +18,48 @@ public enum Storage {
         public var total: Int64
     }
 
-    /// Allocated size of a folder (du), following nothing outside it. APFS clones count fully here even
-    /// though they share space, so engine files can look bigger than they really are.
-    public static func size(_ url: URL) -> Int64 {
-        guard FileManager.default.fileExists(atPath: url.path),
-              let r = try? Shell.run("/usr/bin/du", ["-sk", url.path], timeout: 300), r.ok,
-              let kb = Int64(r.stdout.split(separator: "\t").first?.trimmingCharacters(in: .whitespaces) ?? "") else { return 0 }
-        return kb * 1024
+    /// Space a file or folder really uses: on APFS only the bytes not shared with clones (each game app's
+    /// Wine engine is a clone of the same files, so counting it in full overstated every game by ~1.4 GB);
+    /// elsewhere (ExFAT…) the allocated size. Links aren't followed. `excluding` folders are skipped.
+    public static func size(_ url: URL, excluding: [URL] = []) -> Int64 {
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { return 0 }
+        let keys: [URLResourceKey] = [.isRegularFileKey, .totalFileAllocatedSizeKey]
+        func one(_ u: URL) -> Int64 {
+            if let p = privateSize(u) { return p }
+            return Int64((try? u.resourceValues(forKeys: Set(keys)))?.totalFileAllocatedSize ?? 0)
+        }
+        if !isDir.boolValue { return one(url) }
+        let skip = Set(excluding.map { $0.standardizedFileURL.path })
+        guard let e = fm.enumerator(at: url, includingPropertiesForKeys: keys, options: [], errorHandler: { _, _ in true }) else { return 0 }
+        var total: Int64 = 0
+        for case let u as URL in e {
+            if !skip.isEmpty, skip.contains(u.standardizedFileURL.path) { e.skipDescendants(); continue }
+            guard (try? u.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }
+            total += one(u)
+        }
+        return total
+    }
+
+    /// Bytes of this file not shared with any APFS clone (nil where the drive doesn't report it).
+    static func privateSize(_ u: URL) -> Int64? {
+        var al = attrlist()
+        al.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
+        al.commonattr = attrgroup_t(ATTR_CMN_RETURNED_ATTRS)
+        al.forkattr = attrgroup_t(ATTR_CMNEXT_PRIVATESIZE)
+        var buf = [UInt8](repeating: 0, count: 64)
+        let r = u.withUnsafeFileSystemRepresentation { path -> Int32 in
+            guard let path else { return -1 }
+            return getattrlist(path, &al, &buf, buf.count, UInt32(FSOPT_ATTR_CMN_EXTENDED | FSOPT_NOFOLLOW))
+        }
+        guard r == 0 else { return nil }
+        return buf.withUnsafeBytes { b -> Int64? in
+            // u_int32 length, attribute_set_t returned (common, vol, dir, file, fork), then off_t private size
+            let returnedFork = b.load(fromByteOffset: 4 + 16, as: UInt32.self)
+            guard returnedFork & UInt32(ATTR_CMNEXT_PRIVATESIZE) != 0 else { return nil }
+            return b.loadUnaligned(fromByteOffset: 24, as: Int64.self)
+        }
     }
 
     public struct GameUsage: Equatable {
@@ -54,8 +89,16 @@ public enum Storage {
     /// already inside another counted folder, and never follow arbitrary links while sizing the app.
     public static func usage(for g: InstalledGame) -> GameUsage {
         let app = g.native?.installFolder.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath() } ?? g.appURL.resolvingSymlinksInPath()
+        // Launchers: games installed in the launcher's own library are listed separately, not as its size.
+        let hosted = launcherGames(in: g).filter { $0.1.path.hasPrefix(app.path + "/") }
+        if !hosted.isEmpty {
+            var parts = [GameUsage.Part(title: g.isSteamHost ? "Steam" : "Launcher", url: app, bytes: size(app, excluding: hosted.map(\.1)), drive: driveName(app))]
+            parts += hosted.map { name, url in GameUsage.Part(title: name, url: url, bytes: FileManager.default.fileExists(atPath: url.path) ? size(url) : nil, drive: driveName(url)) }
+            return GameUsage(parts: parts)
+        }
         var roots: [(String, URL)] = [("App", app)]
-        if let data = GameMover.externalFiles(g) ?? WineTools.places(for: g).first(where: { $0.title == "Game folder" })?.url {
+        let launcherFolder = (g.usesSharedSteam || g.battleNet != nil || g.hosted != nil) ? LauncherInstallation.location(for: g)?.folder : nil
+        if let data = launcherFolder ?? GameMover.externalFiles(g) ?? WineTools.places(for: g).first(where: { $0.title == "Game folder" })?.url {
             let resolved = data.resolvingSymlinksInPath()
             if !resolved.path.hasPrefix(app.path + "/"), resolved != app { roots.append(("Game files", resolved)) }
         }
@@ -68,6 +111,18 @@ public enum Storage {
         return GameUsage(parts: roots.map { title, url in
             GameUsage.Part(title: title, url: url, bytes: FileManager.default.fileExists(atPath: url.path) ? size(url) : nil, drive: driveName(url))
         }, appOnly: g.native != nil && g.native?.installFolder == nil)
+    }
+
+    /// Games a launcher app (Steam, Battle.net, EA, Ubisoft) has installed: (name, folder).
+    static func launcherGames(in g: InstalledGame) -> [(String, URL)] {
+        if g.isSteamHost { return SharedSteam.installedGames().compactMap { s in s.folder.map { (s.name, $0.standardizedFileURL) } } }
+        if BattleNet.isHost(g) {
+            return BattleNet.installedGames(host: g).compactMap { b in LauncherInstallation.windowsFolder(b.installLocation, prefix: g.prefix).map { (b.name, $0) } }
+        }
+        if let kind = PCLaunchers.kind(of: g) {
+            return PCLaunchers.installedGames(kind, host: g).compactMap { h in LauncherInstallation.windowsFolder(h.installLocation, prefix: g.prefix).map { (h.name, $0) } }
+        }
+        return []
     }
 
     public static func games(_ games: [InstalledGame]) -> [Item] {

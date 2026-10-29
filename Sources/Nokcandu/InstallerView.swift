@@ -738,6 +738,8 @@ struct DiscSwapBar: View {
 /// "Install to:" — the library folders, plus adding another (e.g. on an external drive).
 struct InstallFolderPicker: View {
     @Binding var folder: URL
+    /// Installing a Mac app: only Mac-formatted drives can hold it (ExFAT has no links, which most Mac games contain).
+    var macApp = false
     @State private var folders = GameFolders.all
     @State private var error: String?
 
@@ -745,13 +747,17 @@ struct InstallFolderPicker: View {
         VStack(alignment: .leading, spacing: 4) {
             Picker("Install to", selection: Binding(get: { folder.standardizedFileURL }, set: { pick($0) })) {
                 ForEach(folders, id: \.self) { f in
-                    Text(GameFolderLabel.text(f)).tag(f).disabled(!GameFolders.isAvailable(f))
+                    Text(GameFolderLabel.text(f) + (macApp && !GameFolders.holdsApps(f) ? " — not for Mac apps" : "")).tag(f)
+                        .disabled(!GameFolders.isAvailable(f) || (macApp && !GameFolders.holdsApps(f)))
                 }
                 Divider()
                 Text("Other Folder…").tag(URL(fileURLWithPath: "/__other__"))
             }
             if let error { Text(error).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true) }
-            else {
+            else if macApp && !GameFolders.holdsApps(folder) {
+                Text("\(GameFolders.volumeName(folder)) is \(GameFolders.formatName(folder)), which can't hold Mac apps (they'd break). Pick this Mac or a Mac-formatted drive — or choose the Windows version to keep its files on \(GameFolders.volumeName(folder)).")
+                    .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+            } else {
                 let free = GameFolders.freeSpace(folder).map { Storage.format($0) + " free" } ?? ""
                 Text("\(GameFolders.volumeName(folder)) · \(free)"
                      + (GameFolders.holdsApps(folder) ? "" : " · \(GameFolders.formatName(folder)) drive: the game's files go here, its small app stays on this Mac"))

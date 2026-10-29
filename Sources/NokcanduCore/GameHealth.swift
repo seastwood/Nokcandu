@@ -85,6 +85,13 @@ public enum StuckGames {
         })
     }
 
+    /// All of this game's running Windows programs.
+    public static func running(_ g: InstalledGame) -> [Process] {
+        let progs = programs(of: g)
+        guard !progs.isEmpty, let r = try? Shell.run("/bin/ps", ["-axo", "pid=,etime=,command="], timeout: 10) else { return [] }
+        return matching(r.stdout, programs: progs)
+    }
+
     /// This game's processes that have been running for a while with no window — stuck.
     public static func stuck(_ g: InstalledGame, minimumSeconds: Int = 45) -> [Process] {
         let progs = programs(of: g)

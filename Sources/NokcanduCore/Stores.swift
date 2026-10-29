@@ -42,7 +42,7 @@ public struct StoreLink: Codable, Hashable, Sendable {
 }
 
 /// A game in the user's store library.
-public struct StoreGame: Identifiable, Hashable, Sendable {
+public struct StoreGame: Identifiable, Hashable, Sendable, Codable {
     public var id: String
     public var store: Store
     public var title: String

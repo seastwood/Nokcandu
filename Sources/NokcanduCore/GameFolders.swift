@@ -178,8 +178,22 @@ public enum GameMover {
 
     /// Nil when the game can start; otherwise e.g. "Connect Elements first".
     public static func missingDrive(_ g: InstalledGame) -> String? {
-        guard let ext = externalFiles(g), !FileManager.default.fileExists(atPath: ext.path) else { return nil }
-        return "\(g.name)'s files are on \(ext.path.hasPrefix("/Volumes/") ? ext.pathComponents[2] : "another drive"), which isn't connected. Connect it, then press Play again."
+        guard let drive = offlineDrive(g) else { return nil }
+        return "\(g.name)'s files are on \(drive), which isn't connected. Connect it, then press Play again."
+    }
+
+    /// The (disconnected) drive this game's files are on: files Nokcandu moved, or a launcher's
+    /// library (Steam, Battle.net, EA, Ubisoft) on an unplugged drive. Nil when the files are reachable.
+    public static func offlineDrive(_ g: InstalledGame) -> String? {
+        if let ext = externalFiles(g), !FileManager.default.fileExists(atPath: ext.path) {
+            return ext.path.hasPrefix("/Volumes/") && ext.pathComponents.count > 2 ? ext.pathComponents[2] : "its drive"
+        }
+        if g.usesSharedSteam, let id = g.custom?.steamAppID { return SharedSteam.offlineDrive(appID: id) }
+        if g.battleNet != nil || g.hosted != nil, let folder = LauncherInstallation.location(for: g)?.folder,
+           LauncherInstallation.presence(at: folder) == .offline {
+            return Storage.driveName(folder)
+        }
+        return nil
     }
 
     public static func filesBlocker(_ g: InstalledGame) -> String? {

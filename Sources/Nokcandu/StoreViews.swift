@@ -112,7 +112,7 @@ struct StoreLibraryView: View {
                     if loading { ProgressView().controlSize(.small) }
                     Spacer()
                     Button("Refresh") { Task { await loadLibrary() } }.disabled(loading)
-                    Button("Sign Out") { Task { await StoreAccounts.signOut(store); games[store] = nil; refreshState() } }
+                    Button("Sign Out") { Task { await StoreAccounts.signOut(store); ListCache.remove("store-\(store.rawValue)"); games[store] = nil; refreshState() } }
                 }
                 .padding(10)
                 if let error { Text(error).foregroundStyle(.red).font(.caption).padding(.horizontal) }
@@ -185,10 +185,12 @@ struct StoreLibraryView: View {
                     .pickerStyle(.radioGroup)
                 }
                 HStack(alignment: .top) {
-                    InstallFolderPicker(folder: $folder).frame(maxWidth: 440)
+                    let mac = g.mac && (wantMac || !g.windows)
+                    InstallFolderPicker(folder: $folder, macApp: mac).frame(maxWidth: 440)
                     Spacer()
                     Button("Cancel") { choosing = nil }
-                    Button("Install") { (g.mac && (wantMac || !g.windows)) ? installMac(g) : install(g) }.buttonStyle(.borderedProminent)
+                    Button("Install") { mac ? installMac(g) : install(g) }.buttonStyle(.borderedProminent)
+                        .disabled(mac && !GameFolders.holdsApps(folder))
                 }
             }
             .padding(.leading, 44)
@@ -198,7 +200,12 @@ struct StoreLibraryView: View {
 
     func refreshState() {
         for s in Store.allCases { signedIn[s] = StoreAccounts.isSignedIn(s) }
-        if tab.store != nil, signedIn[store] == true && games[store] == nil { Task { await loadLibrary() } }
+        guard tab.store != nil, signedIn[store] == true, games[store] == nil else { return }
+        // Show the saved library right away; fetch a fresh one in the background when it's over an hour old.
+        if let c = ListCache.load("store-\(store.rawValue)", as: [StoreGame].self) {
+            games[store] = c.value
+            if Date().timeIntervalSince(c.saved) > 3600 { Task { await loadLibrary() } }
+        } else { Task { await loadLibrary() } }
     }
 
     func startLogin() async {
@@ -230,15 +237,23 @@ struct StoreLibraryView: View {
         let s = store
         loading = true; error = nil
         defer { loading = false }
-        do { games[s] = try await StoreAccounts.library(s).sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending } }
+        do {
+            let list = try await StoreAccounts.library(s).sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+            games[s] = list
+            ListCache.save(list, "store-\(s.rawValue)")
+        }
         catch { self.error = error.localizedDescription }
     }
 
     /// Mac versions download straight into a folder (no Wine); then they appear in the library.
     func installMac(_ g: StoreGame) {
         choosing = nil
-        // Mac apps need a Mac-formatted drive (ExFAT can't hold app bundles).
-        let target = GameFolders.holdsApps(folder) ? folder : NokPaths.gameAppsFolder
+        // Mac apps need a Mac-formatted drive (ExFAT can't hold app bundles). Never switch drives silently.
+        guard GameFolders.holdsApps(folder) else {
+            error = "\(GameFolders.volumeName(folder)) can't hold Mac apps. Pick this Mac or a Mac-formatted drive, or install the Windows version there."
+            return
+        }
+        let target = folder
         macProgress[g.id] = "Starting download…"
         Task {
             do {

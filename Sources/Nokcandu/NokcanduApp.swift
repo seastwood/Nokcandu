@@ -6,6 +6,7 @@ import NokcanduCore
 struct NokcanduApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var model = AppModel()
+    init() { ListCache.installImageCache() }      // store artwork loads once, not on every visit
 
     var body: some Scene {
         WindowGroup("Nokcandu") {
@@ -158,6 +159,13 @@ struct LibraryView: View {
             InstallerView().environmentObject(model)
         }
         .sheet(item: $model.renaming) { g in RenameGameSheet(game: g).environmentObject(model) }
+        .alert("Quit \(model.quitting?.name ?? "the game")?", isPresented: Binding(get: { model.quitting != nil }, set: { if !$0 { model.quitting = nil } }),
+               presenting: model.quitting) { g in
+            Button("Quit", role: .destructive) { model.quit(g); model.quitting = nil }
+            Button("Cancel", role: .cancel) { model.quitting = nil }
+        } message: { g in
+            Text(g.native != nil ? "Unsaved progress may be lost." : GameLauncher.quitScope(g))
+        }
         .sheet(isPresented: $model.showWelcome) {
             WelcomeView().environmentObject(model)
         }
@@ -188,6 +196,11 @@ extension LibraryView {
     func row(_ g: InstalledGame) -> some View {
         GameRow(game: g, state: model.runStates[g.id] ?? .notRunning)
             .tag(g.id)
+            .contentShape(Rectangle())
+            // Double-click a game to play it (or open Steam); a running game just stays selected.
+            .simultaneousGesture(TapGesture(count: 2).onEnded {
+                if !model.isRunning(g) || g.isSteamHost { model.play(g) }
+            })
             .contextMenu { GameContextMenu(game: g) }
     }
 }
@@ -196,6 +209,14 @@ struct GameContextMenu: View {
     @EnvironmentObject var model: AppModel
     let game: InstalledGame
     var body: some View {
+        if model.isRunning(game) {
+            if game.isSteamHost { Button("Show Steam") { model.play(game) } }
+            Button("Quit…") { model.quitting = game }
+            Divider()
+        } else {
+            Button(game.isSteamHost ? "Open Steam" : "Play") { model.play(game) }
+            Divider()
+        }
         if !LibraryOrganizer.isLauncher(game) {
             let fav = model.favoriteGames.contains(game)
             Button(fav ? "Remove from Favorites" : "Add to Favorites") { model.setFavorite(game, !fav) }
