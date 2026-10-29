@@ -241,6 +241,13 @@ public enum CustomInstall {
                 guard !CustomGames.findExecutables(prefix: ctx.prefix, nameHint: CustomInstall.name(ctx), limit: 1).isEmpty else {
                     throw NokError("No installed program was found yet. Finish the Windows installer, then press Continue. If setup failed, choose Run Installer Again.")
                 }
+                if ctx.input("launcherKind") == PCLauncher.ubisoft.rawValue {
+                    let exe=PCLauncher.ubisoft.defaultExe
+                    guard let rel=CustomGames.driveCRelative(windowsPath:exe), PEFile.inspect(ctx.prefix.appendingPathComponent("drive_c/"+rel)) != nil else {
+                        throw NokError("Ubisoft Connect’s program was not found yet. Finish its installer, then press Continue.")
+                    }
+                    ctx.state.inputs["exe"]=exe
+                }
                 return markFinished(ctx)
             }
             let url = URL(fileURLWithPath: p)
@@ -441,7 +448,7 @@ public enum CustomInstall {
                 probe = ctx.prefix.appendingPathComponent("drive_c/\(rel)")
             }
             let pe = probe.flatMap(PEFile.inspect)
-            let preset = GraphicsPreset.suggest(for: pe)
+            let preset: GraphicsPreset = ctx.input("launcherKind") == PCLauncher.ubisoft.rawValue ? .dxmt : GraphicsPreset.suggest(for: pe)
             ctx.state.inputs["graphics"] = preset.rawValue
             if let pe {
                 ctx.state.inputs["is64"] = pe.is64Bit ? "1" : "0"
@@ -459,6 +466,7 @@ public enum CustomInstall {
         let info = StageInfo(id: "app-build", title: "Finish the Mac app", detail: "Launcher, original game icon, and app details.", kind: .automatic)
         func isDone(_ ctx: InstallContext) -> Bool {
             if ctx.input("launcherKind") == PCLauncher.ea.rawValue, ctx.input("ea.client-configured") != "1" { return false }
+            if ctx.input("launcherKind") == PCLauncher.ubisoft.rawValue, ctx.input("ubisoft.client-configured") != "1" { return false }
             guard let c = CustomGameConfig.load(contents: ctx.contents),
                   let sha = try? Hashing.sha256(file: ctx.contents.appendingPathComponent("MacOS/\(CustomGames.launcherName)")) else { return false }
             return sha == c.launcherSHA && FileManager.default.fileExists(atPath: ctx.contents.appendingPathComponent("Info.plist").path)
@@ -530,6 +538,11 @@ public enum CustomInstall {
             if ctx.input("launcherKind") == PCLauncher.ea.rawValue, let game = GameLibrary.inspect(ctx.targetApp) {
                 try await EAAppInstaller.configureClient(game, log: ctx.log)
                 ctx.state.inputs["ea.client-configured"] = "1"
+                try ctx.saveState()
+            }
+            if ctx.input("launcherKind") == PCLauncher.ubisoft.rawValue, let game = GameLibrary.inspect(ctx.targetApp) {
+                try await UbisoftBrowser.configureClient(game, log:ctx.log)
+                ctx.state.inputs["ubisoft.client-configured"]="1"
                 try ctx.saveState()
             }
             _ = try? Shell.run("/usr/bin/touch", [ctx.targetApp.path])

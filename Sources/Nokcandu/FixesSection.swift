@@ -120,7 +120,7 @@ private struct ComponentFixesView: View {
     @State private var status = ""
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ForEach(CompatibilityFix.allCases.filter { $0 != .openUA || OpenUASettings.supports(game) || CompatibilityFixes.isInstalled(.openUA, for: game) }) { fix in
+            ForEach(CompatibilityFix.allCases.filter { CompatibilityFixes.visible($0, for: game) }) { fix in
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(fix.title).font(.body.bold())

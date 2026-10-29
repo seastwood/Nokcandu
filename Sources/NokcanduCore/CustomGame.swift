@@ -455,6 +455,7 @@ public enum CustomGames {
         fi
 
         """
+        s += UbisoftBrowser.launcherBlock(c)
         s += CustomGames.registryEnvBlock
         if c.exe.lowercased().hasSuffix("\\eadesktop.exe") {
             s += "if [ \"$CHECK_ONLY\" = 0 ]; then\n" + EACompatibility.block(watch: true) + "fi\n"

@@ -4,11 +4,12 @@ import Foundation
 /// downloads or patch bytes. DLLs are private to the selected executable's folder; Wine's system DLLs
 /// and registry are untouched. File undo uses the same conflict-aware journal as other Nokcandu edits.
 public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable, Sendable {
-    case shaderCompiler47 = "shader-compiler-47"
+    case shaderCompiler47 = "shader-compiler-47", ubisoftBrowser = "ubisoft-browser"
     case directx9Extras = "directx9-extras", d3d8to9, borderless, cursorVisibility = "cursor-visibility", openUA = "openua-display", bundledVC = "bundled-vc-runtime", crossProcessWindows = "cross-process-windows"
     public var id: String { rawValue }
     public var title: String {
         switch self {
+        case .ubisoftBrowser: "Ubisoft Connect browser display"
         case .shaderCompiler47: "Microsoft shader compiler"
         case .bundledVC: "Use bundled Visual C++ libraries"
         case .crossProcessWindows: "Fix launcher windows (DXMT)"
@@ -21,6 +22,7 @@ public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable, Senda
     }
     public var detail: String {
         switch self {
+        case .ubisoftBrowser: "Fixes Ubisoft Connect’s blank browser with DXMT. Enables its GPU launch switch in an exactly verified browser file; keeps the original for Undo. Only for Ubisoft Connect. Restart afterward."
         case .shaderCompiler47: "Downloads Microsoft’s d3dcompiler_47 library for shaders Wine cannot compile, which can cause missing icons, blank browser content, or effects. Restart afterward."
         case .bundledVC: "Uses the Microsoft Visual C++ libraries already beside this program, instead of Wine’s replacements. Try this when an app waits before opening a window. Downloads nothing; restart afterward."
         case .crossProcessWindows: "Allows DXMT to display windows drawn by another process, as used by some game launchers and embedded browsers. Requires DXMT graphics; restart afterward."
@@ -50,6 +52,8 @@ public enum CompatibilityFixes {
         var appliedOverrides: [String: String]
         var previousLegacy: Bool?
         var previousBorderless: Bool?
+        var previousArguments: String? = nil
+        var appliedArguments: String? = nil
         var previousEnvironment: [String: String]? = nil
         var appliedEnvironment: [String: String]? = nil
     }
@@ -97,11 +101,22 @@ public enum CompatibilityFixes {
     }
     /// Restrict changes to standalone managed apps: shared launcher environments need per-program
     /// routing before these can safely be offered there.
+    public static func visible(_ fix: CompatibilityFix, for g:InstalledGame) -> Bool {
+        if isInstalled(fix,for:g) { return true }
+        if fix == .openUA { return OpenUASettings.supports(g) }
+        if fix == .ubisoftBrowser { return UbisoftBrowser.supports(g) }
+        return true
+    }
     public static func unavailable(_ fix: CompatibilityFix, for g: InstalledGame) -> String? {
         guard g.custom != nil, !g.usesSharedSteam, g.battleNet == nil, g.hosted == nil,
               g.native == nil else { return "Available for games with their own Nokcandu Windows environment." }
         guard let exe = managedProgram(g), PEFile.inspect(exe) != nil else {
             return "The selected program is missing or outside this game's C: folders. Choose it under Settings → Program."
+        }
+        if fix == .ubisoftBrowser {
+            guard UbisoftBrowser.supports(g) else { return "Only available for Ubisoft Connect." }
+            guard g.custom?.graphics == .dxmt else { return "Choose Metal for DirectX 10–11 (DXMT) first." }
+            if UbisoftBrowser.browser(g) == nil { return "Ubisoft’s browser must be inside its own managed folder." }
         }
         if fix == .bundledVC, bundledVCRules(g).isEmpty { return "No matching Visual C++ libraries were found beside this program." }
         if fix == .crossProcessWindows, g.custom?.graphics != .dxmt { return "Choose Metal for DirectX 10–11 (DXMT) first." }
@@ -203,6 +218,7 @@ public enum CompatibilityFixes {
             for (key, value) in st.appliedEnvironment ?? [:] {
                 if c.environment == nil { c.environment = [:] }; c.environment?[key] = value
             }
+            if fix == .ubisoftBrowser { c.arguments = UbisoftBrowser.arguments(c.arguments) }
             if fix == .borderless { c.borderless = true }
             if fix == .d3d8to9 { c.legacyD3D9 = true; c.graphics = .classic3D }
         }
@@ -226,6 +242,9 @@ public enum CompatibilityFixes {
         try NokPaths.ensure(work); defer { try? FileManager.default.removeItem(at: work) }
         var files: [URL: Data] = [:], applied: [String: String] = [:], appliedEnv: [String: String] = [:]
         switch fix {
+        case .ubisoftBrowser:
+            files = try UbisoftBrowser.plannedFiles(g)
+            appliedEnv = ["DXMT_ALLOW_CROSS_PROCESS_SWAPCHAIN":"1"]
         case .shaderCompiler47:
             files[exe.deletingLastPathComponent().appendingPathComponent("d3dcompiler_47.dll")] = try await shaderCompiler47(for: g, work: work, log: log)
             applied = ["d3dcompiler_47": "n,b"]
@@ -256,6 +275,8 @@ public enum CompatibilityFixes {
         let previous = overrides(c.environment?["WINEDLLOVERRIDES"])
         let st = State(executable: c.exe, previousOverrides: previous, appliedOverrides: applied,
                        previousLegacy: c.legacyD3D9, previousBorderless: c.borderless,
+                       previousArguments: fix == .ubisoftBrowser ? c.arguments : nil,
+                       appliedArguments: fix == .ubisoftBrowser ? UbisoftBrowser.arguments(c.arguments) : nil,
                        previousEnvironment: c.environment?.filter { appliedEnv[$0.key] != nil }, appliedEnvironment: appliedEnv)
         let record = marker(fix, g)
         try NokPaths.ensure(record.deletingLastPathComponent())
@@ -271,6 +292,7 @@ public enum CompatibilityFixes {
             for (key, value) in appliedEnv {
                 if c.environment == nil { c.environment = [:] }; c.environment?[key] = value
             }
+            if fix == .ubisoftBrowser { c.arguments = UbisoftBrowser.arguments(c.arguments) }
             if fix == .d3d8to9 { c.legacyD3D9 = true }
             if fix == .borderless { c.borderless = true }
             try CustomGames.save(c, to: g)
@@ -315,6 +337,9 @@ public enum CompatibilityFixes {
             let current = c.environment?[key], previous = st.previousEnvironment?[key]
             guard current == applied || current == previous else { throw NokError("The \(key) setting changed after installation. Your setting was kept.") }
             c.environment?[key] = previous
+        }
+        if fix == .ubisoftBrowser, let previous=st.previousArguments, let applied=st.appliedArguments {
+            c.arguments = UbisoftBrowser.undoArguments(c.arguments,previous:previous,applied:applied)
         }
         if fix == .d3d8to9, c.legacyD3D9 == true { c.legacyD3D9 = st.previousLegacy }
         if fix == .borderless, c.borderless == true { c.borderless = st.previousBorderless }
