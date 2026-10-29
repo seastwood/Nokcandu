@@ -67,6 +67,31 @@ public enum PEFile {
         return PEInfo(is64Bit: p.is64, imports: imports)
     }
 
+    /// Like `inspect`, but also counts graphics libraries the program loads by name at run time (many games
+    /// call LoadLibrary("d3d11.dll") instead of importing it, which left them looking like DirectX 9 games).
+    public static func inspectWithLoadedDLLs(_ url: URL) -> PEInfo? {
+        guard var info = inspect(url) else { return nil }
+        let have = Set(info.imports.map { $0.lowercased() })
+        if have.contains(where: { ["d3d8.dll", "d3d9.dll", "d3d10.dll", "d3d10_1.dll", "d3d11.dll", "d3d12.dll", "dxgi.dll", "ddraw.dll", "opengl32.dll"].contains($0) }) {
+            return info
+        }
+        info.imports += loadedGraphicsDLLs(url).filter { !have.contains($0) }
+        return info
+    }
+
+    static func loadedGraphicsDLLs(_ url: URL) -> [String] {
+        guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return [] }
+        let names = ["d3d12.dll", "d3d11.dll", "dxgi.dll", "d3d10.dll", "d3d9.dll", "d3d8.dll", "ddraw.dll", "opengl32.dll"]
+        var found: [String] = []
+        for n in names {
+            // ASCII and UTF-16LE spellings, any case.
+            let lower = Data(n.utf8), upper = Data(n.uppercased().utf8)
+            let wide = Data(n.utf8.flatMap { [$0, 0] }), wideUp = Data(n.uppercased().utf8.flatMap { [$0, 0] })
+            if [lower, upper, wide, wideUp].contains(where: { data.range(of: $0) != nil }) { found.append(n) }
+        }
+        return found
+    }
+
     /// Builds a single-image .ico from the exe's largest group icon. Returns nil when there is none.
     public static func largestIcon(_ url: URL) -> Data? {
         guard let data = try? Data(contentsOf: url, options: .mappedIfSafe), let p = parse(data),

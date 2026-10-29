@@ -123,3 +123,13 @@ final class SteamRunningTests: XCTestCase {
         XCTAssertEqual(m.count, 2)
     }
 }
+
+final class LoadedDLLTests: XCTestCase {
+    func testFindsRuntimeLoadedGraphicsLibraries() throws {
+        let u = FileManager.default.temporaryDirectory.appendingPathComponent("pe-\(UUID().uuidString).bin")
+        defer { try? FileManager.default.removeItem(at: u) }
+        var d = Data("MZ junk ".utf8); d += Data("D3D11.DLL".utf8.flatMap { [$0, 0] }); d += Data(" dxgi.dll ".utf8)
+        try d.write(to: u)
+        XCTAssertEqual(Set(PEFile.loadedGraphicsDLLs(u)), ["d3d11.dll", "dxgi.dll"])
+    }
+}

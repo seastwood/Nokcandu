@@ -635,12 +635,13 @@ public enum SharedSteam {
     /// program exists, look at it and pick the right mode (unless the player confirmed one).
     @discardableResult
     public static func refreshDetection(_ g: InstalledGame) -> Bool {
-        guard g.usesSharedSteam, var c = g.custom, c.is64Bit == nil, c.detectedAPIs.isEmpty, let id = c.steamAppID,
+        guard g.usesSharedSteam, var c = g.custom, c.detectedAPIs.isEmpty, c.confirmedGraphics == nil, let id = c.steamAppID,
               let lib = installedGames().first(where: { $0.appID == id && $0.installed }), let folder = lib.folder,
-              let exe = mainExecutable(in: folder, gameName: lib.name), let pe = PEFile.inspect(exe) else { return false }
+              let exe = mainExecutable(in: folder, gameName: lib.name), let pe = PEFile.inspectWithLoadedDLLs(exe) else { return false }
         c.is64Bit = pe.is64Bit
         c.detectedAPIs = pe.imports.map { $0.lowercased() }.filter { $0.hasPrefix("d3d") || $0 == "dxgi.dll" || $0 == "ddraw.dll" || $0 == "opengl32.dll" }
-        if c.confirmedGraphics == nil { c.graphics = GraphicsPreset.suggest(for: pe) }
+        guard !c.detectedAPIs.isEmpty else { return false }      // nothing to go on: leave the player's choice
+        c.graphics = GraphicsPreset.suggest(for: pe)
         return (try? CustomGames.saveAll(c, to: g)) != nil
     }
 
@@ -656,7 +657,7 @@ public enum SharedSteam {
         guard isSetUp else { throw NokError("Set up Steam first.") }
         let fm = FileManager.default
         let probe = game.folder.flatMap { mainExecutable(in: $0, gameName: game.name) }
-        let pe = probe.flatMap(PEFile.inspect)
+        let pe = probe.flatMap(PEFile.inspectWithLoadedDLLs)
         let name = CustomGames.safeFolderName(game.name)
         let target = try CustomGames.freeAppURL(name)
         let c = target.appendingPathComponent("Contents")
@@ -859,7 +860,9 @@ extension SharedSteam {
     public static func refreshHostScriptsIfNeeded() {
         let fm = FileManager.default
         let launcher = contents.appendingPathComponent("MacOS/\(hostLauncher)")
-        guard fm.fileExists(atPath: helper.path), fm.fileExists(atPath: launcher.path), !isRunning else { return }
+        // Written atomically (a new file replaces the old one), so a helper that's running keeps reading
+        // its own copy. Waiting for Steam to close left games starting through an outdated helper.
+        guard fm.fileExists(atPath: helper.path), fm.fileExists(atPath: launcher.path) else { return }
         for (url, text) in [(helper, helperScript()), (launcher, hostLauncherScript())] {
             if (try? Hashing.sha256(file: url)) != Hashing.sha256(data: Data(text.utf8)) {
                 try? Data(text.utf8).write(to: url, options: .atomic)
