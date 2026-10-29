@@ -201,6 +201,9 @@ public enum CustomInstall {
             try GameMover.removeCopiedMacMetadata(in: staging)
             if fm.fileExists(atPath: target.path) { try fm.removeItem(at: target) }
             try fm.moveItem(at: staging, to: target)
+            if let bottle = ctx.input("bottle.path") {
+                Bottles.importUserData(from: URL(fileURLWithPath: bottle), into: ctx.prefix, log: ctx.log)
+            }
         }
 
         func storeDownload(_ ctx: InstallContext) async throws {

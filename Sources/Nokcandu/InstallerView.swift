@@ -133,6 +133,12 @@ final class InstallerModel: ObservableObject {
 }
 
 struct InstallerView: View {
+    @State private var bottles: [Bottle] = Bottles.all()
+    @State private var bottleGames: [String: [Bottle.Game]] = [:]
+    func loadGames(_ b: Bottle) async {
+        let list = await Task.detached(priority: .userInitiated) { Bottles.games(in: b) }.value
+        bottleGames[b.id] = list
+    }
     @EnvironmentObject var app: AppModel
     @Environment(\.dismiss) private var dismiss
     @StateObject private var m = InstallerModel()
@@ -251,6 +257,33 @@ struct InstallerView: View {
                     }
                         .disabled(newSource != .steamLibrary && newSource != .store && newName.trimmingCharacters(in: .whitespaces).isEmpty)
                         .keyboardShortcut(.defaultAction)
+                }
+            }
+            if !bottles.isEmpty {
+                Section("Bring games over from Whisky or CrossOver") {
+                    Text("Copies the game's folder (instantly on the same drive) and the saves and settings it kept in that bottle. Whisky and CrossOver aren't changed. Windows components the game installed there (like .NET) may need installing again in Fixes.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    ForEach(bottles) { b in
+                        DisclosureGroup("\(b.name) (\(b.kind.rawValue))") {
+                            let list = bottleGames[b.id] ?? []
+                            if bottleGames[b.id] == nil { ProgressView().controlSize(.small).task { await loadGames(b) } }
+                            else if list.isEmpty { Text("No games found in this bottle.").font(.caption).foregroundStyle(.secondary) }
+                            ForEach(list) { g in
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(g.name)
+                                        Text(g.exe.lastPathComponent).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Button("Bring Over") {
+                                        m.startCustom(name: g.name, source: .folder, library: app.games, folder: installFolder,
+                                                      inputs: ["folderMode": "copy", "folderPath": g.folder.path, "bottle.path": b.url.path])
+                                        if m.executor != nil { m.continueInstall() }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             Section("Mac games") {

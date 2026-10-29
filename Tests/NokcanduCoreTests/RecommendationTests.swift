@@ -97,3 +97,15 @@ final class CloudSaveTests: XCTestCase {
         XCTAssertEqual(CloudSaves.parse("[cli] INFO: No cloud or local savegame found."), .none)
     }
 }
+
+final class BottleTests: XCTestCase {
+    func testGameFolder() {
+        let b = URL(fileURLWithPath: "/tmp/Bottles/Games")
+        func f(_ p: String) -> String? { Bottles.gameFolder(for: b.appendingPathComponent("drive_c/" + p), in: b)?.lastPathComponent }
+        XCTAssertEqual(f("Program Files (x86)/Foo Game/bin/foo.exe"), "Foo Game")
+        XCTAssertEqual(f("GOG Games/Bar/bar.exe"), "Bar")
+        XCTAssertEqual(f("Baz/baz.exe"), "Baz")
+        XCTAssertNil(f("Program Files (x86)/Steam/steamapps/common/x.exe"))
+        XCTAssertNil(f("setup.exe"))
+    }
+}
