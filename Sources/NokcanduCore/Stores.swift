@@ -411,6 +411,18 @@ public enum StoreAccounts {
 
     /// Lines for a game's launcher that fetch what the store adds when a game starts (Epic: sign-in token and
     /// account; Amazon: its SDK settings). Fills STORE_ARGS; plays offline if the store can't be reached.
+    /// Sign-in and launch arguments from the store for a game it installed (Epic: a one-time exchange code
+    /// and account details). Epic games whose online services can't sign in close right after starting.
+    public static func launchArguments(_ link: StoreLink) async throws -> [String] {
+        guard link.store == .epic else { return [] }
+        let r = try await StoreTools.capture(.epic, ["launch", link.id, "--json", "--skip-version-check"], timeout: 60)
+        guard r.status == 0, let j = try? JSONSerialization.jsonObject(with: r.out) as? [String: Any] else {
+            throw NokError("Epic Games couldn't prepare the sign-in for this game\(r.err.isEmpty ? "" : ": " + String(r.err.suffix(200)))")
+        }
+        let list = { (k: String) in (j[k] as? [String]) ?? [] }
+        return list("game_parameters") + list("user_parameters") + list("egl_parameters")
+    }
+
     public static func launcherLines(_ link: StoreLink) -> String {
         guard link.store != .gog else { return "STORE_ARGS=()\n" }
         let q = CustomGames.shellQuote

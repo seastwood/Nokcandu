@@ -213,7 +213,14 @@ final class AppModel: ObservableObject {
                 if DisplayController.supports(g) { DisplayController.prepareForLaunch(g) }
                 LibraryOrganizer.notePlayed(g)
                 GameDataSpec.forGame(g)?.snapshot()     // keep a copy of settings that live outside the app
-                return Result { try GameLauncher.launch(g) }
+                // Mac versions from Epic need Epic's sign-in details, or they close right after their first screen.
+                var args: [String] = []
+                if let link = g.native?.store, link.store == .epic {
+                    do { args = try await StoreAccounts.launchArguments(link) }
+                    catch { await MainActor.run { self.say("Starting without Epic sign-in — \(error.localizedDescription). Online features may not work.") } }
+                }
+                let launchArgs = args
+                return Result { try GameLauncher.launch(g, arguments: launchArgs) }
             }.value
             if case .failure(let e) = r { fail(e) }
             if sortMode == .recent { reorganize() }
