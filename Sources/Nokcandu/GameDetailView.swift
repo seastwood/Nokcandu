@@ -413,6 +413,11 @@ struct NativeGameDetail: View {
                         }
                         GameStorageSummary(game: game)
                         Text(native.store.map { "Mac version from \($0.store.title)" } ?? "Mac game — runs natively, no Wine").foregroundStyle(.secondary)
+                        if let n = MacCompat.note(MacCompat.check(game.appURL)) {
+                            Label(n.text, systemImage: n.warning ? "exclamationmark.triangle" : "checkmark.circle")
+                                .font(.callout).foregroundStyle(n.warning ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                         HStack {
                             Button { model.play(game) } label: { Label(running ? "Running" : "Play", systemImage: "play.fill").frame(minWidth: 90) }
                                 .buttonStyle(.borderedProminent).controlSize(.large).disabled(running)

@@ -40,4 +40,13 @@ final class GameHealthTests: XCTestCase {
         ListCache.remove(key)
         XCTAssertNil(ListCache.load(key, as: [StoreGame].self))
     }
+
+    func testMacCompatibility() {
+        // A system app is built for Apple silicon (universal); the macOS version check compares numerically.
+        XCTAssertEqual(MacCompat.check(URL(fileURLWithPath: "/System/Applications/Calculator.app")), .native)
+        XCTAssertTrue(MacCompat.newer("15.4", than: OperatingSystemVersion(majorVersion: 15, minorVersion: 3, patchVersion: 9)))
+        XCTAssertFalse(MacCompat.newer("10.13", than: OperatingSystemVersion(majorVersion: 26, minorVersion: 0, patchVersion: 0)))
+        XCTAssertNil(MacCompat.note(.unknown))
+        XCTAssertTrue(MacCompat.note(.rosetta)!.warning)
+    }
 }
