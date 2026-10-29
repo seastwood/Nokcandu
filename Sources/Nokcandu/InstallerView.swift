@@ -499,6 +499,10 @@ struct InstallerView: View {
         let inputs = ex.ctx.state.inputs
         switch source {
         case .installer:
+            if inputs["acquire.opened"] == "1" {
+                Text("Finish and close the Windows setup window, then press Continue. A launcher opened by setup can stay running.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
             HStack {
                 Button("Choose Installer…") {
                     if let u = pick(folder: false, types: ["exe", "msi"]) { m.setInput("installerPath", u.path); m.continueInstall() }

@@ -16,7 +16,8 @@ static bool nokcandu_background_program(const char *path) {
         "steamservice.exe", "gldriverquery.exe", "gldriverquery64.exe", "vulkandriverquery.exe",
         "vulkandriverquery64.exe", "crashhandler.exe", "EAGEP.exe", "EABackgroundService.exe",
         "EALocalHostSvc.exe", "EACefSubProcess.exe", "EACrashReporter.exe", "EAErrorReporter.exe",
-        "steamwebhelper.exe", "QtWebEngineProcess.exe", "CefSharp.BrowserSubprocess.exe", NULL
+        "steamwebhelper.exe", "QtWebEngineProcess.exe", "CefSharp.BrowserSubprocess.exe",
+        "UplayWebCore.exe", "UplayService.exe", "UpcElevationService.exe", "UplayCrashReporter.exe", "UbisoftExtension.exe", NULL
     };
     for (unsigned i = 0; names[i]; ++i) if (!strcasecmp(name, names[i])) return true;
     return false;

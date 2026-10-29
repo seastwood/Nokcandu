@@ -101,7 +101,7 @@ public enum CustomInstall {
             switch source {
             case .installer:
                 return StageInfo(id: "acquire", title: "Run the game's installer",
-                                 detail: "Choose the setup .exe or .msi. It opens in its own window — install to C:\\Games if it asks, and accept only what you agree to. Typing paths works better than pasting there.",
+                                 detail: "Choose the setup .exe or .msi. It opens in its own window — install to C:\\Games if it asks, and accept only what you agree to. Finish and close the installer, then press Continue here. Typing paths works better than pasting there.",
                                  kind: .handoff, needs: ["installerPath"])
             case .disc:
                 return StageInfo(id: "acquire", title: "Install from the disc image",
@@ -237,7 +237,12 @@ public enum CustomInstall {
                 try await EAAppInstaller.run(ctx, installer: URL(fileURLWithPath: p))
                 return
             }
-            if ZeroHourInstall.opened(ctx, info.id) { return markFinished(ctx) }
+            if ZeroHourInstall.opened(ctx, info.id) {
+                guard !CustomGames.findExecutables(prefix: ctx.prefix, nameHint: CustomInstall.name(ctx), limit: 1).isEmpty else {
+                    throw NokError("No installed program was found yet. Finish the Windows installer, then press Continue. If setup failed, choose Run Installer Again.")
+                }
+                return markFinished(ctx)
+            }
             let url = URL(fileURLWithPath: p)
             guard ["exe", "msi"].contains(url.pathExtension.lowercased()), FileManager.default.fileExists(atPath: p) else {
                 throw NokError("Choose a Windows setup file (.exe or .msi).")
@@ -245,9 +250,16 @@ public enum CustomInstall {
             try FileManager.default.createDirectory(at: CustomInstall.gamesFolder(ctx), withIntermediateDirectories: true)
             try ZeroHourInstall.markOpened(ctx, info.id)
             ctx.log("Starting the installer. Finish it in its own window…")
-            let r = try await ctx.runWine(["start", "/wait", "/unix", p], cwd: url.deletingLastPathComponent(), timeout: 4 * 3600)
-            ctx.log("Installer closed (exit \(r.status)).")
-            markFinished(ctx)
+            // This is a user handoff, not a wait for every program setup opens. Some installers
+            // keep their launcher running indefinitely. Continue checks for installed programs;
+            // choosing the actual program and the later self-check still validate the result.
+            let r = try await ctx.runWine(["start", "/unix", p], cwd: url.deletingLastPathComponent(), timeout: 60)
+            guard r.ok else {
+                ctx.state.inputs["acquire.opened"] = "0"
+                try ctx.saveState()
+                throw NokError("Windows could not open this installer (exit \(r.status)). Run Installer Again to retry.")
+            }
+            ctx.log("Installer opened. Finish and close its setup window, then press Continue here. A launcher left running does not need to exit first.")
         }
 
         func installFromDisc(_ ctx: InstallContext) async throws {
