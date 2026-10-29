@@ -44,10 +44,25 @@ final class GameAppTests: XCTestCase {
         XCTAssertEqual(steam["LSApplicationCategoryType"] as? String, "public.app-category.utilities")
         let c = dir.appendingPathComponent("Steam.app/Contents")
         XCTAssertTrue(FileManager.default.isExecutableFile(atPath: c.appendingPathComponent("MacOS/wine").path))
+        // Named after the program so macOS's privacy lists show "Steam", not "wine".
+        XCTAssertEqual(steam["CFBundleExecutable"] as? String, "Steam")
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: c.appendingPathComponent("MacOS/Steam").path))
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: c.appendingPathComponent("MacOS/wine").path), "Steam")
         XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: c.appendingPathComponent("lib").path), "../../../wine/lib")
         // The links resolve to the engine.
         XCTAssertEqual(c.appendingPathComponent("lib").resolvingSymlinksInPath().path,
                        host.appendingPathComponent("SharedSupport/wine/lib").resolvingSymlinksInPath().path)
+    }
+
+    func testOldWrapperWithLoaderAtWineIsMigrated() throws {
+        GameApp.ensure(host: host, wrappers: [.init(name: "G", iconFrom: nil)], programs: [:], fallback: "G")
+        let m = dir.appendingPathComponent("G.app/Contents/MacOS")
+        // Make it look like a wrapper from before: the loader itself at MacOS/wine.
+        try FileManager.default.removeItem(at: m.appendingPathComponent("wine"))
+        try FileManager.default.moveItem(at: m.appendingPathComponent("G"), to: m.appendingPathComponent("wine"))
+        GameApp.ensure(host: host, wrappers: [.init(name: "G", iconFrom: nil)], programs: [:], fallback: "G")
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: m.appendingPathComponent("wine").path), "G")
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: m.appendingPathComponent("G").path))
     }
 
     func testStaleWrappersRemovedAndSwitchOff() throws {

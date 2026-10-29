@@ -967,7 +967,19 @@ static void gl_limit_wine(void) {
 #include <fcntl.h>
 #include <errno.h>
 #include <sys/stat.h>
-static void run_from_game_app(void) {
+extern pid_t responsibility_get_pid_responsible_for_pid(pid_t) __attribute__((weak_import));
+// macOS files privacy permissions (Input Monitoring, microphone) under the process that is responsible for
+// the others — the first one a launcher starts. When that one is a Windows helper (start.exe…), it used to
+// stay a bare "wine", so Privacy & Security filled up with unnamed "wine" entries. It now runs from the
+// game's wrapper too (helper library still off), so the permission is listed under the game's name.
+static bool responsible_for_itself(void) {
+    if (!responsibility_get_pid_responsible_for_pid) return false;
+    return responsibility_get_pid_responsible_for_pid(getpid()) == getpid();
+}
+
+static void run_from_game_app_as(bool background);
+static void run_from_game_app(void) { run_from_game_app_as(false); }
+static void run_from_game_app_as(bool background) {
     if (getenv("NOKCANDU_NO_GAME_APP")) return;
     char exe[PATH_MAX]; uint32_t size = sizeof exe;
     if (_NSGetExecutablePath(exe, &size) != 0 || strstr(exe, "/GameApp/")) return;
@@ -975,7 +987,7 @@ static void run_from_game_app(void) {
     if (!base || strcmp(base + 1, "wine") != 0) return;
     int argc = *_NSGetArgc(); char **argv = *_NSGetArgv();
     if (argc < 2 || !argv[1] || argv[1][0] == '-' || !argv[1][0]) return;
-    if (nokcandu_background_program(argv[1])) return;
+    if (!background && nokcandu_background_program(argv[1])) return;
     const char *prog = argv[1];
     for (const char *q = argv[1]; *q; q++) if (*q == '\\' || *q == '/') prog = q + 1;
     Dl_info info;
@@ -995,7 +1007,7 @@ static void run_from_game_app(void) {
         *tab = 0;
         if (strcmp(line, "#engine") == 0) strlcpy(engine, tab + 1, sizeof engine);
         else if (strcmp(line, "*") == 0) strlcpy(fallback, tab + 1, sizeof fallback);
-        else if (strcasecmp(line, prog) == 0) strlcpy(wrapper, tab + 1, sizeof wrapper);
+        else if (!background && strcasecmp(line, prog) == 0) strlcpy(wrapper, tab + 1, sizeof wrapper);
     }
     fclose(f);
     if (!wrapper[0]) strlcpy(wrapper, fallback, sizeof wrapper);
@@ -1018,7 +1030,11 @@ static void run_from_game_app(void) {
 
 __attribute__((constructor)) static void start(void) {
     int argc = *_NSGetArgc(); char **argv = *_NSGetArgv();
-    if (argc > 1 && nokcandu_background_program(argv[1])) { helper_enabled = false; return; }
+    if (argc > 1 && nokcandu_background_program(argv[1])) {
+        helper_enabled = false;
+        if (responsible_for_itself()) run_from_game_app_as(true);
+        return;
+    }
     run_from_game_app();
     const char *s = getenv("NOKCANDU_RAW_MOUSE_SCALE");
     if (s && atof(s) > 0.01 && atof(s) < 20) scale = atof(s);

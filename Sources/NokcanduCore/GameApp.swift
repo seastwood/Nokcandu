@@ -50,9 +50,14 @@ public enum GameApp {
         return s.isEmpty ? "Game" : s
     }
 
+    /// The loader copy is named after the game: macOS lists privacy permissions (Input Monitoring for raw
+    /// mouse, the microphone) under the program's file name, so a plain "wine" told nobody which game it was.
+    /// "wine" stays as a link to it for anything that looks for that name.
+    static func executableName(_ name: String) -> String { safeName(name) == "wine" ? "wine-game" : safeName(name) }
+
     static func plist(name: String, icon: Bool, game: Bool = true) -> [String: Any] {
         var p: [String: Any] = [
-            "CFBundleExecutable": "wine",
+            "CFBundleExecutable": executableName(name),
             "CFBundleIdentifier": bundleID(name),
             "CFBundleName": name,
             "CFBundleDisplayName": name,
@@ -110,13 +115,26 @@ public enum GameApp {
         try? fm.createDirectory(at: c.appendingPathComponent("MacOS"), withIntermediateDirectories: true)
         try? fm.createDirectory(at: c.appendingPathComponent("Resources"), withIntermediateDirectories: true)
         // The loader copy gets re-signed with the wrapper, so remember which engine loader it came from.
-        let loader = c.appendingPathComponent("MacOS/wine"), stamp = c.appendingPathComponent("Resources/loader-sha256")
+        let exeName = executableName(name)
+        let loader = c.appendingPathComponent("MacOS/\(exeName)"), stamp = c.appendingPathComponent("Resources/loader-sha256")
+        let link = c.appendingPathComponent("MacOS/wine")
         let source = try? Hashing.sha256(file: wine)
         if !fm.fileExists(atPath: loader.path) || source == nil || (try? String(contentsOf: stamp, encoding: .utf8)) != source {
             try? fm.removeItem(at: loader)
             if (try? fm.copyItem(at: wine, to: loader)) == nil { return }
             if let source { try? source.write(to: stamp, atomically: true, encoding: .utf8) }
             changed = true
+        }
+        // Wrappers from before kept the loader itself at MacOS/wine: make that the link.
+        if (try? fm.destinationOfSymbolicLink(atPath: link.path)) != exeName {
+            try? fm.removeItem(at: link)
+            try? fm.createSymbolicLink(atPath: link.path, withDestinationPath: exeName)
+            changed = true
+        }
+        // A loader left over from an earlier name of this wrapper.
+        for f in (try? fm.contentsOfDirectory(atPath: c.appendingPathComponent("MacOS").path)) ?? []
+            where ![exeName, "wine", "wineserver"].contains(f) {
+            try? fm.removeItem(at: c.appendingPathComponent("MacOS/\(f)")); changed = true
         }
         // Paths Wine looks for next to its loader (the server, its libraries and data).
         let links = [("MacOS/wineserver", "../../../../wine/bin/wineserver"), ("lib", "../../../wine/lib"),
