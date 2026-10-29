@@ -361,6 +361,40 @@ public enum StoreAccounts {
         return size
     }
 
+    /// Titles of the DLC you own for a game (GOG and Epic). Cached like sizes.
+    public static func ownedDLC(_ store: Store, id: String, mac: Bool) async -> [String] {
+        let key = "\(id)-\(mac ? "mac" : "win")", cacheKey = "dlc-\(store.rawValue)"
+        var cache = ListCache.load(cacheKey, as: [String: [String]].self)?.value ?? [:]
+        if let hit = cache[key] { return hit }
+        var titles: [String] = []
+        func title(_ x: Any) -> String? {
+            if let d = x as? [String: Any] { return (d["title"] ?? d["name"]) as? String }
+            return x as? String
+        }
+        switch store {
+        case .epic:
+            guard let r = try? await StoreTools.capture(.epic, ["info", id, "--json", "--platform", mac ? "Mac" : "Windows"], timeout: 120), r.status == 0,
+                  let j = try? JSONSerialization.jsonObject(with: r.out) as? [String: Any], let game = j["game"] as? [String: Any] else { return [] }
+            titles = ((game["owned_dlc"] as? [Any]) ?? []).compactMap(title)
+        case .gog:
+            guard let r = try? await StoreTools.capture(.gog, ["info", id, "--platform", mac ? "osx" : "windows"], timeout: 120), r.status == 0,
+                  let j = try? JSONSerialization.jsonObject(with: r.out) as? [String: Any] else { return [] }
+            titles = ((j["dlcs"] as? [Any]) ?? []).compactMap(title)
+        case .amazon: return []
+        }
+        cache[key] = titles; ListCache.save(cache, cacheKey)
+        return titles
+    }
+
+    /// Store tool arguments for "include DLC" / "skip DLC".
+    public static func dlcArgs(_ store: Store, include: Bool) -> [String] {
+        switch store {
+        case .gog: include ? ["--with-dlcs"] : ["--skip-dlcs"]
+        case .epic: include ? [] : ["--skip-dlcs"]     // legendary installs owned DLC with -y unless told not to
+        case .amazon: []
+        }
+    }
+
     /// Stops before downloading when the drive can't hold the game (plus 1 GB to spare).
     public static func checkSpace(_ store: Store, id: String, mac: Bool, folder: URL) async throws {
         guard let size = await installSize(store, id: id, mac: mac), let free = GameFolders.freeSpace(folder) else { return }
@@ -370,7 +404,7 @@ public enum StoreAccounts {
         }
     }
 
-    public static func download(_ g: StoreLink, into folder: URL, log: @escaping @Sendable (String) -> Void,
+    public static func download(_ g: StoreLink, into folder: URL, includeDLC: Bool = false, log: @escaping @Sendable (String) -> Void,
                                 progress: (@Sendable (StoreTools.Progress) -> Void)? = nil) async throws -> (exe: URL, arguments: String) {
         let fm = FileManager.default
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -379,13 +413,13 @@ public enum StoreAccounts {
         switch g.store {
         case .gog:
             let status = try await StoreTools.stream(.gog, ["download", g.id, "--platform", "windows", "--path", real.path,
-                                                            "--support", real.appendingPathComponent(".gog-support").path, "--skip-dlcs"], log: log, progress: progress)
+                                                            "--support", real.appendingPathComponent(".gog-support").path] + dlcArgs(.gog, include: includeDLC), log: log, progress: progress)
             guard status == 0 else { throw NokError("The GOG download stopped (exit \(status)). Press Continue to resume it.") }
             return try gogPlayTask(in: real, id: g.id)
         case .epic:
             let status = try await StoreTools.stream(.epic, ["install", g.id, "--base-path", real.deletingLastPathComponent().path,
                                                              "--game-folder", real.lastPathComponent, "--platform", "Windows",
-                                                             "--skip-sdl", "-y"], log: log, progress: progress)
+                                                             "--skip-sdl", "-y"] + dlcArgs(.epic, include: includeDLC), log: log, progress: progress)
             guard status == 0 else { throw NokError("The Epic download stopped (exit \(status)). Press Continue to resume it.") }
             let installed = StoreTools.configDir(.epic).appendingPathComponent("installed.json")
             guard let d = try? Data(contentsOf: installed), let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],

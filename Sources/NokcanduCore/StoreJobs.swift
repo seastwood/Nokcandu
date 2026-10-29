@@ -8,6 +8,7 @@ public struct StoreJob: Codable, Hashable, Sendable, Identifiable {
     /// The folder the game's own folder goes into.
     public var folder: URL
     public var started: Date
+    public var includeDLC: Bool? = nil
     public var id: String { StoreJobs.key(game.store, game.id) }
     public init(game: StoreGame, folder: URL, started: Date = Date()) { self.game = game; self.folder = folder; self.started = started }
 }

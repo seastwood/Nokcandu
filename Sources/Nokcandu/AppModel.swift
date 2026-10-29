@@ -390,8 +390,9 @@ final class AppModel: ObservableObject {
 
     /// Download a store game's Mac version (or pick up one that stopped) — runs here, not in the store
     /// window, so closing the window doesn't lose it, and is saved so a restart can resume it.
-    func installMac(_ g: StoreGame, into folder: URL) {
-        let job = StoreJob(game: g, folder: folder)
+    func installMac(_ g: StoreGame, into folder: URL, includeDLC: Bool = false) {
+        var job = StoreJob(game: g, folder: folder)
+        job.includeDLC = includeDLC
         guard storeDownloads[job.id] == nil else { return }
         StoreJobs.add(job)
         interruptedDownloads.removeAll { $0.id == job.id }
@@ -399,7 +400,7 @@ final class AppModel: ObservableObject {
         let id = job.id
         Task {
             do {
-                let n = try await NativeGames.installFromStore(g, into: folder, log: { line in
+                let n = try await NativeGames.installFromStore(g, into: folder, includeDLC: includeDLC, log: { line in
                     Task { @MainActor in self.storeDownloads[id]?.line = line.trimmingCharacters(in: .whitespaces) }
                 }, progress: { p in
                     Task { @MainActor in self.storeDownloads[id]?.progress = p }
@@ -443,7 +444,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func resumeDownload(_ j: StoreJob) { installMac(j.game, into: j.folder) }
+    func resumeDownload(_ j: StoreJob) { installMac(j.game, into: j.folder, includeDLC: j.includeDLC ?? false) }
 
     func discardDownload(_ j: StoreJob) {
         StoreJobs.discard(j)

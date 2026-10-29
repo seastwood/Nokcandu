@@ -56,6 +56,12 @@ public enum StoreUpdates {
         return nil
     }
 
+    static func gogHasDLC(_ id: String) -> Bool {
+        guard let d = try? Data(contentsOf: gogManifests.appendingPathComponent(id)),
+              let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return false }
+        return !((j["HGLdlcs"] as? [Any]) ?? []).isEmpty
+    }
+
     /// The folder holding goggame-<id>.info (the game's root), searched upward from the program.
     public static func gogRoot(from start: URL, id: String) -> URL? {
         var dir = start.hasDirectoryPath ? start : start.deletingLastPathComponent()
@@ -117,7 +123,7 @@ public enum StoreUpdates {
                 throw NokError("Couldn't find \(g.name)'s GOG download folder to update.")
             }
             status = try await StoreTools.stream(.gog, ["update", l.id, "--platform", mac ? "osx" : "windows", "--path", path.path,
-                                                        "--support", path.appendingPathComponent(".gog-support").path, "--skip-dlcs"],
+                                                        "--support", path.appendingPathComponent(".gog-support").path] + StoreAccounts.dlcArgs(.gog, include: gogHasDLC(l.id)),
                                                  log: log, progress: progress)
         case .amazon:
             throw NokError("Amazon games update through Amazon.")

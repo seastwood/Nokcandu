@@ -210,7 +210,8 @@ public enum CustomInstall {
             guard StoreAccounts.isSignedIn(kind) else { throw NokError("Sign in to \(kind.title) in Nokcandu's Store Library first.") }
             let folder = CustomInstall.gamesFolder(ctx)
             ctx.log("Downloading from \(kind.title)…")
-            let r = try await StoreAccounts.download(StoreLink(store: kind, id: id), into: folder, log: ctx.log) { p in
+            let r = try await StoreAccounts.download(StoreLink(store: kind, id: id), into: folder,
+                                                    includeDLC: ctx.input("store.dlc") == "1", log: ctx.log) { p in
                 ctx.reportProgress("Downloading from \(kind.title) — \(p.label)", fraction: p.fraction)
             }
             // The store reports real paths (maybe on another drive); the game sees them under C:\Games\<name>.

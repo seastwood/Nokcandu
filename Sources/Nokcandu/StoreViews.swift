@@ -33,6 +33,9 @@ struct StoreLibraryView: View {
     @State private var choosing: String?
     /// Install sizes, looked up when a game's install options open (nil entry = store doesn't report it).
     @State private var sizes: [String: StoreAccounts.InstallSize?] = [:]
+    /// Owned DLC titles per game/version, and whether to include them.
+    @State private var dlcs: [String: [String]] = [:]
+    @State private var withDLC = true
 
     struct LoginRequest: Identifiable { let id = UUID(); let store: Store; let url: URL; let amazon: [String: String] }
 
@@ -205,6 +208,10 @@ struct StoreLibraryView: View {
                     }()
                     VStack(alignment: .leading, spacing: 4) {
                         InstallFolderPicker(folder: $folder, macApp: mac).frame(maxWidth: 440)
+                        if let d = dlcs[key], !d.isEmpty {
+                            Toggle("Include your DLC (\(d.count)): \(d.prefix(3).joined(separator: ", "))\(d.count > 3 ? "…" : "")", isOn: $withDLC)
+                                .toggleStyle(.checkbox).font(.caption).help(d.joined(separator: "\n"))
+                        }
                         Group {
                             if let entry = sizes[key] {
                                 if let sz = entry {
@@ -283,6 +290,7 @@ struct StoreLibraryView: View {
             Task {
                 let s = await StoreAccounts.installSize(g.store, id: g.id, mac: mac)
                 sizes[sizeKey(g, mac: mac)] = .some(s)
+                dlcs[sizeKey(g, mac: mac)] = await StoreAccounts.ownedDLC(g.store, id: g.id, mac: mac)
             }
         }
     }
@@ -294,11 +302,13 @@ struct StoreLibraryView: View {
             error = "\(GameFolders.volumeName(folder)) can't hold Mac apps. Pick this Mac or a Mac-formatted drive, or install the Windows version there."
             return
         }
-        app.installMac(g, into: folder)
+        let key = sizeKey(g, mac: true)
+        app.installMac(g, into: folder, includeDLC: withDLC && !(dlcs[key] ?? []).isEmpty)
     }
 
     func install(_ g: StoreGame) {
-        app.pendingStoreInstall = (g.title, ["store.kind": g.store.rawValue, "store.id": g.id], folder)
+        let dlc = withDLC && !(dlcs[sizeKey(g, mac: false)] ?? []).isEmpty
+        app.pendingStoreInstall = (g.title, ["store.kind": g.store.rawValue, "store.id": g.id, "store.dlc": dlc ? "1" : "0"], folder)
         dismiss()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { app.showInstaller = true }
     }
