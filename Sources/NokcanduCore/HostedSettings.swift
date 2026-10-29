@@ -61,7 +61,7 @@ public enum HostedSettings {
         [ -x "$SUPPORT/wine/bin/wine" ] || { echo 'The launcher app is missing. Open its page in Nokcandu to repair it.' >&2; exit 1; }
         \(PCLaunchers.hostRunningCheck(link))
         export WINEPREFIX="$SUPPORT/prefix"
-        export DYLD_FALLBACK_LIBRARY_PATH="$HC/Frameworks:/usr/lib"
+        \(WineEnvironment.exportLine("HC"))
         export WINEDEBUG=-all WINEMSYNC=1
         export PATH="$SUPPORT/wine/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         \(HelperPatch.block)

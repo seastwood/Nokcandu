@@ -63,7 +63,7 @@ public enum SharedSteam {
         CONTENTS="$(cd "$(dirname "$0")/.." && pwd)"
         SUPPORT="$CONTENTS/SharedSupport"
         export WINEPREFIX="$SUPPORT/prefix"
-        export DYLD_FALLBACK_LIBRARY_PATH="$CONTENTS/Frameworks:/usr/lib"
+        \(WineEnvironment.exportLine("CONTENTS"))
         export WINEDEBUG=-all
         export WINEMSYNC=1
         export PATH="$SUPPORT/wine/bin:/usr/bin:/bin:/usr/sbin:/sbin"
@@ -157,7 +157,7 @@ public enum SharedSteam {
         # A game started later restarts Steam (after asking) when any of it changed since.
         config_id() {
          # (Files that don't exist are simply left out — a missing one must never stop Steam from starting.)
-         { echo "$MODE"; cat "$STATE/perf.env" "$STATE/raw-mouse-debug" 2>/dev/null || true; if [ -f "$STATE/steam-gpu" ]; then echo gpu; fi
+         { echo "$MODE"; echo "$DYLD_FALLBACK_LIBRARY_PATH"; cat "$STATE/perf.env" "$STATE/raw-mouse-debug" 2>/dev/null || true; if [ -f "$STATE/steam-gpu" ]; then echo gpu; fi
            /sbin/md5 -q "$STATE/nokcandu-rawmouse.dylib" 2>/dev/null || true; } | /sbin/md5 -q
         }
         # --status: what starting this game would do (Nokcandu asks about restarting in its own window).

@@ -30,7 +30,7 @@ public enum HelperPatch {
     /// Keep the Intel Wine helper out of native utilities (Python, display tools, store helpers).
     /// Shared by built-in recipes, general game launchers and the shared Steam helper.
     static func scopeWineLibrary(_ text: String) -> String {
-        var result = text.replacingOccurrences(of: globalExport,
+        var result = WineEnvironment.upgradeExports(text).replacingOccurrences(of: globalExport,
             with: #"NOKCANDU_HELPER_LIBRARY="$SUPPORT/nokcandu/nokcandu-rawmouse.dylib""#)
         result = result.components(separatedBy: "\n").map { line in
             let body = line.drop(while: { $0 == " " || $0 == "\t" })
@@ -57,6 +57,7 @@ public enum HelperPatch {
 
     /// Both helper versions normalise to the exact tested launcher for fingerprint checks.
     public static func strip(_ text: String) -> String {
+        let text = WineEnvironment.originalExports(text)
         if text.contains(block) {
             return text.replacingOccurrences(of: block, with: "").components(separatedBy: "\n").map { line in
                 let body = line.drop(while: { $0 == " " || $0 == "\t" })

@@ -218,7 +218,7 @@ public enum PCLaunchers {
         if [ ! -x "$SUPPORT/wine/bin/wine" ]; then echo "\(l.launcher.title) app not found at $HOST" >&2; exit 1; fi
         if [ "${1:-}" = --check ]; then echo "Launcher check passed: \(l.launcher.title) is ready."; exit 0; fi
         export WINEPREFIX="$SUPPORT/prefix"
-        export DYLD_FALLBACK_LIBRARY_PATH="$HC/Frameworks:/usr/lib"
+        \(WineEnvironment.exportLine("HC"))
         export WINEDEBUG=-all
         export WINEMSYNC=1
         export PATH="$SUPPORT/wine/bin:/usr/bin:/bin:/usr/sbin:/sbin"
@@ -261,7 +261,7 @@ public enum PCLaunchers {
             let settings = HostedSettings.load(g), want = HostedSettings.script(l, settings: settings)
             guard current != want else { continue }
             // Known older generated scripts and fingerprinted scripts migrate; manual edits stay.
-            if current == legacyLauncherScript(l) || current == launcherScript(l, legacyProcessDetection: true) ||
+            if WineEnvironment.upgradeExports(current) == legacyLauncherScript(l) || WineEnvironment.upgradeExports(current) == launcherScript(l, legacyProcessDetection: true) ||
                 settings.launcherSHA == Hashing.sha256(data: Data(current.utf8)) {
                 try? HostedSettings.save(settings, for: g)
             }

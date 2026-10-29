@@ -228,12 +228,12 @@ public enum Winetricks {
         // New apps omit Configure.app. Prefer Nokcandu's source-built archive tool.
         let cab = NokPaths.bundledResource("cabextract")?.deletingLastPathComponent()
             ?? host.appendingPathComponent("Configure.app/Contents/Resources")
-        var env = ProcessInfo.processInfo.environment
+        var env = WineTools.environment(contents:host)
         env["DYLD_INSERT_LIBRARIES"] = nil
         env["WINEPREFIX"] = support.appendingPathComponent("prefix").path
         env["WINE"] = wineBin.appendingPathComponent("wine").path
         env["WINESERVER"] = wineBin.appendingPathComponent("wineserver").path
-        env["DYLD_FALLBACK_LIBRARY_PATH"] = host.appendingPathComponent("Frameworks").path + ":/usr/lib"
+        env["DYLD_FALLBACK_LIBRARY_PATH"] = WineEnvironment.libraryPath(contents: host)
         env["PATH"] = [cab.path, wineBin.path, "/usr/bin", "/bin", "/usr/sbin", "/sbin"].joined(separator: ":")
         env["W_OPT_UNATTENDED"] = "1"
         env["WINEDEBUG"] = "-all"

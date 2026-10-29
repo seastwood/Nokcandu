@@ -365,7 +365,7 @@ public enum ZeroHourInstall {
                   let screen = NokPaths.bundledResource("screen-size") else { throw NokError("Launcher template missing from Nokcandu.app") }
             let launcher = ctx.contents.appendingPathComponent("MacOS/generals-launcher")
             try? fm.removeItem(at: launcher)
-            try fm.copyItem(at: template, to: launcher)
+            try Data(WineEnvironment.upgradeExports(String(contentsOf:template,encoding:.utf8)).utf8).write(to:launcher,options:.atomic)
             try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: launcher.path)
             let screenDst = ctx.contents.appendingPathComponent("Resources/screen-size")
             try? fm.removeItem(at: screenDst)

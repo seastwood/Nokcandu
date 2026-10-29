@@ -30,6 +30,26 @@ final class SettingsRestartTests: XCTestCase {
         } catch { XCTAssertEqual(error.localizedDescription, "test failure") }
         XCTAssertEqual(steps.last, "recovered")
     }
+    func testApplyingHostedGameSettingRelaunchesGameRatherThanOnlyHost() async throws {
+        let (host, _) = try EASetupRecoveryTests().fixture()
+        defer { try? FileManager.default.removeItem(at:host.appURL) }
+        let server=host.support.appendingPathComponent("wine/bin/wineserver")
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to:server)
+        try FileManager.default.setAttributes([.posixPermissions:0o755],ofItemAtPath:server.path)
+        let link=HostedGameLink(hostApp:host.appURL.path,launcher:.ea,id:"g",name:"Selected Game",exe:#"C:\Games\Game.exe"#)
+        let selected=InstalledGame(appURL:host.appURL.appendingPathComponent("Selected.app"),name:"Selected Game",hosted:link)
+        var reopened:[InstalledGame.ID]=[]
+        try await WineTools.applySettings(for:selected,restart:true,edit:{ game in
+            XCTAssertEqual(game.id,selected.id)
+        },reopen:{reopened.append($0.id)})
+        XCTAssertEqual(reopened,[selected.id],"The selected game must start the host and itself in one action")
+        reopened=[]
+        do {
+            try await WineTools.applySettings(for:selected,restart:true,edit:{_ in throw NokError("failure")},reopen:{reopened.append($0.id)})
+            XCTFail("Expected edit failure")
+        } catch {}
+        XCTAssertEqual(reopened,[host.id],"A failed edit recovers the host without launching a possibly partially changed game")
+    }
     func testRestartClosesOrphanedWineWithoutTouchingOtherPrograms() async throws {
         let (host, _) = try EASetupRecoveryTests().fixture()
         defer { try? FileManager.default.removeItem(at: host.appURL) }

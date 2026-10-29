@@ -138,9 +138,10 @@ final class AppModel: ObservableObject {
             let running = contents != nil ? await WineTools.environmentIsRunning(for: game) : false
             if running {
                 let name = host?.name ?? game.name
+                let reopenName = host?.id == game.id ? name : "\(game.name) through \(name)"
                 let alert = NSAlert()
                 alert.messageText = "Restart \(name) to apply \(title.lowercased())?"
-                alert.informativeText = "Nokcandu will fully close all Windows programs in this environment, including its running games. Unsaved progress will be lost. It will apply the setting while everything is closed, then reopen \(name)."
+                alert.informativeText = "Nokcandu will fully close all Windows programs in this environment, including its running games. Unsaved progress will be lost. It will apply the setting while everything is closed, then reopen \(reopenName)."
                 alert.alertStyle = .warning
                 alert.addButton(withTitle: "Apply and Restart")
                 alert.addButton(withTitle: "Cancel")
@@ -151,7 +152,7 @@ final class AppModel: ObservableObject {
                 try await WineTools.applySettings(for: game, restart: running, edit: edit)
                 applied = true
                 refresh()
-                say(running ? "\(host?.name ?? game.name) restarted. \(success)" : success)
+                say(running ? "\(game.name) restarted. \(success)" : success)
             } catch { fail(error) }
         }
     }

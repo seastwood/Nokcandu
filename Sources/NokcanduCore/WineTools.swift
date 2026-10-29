@@ -50,7 +50,7 @@ public enum WineTools {
         var env = ProcessInfo.processInfo.environment
         let support = c.appendingPathComponent("SharedSupport")
         env["WINEPREFIX"] = support.appendingPathComponent("prefix").path
-        env["DYLD_FALLBACK_LIBRARY_PATH"] = c.appendingPathComponent("Frameworks").path + ":/usr/lib"
+        env["DYLD_FALLBACK_LIBRARY_PATH"] = WineEnvironment.libraryPath(contents: c)
         env["WINEDEBUG"] = "-all"
         env["WINEMSYNC"] = "1"
         env["PATH"] = support.appendingPathComponent("wine/bin").path + ":/usr/bin:/bin:/usr/sbin:/sbin"
@@ -143,7 +143,7 @@ public enum WineTools {
             return !result.ok
         } catch { return true }
     }
-    /// Apply while the entire environment is closed, then reopen its actual host. Callers obtain
+    /// Apply while the environment is closed, then relaunch the selected game through its host. Callers obtain
     /// confirmation first; mouse settings that apply live never use this path.
     public static func applySettings(for game: InstalledGame, restart: Bool,
                                      edit: (InstalledGame) async throws -> Void,
@@ -157,8 +157,9 @@ public enum WineTools {
             throw error
         }
         if restart, let hostURL, let host = GameLibrary.inspect(hostURL) {
-            CustomGames.upgradeLaunchers([host])
-            try reopen(GameLibrary.inspect(hostURL) ?? host)
+            let selected=GameLibrary.inspect(game.appURL) ?? game
+            CustomGames.upgradeLaunchers([host, selected])
+            try reopen(GameLibrary.inspect(selected.appURL) ?? selected)
         }
     }
 

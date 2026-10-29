@@ -20,6 +20,12 @@ Detailed implementation notes live in [compatibility-fixes.md](compatibility-fix
 | Rollback data belongs to a specific engine. | Keep the original audio driver with its engine's rollback record; never apply another engine's saved driver as a buffer adjustment. | Tests cover present/missing baselines and exclude hosted shortcuts as engine owners. [Updates.swift](../Sources/NokcanduCore/Updates.swift). |
 | Game-owned configuration evolves during normal use. | Manage allowlisted settings individually where supported, retain unrelated edits and preserve backups. Fingerprint generated launchers before migration; do not overwrite manual edits. | BF1942 resolution/mod troubleshooting and shared journal/profile tests. [ChangeJournal.swift](../Sources/NokcanduCore/ChangeJournal.swift). |
 
+## Shared media loading and settings restart — October 29, 2026
+
+Chrono Trigger's logo-then-black-screen failure was resolved in a controlled launch by including the bundled GStreamer library directory in Wine's library search path. Media Foundation had failed to create its parser before decoder selection, despite LAV already being installed. `WineEnvironment` now provides this directory centrally for fresh launchers, shared hosts, installers and tools. Recognized generated scripts migrate safely; Steam detects that its old running environment needs restarting. This is not evidence that the unresolved EA gameplay audio issue is fixed.
+
+Apply and Restart now relaunches the selected game's standard launcher after a successful edit, so it starts both its host and the game. An edit failure recovers only the host. The full suite passed 182 tests with six optional skips; the signed build passed. The installed normal restart API check also passed; visual inspection of that relaunch stalled. See the [dated evidence and limits](investigations/chrono-trigger-media-2026-10-29.md).
+
 ## Launcher-specific findings
 
 ### Ubisoft Connect — sign-in rendering verified

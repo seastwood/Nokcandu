@@ -124,7 +124,9 @@ public enum BattleNet {
             guard let l = g.battleNet else { continue }
             let f = g.appURL.appendingPathComponent("Contents/MacOS/\(CustomGames.launcherName)")
             let want = launcherScript(l)
-            if (try? String(contentsOf: f, encoding: .utf8)) == want { continue }
+            guard let current=try? String(contentsOf:f,encoding:.utf8), current != want else { continue }
+            // This exact generated-script migration must not replace hand-edited launchers.
+            guard WineEnvironment.upgradeExports(current) == want else { continue }
             if (try? Data(want.utf8).write(to: f, options: .atomic)) != nil {
                 try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: f.path)
             }
@@ -172,7 +174,7 @@ public enum BattleNet {
         if [ ! -x "$SUPPORT/wine/bin/wine" ]; then echo "Battle.net app not found at $HOST" >&2; exit 1; fi
         if [ "${1:-}" = --check ]; then echo "Launcher check passed: Battle.net is ready to start $CODE."; exit 0; fi
         export WINEPREFIX="$SUPPORT/prefix"
-        export DYLD_FALLBACK_LIBRARY_PATH="$HC/Frameworks:/usr/lib"
+        \(WineEnvironment.exportLine("HC"))
         export WINEDEBUG=-all
         export WINEMSYNC=1
         export PATH="$SUPPORT/wine/bin:/usr/bin:/bin:/usr/sbin:/sbin"

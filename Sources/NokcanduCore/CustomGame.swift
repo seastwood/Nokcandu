@@ -399,7 +399,7 @@ public enum CustomGames {
         CONTENTS="$(cd "$(dirname "$0")/.." && pwd)"
         SUPPORT="$CONTENTS/SharedSupport"
         export WINEPREFIX="$SUPPORT/prefix"
-        export DYLD_FALLBACK_LIBRARY_PATH="$CONTENTS/Frameworks:/usr/lib"
+        \(WineEnvironment.exportLine("CONTENTS"))
         # Quiet, except errors from Windows video playback (lets Nokcandu recognize cinematic crashes).
         export WINEDEBUG=-all,err+quartz,err+strmbase
         export WINEMSYNC=1
