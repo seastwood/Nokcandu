@@ -1,5 +1,7 @@
 # Nokcandu
 
+For current troubleshooting conclusions and implementation knowledge, start with the [documentation index](index.md). The milestone sections below retain historical development context; they are not a complete current feature inventory.
+
 A small Mac app that turns owned Windows games into normal Mac apps using tested, reviewed Wine recipes.
 First version: the two proven recipes — **Worms Armageddon (disc)** and **Generals Zero Hour (Steam + GeneralsOnline)**.
 

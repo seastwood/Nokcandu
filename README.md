@@ -57,6 +57,10 @@ fix data from [umu-protonfixes](https://github.com/Open-Wine-Components/umu-prot
 [AreWeAntiCheatYet](https://github.com/AreWeAntiCheatYet/AreWeAntiCheatYet) (MIT).
 Nokcandu isn't affiliated with Apple, Microsoft, Valve, Blizzard, GOG, Epic Games, Amazon, EA, Ubisoft, CodeWeavers or the Wine project.
 
+## Documentation
+
+See the [documentation index](docs/index.md) for engineering learnings, compatibility fixes, troubleshooting records, and development notes.
+
 ## Build from source
 
 ```
