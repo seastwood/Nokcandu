@@ -98,6 +98,14 @@ struct LibraryView: View {
                     }
                 }
             }
+            // The list's own primary action: double-click (or Return) plays, without the extra tap
+            // recognizer that delayed or swallowed single clicks on rows.
+            .contextMenu(forSelectionType: InstalledGame.ID.self) { ids in
+                if let id = ids.first, let g = model.games.first(where: { $0.id == id }) { GameContextMenu(game: g) }
+            } primaryAction: { ids in
+                guard let id = ids.first, let g = model.games.first(where: { $0.id == id }) else { return }
+                if !model.isRunning(g) || g.isSteamHost { model.play(g) }
+            }
             .navigationSplitViewColumnWidth(min: 220, ideal: 250)
             .toolbar {
                 if #available(macOS 26.0, *) { ToolbarSpacer(.flexible) }
@@ -202,11 +210,6 @@ extension LibraryView {
         GameRow(game: g, state: model.runStates[g.id] ?? .notRunning)
             .tag(g.id)
             .contentShape(Rectangle())
-            // Double-click a game to play it (or open Steam); a running game just stays selected.
-            .simultaneousGesture(TapGesture(count: 2).onEnded {
-                if !model.isRunning(g) || g.isSteamHost { model.play(g) }
-            })
-            .contextMenu { GameContextMenu(game: g) }
     }
 }
 

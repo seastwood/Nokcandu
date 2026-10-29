@@ -349,7 +349,7 @@ struct GameResolutionSection: View {
                         }
                     }.labelsHidden().frame(width: 280)
                 }
-                Text("Changes your Mac's display while the game runs and restores it afterward. Desktop keeps your current screen resolution. This doesn't change the game's own settings.")
+                Text("Changes your Mac's display while the game runs and restores it afterward. Desktop keeps your current screen resolution. Nokcandu doesn't edit the game's own settings, but many games (like Counter-Strike 2) only offer resolutions that fit the screen, so pick the size here first, then choose it in the game.")
                     .font(.caption).foregroundStyle(.secondary)
                 if game.usesSharedSteam { Text("Changing the Mac screen resolution needs Steam closed.").font(.caption).foregroundStyle(.secondary) }
                 Divider()
