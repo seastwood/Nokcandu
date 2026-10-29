@@ -285,6 +285,13 @@ public enum SharedSteam {
         public var library: URL?
         /// Steam's state flags from its install record (appmanifest): downloading, paused, installed…
         public var stateFlags: Int?
+        /// Steam's download counters from the install record (for a percentage while downloading).
+        public var bytesDownloaded: Int64?
+        public var bytesToDownload: Int64?
+        public var downloadFraction: Double? {
+            guard download != nil, let d = bytesDownloaded, let t = bytesToDownload, t > 0 else { return nil }
+            return min(1, Double(d) / Double(t))
+        }
 
         public enum Download: Equatable { case downloading, paused, queued }
         /// What Steam is doing with a game that has an install record but isn't fully installed.
@@ -365,6 +372,8 @@ public enum SharedSteam {
                                     playtimeMinutes: nil, iconURL: nil, owned: true)
                 g.library = lib
                 g.stateFlags = flags
+                g.bytesDownloaded = s["BytesDownloaded"]?.string.flatMap(Int64.init)
+                g.bytesToDownload = s["BytesToDownload"]?.string.flatMap(Int64.init)
                 return g
             }
         }

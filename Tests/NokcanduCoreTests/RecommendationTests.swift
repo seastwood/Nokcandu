@@ -73,3 +73,27 @@ final class ProblemReportTests: XCTestCase {
         XCTAssertLessThan(link.absoluteString.count, 7000)
     }
 }
+
+final class StoreUpdateTests: XCTestCase {
+    func testLegendaryUpdateLines() {
+        let t = """
+        Installed games:
+         * Subnautica (App name: Jaguar | Version: 1.0-Mac | Platform: Mac | 6.53 GiB)
+          -> Update available! Installed: 1.0-Mac, Latest: 1.1-Mac
+         * The Battle of Polytopia (App name: 3ce8 | Version: 2.17 | Platform: Mac | 0.37 GiB)
+        """
+        let u = StoreUpdates.parseLegendary(t)
+        XCTAssertEqual(u.count, 1)
+        XCTAssertEqual(u["Jaguar"]?.installed, "1.0-Mac")
+        XCTAssertEqual(u["Jaguar"]?.latest, "1.1-Mac")
+    }
+}
+
+final class CloudSaveTests: XCTestCase {
+    func testParse() {
+        XCTAssertEqual(CloudSaves.parse("[cli] INFO: Save game for \"X\" is up to date, skipping..."), .upToDate)
+        XCTAssertEqual(CloudSaves.parse("[cli] INFO: Cloud save for \"X\" is newer:\n[cli] INFO: Downloading \"X\" save..."), .downloaded)
+        XCTAssertEqual(CloudSaves.parse("[cli] INFO: Uploading save..."), .uploaded)
+        XCTAssertEqual(CloudSaves.parse("[cli] INFO: No cloud or local savegame found."), .none)
+    }
+}

@@ -284,7 +284,8 @@ struct SteamLibraryView: View {
                 HStack(spacing: 6) {
                     if added != nil { badge("In Nokcandu", .green) }
                     switch g.download {
-                    case .downloading: badge(g.installed ? "Updating in Steam…" : "Downloading in Steam…", .orange)
+                    case .downloading:
+                        badge((g.installed ? "Updating in Steam" : "Downloading in Steam") + (g.downloadFraction.map { " · \(Int($0 * 100))%" } ?? "…"), .orange)
                     case .paused: badge("Paused in Steam", .gray)
                     case .queued: badge("Queued in Steam", .gray)
                     case nil:

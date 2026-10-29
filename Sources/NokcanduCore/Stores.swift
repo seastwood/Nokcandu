@@ -102,7 +102,8 @@ public enum StoreTools {
 
     /// Runs a client and returns its whole standard output (library lists can be megabytes of JSON —
     /// more than the normal output capture keeps).
-    public static func capture(_ s: Store, _ args: [String], timeout: TimeInterval = 300) async throws -> (status: Int32, out: Data, err: String) {
+    public static func capture(_ s: Store, _ args: [String], timeout: TimeInterval = 300,
+                               extraEnvironment: [String: String] = [:]) async throws -> (status: Int32, out: Data, err: String) {
         let tool = try await ensure(s)
         try NokPaths.ensure(configDir(s))
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("nokcandu-\(s.rawValue)-\(UUID().uuidString).json")
@@ -113,7 +114,7 @@ public enum StoreTools {
         let p = Process()
         p.executableURL = tool
         p.arguments = baseArgs(s) + args
-        p.environment = environment(s)
+        p.environment = environment(s).merging(extraEnvironment) { $1 }
         let outH = try FileHandle(forWritingTo: tmp), errH = try FileHandle(forWritingTo: errURL)
         p.standardOutput = outH; p.standardError = errH; p.standardInput = FileHandle.nullDevice
         try p.run()

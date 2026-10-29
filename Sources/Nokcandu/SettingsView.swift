@@ -1,3 +1,4 @@
+import GameController
 import SwiftUI
 import AppKit
 import NokcanduCore
@@ -101,9 +102,17 @@ struct AdvancedSettings: View {
     @State private var caches: [Caches.Cache] = []
     @State private var loading = true
     @State private var gameApps = GameApp.enabled
+    @State private var cloudSaves = CloudSaves.enabled
 
     var body: some View {
         Form {
+            Section {
+                Toggle("Sync Epic cloud saves", isOn: Binding(get: { cloudSaves }, set: { cloudSaves = $0; CloudSaves.enabled = $0 }))
+            } header: { Text("Cloud saves") } footer: {
+                Text("For games installed from Epic: a newer cloud save is downloaded before the game starts, and your save is uploaded after it quits. The newer save always wins. (Steam games sync through Steam. GOG cloud saves aren't supported yet.)")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            ControllersSection()
             Section {
                 Toggle("Run games as their own apps", isOn: Binding(get: { gameApps }, set: { on in
                     gameApps = on; GameApp.enabled = on
@@ -163,6 +172,35 @@ struct AdvancedSettings: View {
             let more = await Task.detached(priority: .utility) { Caches.others(g) }.value
             caches += more
             loading = false
+        }
+    }
+}
+
+
+
+/// Game controllers macOS sees right now (Wine's games see the same ones).
+struct ControllersSection: View {
+    @State private var pads: [String] = []
+    var body: some View {
+        Section {
+            if pads.isEmpty {
+                Text("No controller connected. Pair one in System Settings → Bluetooth, or plug it in.").foregroundStyle(.secondary)
+            }
+            ForEach(pads, id: \.self) { p in Label(p, systemImage: "gamecontroller.fill") }
+        } header: { Text("Controllers") } footer: {
+            Text("Xbox, PlayStation and Switch Pro controllers work in most Windows games that support controllers — Windows games see them as standard game controllers. If a game ignores yours, check its own controls settings.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .onAppear(perform: reload)
+        .onReceive(NotificationCenter.default.publisher(for: .GCControllerDidConnect)) { _ in reload() }
+        .onReceive(NotificationCenter.default.publisher(for: .GCControllerDidDisconnect)) { _ in reload() }
+    }
+    func reload() {
+        GCController.startWirelessControllerDiscovery {}
+        pads = GCController.controllers().map { c in
+            let kind = c.extendedGamepad != nil ? "full gamepad" : c.microGamepad != nil ? "simple gamepad" : "controller"
+            let battery = c.battery.map { " · battery \(Int($0.batteryLevel * 100))%" } ?? ""
+            return "\(c.vendorName ?? "Controller") (\(kind))\(battery)"
         }
     }
 }

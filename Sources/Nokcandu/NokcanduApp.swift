@@ -23,6 +23,7 @@ struct NokcanduApp: App {
                 Button("Add a Game…") { model.showInstaller = true }.keyboardShortcut("i", modifiers: [.command, .shift])
                 Button("Game Stores…") { model.openStores() }.keyboardShortcut("l", modifiers: [.command, .shift])
                 Button("Refresh Library") { model.refresh() }.keyboardShortcut("r")
+                Button("Check for Game Updates") { Task { await model.checkStoreUpdates(); model.say(model.storeUpdates.isEmpty ? "Your GOG and Epic games are up to date." : "\(model.storeUpdates.count) game update(s) available.") } }
                 Button("Updates…") { model.showUpdates = true }.keyboardShortcut("u", modifiers: [.command, .shift])
                 Button("Setup Checklist…") { model.showWelcome = true }
             }
@@ -253,6 +254,8 @@ struct GameRow: View {
         if case .launcherRunning = state { return "Running" }
         if model.moving.contains(game.id) { return "Moving…" }
         if let d = model.missingDrive[game.id] { return "Connect \(d) to play" }
+        if let u = model.updating[game.id] { return "Updating" + (u.progress.map { " · \($0.label)" } ?? "…") }
+        if model.storeUpdates[game.id] != nil { return "Update available" }
         if let custom = model.subtitles[game.id] { return custom }
         var s: String
         if let n = game.native { s = n.store.map { "Mac game · \($0.store.title)" } ?? "Mac game" }

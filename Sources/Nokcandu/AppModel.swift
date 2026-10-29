@@ -39,6 +39,9 @@ final class AppModel: ObservableObject {
     /// before finishing (saved on disk, so they survive a restart).
     @Published var storeDownloads: [String: StoreDownload] = [:]
     @Published var interruptedDownloads: [StoreJob] = []
+    /// GOG/Epic games with a newer version (game id → versions), and updates running now.
+    @Published var storeUpdates: [String: StoreUpdates.Available] = StoreUpdates.cached()?.value ?? [:]
+    @Published var updating: [String: StoreDownload] = [:]
     struct StoreDownload: Equatable { var line: String; var progress: StoreTools.Progress? }
     @Published var showUpdates = false
     @Published var showReport = false
@@ -65,6 +68,9 @@ final class AppModel: ObservableObject {
         SharedSteam.refreshHostScriptsIfNeeded()
         refresh()
         interruptedDownloads = StoreJobs.all()
+        if Date().timeIntervalSince(StoreUpdates.cached()?.saved ?? .distantPast) > 6 * 3600 {
+            Task { await checkStoreUpdates() }
+        }
         if let j = interruptedDownloads.first {
             let more = interruptedDownloads.count > 1 ? " (and \(interruptedDownloads.count - 1) more)" : ""
             say("\(j.game.title)'s download didn't finish\(more). Resume it in Game Stores.")
@@ -185,6 +191,14 @@ final class AppModel: ObservableObject {
             }
         }
         if s != runStates {
+            // A game with Epic cloud saves just quit: upload its newer saves.
+            for g in games where CloudSaves.supported(g) != nil {
+                if case .launcherRunning = runStates[g.id] ?? .notRunning, case .notRunning = s[g.id] ?? .notRunning {
+                    Task.detached(priority: .utility) {
+                        if await CloudSaves.sync(g) == .uploaded { await MainActor.run { self.say("Uploaded \(g.name)'s save to Epic's cloud.") } }
+                    }
+                }
+            }
             runStates = s
             // Something just started or stopped: if Steam is closed now, bring its helper up to date
             // (it can only be replaced while Steam isn't running).
@@ -231,6 +245,13 @@ final class AppModel: ObservableObject {
                     catch { await MainActor.run { self.say("Starting without Epic sign-in — \(error.localizedDescription). Online features may not work.") } }
                 }
                 let launchArgs = args
+                // Epic cloud saves: get a newer save from the cloud before the game reads it.
+                if CloudSaves.supported(g) != nil {
+                    await MainActor.run { self.say("Checking \(g.name)'s cloud saves…") }
+                    if await CloudSaves.sync(g) == .downloaded {
+                        await MainActor.run { self.say("Downloaded \(g.name)'s newer cloud save. Starting…") }
+                    }
+                }
                 return Result { try GameLauncher.launch(g, arguments: launchArgs) }
             }.value
             if case .failure(let e) = r { fail(e) }
@@ -391,6 +412,33 @@ final class AppModel: ObservableObject {
                 storeDownloads[id] = nil
                 interruptedDownloads = StoreJobs.all()
                 banner = Banner(text: "\(g.title): \(error.localizedDescription)", isError: true)
+            }
+        }
+    }
+
+    func checkStoreUpdates() async {
+        let gs = games
+        storeUpdates = await Task.detached(priority: .utility) { await StoreUpdates.check(gs) }.value
+    }
+
+    func updateGame(_ g: InstalledGame) {
+        guard updating[g.id] == nil else { return }
+        updating[g.id] = StoreDownload(line: "Starting update…", progress: nil)
+        let id = g.id
+        Task {
+            do {
+                try await StoreUpdates.update(g, log: { line in
+                    Task { @MainActor in self.updating[id]?.line = line.trimmingCharacters(in: .whitespaces) }
+                }, progress: { p in
+                    Task { @MainActor in self.updating[id]?.progress = p }
+                })
+                updating[id] = nil
+                storeUpdates[id] = nil
+                refresh()
+                say("\(g.name) is up to date.")
+            } catch {
+                updating[id] = nil
+                banner = Banner(text: "\(g.name): \(error.localizedDescription)", isError: true)
             }
         }
     }

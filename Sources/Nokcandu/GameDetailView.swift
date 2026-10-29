@@ -43,6 +43,26 @@ struct GameDetailView: View {
                     .padding(12)
                     .background((w.verdict == .blocked ? Color.red : Color.orange).opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
                 }
+                if let u = model.updating[game.id] {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Updating \(game.name)…").font(.body.bold())
+                        if let p = u.progress { ProgressView(value: p.fraction); Text(p.label).font(.caption).monospacedDigit() }
+                        else { ProgressView().progressViewStyle(.linear); Text(u.line).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                    }
+                    .padding(12).background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                } else if let u = model.storeUpdates[game.id] {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "arrow.down.circle.fill").foregroundStyle(.blue).font(.title3)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Update available from \(u.link.store.title)").font(.body.bold())
+                            Text("Installed \(u.installed) · newest \(u.latest)").font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Update") { model.updateGame(game) }.buttonStyle(.borderedProminent)
+                            .disabled({ if case .launcherRunning = model.runStates[game.id] ?? .notRunning { return true }; return false }())
+                    }
+                    .padding(12).background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                }
                 if game.custom != nil, !LibraryOrganizer.isLauncher(game) {
                     SuggestionsBanner(game: game).id("suggest-\(game.id)")
                 }
