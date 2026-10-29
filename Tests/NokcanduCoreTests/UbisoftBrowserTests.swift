@@ -50,14 +50,17 @@ final class UbisoftBrowserTests: XCTestCase {
     }
     /// Real official bytes are local licensed installation data, never committed to the repo.
     func testVerifiedOfficialBrowserInstallRepairAndUndo() async throws {
-        guard ProcessInfo.processInfo.environment["NOKCANDU_UBISOFT_E2E"]=="1" else { throw XCTSkip("Requires the local official Ubisoft browser") }
+        guard ProcessInfo.processInfo.environment["NOKCANDU_UBISOFT_E2E"]=="1",
+              let sourcePath=ProcessInfo.processInfo.environment["NOKCANDU_UBISOFT_BROWSER"] else {
+            throw XCTSkip("Set NOKCANDU_UBISOFT_BROWSER to an original official libcef.dll and NOKCANDU_UBISOFT_E2E=1")
+        }
         var g=try ProfileCompletenessTests().fixture()
         defer { try? FileManager.default.removeItem(at:g.appURL) }
         var c=g.custom!;c.exe = #"C:\Games\T\upc.exe"#;c.graphics = .dxmt;c.arguments="--language en"
         try CustomGames.save(c,to:g);g=CompatibilityFixes.fresh(g)
         let exe=try XCTUnwrap(CompatibilityFixes.program(g));try NokPaths.ensure(exe.deletingLastPathComponent());try OpenUASettingsTests().pe().write(to:exe)
         let file=exe.deletingLastPathComponent().appendingPathComponent("libcef.dll")
-        let source=URL(fileURLWithPath:"/private/tmp/nok-ubisoft-cx-test/official-files/libcef.dll")
+        let source=URL(fileURLWithPath:sourcePath)
         let original=try Data(contentsOf:source);XCTAssertEqual(Hashing.sha256(data:original),UbisoftBrowser.originalSHA)
         try original.write(to:file)
         try await CompatibilityFixes.install(.ubisoftBrowser,for:g,log:{_ in})
