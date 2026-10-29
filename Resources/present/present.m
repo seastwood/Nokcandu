@@ -52,6 +52,9 @@ static __weak NSWindow *gameWindow;    // the game's fullscreen Wine window
 static NokPresentGeometry geo;         // published on the main thread; read by the event rewrite (same thread)
 static void selfTest(void);
 static void tieToFrame(void);
+static BOOL confining;              // the pointer is kept inside the picture right now
+static CGRect gameClip;             // the game's ClipCursor area, in the game's coordinates (empty: none)
+static BOOL manualCapture;          // Control-Command-Escape: keep the pointer in the picture until pressed again
 static void (*orig_orderRelative)(id, SEL, NSWindowOrderingMode, NSInteger);
 static NSView *titlebarFill;
 static void updateCapture(void);
@@ -530,6 +533,16 @@ static void scan(void) {
     if (fs) raiseTitlebar();
     updateGeometry();
     updateCapture();
+    // Diagnostics: a line whenever the state that decides where the mouse goes changes.
+    static NSString *lastState;
+    id ctl = [objc_getClass("WineApplicationController") performSelector:@selector(sharedController)];
+    id capture = nil; NSUInteger dragged = 0;
+    @try { capture = [ctl valueForKey:@"mouseCaptureWindow"]; dragged = [[ctl valueForKey:@"windowsBeingDragged"] count]; } @catch (id x) {}
+    NSString *st = [NSString stringWithFormat:@"state: game %ld %@ key %d visible %d | key window %@ | active %d | capture %@ dragged %lu | confining %d clip %@ manual %d | wine windows %lu",
+        (long)g.windowNumber, NSStringFromRect(g.frame), g.isKeyWindow, g.isVisible, NSApp.keyWindow.class, NSApp.isActive,
+        capture ? @"yes" : @"no", (unsigned long)dragged, confining, NSStringFromRect(NSRectFromCGRect(gameClip)), manualCapture,
+        (unsigned long)[NSApp.windows filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NSWindow *w, id b) { return isWineWindow(w) && w.isVisible; }]].count];
+    if (![st isEqualToString:lastState]) { note(@"%@", st); lastState = st; }
 }
 
 // MARK: Self-test (NOKCANDU_PRESENT_SELFTEST=1|fullscreen)
@@ -575,6 +588,29 @@ static void selfTest(void) {
     after(4, ^{ clickCorners(@"larger"); });
     after(5, ^{ [frameWindow setFrame:NSMakeRect(40, 60, 500, 340) display:YES]; updateGeometry(); });
     after(6, ^{ clickCorners(@"small, different shape"); });
+    if (strcmp(mode, "move") == 0) {
+        after(2, ^{ note(@"before move: game %@", NSStringFromRect(gameWindow.frame));
+                    NSRect f = frameWindow.frame; f.origin.x += 120; f.origin.y -= 80; [frameWindow setFrame:f display:YES]; });
+        after(3, ^{ note(@"after move: game %@", NSStringFromRect(gameWindow.frame)); clickCorners(@"moved"); });
+        return;
+    }
+    if (strcmp(mode, "track") == 0) {
+        // Moves across the picture in 20 steps, at two window sizes: the game's raw-input total should match the
+        // distance in game pixels, and its cursor should end where the pointer is.
+        for (int k = 0; k < 2; k++) {
+            if (k == 1) after(5, ^{ [frameWindow setFrame:NSMakeRect(100, 100, 900, 700) display:YES]; updateGeometry(); note(@"selftest: resized"); });
+            for (int i = 0; i <= 20; i++) after(2 + k * 4 + i * 0.05, ^{
+                CGRect d = geo.display; NSWindow *f = frameWindow;
+                CGPoint p = CGPointMake(CGRectGetMinX(d) + 5 + (d.size.width - 10) * i / 20.0, CGRectGetMidY(d));
+                NSPoint local = [f convertPointFromScreen:NSMakePoint(p.x, primaryHeight() - p.y)];
+                NSEvent *m = [NSEvent mouseEventWithType:NSEventTypeMouseMoved location:local modifierFlags:0 timestamp:NSProcessInfo.processInfo.systemUptime
+                                             windowNumber:f.windowNumber context:nil eventNumber:0 clickCount:0 pressure:0];
+                [NSApp sendEvent:m];
+                if (i == 20) { note(@"selftest track %d: picture %@ game %@", k, NSStringFromRect(NSRectFromCGRect(d)), NSStringFromRect(NSRectFromCGRect(geo.game))); clickAt(p); }
+            });
+        }
+        return;
+    }
     if (strcmp(mode, "aim") == 0) {
         after(2, ^{ NSWindow *g = gameWindow;
             NSEvent *d = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:g.windowNumber context:nil characters:@"h" charactersIgnoringModifiers:@"h" isARepeat:NO keyCode:4];
@@ -693,9 +729,6 @@ static BOOL gameHidesCursor(void) {
     if (hiddenIvar < 0) { Ivar iv = class_getInstanceVariable(object_getClass(ctl), "clientWantsCursorHidden"); hiddenIvar = iv ? ivar_getOffset(iv) : 0; }
     return hiddenIvar > 0 && *((BOOL *)((__bridge void *)ctl + hiddenIvar));
 }
-static BOOL confining;
-static BOOL manualCapture;          // Control-Command-Escape: keep the pointer in the picture until pressed again
-static double escDownSince;         // holding Escape for a second also lets go of a manual capture
 static double lastGameWarp;         // when the game last moved the pointer itself (aiming re-centres every frame)
 /// Aiming: the game hides the pointer and keeps moving it back (FPS cameras). Then, like in real full screen,
 /// the pointer can't wander out of the picture. Games that only hide the Mac pointer to draw their own (most
@@ -705,18 +738,38 @@ static void updateCapture(void) {
     if (!g || !geo.valid) return;
     if (!NSApp.isActive) manualCapture = NO;           // switching away (Command-Tab) always lets go
     BOOL want = NSApp.isActive && g.isKeyWindow &&
-        (manualCapture || (gameHidesCursor() && CFAbsoluteTimeGetCurrent() - lastGameWarp < 0.5));
+        (manualCapture || !CGRectIsEmpty(gameClip) || (gameHidesCursor() && CFAbsoluteTimeGetCurrent() - lastGameWarp < 0.5));
     if (want != confining) note(want ? @"pointer kept in the picture (aiming)" : @"pointer released");
     confining = want;
 }
 /// While aiming, a pointer that leaves the picture is put back at its edge.
 static BOOL keepInside(CGPoint p) {
     if (!confining) return NO;
-    CGRect d = CGRectInset(geo.display, 1, 1);
+    CGRect area = geo.display;
+    if (!CGRectIsEmpty(gameClip) && !manualCapture) {
+        CGPoint a = nok_present_to_screen(&geo, gameClip.origin), b = nok_present_to_screen(&geo, CGPointMake(CGRectGetMaxX(gameClip), CGRectGetMaxY(gameClip)));
+        area = CGRectIntersection(CGRectMake(a.x, a.y, b.x - a.x, b.y - a.y), geo.display);
+    }
+    CGRect d = CGRectInset(area, 1, 1);
     if (CGRectContainsPoint(d, p)) return NO;
     CGPoint q = CGPointMake(MIN(MAX(p.x, CGRectGetMinX(d)), CGRectGetMaxX(d)), MIN(MAX(p.y, CGRectGetMinY(d)), CGRectGetMaxY(d)));
     CGWarpMouseCursorPosition(q);
     return YES;
+}
+
+// ClipCursor: Wine asks macOS to confine the pointer to a rect relative to the game's (unscaled, hidden) window,
+// which would trap it in a region of the screen that isn't the picture. Keep the request here instead and keep
+// the pointer inside the matching part of the picture while the game is in front.
+static void (*orig_setConfinement)(id, SEL, NSRect);
+static void my_setConfinement(NSWindow *self, SEL _cmd, NSRect r) {
+    if (!enabled || !frameWindow || !isWineWindow(self)) { orig_setConfinement(self, _cmd, r); return; }
+    if (NSIsEmptyRect(r)) gameClip = CGRectNull;
+    else {
+        CGRect w = toWin(self.frame);          // the window in the game's coordinates
+        gameClip = CGRectMake(w.origin.x + r.origin.x, w.origin.y + w.size.height - NSMaxY(r), r.size.width, r.size.height);
+    }
+    note(@"game clip %@", NSStringFromRect(NSRectFromCGRect(gameClip)));
+    updateCapture();
 }
 
 // Wine finds the window under the pointer itself (for plain mouse moves). Over the picture, that's the game.
@@ -749,19 +802,18 @@ static void my_sendEvent(id self, SEL _cmd, NSEvent *e) {
         if (e.type == NSEventTypeLeftMouseDown) trackResize(e);
         return;
     }
-    // Control-Command-Escape: capture the pointer in the picture (or let go). Holding Escape a second also lets go.
+    // Control-Command-Escape: capture the pointer in the picture (again: let go).
     if (frameWindow && e.type == NSEventTypeKeyDown && e.keyCode == 53 &&
         (e.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask) == (NSEventModifierFlagControl | NSEventModifierFlagCommand)) {
         manualCapture = !manualCapture; updateCapture();
         note(@"pointer capture %@ (Control-Command-Escape)", manualCapture ? @"on" : @"off");
         return;
     }
-    if (manualCapture && e.keyCode == 53 && (e.type == NSEventTypeKeyDown || e.type == NSEventTypeKeyUp)) {
-        double now = CFAbsoluteTimeGetCurrent();
-        if (e.type == NSEventTypeKeyDown && !e.isARepeat) escDownSince = now;
-        else if (e.type == NSEventTypeKeyDown && escDownSince > 0 && now - escDownSince > 1.0) {
-            manualCapture = NO; escDownSince = 0; updateCapture(); note(@"pointer capture off (held Escape)");
-        } else if (e.type == NSEventTypeKeyUp) escDownSince = 0;
+    // Shift-Command-Escape lets go (Escape alone always belongs to the game).
+    if (frameWindow && e.type == NSEventTypeKeyDown && e.keyCode == 53 &&
+        (e.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask) == (NSEventModifierFlagShift | NSEventModifierFlagCommand)) {
+        manualCapture = NO; updateCapture(); note(@"pointer capture off (Shift-Command-Escape)");
+        return;
     }
     // Control-Command-F: full screen (see setFilling).
     if (frameWindow && e.type == NSEventTypeKeyDown && [e.charactersIgnoringModifiers.lowercaseString isEqualToString:@"f"] &&
@@ -770,12 +822,6 @@ static void my_sendEvent(id self, SEL _cmd, NSEvent *e) {
         return;
     }
     NSEvent *r = rewrite(e);
-    if (e.type == NSEventTypeLeftMouseDown || e.type == NSEventTypeRightMouseDown)
-        if (r.window) { CGPoint q = CGEventGetLocation(r.CGEvent); NSPoint np = NSMakePoint(q.x, primaryHeight() - q.y);
-            note(@"  target %@ visible %d frame %@ contains %d ignores %d", r.window, r.window.isVisible, NSStringFromRect(r.window.frame),
-                 NSMouseInRect(np, [r.window contentRectForFrameRect:r.window.frame], NO), r.window.ignoresMouseEvents); }
-        note(@"click at %@ (window %ld) -> %@ window %ld; picture %@", NSStringFromPoint(NSPointFromCGPoint(CGEventGetLocation(e.CGEvent))), (long)e.windowNumber,
-             NSStringFromPoint(NSPointFromCGPoint(CGEventGetLocation(r.CGEvent))), (long)r.windowNumber, NSStringFromRect(NSRectFromCGRect(geo.display)));
     handlingGameEvent = (r != e);
     if (r == e && frameWindow && e.window == frameWindow && isMouseEvent(e)) {
         // The frame's own title bar and edges: plain AppKit handling. Wine would otherwise treat the pointer
@@ -802,11 +848,19 @@ static NSPoint my_mouseLocation(id self, SEL _cmd) {
 
 // The game moving the cursor (aiming re-centres it, menus place it) lands at the matching point in the frame.
 static CGError my_warp(CGPoint p) {
-    CGPoint in = p;
     lastGameWarp = CFAbsoluteTimeGetCurrent();     // the game (through Wine) moved the pointer
     if (enabled && geo.valid) p = nok_present_to_screen(&geo, p);
-    static int n; if (n++ < 20) note(@"warp %@ -> %@", NSStringFromPoint(NSPointFromCGPoint(in)), NSStringFromPoint(NSPointFromCGPoint(p)));
     return CGWarpMouseCursorPosition(p);
+}
+/// For the raw-mouse code in the same library (interposing doesn't reach calls inside this library): a point
+/// on the game window's real, unscaled frame -> where it shows on screen.
+void nok_present_warp_real(CGPoint p) {
+    NSWindow *g = gameWindow;
+    if (enabled && geo.valid && g) {
+        CGRect real = toTopLeft(g.frame);
+        p = nok_present_to_screen(&geo, CGPointMake(geo.game.origin.x + p.x - real.origin.x, geo.game.origin.y + p.y - real.origin.y));
+    }
+    CGWarpMouseCursorPosition(p);
 }
 __attribute__((used)) static const struct { const void *replacement, *original; } warp_interpose[]
     __attribute__((section("__DATA,__interpose"))) = { { (const void *)my_warp, (const void *)CGWarpMouseCursorPosition } };
@@ -874,8 +928,8 @@ __attribute__((constructor)) static void start(void) {
             Class ww = objc_getClass("WineWindow");
             if (ww) hook(ww, @selector(setLevel:), (IMP)my_setLevel, (IMP *)&orig_setLevel, NO);
             if (ww) hook(ww, @selector(orderWindow:relativeTo:), (IMP)my_orderRelative, (IMP *)&orig_orderRelative, NO);
-            // ClipCursor isn't mapped yet: macOS confines to a rect inside the (untransformed) window, which can't
-            // describe the picture. Aiming games are kept inside by keepInside() instead.
+            SEL conf = NSSelectorFromString(@"setMouseConfinementRect:");
+            if ([NSWindow instancesRespondToSelector:conf]) hook([NSWindow class], conf, (IMP)my_setConfinement, (IMP *)&orig_setConfinement, NO);
             [NSTimer scheduledTimerWithTimeInterval:0.25 repeats:YES block:^(NSTimer *t2) {
                 // Another process of the game changed the display mode.
                 int fw, fh;
