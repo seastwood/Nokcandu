@@ -74,6 +74,24 @@ public enum GraphicsPreset: String, Codable, CaseIterable, Identifiable, Sendabl
     }
     public var validated: Bool { self == .classic3D }
 
+    /// Renderer defaults and user/component rules form one map. Explicit per-DLL rules win,
+    /// but adding an unrelated shader/runtime must not discard the selected graphics backend.
+    var dllOverrides: String {
+        switch self {
+        case .classic3D: "d3d8,d3d9=b"
+        case .modern3D: "d3d9,d3d10core,d3d11,dxgi=b"
+        case .appleMetal: "dxgi,d3d11,d3d12,d3d12core=b"
+        case .dxmt: "dxgi,d3d10core,d3d11,winemetal=b"
+        case .classic2D: "ddraw=b"
+        case .compatible: ""
+        }
+    }
+    func mergedDLLOverrides(_ extra: String) -> String {
+        var rules = CompatibilityFixes.overrides(dllOverrides)
+        rules.merge(CompatibilityFixes.overrides(extra)) { _, explicit in explicit }
+        return rules.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ";")
+    }
+
     /// Launcher lines. All renderer DLLs in the Sikarugir runtime are Wine *builtin* DLLs, so they
     /// are selected with WINEDLLPATH_<NAME> and `=b` — never `=n` (see the Zero Hour notes).
     var launcherExports: [String] {
@@ -84,15 +102,15 @@ public enum GraphicsPreset: String, Codable, CaseIterable, Identifiable, Sendabl
         let smooth = [#"export DXVK_ASYNC=1"#, #"export DXVK_CONFIG="d3d9.maxFrameLatency = 1; dxgi.maxFrameLatency = 1""#]
         switch self {
         case .classic3D:
-            return [#"export WINEDLLPATH_D9VK="$SUPPORT/renderer/d9vk/wine""#, vk, log] + smooth + [#"export WINEDLLOVERRIDES="d3d8,d3d9=b""#]
+            return [#"export WINEDLLPATH_D9VK="$SUPPORT/renderer/d9vk/wine""#, vk, log] + smooth + ["export WINEDLLOVERRIDES=\"\(dllOverrides)\""]
         case .modern3D:
-            return [#"export WINEDLLPATH_DXVK="$SUPPORT/renderer/dxvk3/wine""#, vk, log] + smooth + [#"export WINEDLLOVERRIDES="d3d9,d3d10core,d3d11,dxgi=b""#]
+            return [#"export WINEDLLPATH_DXVK="$SUPPORT/renderer/dxvk3/wine""#, vk, log] + smooth + ["export WINEDLLOVERRIDES=\"\(dllOverrides)\""]
         case .appleMetal:
             return [#"export WINEDLLPATH_D3DMETAL="$SUPPORT/renderer/d3dmetal/wine""#,
                     #"export CX_D3DMETALPATH="$SUPPORT/renderer/d3dmetal/external""#,
                     #"export DYLD_FALLBACK_FRAMEWORK_PATH="$SUPPORT/renderer/d3dmetal/external""#,
                     #"[ -f "$SUPPORT/renderer/d3dmetal/external/libd3dshared.dylib" ] && export CX_APPLEGPTK_LIBD3DSHARED_PATH="$SUPPORT/renderer/d3dmetal/external/libd3dshared.dylib""#,
-                    #"export WINEDLLOVERRIDES="dxgi,d3d11,d3d12,d3d12core=b""#]
+                    "export WINEDLLOVERRIDES=\"\(dllOverrides)\""]
         case .dxmt:
             return [#"export WINEDLLPATH_DXMT="$SUPPORT/renderer/dxmt/wine""#,
                     #"export DXMT_LOG_PATH="$SUPPORT/Logs""#,
@@ -100,9 +118,9 @@ public enum GraphicsPreset: String, Codable, CaseIterable, Identifiable, Sendabl
                     // settings per card — CS2 resets its video settings and window mode whenever the card changes —
                     // so switching between Apple Metal and DXMT would otherwise wipe the game's own settings.
                     #"export DXMT_CONFIG="${DXMT_CONFIG:+$DXMT_CONFIG;}dxgi.customVendorId=1002;dxgi.customDeviceId=66af""#,
-                    #"export WINEDLLOVERRIDES="dxgi,d3d10core,d3d11,winemetal=b""#]
+                    "export WINEDLLOVERRIDES=\"\(dllOverrides)\""]
         case .classic2D:
-            return [#"export WINEDLLPATH_CNCD="$SUPPORT/renderer/cnc_ddraw/wine""#, #"export WINEDLLOVERRIDES="ddraw=b""#]
+            return [#"export WINEDLLPATH_CNCD="$SUPPORT/renderer/cnc_ddraw/wine""#, "export WINEDLLOVERRIDES=\"\(dllOverrides)\""]
         case .compatible:
             return []
         }
@@ -409,7 +427,10 @@ public enum CustomGames {
         let env = (c.environment ?? [:]).filter { CustomGames.isValidEnvName($0.key) }.sorted { $0.key < $1.key }
         if !env.isEmpty {
             s += "# Your extra settings\n"
-            for (k, v) in env { s += "export \(k)=\(shellQuote(v))\n" }
+            for (k, v) in env {
+                let value = k == "WINEDLLOVERRIDES" ? c.graphics.mergedDLLOverrides(v) : v
+                s += "export \(k)=\(shellQuote(value))\n"
+            }
         }
         s += EAAppInstaller.gameRendererExports(c)
         s += """

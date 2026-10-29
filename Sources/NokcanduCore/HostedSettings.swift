@@ -28,7 +28,7 @@ public enum HostedSettings {
         let program = link.exe.flatMap { exe in host.flatMap { BattleNet.unixPath(exe, prefix: $0.prefix) } }
         // Use matching shader helpers shipped beside the game. A renderer must not mask them with
         // Wine replacements (BFBC2's compiler_42 is one example). Never download arbitrary DLLs.
-        var overrides = CompatibilityFixes.overrides(settings.environment["WINEDLLOVERRIDES"])
+        var overrides = CompatibilityFixes.overrides(mode.mergedDLLOverrides(settings.environment["WINEDLLOVERRIDES"] ?? ""))
         if let program, let info = PEFile.inspect(program),
            let files = try? FileManager.default.contentsOfDirectory(at: program.deletingLastPathComponent(), includingPropertiesForKeys: nil) {
             for file in files where file.lastPathComponent.lowercased().range(of: #"^(d3dx9_[0-9]+|d3dcompiler_[0-9]+)\.dll$"#, options: .regularExpression) != nil {
@@ -88,7 +88,7 @@ public enum HostedSettings {
         # The client retains its own renderer. Only this game's process gets these settings.
         \(mode.launcherExports.joined(separator: "\n"))
         export DXVK_LOG_PATH="$GAME_LOGS" DXMT_LOG_PATH="$GAME_LOGS"
-        \(extraRules.isEmpty ? "" : #"export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:+$WINEDLLOVERRIDES;}""# + q(extraRules))
+        \(extraRules.isEmpty ? "" : "export WINEDLLOVERRIDES=" + q(extraRules))
         \(extra)
         \(link.launcher == .ea ? EACompatibility.block(watch: false) : "")
         \(settings.borderless == true && link.exe != nil ? "export NOKCANDU_BORDERLESS_TARGET=" + q(link.exe!) + "\nexport NOKCANDU_BORDERLESS_DLL=" + q(borderlessPath(link, ext: "dll")) + "\nBORDERLESS_LAUNCHER=" + q(borderlessPath(link, ext: "exe")) : "")
