@@ -35,6 +35,33 @@ final class CompatibilityFixTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: exe), pe)
     }
 
+    func testChangingProgramRedoesFixes() async throws {
+        var g = try ProfileCompletenessTests().fixture()
+        defer { try? FileManager.default.removeItem(at: g.appURL) }
+        let exe = try XCTUnwrap(CompatibilityFixes.program(g)), pe = OpenUASettingsTests().pe()
+        try pe.write(to: exe)
+        let other = exe.deletingLastPathComponent().appendingPathComponent("Other.exe")
+        try pe.write(to: other)
+        var c = try XCTUnwrap(g.custom); c.graphics = .dxmt; c.environment = ["KEEP": "original"]
+        try CustomGames.save(c, to: g); g = CompatibilityFixes.fresh(g)
+        try await CompatibilityFixes.install(.crossProcessWindows, for: g) { _ in }
+        g = CompatibilityFixes.fresh(g)
+        let original = try XCTUnwrap(g.custom)
+        var edited = original
+        edited.exe = try XCTUnwrap(CustomGames.windowsPath(forUnix: other, prefix: g.prefix))
+        edited.environment?["ADDED"] = "yes"
+        // Plain save refuses and names the fix.
+        XCTAssertThrowsError(try CustomGames.save(edited, to: g)) { XCTAssertTrue("\($0.localizedDescription)".contains(CompatibilityFix.crossProcessWindows.title)) }
+        let missed = try await CompatibilityFixes.changeProgram(to: edited, from: original, for: g) { _ in }
+        XCTAssertTrue(missed.isEmpty)
+        g = CompatibilityFixes.fresh(g)
+        XCTAssertEqual(g.custom?.exe, edited.exe)
+        XCTAssertTrue(CompatibilityFixes.isInstalled(.crossProcessWindows, for: g))
+        XCTAssertEqual(g.custom?.environment?["DXMT_ALLOW_CROSS_PROCESS_SWAPCHAIN"], "1")
+        XCTAssertEqual(g.custom?.environment?["KEEP"], "original")
+        XCTAssertEqual(g.custom?.environment?["ADDED"], "yes")
+    }
+
     func testMicrosoftShaderCompilerBothArchitecturesInstallAndUndoE2E() async throws {
         guard ProcessInfo.processInfo.environment["NOKCANDU_E2E"] == "1",
               let root = ProcessInfo.processInfo.environment["NOKCANDU_RESOURCE_ROOT"] else {

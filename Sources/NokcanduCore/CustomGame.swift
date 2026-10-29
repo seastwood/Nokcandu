@@ -569,7 +569,8 @@ public enum CustomGames {
             throw NokError("Undo BF1942 display settings in Display before changing the game's program.")
         }
         if let old = CustomGameConfig.load(contents: game.contents), old.exe != c.exe, !installed.isEmpty {
-            throw NokError("Undo compatibility fixes in Fixes before changing the game's program.")
+            let names = installed.compactMap { CompatibilityFix(rawValue: $0)?.title }.joined(separator: ", ")
+            throw NokError("These fixes are set up for the current program: \(names). Change the program from the game's Settings (it offers to redo them), or undo them in Fixes first.")
         }
         if c.legacyD3D9 == true && c.graphics != .classic3D {
             throw NokError("Undo DirectX 8 compatibility in Fixes before changing graphics modes.")

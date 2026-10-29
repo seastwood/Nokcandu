@@ -318,6 +318,39 @@ public enum CompatibilityFixes {
             try? ledger.write(data, to: target, reason: "Updated bundled window helper")
         }
     }
+    /// Fixes are tied to the program they were set up for. Changing the program: take a restore point,
+    /// undo those fixes, save the new settings (keeping the person's other edits), then set the fixes up
+    /// again for the new program where they apply. Returns the fixes that couldn't come back, with why.
+    @discardableResult
+    public static func changeProgram(to edited: CustomGameConfig, from original: CustomGameConfig, for game: InstalledGame,
+                                     log: @escaping @Sendable (String) -> Void) async throws -> [(CompatibilityFix, String)] {
+        try requireClosed(game)
+        let installed = CompatibilityFix.allCases.filter { isInstalled($0, for: game) }
+        RestorePoints.before(game, "Before changing the program", log: log)
+        for f in installed.reversed() {
+            log("Undoing \(f.title)…")
+            try undo(f, for: game, log: log)
+        }
+        // Re-apply the person's edits on top of the settings as they are after Undo.
+        let g = fresh(game)
+        guard var c = g.custom else { throw NokError("This game's settings are missing.") }
+        c.name = edited.name; c.exe = edited.exe; c.arguments = edited.arguments
+        c.disc = edited.disc; c.extraDiscs = edited.extraDiscs
+        var env = c.environment ?? [:]
+        let before = original.environment ?? [:], after = edited.environment ?? [:]
+        for k in Set(before.keys).union(after.keys) where before[k] != after[k] && k != "WINEDLLOVERRIDES" { env[k] = after[k] }
+        c.environment = env.isEmpty ? nil : env
+        try CustomGames.saveAll(c, to: g)
+        var missed: [(CompatibilityFix, String)] = []
+        for f in installed {
+            let now = fresh(game)
+            if let why = unavailable(f, for: now) { missed.append((f, why)); continue }
+            log("Setting up \(f.title) for the new program…")
+            do { try await install(f, for: now, log: log) } catch { missed.append((f, error.localizedDescription)) }
+        }
+        return missed
+    }
+
     public static func undo(_ fix: CompatibilityFix, for game: InstalledGame, log: @escaping @Sendable (String) -> Void) throws {
         let g = fresh(game)
         try begin(g); defer { end(g) }

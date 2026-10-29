@@ -14,6 +14,8 @@ struct GameSettingsSection: View {
     @State private var envRows: [EnvRow]
     @State private var launcherEdited = false
     @State private var saving = false
+    /// Fixes that have to be undone (and set up again) before the program can change.
+    @State private var fixesToRedo: [CompatibilityFix]?
 
     struct EnvRow: Identifiable, Hashable { var id = UUID(); var key: String; var value: String }
 
@@ -115,6 +117,28 @@ struct GameSettingsSection: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         } label: { Text("Settings").font(.headline) }
         .onAppear(perform: checkLauncher)
+        .confirmationDialog("Change \(game.name)'s program?", isPresented: Binding(get: { fixesToRedo != nil }, set: { if !$0 { fixesToRedo = nil } })) {
+            Button("Change Program") { changeProgram() }
+            Button("Cancel", role: .cancel) { fixesToRedo = nil }
+        } message: {
+            Text("These fixes were set up for the current program, so Nokcandu undoes them first, switches the program, then sets them up again for the new one where they apply:\n\n"
+                 + (fixesToRedo ?? []).map { "• " + $0.title }.joined(separator: "\n")
+                 + "\n\nA restore point is taken first, so you can go back.")
+        }
+    }
+
+    func changeProgram() {
+        fixesToRedo = nil
+        saving = true
+        let c = edited, o = original, g = game
+        let note = Locked("")
+        model.changeSetting(for: g, title: "Game Settings", success: "Program changed; its fixes were set up again.", edit: { fresh in
+            let missed = try await CompatibilityFixes.changeProgram(to: c, from: o, for: fresh) { _ in }
+            note.value = missed.map { "\($0.0.title) — \($0.1)" }.joined(separator: "; ")
+        }, completion: { ok in
+            saving = false
+            if ok, !note.value.isEmpty { model.say("Program changed. Not set up again for the new program: \(note.value)") }
+        })
     }
 
     func row<C: View>(_ label: String, @ViewBuilder _ content: () -> C) -> some View {
@@ -159,6 +183,10 @@ struct GameSettingsSection: View {
 
     func save(force: Bool = false, always: Bool = false) {
         guard dirty || always else { return }
+        if edited.exe != original.exe {
+            let fixes = CompatibilityFix.allCases.filter { CompatibilityFixes.isInstalled($0, for: game) }
+            if !fixes.isEmpty { fixesToRedo = fixes; return }
+        }
         saving = true
         let c = edited, g = game, f = force || launcherEdited
         model.changeSetting(for: g, title: "Game Settings", edit: { fresh in
