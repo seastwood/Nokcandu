@@ -567,46 +567,101 @@ struct GameDiscsSection: View {
 
 // MARK: - Remove game
 
-/// Removes a game completely — its app and everything Nokcandu keeps for it — to the Trash.
+/// Preview exactly which app and separate installation will go to the Trash.
 struct RemoveGameSection: View {
     @EnvironmentObject var model: AppModel
     let game: InstalledGame
-    @State private var items: [GameRemoval.Item] = []
+    @State private var preview: GameRemoval.Plan?
     @State private var confirm = false
+    @State private var preparing = false
+    @State private var working = false
+    @State private var removeFiles = false
 
     var body: some View {
         GroupBox {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Remove \(game.name)").font(.body.bold())
-                    Text("Moves the app, its dedicated external game folder when listed, and Nokcandu’s records to the Trash. Existing folders used without copying and your saved profiles stay.")
+                    Text("Choose whether to remove only the Nokcandu app or also its separately stored game files. Review the drive and folder before anything moves to the Trash.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
-                Button("Remove Game…", role: .destructive) { items = GameRemoval.items(for: game, library: model.games); confirm = true }
-            }
-            .padding(6)
+                if preparing { ProgressView().controlSize(.small) }
+                Button(preparing ? "Checking…" : "Remove Game…", role: .destructive, action: prepare).disabled(preparing)
+            }.padding(6)
         }
-        .confirmationDialog("Move \(game.name) to the Trash?", isPresented: $confirm) {
-            Button("Move to Trash", role: .destructive) { remove() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text(items.map { "• \($0.what) — \(Storage.format($0.bytes))" }.joined(separator: "\n")
-                 + "\n\nYou can put it back from the Trash. Save games stored inside the app go with it.")
+        .sheet(isPresented: $confirm) {
+            if let plan = preview {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Remove \(game.name)?").font(.title2.bold())
+                    if let folder = plan.gameFolder {
+                        Picker("Remove", selection: $removeFiles) {
+                            Text("Nokcandu app only").tag(false)
+                            Text("App and game files").tag(true)
+                        }.pickerStyle(.radioGroup).disabled(working)
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("Game files: \(Storage.format(folder.bytes)) on \(folder.drive)").font(.headline)
+                            Text(folder.url.path).font(.caption.monospaced()).textSelection(.enabled)
+                            Text(removeFiles ? "This entire game folder will move to the Trash, including any saves or mods inside it." : "This game folder will stay where it is.")
+                        }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                    } else if let reason = plan.folderUnavailable {
+                        Text(reason).foregroundStyle(.secondary)
+                    }
+                    if plan.shared {
+                        if removeFiles {
+                            Text("\(plan.launcherName ?? "The launcher") and its Windows games will be fully closed before removing the files. Save your progress first.")
+                        } else {
+                            Text("Only the small Nokcandu app and its records will be removed. If the game files are still installed, the game stays in \(plan.launcherName ?? "the launcher")’s list and can be added again.")
+                        }
+                    } else {
+                        Text("Game files and saves stored inside the app go with the app. Saves outside the listed locations and your saved profiles stay.")
+                    }
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(plan.appItems) { item in Text("• \(item.what) — \(Storage.format(item.bytes))").font(.caption) }
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }.frame(maxHeight: 130)
+                    Text("Removed items go to the Trash. No permanent deletion is used.").font(.caption).foregroundStyle(.secondary)
+                    HStack {
+                        if working { ProgressView().controlSize(.small); Text("Removing…").font(.caption) }
+                        Spacer()
+                        Button("Cancel") { confirm = false }.keyboardShortcut(.cancelAction).disabled(working)
+                        Button(removeFiles ? "Move App and Game Files to Trash" : "Move App to Trash", role: .destructive, action: remove).disabled(working)
+                    }
+                }.padding(24).frame(width: 570).interactiveDismissDisabled(working)
+            }
         }
     }
-
-    func remove() {
-        let g = game, lib = model.games
+    func prepare() {
+        if let reason = GameRemoval.blocker(game, library: model.games) { model.fail(NokError(reason)); return }
+        preparing = true
+        let g = game, library = model.games
         Task {
-            let r = await Task.detached { Result { try GameRemoval.remove(g, library: lib) } }.value
-            switch r {
-            case .success(let failed):
-                model.say(failed.isEmpty ? "\(g.name) moved to the Trash." : "Moved to the Trash, except: \(failed.joined(separator: "; "))")
-                model.selection = nil
+            preview = await Task.detached(priority: .userInitiated) { GameRemoval.plan(for: g, library: library) }.value
+            preparing = false; removeFiles = false; confirm = true
+        }
+    }
+    func remove() {
+        guard let plan = preview else { return }
+        let g = game, library = model.games, mode: GameRemoval.Mode = removeFiles ? .appAndGameFiles : .appOnly
+        let expected = plan.gameFolder
+        working = true
+        Task {
+            do {
+                if removeFiles && plan.shared {
+                    // Check the folder is still the one reviewed before closing the launcher and its games.
+                    let now = await Task.detached { GameRemoval.plan(for: g, library: library).gameFolder }.value
+                    guard let now, let expected, now.url == expected.url, GameRemoval.sameFolder(now, expected) else {
+                        throw NokError("The game folder changed or is no longer available. Nothing was removed; open Remove Game again to review its location.")
+                    }
+                    try await WineTools.stopAll(for: g)
+                }
+                let failed = try await Task.detached { try GameRemoval.remove(g, library: library, mode: mode, expectedFolder: expected) }.value
+                working = false; confirm = false
+                model.say(failed.isEmpty ? "\(g.name) moved to the Trash." : "Removal stopped: \(failed.joined(separator: "; "))")
+                if !FileManager.default.fileExists(atPath: g.appURL.path) { model.selection = nil }
                 model.refresh()
-            case .failure(let e): model.fail(e)
-            }
+            } catch { working = false; model.fail(error) }
         }
     }
 }

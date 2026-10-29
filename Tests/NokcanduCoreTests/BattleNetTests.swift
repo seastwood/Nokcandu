@@ -8,7 +8,9 @@ final class BattleNetTests: XCTestCase {
         let prefix = app.appendingPathComponent("Contents/SharedSupport/prefix")
         try fm.createDirectory(at: prefix.appendingPathComponent("dosdevices"), withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: app.deletingLastPathComponent()) }
-        try fm.createSymbolicLink(atPath: prefix.appendingPathComponent("dosdevices/d:").path, withDestinationPath: "/Volumes/Elements/Games")
+        let drive = app.deletingLastPathComponent().appendingPathComponent("Drive")
+        try NokPaths.ensure(drive.appendingPathComponent("Diablo II Resurrected"))
+        try fm.createSymbolicLink(atPath: prefix.appendingPathComponent("dosdevices/d:").path, withDestinationPath: drive.path)
         let reg = #"""
         WINE REGISTRY Version 2
 
@@ -29,7 +31,7 @@ final class BattleNetTests: XCTestCase {
         XCTAssertEqual(games.map(\.uid), ["osi"])
         XCTAssertEqual(games.first?.code, "OSI")
         XCTAssertEqual(games.first?.exe, #"D:\Diablo II Resurrected\D2R.exe"#)
-        XCTAssertEqual(BattleNet.unixPath(games[0].exe!, prefix: prefix)?.path, "/Volumes/Elements/Games/Diablo II Resurrected/D2R.exe")
+        XCTAssertEqual(BattleNet.unixPath(games[0].exe!, prefix: prefix)?.path, drive.appendingPathComponent("Diablo II Resurrected/D2R.exe").path)
         XCTAssertEqual(BattleNet.code(for: "s1"), "S1")
 
         let script = BattleNet.launcherScript(BattleNetLink(hostApp: app.path, uid: "osi", code: "OSI", name: "Diablo II: Resurrected"))

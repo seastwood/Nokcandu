@@ -20,13 +20,14 @@ struct BlizzardGamesSection: View {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(bg.name)
                             Text(bg.installLocation).font(.caption).foregroundStyle(.secondary)
+                            if LauncherInstallation.presence(at: BattleNet.unixPath(bg.installLocation.replacingOccurrences(of: "/", with: "\\"), prefix: host.prefix)) == .offline { Text("Drive not connected").font(.caption).foregroundStyle(.secondary) }
                         }
                         Spacer()
-                        if let app = BattleNet.addedApp(for: bg, in: model.games) {
+                        if let app = BattleNet.addedApp(for: bg, host: host, in: model.games) {
                             Button("Show") { model.selection = app.id }.buttonStyle(.link)
-                            Button("Play") { model.play(app) }
+                            Button("Play") { model.play(app) }.disabled(LauncherInstallation.presence(at: BattleNet.unixPath(bg.installLocation, prefix: host.prefix)) == .offline)
                         } else {
-                            Button("Add to Nokcandu") { add(bg) }
+                            Button("Add to Nokcandu") { add(bg) }.disabled(LauncherInstallation.presence(at: BattleNet.unixPath(bg.installLocation, prefix: host.prefix)) == .offline)
                         }
                     }
                 }
@@ -37,8 +38,11 @@ struct BlizzardGamesSection: View {
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             .padding(6).frame(maxWidth: .infinity, alignment: .leading)
-        } label: { Text("Blizzard Games").font(.headline) }
+        } label: {
+            HStack { Text("Blizzard Games").font(.headline); Spacer(); Button("Refresh") { games = BattleNet.installedGames(host: host) }.buttonStyle(.link) }
+        }
         .onAppear { games = BattleNet.installedGames(host: host); closes = BattleNet.closesWithGame(host: host) }
+        .onChange(of: model.libraryRevision) { _, _ in games = BattleNet.installedGames(host: host) }
     }
 
     func add(_ bg: BattleNet.BlizzardGame) {
@@ -94,13 +98,13 @@ struct SteamGamesSection: View {
                     HStack {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(sg.name)
-                            Text(sg.installed ? (sg.sizeOnDisk.map { Storage.format($0) } ?? "Installed") : "Downloading in Steam…")
+                            Text(LauncherInstallation.presence(at: sg.folder) == .offline ? "Drive not connected" : sg.installed ? (sg.sizeOnDisk.map { Storage.format($0) } ?? "Installed") : "Downloading in Steam…")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        if let app = model.games.first(where: { $0.custom?.steamAppID == sg.appID }) {
+                        if let app = model.games.first(where: { $0.custom?.steamAppID == sg.appID && FileManager.default.fileExists(atPath: $0.appURL.path) }) {
                             Button("Show") { model.selection = app.id }.buttonStyle(.link)
-                            Button("Play") { model.play(app) }
+                            Button("Play") { model.play(app) }.disabled(!sg.installed)
                         } else if adding == sg.appID {
                             ProgressView().controlSize(.small)
                         } else {
@@ -127,6 +131,7 @@ struct SteamGamesSection: View {
             }
         }
         .onAppear(perform: load)
+        .onChange(of: model.libraryRevision) { _, _ in load() }
     }
 
     func load() {
@@ -227,15 +232,16 @@ struct LauncherGamesSection: View {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(hg.name)
                             Text(hg.installLocation).font(.caption).foregroundStyle(.secondary)
+                            if LauncherInstallation.presence(at: BattleNet.unixPath(hg.installLocation.replacingOccurrences(of: "/", with: "\\"), prefix: host.prefix)) == .offline { Text("Drive not connected").font(.caption).foregroundStyle(.secondary) }
                         }
                         Spacer()
-                        if let app = PCLaunchers.addedApp(for: hg, kind: kind, in: model.games) {
+                        if let app = PCLaunchers.addedApp(for: hg, kind: kind, host: host, in: model.games) {
                             Button("Show") { model.selection = app.id }.buttonStyle(.link)
                             Button("Play") { model.play(app) }
                         } else {
                             Button("Add to Nokcandu") { add(hg) }
                         }
-                    }.disabled(finishingSetup != nil)
+                    }.disabled(finishingSetup != nil || LauncherInstallation.presence(at: BattleNet.unixPath(hg.installLocation.replacingOccurrences(of: "/", with: "\\"), prefix: host.prefix)) == .offline)
                 }
                 if kind == .ea {
                     Divider()
@@ -270,6 +276,7 @@ struct LauncherGamesSection: View {
             }
         }
         .onAppear(perform: load)
+        .onChange(of: model.libraryRevision) { _, _ in load() }
     }
 
     func load() { games = PCLaunchers.installedGames(kind, host: host) }

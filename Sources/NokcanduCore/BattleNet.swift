@@ -42,7 +42,7 @@ public enum BattleNet {
     public static func host(in games: [InstalledGame]) -> InstalledGame? { games.first(where: isHost) }
 
     /// Blizzard games installed in the Battle.net app, from their Windows uninstall entries.
-    public static func installedGames(host: InstalledGame) -> [BlizzardGame] {
+    public static func registeredGames(host: InstalledGame) -> [BlizzardGame] {
         guard let reg = try? String(contentsOf: host.prefix.appendingPathComponent("system.reg"), encoding: .utf8) else { return [] }
         var out: [BlizzardGame] = []
         for block in reg.components(separatedBy: "\n\n") where block.contains("CurrentVersion\\\\Uninstall\\\\") {
@@ -60,6 +60,12 @@ public enum BattleNet {
         return out.sorted { $0.name < $1.name }
     }
 
+    public static func installedGames(host: InstalledGame) -> [BlizzardGame] {
+        registeredGames(host: host).filter {
+            LauncherInstallation.presence(at: LauncherInstallation.windowsFolder($0.installLocation, prefix: host.prefix)) != .missing
+        }
+    }
+
     /// Mac path for a Windows path in the host's environment (any drive letter, via dosdevices).
     public static func unixPath(_ windows: String, prefix: URL) -> URL? {
         guard windows.count >= 3, windows.dropFirst().hasPrefix(":\\") else { return nil }
@@ -71,8 +77,11 @@ public enum BattleNet {
         return rest.isEmpty ? base : base.appendingPathComponent(rest)
     }
 
-    public static func addedApp(for game: BlizzardGame, in games: [InstalledGame]) -> InstalledGame? {
-        games.first { $0.battleNet?.uid == game.uid }
+    public static func addedApp(for game: BlizzardGame, host: InstalledGame? = nil, in games: [InstalledGame]) -> InstalledGame? {
+        games.first { app in
+            guard let link = app.battleNet, link.uid == game.uid, FileManager.default.fileExists(atPath: app.appURL.path) else { return false }
+            return host == nil || URL(fileURLWithPath: link.hostApp).resolvingSymlinksInPath() == host!.appURL.resolvingSymlinksInPath()
+        }
     }
 
     /// Creates "<Game>.app" next to the other game apps.

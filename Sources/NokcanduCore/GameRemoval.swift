@@ -11,6 +11,53 @@ public enum GameRemoval {
         public var bytes: Int64
     }
 
+    public enum Mode { case appOnly, appAndGameFiles }
+    public struct FolderChoice {
+        public var url: URL
+        public var bytes: Int64
+        public var drive: String
+        var identity: String
+        var associated: [Item] = []
+    }
+    public struct Plan {
+        public var appItems: [Item]
+        public var gameFolder: FolderChoice?
+        public var folderUnavailable: String?
+        public var launcherName: String?
+        public var shared: Bool
+        public var appBytes: Int64 { appItems.reduce(0) { $0 + $1.bytes } }
+    }
+    /// Same folder on disk (same drive and directory), not just the same path.
+    public static func sameFolder(_ a: FolderChoice, _ b: FolderChoice) -> Bool { a.identity == b.identity }
+    static func identity(_ url: URL) throws -> String {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        guard let device = attributes[.systemNumber] as? NSNumber, let inode = attributes[.systemFileNumber] as? NSNumber,
+              attributes[.type] as? FileAttributeType == .typeDirectory else { throw NokError("The game folder could not be verified.") }
+        return "\(device):\(inode)"
+    }
+    public static func plan(for game: InstalledGame, library: [InstalledGame]) -> Plan {
+        let shared = game.hosted != nil || game.battleNet != nil || game.usesSharedSteam
+        var plan = Plan(appItems: items(for: game, library: library, includeGameFiles: false),
+                        folderUnavailable: nil, launcherName: game.hosted?.launcher.title ?? (game.battleNet != nil ? "Battle.net" : game.usesSharedSteam ? "Steam" : nil), shared: shared)
+        var root: URL?, associated: [Item] = []
+        if shared {
+            if let location = LauncherInstallation.location(for: game) {
+                plan.launcherName = location.launcher
+                if let reason = LauncherInstallation.removalBlocker(location, game: game, library: library) { plan.folderUnavailable = reason }
+                else {
+                    root = location.folder.resolvingSymlinksInPath().standardizedFileURL
+                    if let manifest = location.manifest, FileManager.default.fileExists(atPath: manifest.path) {
+                        associated.append(Item(url: manifest, what: "Steam installation record", bytes: size(manifest)))
+                    }
+                }
+            } else { plan.folderUnavailable = "The launcher has no verified game-folder location. Remove only the app and keep the game files." }
+        } else { root = removableExternalFiles(game, library: library) }
+        if let root, let id = try? identity(root) {
+            plan.gameFolder = FolderChoice(url: root, bytes: size(root), drive: Storage.driveName(root), identity: id, associated: associated)
+        } else if root != nil { plan.folderUnavailable = "The game folder could not be verified. Its files will be kept." }
+        return plan
+    }
+
     static func size(_ u: URL) -> Int64 {
         let fm = FileManager.default
         var isDir: ObjCBool = false
@@ -25,10 +72,10 @@ public enum GameRemoval {
     }
 
     /// Everything that would be removed with this game.
-    public static func items(for g: InstalledGame, library: [InstalledGame] = []) -> [Item] {
+    public static func items(for g: InstalledGame, library: [InstalledGame] = [], includeGameFiles: Bool = true) -> [Item] {
         let fm = FileManager.default
-        var out = [Item(url: g.appURL, what: "The game app (game files, Windows environment, saves inside it)", bytes: size(g.appURL))]
-        if let external = removableExternalFiles(g, library: library) {
+        var out = [Item(url: g.appURL, what: (g.hosted != nil || g.battleNet != nil || g.usesSharedSteam) ? "Nokcandu app (shortcut and its local settings)" : "The game app (including files and saves inside it)", bytes: size(g.appURL))]
+        if includeGameFiles, let external = removableExternalFiles(g, library: library) {
             out.append(Item(url: external, what: "Game files on \(GameFolders.volumeName(external)): \(external.path) (including saves there)", bytes: size(external)))
         }
         let scope = g.journalScope
@@ -76,31 +123,52 @@ public enum GameRemoval {
             let dependents = library.filter { $0.battleNet != nil }
             if !dependents.isEmpty { return "Your Battle.net games (\(dependents.map(\.name).joined(separator: ", "))) run inside this Battle.net. Remove them first." }
         }
+        if let kind = PCLaunchers.kind(of: g) {
+            let dependents = library.filter { $0.hosted.map { URL(fileURLWithPath: $0.hostApp).resolvingSymlinksInPath() == g.appURL.resolvingSymlinksInPath() } ?? false }
+            if !dependents.isEmpty { return "Your \(kind.title) games use this launcher. Remove their Nokcandu apps first." }
+        }
         return nil
     }
 
-    /// Moves the game and its items to the Trash. Returns what couldn't be moved.
+    /// Files go first: an external-drive Trash failure must not leave an orphaned installation.
+    /// The previewed directory identity is rechecked before any mutation. No permanent-delete fallback.
     @discardableResult
-    public static func remove(_ g: InstalledGame, library: [InstalledGame]) throws -> [String] {
-        if let b = blocker(g, library: library) { throw NokError(b) }
-        var failed: [String] = []
-        // Disc images stay mounted inside the app after playing; eject them first.
-        if let mounts = try? FileManager.default.contentsOfDirectory(at: g.support, includingPropertiesForKeys: nil) {
-            for m in mounts where m.lastPathComponent.hasPrefix("MountedDisc") {
-                _ = try? Shell.run("/usr/bin/hdiutil", ["detach", m.path, "-force"], timeout: 60)
+    public static func remove(_ game: InstalledGame, library: [InstalledGame], mode: Mode = .appOnly,
+                              expectedFolder: FolderChoice? = nil) throws -> [String] {
+        try remove(game, library: library, mode: mode, expectedFolder: expectedFolder, trash: {
+            try FileManager.default.trashItem(at: $0, resultingItemURL: nil)
+        })
+    }
+    static func remove(_ game: InstalledGame, library: [InstalledGame], mode: Mode,
+                       expectedFolder: FolderChoice?, trash: (URL) throws -> Void) throws -> [String] {
+        if let reason = blocker(game, library: library) { throw NokError(reason) }
+        let current = plan(for: game, library: library)
+        var removalItems = current.appItems
+        if mode == .appAndGameFiles {
+            guard let expected = expectedFolder, let folder = current.gameFolder,
+                  expected.url == folder.url, expected.identity == folder.identity else {
+                throw NokError("The game folder changed or is no longer available. Nothing was removed; open Remove Game again to review its location.")
+            }
+            if current.shared, let contents = WineTools.hostContents(for: game), !WineTools.ownedProcesses(contents: contents).isEmpty {
+                throw NokError("Close the launcher and its Windows games before removing game files.")
+            }
+            removalItems = [Item(url: folder.url, what: "Game files", bytes: folder.bytes)] + folder.associated + removalItems
+        }
+        // Eject mounted images in this app, never in the shared launcher.
+        if let mounts = try? FileManager.default.contentsOfDirectory(at: game.support, includingPropertiesForKeys: nil) {
+            for mount in mounts where mount.lastPathComponent.hasPrefix("MountedDisc") {
+                _ = try? Shell.run("/usr/bin/hdiutil", ["detach", mount.path, "-force"], timeout: 60)
             }
         }
-        // Resolve links before trashing the app; the external location is then still available.
-        let removalItems = items(for: g, library: library)
-        for i in removalItems {
-            do { try FileManager.default.trashItem(at: i.url, resultingItemURL: nil) }
+        var failures: [String] = []
+        for item in removalItems {
+            do { try trash(item.url) }
             catch {
-                failed.append("\(i.url.lastPathComponent): \(error.localizedDescription)")
-                // Keep remaining data and records available for recovery after a partial removal.
-                break
+                failures.append("\(item.url.lastPathComponent): \(error.localizedDescription)")
+                break // Keep the app and records if the game files could not be trashed.
             }
         }
-        return failed
+        return failures
     }
 
     /// Leftovers from games that no longer exist (removed in Finder, older versions, tests).

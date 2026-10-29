@@ -284,7 +284,10 @@ public enum SharedSteam {
         /// The Steam library folder it's installed in (Mac path).
         public var library: URL?
         /// The game's own folder (steamapps/common/<installdir>) in its library.
-        public var folder: URL? { installDir.map { (library ?? SharedSteam.steamDir).appendingPathComponent("steamapps/common/\($0)") } }
+        public var folder: URL? {
+            guard let dir = installDir, !dir.isEmpty, dir != ".", dir != "..", !dir.contains("/"), !dir.contains("\\"), !dir.contains("\0") else { return nil }
+            return (library ?? SharedSteam.steamDir).appendingPathComponent("steamapps/common/\(dir)")
+        }
 
         public init(appID: Int, name: String, installed: Bool, installDir: String?, sizeOnDisk: Int64?,
                     playtimeMinutes: Int?, iconURL: URL?, owned: Bool) {
@@ -310,16 +313,26 @@ public enum SharedSteam {
     }
 
     /// Games installed in the shared Steam (appmanifest_*.acf in every library folder).
-    public static func installedGames() -> [LibraryGame] {
+    public static func installedGames() -> [LibraryGame] { installedGames(in: libraryFolders()) }
+    static func installedGames(in libraries: [URL]) -> [LibraryGame] {
+        registeredGames(in: libraries).compactMap { value in
+            var game = value
+            let presence = LauncherInstallation.presence(at: game.folder)
+            if presence == .missing && game.installed { return nil }
+            game.installed = game.installed && presence == .present
+            return game
+        }
+    }
+    static func registeredGames(in libraries: [URL]) -> [LibraryGame] {
         var seen = Set<Int>()
-        return libraryFolders().flatMap { lib -> [LibraryGame] in
+        return libraries.flatMap { lib -> [LibraryGame] in
             let apps = lib.appendingPathComponent("steamapps")
             let files = (try? FileManager.default.contentsOfDirectory(atPath: apps.path)) ?? []
             return files.compactMap { f -> LibraryGame? in
                 guard f.hasPrefix("appmanifest_"), f.hasSuffix(".acf"),
                       let t = try? String(contentsOf: apps.appendingPathComponent(f), encoding: .utf8),
                       let s = (try? VDF.parse(t))?["AppState"], let id = s["appid"]?.string.flatMap(Int.init) else { return nil }
-                if id == 228980 || seen.contains(id) { return nil }   // Steamworks Common Redistributables
+                if f != "appmanifest_\(id).acf" || id == 228980 || seen.contains(id) { return nil }   // Steamworks Common Redistributables
                 seen.insert(id)
                 let flags = s["StateFlags"]?.string.flatMap(Int.init) ?? 0
                 var g = LibraryGame(appID: id, name: s["name"]?.string ?? "App \(id)", installed: flags & 4 != 0,

@@ -6,6 +6,7 @@ import NokcanduCore
 @MainActor
 final class AppModel: ObservableObject {
     @Published var games: [InstalledGame] = [] { didSet { reorganize() } }
+    @Published var libraryRevision = 0
     /// Sidebar lists, rebuilt when the library or its order changes.
     @Published var favoriteGames: [InstalledGame] = []
     @Published var sortedGames: [InstalledGame] = []
@@ -65,6 +66,7 @@ final class AppModel: ObservableObject {
     var selectedGame: InstalledGame? { games.first { $0.id == selection } }
 
     func refresh() {
+        libraryRevision += 1
         games = GameLibrary.scan()
         GameFolders.remember(games)
         for g in games { AppPrivacy.ensure(g.appURL) }

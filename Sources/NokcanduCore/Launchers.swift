@@ -97,7 +97,7 @@ public enum PCLaunchers {
     }
 
     /// Games installed in the launcher, from what it writes to the Windows registry.
-    public static func installedGames(_ kind: PCLauncher, host: InstalledGame) -> [HostedGame] {
+    public static func registeredGames(_ kind: PCLauncher, host: InstalledGame) -> [HostedGame] {
         var out: [HostedGame] = []
         for block in registryBlocks(host.prefix) {
             guard let header = block.components(separatedBy: "\n").first(where: { $0.hasPrefix("[") }) else { continue }
@@ -128,18 +128,29 @@ public enum PCLaunchers {
         return out.filter { seen.insert($0.id).inserted }.sorted { $0.name < $1.name }
     }
 
+    /// Registry entries can outlive an uninstall. An unplugged drive is not an uninstall.
+    public static func installedGames(_ kind: PCLauncher, host: InstalledGame) -> [HostedGame] {
+        registeredGames(kind, host: host).filter {
+            LauncherInstallation.presence(at: LauncherInstallation.windowsFolder($0.installLocation, prefix: host.prefix)) != .missing
+        }
+    }
+
     /// The store's registered installation root, rather than an executable's bin/ subfolder.
     /// Shared by storage accounting and Show Game Folder for every supported launcher.
     public static func installFolder(_ link: HostedGameLink, host: InstalledGame) -> URL? {
-        if let game = installedGames(link.launcher, host: host).first(where: { $0.id == link.id }),
+        if let game = registeredGames(link.launcher, host: host).first(where: { $0.id == link.id }),
            let folder = BattleNet.unixPath(game.installLocation, prefix: host.prefix), folder.path != "/" {
             return folder
         }
         return link.exe.flatMap { BattleNet.unixPath($0, prefix: host.prefix)?.deletingLastPathComponent() }
     }
 
-    public static func addedApp(for game: HostedGame, kind: PCLauncher, in games: [InstalledGame]) -> InstalledGame? {
-        games.first { $0.hosted?.launcher == kind && $0.hosted?.id == game.id }
+    public static func addedApp(for game: HostedGame, kind: PCLauncher, host: InstalledGame? = nil, in games: [InstalledGame]) -> InstalledGame? {
+        games.first { app in
+            guard let link = app.hosted, link.launcher == kind, link.id == game.id,
+                  FileManager.default.fileExists(atPath: app.appURL.path) else { return false }
+            return host == nil || URL(fileURLWithPath: link.hostApp).resolvingSymlinksInPath() == host!.appURL.resolvingSymlinksInPath()
+        }
     }
 
     /// Creates "<Game>.app" that starts the game through the launcher app.
