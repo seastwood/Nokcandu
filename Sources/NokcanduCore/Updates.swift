@@ -322,7 +322,7 @@ public enum EngineUpdate {
 
     /// Apps that have their own engine (games, Battle.net, the shared Steam). Steam games use the shared Steam's.
     public static func hosts(in games: [InstalledGame]) -> [InstalledGame] {
-        games.filter { !$0.usesSharedSteam && WineTools.hostContents(for: $0) != nil }
+        games.filter { !$0.usesSharedSteam && WineTools.hostContents(for: $0) == $0.contents }
     }
 
     static func wineEnv(_ c: URL) -> [String: String] { WineTools.environment(contents: c) }
@@ -330,14 +330,15 @@ public enum EngineUpdate {
     public static func apply(_ g: InstalledGame, runtimeID: String, log: @escaping @Sendable (String) -> Void) async throws {
         let fm = FileManager.default
         let c = g.contents
+        guard WineTools.hostContents(for: g) == c else { throw NokError("Change the engine from this game's launcher app. Its shortcut has no engine of its own.") }
         guard let m = RuntimeManager.manifest(for: runtimeID), RuntimeManager.isCached(id: runtimeID) else { throw NokError("That engine isn't downloaded yet.") }
         if case .launcherRunning = GameLauncher.runState(of: g) { throw NokError("Quit \(g.name) first.") }
         if state(for: g)?.status == .trying { throw NokError("\(g.name) is already trying an engine. Keep it or roll back first.") }
         let previous = g.wineVersion ?? "unknown"
         let previousID = state(for: g)?.runtimeID ?? (previous == RecipeCatalog.sikarugirWine10.wineVersionString ? RecipeCatalog.sikarugirWine10.id : nil)
 
-        // Stop anything still running in this environment so files aren't in use.
-        _ = try? await Shell.runAsync(c.appendingPathComponent("SharedSupport/wine/bin/wineserver").path, ["-k"], env: wineEnv(c), timeout: 60)
+        // Include native clients that survived their Wine server.
+        try await WineTools.stopAll(for: g)
 
         let rb = rollbackDir(c)
         if fm.fileExists(atPath: rb.path) { try fm.removeItem(at: rb) }
@@ -345,6 +346,7 @@ public enum EngineUpdate {
         log("Keeping the current engine (\(previous)) so you can roll back…")
         var moved: [String] = []
         do {
+            try prepareAudioBaseline(c, rollback: rb)
             for comp in RuntimeManager.components where fm.fileExists(atPath: c.appendingPathComponent(comp).path) {
                 let dst = rb.appendingPathComponent("Contents/\(comp)")
                 try fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -387,9 +389,32 @@ public enum EngineUpdate {
     public static func rollBack(_ g: InstalledGame, log: @escaping @Sendable (String) -> Void) async throws {
         if case .launcherRunning = GameLauncher.runState(of: g) { throw NokError("Quit \(g.name) first.") }
         guard FileManager.default.fileExists(atPath: rollbackDir(g.contents).path) else { throw NokError("There's no previous engine kept for \(g.name).") }
-        _ = try? await Shell.runAsync(g.contents.appendingPathComponent("SharedSupport/wine/bin/wineserver").path, ["-k"], env: wineEnv(g.contents), timeout: 60)
+        try await WineTools.stopAll(for: g)
         try restore(g.contents, prefix: g.prefix, log: log)
         log("Rolled back to \(g.reload().wineVersion ?? "the previous engine").")
+    }
+
+    /// An original audio driver belongs to one engine. Keeping it across an upgrade could
+    /// make a later buffer change write the old engine's driver into the new engine.
+    static func prepareAudioBaseline(_ contents: URL, rollback: URL) throws {
+        let fm = FileManager.default, original = AudioBuffer.original(contents)
+        let saved = rollback.appendingPathComponent("audio-original")
+        let present = fm.fileExists(atPath: original.path)
+        if present { try fm.copyItem(at: original, to: saved) }
+        try Data((present ? "present" : "absent").utf8).write(to: rollback.appendingPathComponent("audio-baseline-state"), options: .atomic)
+        if present { try fm.removeItem(at: original) }
+    }
+    static func restoreAudioBaseline(_ contents: URL, rollback: URL) throws {
+        let fm = FileManager.default, marker = rollback.appendingPathComponent("audio-baseline-state")
+        guard fm.fileExists(atPath: marker.path) else { return } // backups made by earlier Nokcandu versions
+        let value = try String(contentsOf: marker, encoding: .utf8)
+        guard ["present", "absent"].contains(value) else { throw NokError("The saved audio baseline record is unreadable. Its backup was kept.") }
+        let original = AudioBuffer.original(contents), saved = rollback.appendingPathComponent("audio-original")
+        if value == "present" {
+            // Read first so a damaged backup cannot remove a current baseline.
+            let data = try Data(contentsOf: saved)
+            try data.write(to: original, options: .atomic)
+        } else if fm.fileExists(atPath: original.path) { try fm.removeItem(at: original) }
     }
 
     static func restore(_ c: URL, prefix: URL, log: (String) -> Void) throws {
@@ -405,6 +430,7 @@ public enum EngineUpdate {
             if fm.fileExists(atPath: dst.path) { try fm.removeItem(at: dst) }
             try fm.moveItem(at: rb.appendingPathComponent("prefix/\(p)"), to: dst)
         }
+        try restoreAudioBaseline(c, rollback: rb)
         // Back to the previous state: none if it was the tested engine, or the previous kept update.
         if let st = try? ChangeJournal.decoder.decode(State.self, from: Data(contentsOf: stateURL(c))),
            let prevID = st.previousRuntimeID, prevID != RecipeCatalog.sikarugirWine10.id,

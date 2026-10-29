@@ -57,6 +57,27 @@ final class SettingsRestartTests: XCTestCase {
         XCTAssertFalse(orphan.isRunning)
         XCTAssertTrue(unrelated.isRunning)
     }
+    func testEngineAudioBaselineIsResetAndRestoredWithRollback() throws {
+        let (host, _) = try EASetupRecoveryTests().fixture()
+        defer { try? FileManager.default.removeItem(at: host.appURL) }
+        let baseline = AudioBuffer.original(host.contents), rollback = host.appURL.appendingPathComponent("rollback")
+        try NokPaths.ensure(rollback)
+        try Data("old engine".utf8).write(to: baseline)
+        try EngineUpdate.prepareAudioBaseline(host.contents, rollback: rollback)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: baseline.path))
+        try Data("new engine".utf8).write(to: baseline)
+        try EngineUpdate.restoreAudioBaseline(host.contents, rollback: rollback)
+        XCTAssertEqual(try Data(contentsOf: baseline), Data("old engine".utf8))
+        try FileManager.default.removeItem(at: rollback); try NokPaths.ensure(rollback)
+        try FileManager.default.removeItem(at: baseline)
+        try EngineUpdate.prepareAudioBaseline(host.contents, rollback: rollback)
+        try Data("new engine".utf8).write(to: baseline)
+        try EngineUpdate.restoreAudioBaseline(host.contents, rollback: rollback)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: baseline.path))
+        let link = HostedGameLink(hostApp: host.appURL.path, launcher: .ea, id: "game", name: "Game", exe: nil)
+        let game = InstalledGame(appURL: host.appURL.appendingPathComponent("shortcut.app"), name: "Game", hosted: link)
+        XCTAssertEqual(EngineUpdate.hosts(in: [host, game]).map(\.id), [host.id])
+    }
     func testStartupSelectsLastGameAndIgnoresLauncherAndSidebarOrder() throws {
         let (ea, _) = try EASetupRecoveryTests().fixture()
         defer { try? FileManager.default.removeItem(at: ea.appURL) }

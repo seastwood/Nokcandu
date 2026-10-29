@@ -26,7 +26,7 @@ public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable {
         case .crossProcessWindows: "Allows DXMT to display windows drawn by another process, as used by some game launchers and embedded browsers. Requires DXMT graphics; restart afterward."
         case .openUA: "Fixes the invisible game window and tiny menu text. Uses OpenUA’s older OpenGL path and adds the original menu resolution. Only for OpenUA; restart the game afterward. Saved and shared profiles include this fix."
         case .directx9Extras: "Downloads Microsoft's shader libraries (d3dx9_43 and d3dcompiler_43) for missing effects or crashes while loading a match."
-        case .d3d8to9: "Downloads d3d8to9 1.16.0 and uses the bundled DXVK 2.3 renderer. Try this when Older 3D games has visual glitches. For 32-bit DirectX 8 games."
+        case .d3d8to9: "Downloads d3d8to9 1.16.0 and uses the bundled compatibility renderer. Try this when Older 3D games has visual glitches. For 32-bit DirectX 8 games."
         case .borderless: "Makes the game's window fill its screen without changing the Mac's display mode. Select Windowed inside the game first."
         case .cursorVisibility: "Experimental. Try this if the Mac arrow stays visible during gameplay. Follows the game's cursor visibility requests without changing mouse input. Works with Raw Mouse Capture off. Restart the game after installing or undoing."
         }
@@ -113,7 +113,7 @@ public enum CompatibilityFixes {
             if PEFile.inspect(exe)?.is64Bit != false { return "This fix is for 32-bit DirectX 8 games." }
             if g.custom?.graphics != .classic3D { return "Choose Older 3D games in Settings first." }
             if !FileManager.default.fileExists(atPath: g.support.appendingPathComponent("renderer/dxvk/wine/i386-windows/d3d9.dll").path) {
-                return "This Windows environment doesn't include the DXVK 2.3 compatibility renderer."
+                return "This Windows environment doesn't include the required DirectX 9 compatibility renderer."
             }
         }
         return nil
