@@ -9,7 +9,8 @@ final class SteamLibraryModel: ObservableObject {
     @Published var loadingOwned = false
     @Published var ownedLoaded = false
     @Published var message: String?
-    @Published var waiting: Set<Int> = []        // install requested in Steam, not finished yet
+    /// Installs requested in Steam (with when), until Steam's install record shows them — or is gone (cancelled).
+    @Published var waiting: [Int: Date] = [:]
     @Published var collections: [SharedSteam.Collection] = []
     private var owned: [SharedSteam.LibraryGame] = []
     private var names: [Int: String] = [:]
@@ -52,7 +53,11 @@ final class SteamLibraryModel: ObservableObject {
             byID[id] = SharedSteam.LibraryGame(appID: id, name: names[id] ?? "Steam app \(id)", installed: false, installDir: nil,
                                                sizeOnDisk: nil, playtimeMinutes: nil, iconURL: nil, owned: true)
         }
-        for id in waiting { if byID[id]?.installed == true { waiting.remove(id) } }
+        let manifests = Set(installed.map(\.appID))
+        for (id, since) in waiting {
+            // Done, or Steam has its own record now (its flags tell the rest), or no record after a minute: cancelled.
+            if byID[id]?.installed == true || manifests.contains(id) || Date().timeIntervalSince(since) > 60 { waiting[id] = nil }
+        }
         let sorted = byID.values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         if sorted != games { games = sorted }
         fillMissingNames()
@@ -278,8 +283,14 @@ struct SteamLibraryView: View {
                 Text(g.name).font(.headline).lineLimit(1)
                 HStack(spacing: 6) {
                     if added != nil { badge("In Nokcandu", .green) }
-                    if g.installed { badge("Installed", .blue) }
-                    else if m.waiting.contains(g.appID) { badge("Downloading in Steam…", .orange) }
+                    switch g.download {
+                    case .downloading: badge(g.installed ? "Updating in Steam…" : "Downloading in Steam…", .orange)
+                    case .paused: badge("Paused in Steam", .gray)
+                    case .queued: badge("Queued in Steam", .gray)
+                    case nil:
+                        if g.installed { badge("Installed", .blue) }
+                        else if m.waiting[g.appID] != nil { badge("Starting in Steam…", .orange) }
+                    }
                     if let min = g.playtimeMinutes, min > 0 { Text("\(min / 60) h played").font(.caption).foregroundStyle(.secondary) }
                     if let s = g.sizeOnDisk, s > 0 { Text(ByteCountFormatter.string(fromByteCount: s, countStyle: .file)).font(.caption).foregroundStyle(.secondary) }
                     if let w = AntiCheat.warning(steamAppID: g.appID, name: g.name) {
@@ -295,7 +306,7 @@ struct SteamLibraryView: View {
             } else if g.installed {
                 Button("Add to Nokcandu") { proceed(g, checkedMac: false) }.buttonStyle(.borderedProminent)
             } else {
-                Button(m.waiting.contains(g.appID) ? "Open in Steam" : "Install in Steam") { proceed(g, checkedMac: false) }
+                Button(m.waiting[g.appID] != nil || g.download != nil ? "Open in Steam" : "Install in Steam") { proceed(g, checkedMac: false) }
             }
         }
         .padding(.vertical, 2)
@@ -320,7 +331,7 @@ struct SteamLibraryView: View {
                     app.say("\(g.name) added. Open it from Nokcandu or \(url.deletingLastPathComponent().lastPathComponent).")
                 } else {
                     try SharedSteam.install(appID: g.appID)
-                    m.waiting.insert(g.appID)
+                    m.waiting[g.appID] = Date()
                     app.say("Steam is opening the install for \(g.name). When it finishes, press Add to Nokcandu here.")
                 }
                 m.refresh()

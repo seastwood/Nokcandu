@@ -49,4 +49,17 @@ final class GameHealthTests: XCTestCase {
         XCTAssertNil(MacCompat.note(.unknown))
         XCTAssertTrue(MacCompat.note(.rosetta)!.warning)
     }
+
+    func testSteamDownloadState() {
+        func g(_ flags: Int?, installed: Bool) -> SharedSteam.LibraryGame {
+            var x = SharedSteam.LibraryGame(appID: 1, name: "X", installed: installed, installDir: "X", sizeOnDisk: nil, playtimeMinutes: nil, iconURL: nil, owned: true)
+            x.stateFlags = flags; return x
+        }
+        XCTAssertEqual(g(4, installed: true).download, nil)                  // fully installed
+        XCTAssertEqual(g(1026, installed: false).download, .queued)          // update required + started
+        XCTAssertEqual(g(0x100000 | 2, installed: false).download, .downloading)
+        XCTAssertEqual(g(0x200 | 2, installed: false).download, .paused)
+        XCTAssertEqual(g(4 | 0x100, installed: true).download, .downloading) // updating an installed game
+        XCTAssertNil(g(nil, installed: false).download)                      // no install record (cancelled)
+    }
 }

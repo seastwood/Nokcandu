@@ -283,6 +283,18 @@ public enum SharedSteam {
         public var owned: Bool
         /// The Steam library folder it's installed in (Mac path).
         public var library: URL?
+        /// Steam's state flags from its install record (appmanifest): downloading, paused, installed…
+        public var stateFlags: Int?
+
+        public enum Download: Equatable { case downloading, paused, queued }
+        /// What Steam is doing with a game that has an install record but isn't fully installed.
+        public var download: Download? {
+            guard let f = stateFlags, !installed || f & 0x100 != 0 else { return nil }
+            // UpdateRunning 0x100, AddingFiles 0x40000, Preallocating 0x80000, Downloading 0x100000, Staging 0x200000, Committing 0x400000
+            if f & (0x100 | 0x40000 | 0x80000 | 0x100000 | 0x200000 | 0x400000) != 0 { return .downloading }
+            if f & 0x200 != 0 { return .paused }                 // UpdatePaused
+            return installed ? nil : .queued
+        }
         /// The game's own folder (steamapps/common/<installdir>) in its library.
         public var folder: URL? {
             guard let dir = installDir, !dir.isEmpty, dir != ".", dir != "..", !dir.contains("/"), !dir.contains("\\"), !dir.contains("\0") else { return nil }
@@ -352,6 +364,7 @@ public enum SharedSteam {
                                     installDir: s["installdir"]?.string, sizeOnDisk: s["SizeOnDisk"]?.string.flatMap(Int64.init),
                                     playtimeMinutes: nil, iconURL: nil, owned: true)
                 g.library = lib
+                g.stateFlags = flags
                 return g
             }
         }

@@ -299,10 +299,49 @@ public enum StoreAccounts {
 
     /// Downloads a game's Windows files into `folder` (C:\Games\<name>, possibly a link to another drive).
     /// Returns the program to start and its arguments.
+    public struct InstallSize: Codable, Equatable, Sendable { public var download: Int64; public var disk: Int64 }
+
+    /// How big the game is (GOG and Epic report it; Amazon doesn't). Cached, since asking takes a few seconds.
+    public static func installSize(_ store: Store, id: String, mac: Bool) async -> InstallSize? {
+        let key = "\(id)-\(mac ? "mac" : "win")", cacheKey = "sizes-\(store.rawValue)"
+        var cache = ListCache.load(cacheKey, as: [String: InstallSize].self)?.value ?? [:]
+        if let hit = cache[key] { return hit }
+        var size: InstallSize?
+        switch store {
+        case .epic:
+            guard let r = try? await StoreTools.capture(.epic, ["info", id, "--json", "--platform", mac ? "Mac" : "Windows"], timeout: 120), r.status == 0,
+                  let j = try? JSONSerialization.jsonObject(with: r.out) as? [String: Any], let m = j["manifest"] as? [String: Any],
+                  let disk = (m["disk_size"] as? NSNumber)?.int64Value, disk > 0 else { return nil }
+            size = InstallSize(download: (m["download_size"] as? NSNumber)?.int64Value ?? disk, disk: disk)
+        case .gog:
+            guard let r = try? await StoreTools.capture(.gog, ["info", id, "--platform", mac ? "osx" : "windows"], timeout: 120), r.status == 0,
+                  let j = try? JSONSerialization.jsonObject(with: r.out) as? [String: Any], let sizes = j["size"] as? [String: [String: Any]] else { return nil }
+            // "*" is shared by all languages; add the largest language (English when present).
+            func n(_ d: [String: Any]?, _ k: String) -> Int64 { (d?[k] as? NSNumber)?.int64Value ?? 0 }
+            let lang = sizes["en-US"] ?? sizes.filter { $0.key != "*" }.max { n($0.value, "disk_size") < n($1.value, "disk_size") }?.value
+            let disk = n(sizes["*"], "disk_size") + n(lang, "disk_size")
+            guard disk > 0 else { return nil }
+            size = InstallSize(download: n(sizes["*"], "download_size") + n(lang, "download_size"), disk: disk)
+        case .amazon: return nil
+        }
+        if let size { cache[key] = size; ListCache.save(cache, cacheKey) }
+        return size
+    }
+
+    /// Stops before downloading when the drive can't hold the game (plus 1 GB to spare).
+    public static func checkSpace(_ store: Store, id: String, mac: Bool, folder: URL) async throws {
+        guard let size = await installSize(store, id: id, mac: mac), let free = GameFolders.freeSpace(folder) else { return }
+        let need = size.disk + (1 << 30)
+        if free < need {
+            throw NokError("Not enough space on \(GameFolders.volumeName(folder)): the game needs \(Storage.format(size.disk)) (plus some room to spare), and \(Storage.format(free)) is free.")
+        }
+    }
+
     public static func download(_ g: StoreLink, into folder: URL, log: @escaping @Sendable (String) -> Void) async throws -> (exe: URL, arguments: String) {
         let fm = FileManager.default
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
         let real = (try? fm.destinationOfSymbolicLink(atPath: folder.path)).map { URL(fileURLWithPath: $0, isDirectory: true) } ?? folder
+        try await checkSpace(g.store, id: g.id, mac: false, folder: real)
         switch g.store {
         case .gog:
             let status = try await StoreTools.stream(.gog, ["download", g.id, "--platform", "windows", "--path", real.path,

@@ -31,6 +31,8 @@ struct StoreLibraryView: View {
     @State private var folder: URL = GameFolders.installFolder
     /// The game whose Install was pressed: its row asks where to put it.
     @State private var choosing: String?
+    /// Install sizes, looked up when a game's install options open (nil entry = store doesn't report it).
+    @State private var sizes: [String: StoreAccounts.InstallSize?] = [:]
 
     struct LoginRequest: Identifiable { let id = UUID(); let store: Store; let url: URL; let amazon: [String: String] }
 
@@ -172,7 +174,7 @@ struct StoreLibraryView: View {
             } else if installedIDs.contains(g.id) || installedMacIDs.contains(g.id) {
                 Text("Installed").font(.caption).foregroundStyle(.secondary)
             } else if choosing != g.id {
-                Button("Install…") { choosing = g.id; wantMac = g.mac }.disabled(!g.windows && !g.mac)
+                Button("Install…") { choosing = g.id; wantMac = g.mac; lookUpSize(g) }.disabled(!g.windows && !g.mac)
             }
         }
         if choosing == g.id {
@@ -186,11 +188,29 @@ struct StoreLibraryView: View {
                 }
                 HStack(alignment: .top) {
                     let mac = g.mac && (wantMac || !g.windows)
-                    InstallFolderPicker(folder: $folder, macApp: mac).frame(maxWidth: 440)
+                    let key = sizeKey(g, mac: mac)
+                    let tooBig: Bool = {
+                        guard let sz = sizes[key] ?? nil, let free = GameFolders.freeSpace(folder) else { return false }
+                        return free < sz.disk + (1 << 30)
+                    }()
+                    VStack(alignment: .leading, spacing: 4) {
+                        InstallFolderPicker(folder: $folder, macApp: mac).frame(maxWidth: 440)
+                        Group {
+                            if let entry = sizes[key] {
+                                if let sz = entry {
+                                    Text("Needs \(Storage.format(sz.disk)) (\(Storage.format(sz.download)) download)")
+                                    if tooBig {
+                                        Text("Not enough space on \(GameFolders.volumeName(folder)) — \(Storage.format(GameFolders.freeSpace(folder) ?? 0)) free. Pick another drive or free up space.")
+                                            .foregroundStyle(.red)
+                                    }
+                                } else { Text("\(g.store.title) doesn't report this game's size — make sure there's enough room.") }
+                            } else { HStack(spacing: 4) { ProgressView().controlSize(.mini); Text("Checking size…") } }
+                        }.font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
                     Spacer()
                     Button("Cancel") { choosing = nil }
                     Button("Install") { mac ? installMac(g) : install(g) }.buttonStyle(.borderedProminent)
-                        .disabled(mac && !GameFolders.holdsApps(folder))
+                        .disabled((mac && !GameFolders.holdsApps(folder)) || tooBig)
                 }
             }
             .padding(.leading, 44)
@@ -246,6 +266,17 @@ struct StoreLibraryView: View {
     }
 
     /// Mac versions download straight into a folder (no Wine); then they appear in the library.
+    func sizeKey(_ g: StoreGame, mac: Bool) -> String { "\(g.store.rawValue)-\(g.id)-\(mac)" }
+
+    func lookUpSize(_ g: StoreGame) {
+        for mac in Set([g.mac, false].filter { $0 == false ? g.windows : true }) where sizes[sizeKey(g, mac: mac)] == nil {
+            Task {
+                let s = await StoreAccounts.installSize(g.store, id: g.id, mac: mac)
+                sizes[sizeKey(g, mac: mac)] = .some(s)
+            }
+        }
+    }
+
     func installMac(_ g: StoreGame) {
         choosing = nil
         // Mac apps need a Mac-formatted drive (ExFAT can't hold app bundles). Never switch drives silently.

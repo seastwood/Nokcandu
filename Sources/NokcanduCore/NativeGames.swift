@@ -83,6 +83,7 @@ public enum NativeGames {
 
     /// Downloads a store game's Mac version into `folder/<name>` and adds it to the library.
     public static func installFromStore(_ g: StoreGame, into folder: URL, log: @escaping @Sendable (String) -> Void) async throws -> NativeGame {
+        try await StoreAccounts.checkSpace(g.store, id: g.id, mac: true, folder: folder)
         let dest = folder.appendingPathComponent(CustomGames.safeFolderName(g.title), isDirectory: true)
         try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
         let status: Int32
