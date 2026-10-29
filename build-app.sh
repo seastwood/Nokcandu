@@ -51,11 +51,13 @@ cp Resources/refresh-generals-launcher.py Resources/build-icu-adapter.py Resourc
 chmod 755 "$APP/Contents/Resources/generals-launcher" "$APP/Contents/Resources/screen-size"
 ./Resources/borderless/build.sh "$(pwd)/$APP/Contents/Resources"
 ./Resources/cabextract/build.sh "$(pwd)/$APP/Contents/Resources"
-# Raw mouse for aiming: x86_64 library loaded into Wine (which runs under Rosetta).
-xcrun clang -arch x86_64 -mmacosx-version-min=11.0 -dynamiclib -fobjc-arc -O2 -Wall \
+# Nokcandu's helper library loaded into Wine: raw mouse, hot corners, game names, and fullscreen games in a
+# resizable window (Resources/present). Built for both x86_64 (today's Wine runs under Rosetta) and arm64
+# (a native Wine later) — nothing in it is specific to one architecture.
+xcrun clang -arch x86_64 -arch arm64 -mmacosx-version-min=11.0 -dynamiclib -fobjc-arc -O2 -Wall \
   -framework AppKit -framework GameController -framework CoreGraphics -framework IOKit -framework OpenGL \
   -install_name @rpath/nokcandu-rawmouse.dylib \
-  -o "$APP/Contents/Resources/nokcandu-rawmouse.dylib" Resources/rawmouse/rawmouse.m
+  -o "$APP/Contents/Resources/nokcandu-rawmouse.dylib" Resources/rawmouse/rawmouse.m Resources/present/present.m
 # Signing identity: a stable one keeps macOS permissions (Input Monitoring, drives, folders) across builds.
 # NOKCANDU_SIGN_IDENTITY, else the "Nokcandu Signing" identity from scripts/make-signing-identity.sh, else ad-hoc.
 SIGN_ID="${NOKCANDU_SIGN_IDENTITY:-}"

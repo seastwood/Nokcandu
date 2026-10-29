@@ -8,6 +8,7 @@
 #import <AppKit/AppKit.h>
 #import <objc/runtime.h>
 #include <dlfcn.h>
+#include <mach-o/dyld.h>
 #include "geometry.h"
 
 typedef int SLSConnection;
@@ -62,6 +63,167 @@ static CGFloat primaryHeight(void) { return CGDisplayBounds(CGMainDisplayID()).s
 // Cocoa (bottom-left origin) <-> global top-left points.
 static CGRect toTopLeft(NSRect r) { return CGRectMake(r.origin.x, primaryHeight() - NSMaxY(r), r.size.width, r.size.height); }
 
+// MARK: Virtual display
+// The game sees one monitor of its own size (a fixed internal resolution, or whatever mode it switches to);
+// the Mac's screen never changes. Only Wine's Mac driver is shown the virtual monitor: calls are answered by
+// who makes them (winemac.so), so AppKit and this library keep seeing the real screen.
+static CGFloat virtW, virtH;                 // 0: the real screen
+static CGDisplayModeRef virtMode;            // the mode the game picked (real or one of the carriers below)
+static NSMutableDictionary<NSValue *, NSValue *> *carrierSizes;   // carrier mode -> the size it stands for
+static NSArray *carriers;
+
+static BOOL fromWine(void *ret) {
+    static const struct mach_header *wineImage;
+    if (!wineImage) {
+        for (uint32_t i = 0; i < _dyld_image_count(); i++)
+            if (strstr(_dyld_get_image_name(i), "winemac.so")) { wineImage = _dyld_get_image_header(i); break; }
+        if (!wineImage) return NO;
+    }
+    Dl_info info;
+    return dladdr(ret, &info) && info.dli_fbase == wineImage;
+}
+/// Height Wine flips its coordinates with (its idea of the primary screen).
+static CGFloat wineHeight(void) { return virtW > 0 ? virtH : primaryHeight(); }
+/// A Cocoa rect in the game's own (Windows) coordinates.
+static CGRect toWin(NSRect r) { return CGRectMake(r.origin.x, wineHeight() - NSMaxY(r), r.size.width, r.size.height); }
+
+static BOOL carrierSize(CGDisplayModeRef m, CGSize *size) {
+    NSValue *v = m ? carrierSizes[[NSValue valueWithPointer:m]] : nil;
+    if (v && size) *size = v.sizeValue;
+    return v != nil;
+}
+
+/// Standard game resolutions, each carried by one real (otherwise unused) display mode object.
+static void makeCarriers(void) {
+    if (carriers) return;
+    NSDictionary *opts = @{ (NSString *)kCGDisplayShowDuplicateLowResolutionModes: @YES };
+    NSArray *real = CFBridgingRelease(CGDisplayCopyAllDisplayModes(CGMainDisplayID(), (__bridge CFDictionaryRef)opts));
+    int sizes[][2] = { {640,480}, {800,600}, {1024,768}, {1152,864}, {1280,720}, {1280,800}, {1280,960}, {1280,1024},
+                       {1366,768}, {1440,900}, {1600,900}, {1600,1200}, {1680,1050}, {1920,1080}, {1920,1200}, {2560,1440} };
+    const char *want = getenv("NOKCANDU_PRESENT_RESOLUTION");
+    int ww = 0, wh = 0; if (want) sscanf(want, "%dx%d", &ww, &wh);
+    carrierSizes = [NSMutableDictionary dictionary];
+    NSMutableArray *list = [NSMutableArray array];
+    NSUInteger n = 0;
+    for (unsigned i = 0; i <= sizeof sizes / sizeof sizes[0] && n < real.count; i++) {
+        int w = i < sizeof sizes / sizeof sizes[0] ? sizes[i][0] : ww, h = i < sizeof sizes / sizeof sizes[0] ? sizes[i][1] : wh;
+        if (w <= 0 || h <= 0) continue;
+        if (i == sizeof sizes / sizeof sizes[0]) { BOOL dup = NO; for (unsigned j = 0; j < i; j++) if (sizes[j][0] == w && sizes[j][1] == h) dup = YES; if (dup) continue; }
+        id carrier = real[n++];
+        carrierSizes[[NSValue valueWithPointer:(__bridge void *)carrier]] = [NSValue valueWithSize:NSMakeSize(w, h)];
+        [list addObject:carrier];
+    }
+    carriers = list;
+}
+
+static CGDisplayModeRef carrierFor(int w, int h) {
+    makeCarriers();
+    for (id c in carriers) { CGSize s; if (carrierSize((__bridge CGDisplayModeRef)c, &s) && s.width == w && s.height == h) return (__bridge CGDisplayModeRef)c; }
+    return NULL;
+}
+
+// Every Wine process of the game has to agree on the display (the desktop window, the game, its helpers): the
+// mode lives in a small file in the Wine prefix that all of them watch.
+static NSString *sharedModePath(void) {
+    const char *pfx = getenv("WINEPREFIX");
+    return pfx ? [[NSString stringWithUTF8String:pfx] stringByAppendingPathComponent:@".nokcandu-virtual-display"] : nil;
+}
+static void writeSharedMode(CGFloat w, CGFloat h) {
+    NSString *path = sharedModePath(); if (!path) return;
+    [[NSString stringWithFormat:@"%.0fx%.0f\n", w, h] writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+}
+static BOOL readSharedMode(int *w, int *h) {
+    NSString *t = [NSString stringWithContentsOfFile:sharedModePath() encoding:NSUTF8StringEncoding error:nil];
+    return t && sscanf(t.UTF8String, "%dx%d", w, h) == 2;
+}
+
+static void displaysChanged(void) {
+    // Wine re-reads monitors and modes on this notification (and tells the game, WM_DISPLAYCHANGE).
+    [NSNotificationCenter.defaultCenter postNotificationName:NSApplicationDidChangeScreenParametersNotification object:NSApp];
+}
+
+static void setVirtualMode(CGDisplayModeRef m) {
+    CGSize s = CGSizeZero;
+    if (m && !carrierSize(m, &s)) s = CGSizeMake(CGDisplayModeGetWidth(m), CGDisplayModeGetHeight(m));
+    CGRect real = CGDisplayBounds(CGMainDisplayID());
+    if (!m || (s.width == real.size.width && s.height == real.size.height)) { virtW = virtH = 0; virtMode = NULL; }
+    else { virtW = s.width; virtH = s.height; virtMode = m; }
+    note(@"virtual display %.0fx%.0f", virtW, virtH);
+}
+
+// NSScreen, asked by Wine: one screen, the virtual one.
+static NSRect (*orig_screenFrame)(id, SEL);
+static NSRect my_screenFrame(NSScreen *self, SEL _cmd) {
+    if (virtW > 0 && fromWine(__builtin_return_address(0)) && self == NSScreen.screens.firstObject) return NSMakeRect(0, 0, virtW, virtH);
+    return orig_screenFrame(self, _cmd);
+}
+static NSRect (*orig_screenVisible)(id, SEL);
+static NSRect my_screenVisible(NSScreen *self, SEL _cmd) {
+    if (virtW > 0 && fromWine(__builtin_return_address(0)) && self == NSScreen.screens.firstObject) return NSMakeRect(0, 0, virtW, virtH);
+    return orig_screenVisible(self, _cmd);
+}
+static NSArray *(*orig_screens)(id, SEL);
+static NSArray *my_screens(id self, SEL _cmd) {
+    NSArray *a = orig_screens(self, _cmd);
+    if (virtW > 0 && fromWine(__builtin_return_address(0)) && a.count > 1) return @[a.firstObject];
+    return a;
+}
+
+// Display modes, asked by Wine.
+static BOOL presenting(void) { return enabled; }
+static CFArrayRef my_CopyAllModes(CGDirectDisplayID d, CFDictionaryRef o) {
+    if (presenting() && fromWine(__builtin_return_address(0)) && d == CGMainDisplayID()) { makeCarriers(); return (CFArrayRef)CFBridgingRetain(carriers); }
+    return CGDisplayCopyAllDisplayModes(d, o);
+}
+static CGDisplayModeRef my_CopyMode(CGDirectDisplayID d) {
+    if (virtMode && fromWine(__builtin_return_address(0)) && d == CGMainDisplayID()) return CGDisplayModeRetain(virtMode);
+    return CGDisplayCopyDisplayMode(d);
+}
+static CGError my_SetMode(CGDirectDisplayID d, CGDisplayModeRef m, CFDictionaryRef o) {
+    if (presenting() && fromWine(__builtin_return_address(0))) {
+        setVirtualMode(m);
+        dispatch_async(dispatch_get_main_queue(), ^{ displaysChanged(); });
+        return kCGErrorSuccess;            // the Mac's screen stays as it is
+    }
+    return CGDisplaySetDisplayMode(d, m, o);
+}
+// Wine's own entry point for a game's display-mode change (it would capture the displays and switch the Mac's
+// screen, or delay it while the app isn't active): the virtual display takes the mode at once.
+static BOOL (*orig_setModeForDisplay)(id, SEL, CGDisplayModeRef, CGDirectDisplayID);
+static BOOL my_setModeForDisplay(id self, SEL _cmd, CGDisplayModeRef m, CGDirectDisplayID d) {
+    if (!presenting() || d != CGMainDisplayID()) return orig_setModeForDisplay(self, _cmd, m, d);
+    setVirtualMode(m);
+    CGRect real = CGDisplayBounds(CGMainDisplayID());
+    writeSharedMode(virtW > 0 ? virtW : real.size.width, virtW > 0 ? virtH : real.size.height);
+    dispatch_async(dispatch_get_main_queue(), ^{ displaysChanged(); });
+    return YES;
+}
+static CGError my_CaptureAll(void) { if (presenting() && fromWine(__builtin_return_address(0))) return kCGErrorSuccess; return CGCaptureAllDisplays(); }
+static CGError my_ReleaseAll(void) { if (presenting() && fromWine(__builtin_return_address(0))) return kCGErrorSuccess; return CGReleaseAllDisplays(); }
+static void my_Restore(void) {
+    if (presenting() && fromWine(__builtin_return_address(0))) { setVirtualMode(NULL); dispatch_async(dispatch_get_main_queue(), ^{ displaysChanged(); }); return; }
+    CGRestorePermanentDisplayConfiguration();
+}
+static size_t my_ModeW(CGDisplayModeRef m) { CGSize s; return carrierSize(m, &s) ? (size_t)s.width : CGDisplayModeGetWidth(m); }
+static size_t my_ModeH(CGDisplayModeRef m) { CGSize s; return carrierSize(m, &s) ? (size_t)s.height : CGDisplayModeGetHeight(m); }
+static size_t my_ModePW(CGDisplayModeRef m) { CGSize s; return carrierSize(m, &s) ? (size_t)s.width : CGDisplayModeGetPixelWidth(m); }
+static size_t my_ModePH(CGDisplayModeRef m) { CGSize s; return carrierSize(m, &s) ? (size_t)s.height : CGDisplayModeGetPixelHeight(m); }
+static bool my_ModeUsable(CGDisplayModeRef m) { return carrierSize(m, NULL) ? true : CGDisplayModeIsUsableForDesktopGUI(m); }
+__attribute__((used)) static const struct { const void *replacement, *original; } display_interpose[]
+    __attribute__((section("__DATA,__interpose"))) = {
+    { (const void *)my_CopyAllModes, (const void *)CGDisplayCopyAllDisplayModes },
+    { (const void *)my_CopyMode, (const void *)CGDisplayCopyDisplayMode },
+    { (const void *)my_SetMode, (const void *)CGDisplaySetDisplayMode },
+    { (const void *)my_CaptureAll, (const void *)CGCaptureAllDisplays },
+    { (const void *)my_ReleaseAll, (const void *)CGReleaseAllDisplays },
+    { (const void *)my_Restore, (const void *)CGRestorePermanentDisplayConfiguration },
+    { (const void *)my_ModeW, (const void *)CGDisplayModeGetWidth },
+    { (const void *)my_ModeH, (const void *)CGDisplayModeGetHeight },
+    { (const void *)my_ModePW, (const void *)CGDisplayModeGetPixelWidth },
+    { (const void *)my_ModePH, (const void *)CGDisplayModeGetPixelHeight },
+    { (const void *)my_ModeUsable, (const void *)CGDisplayModeIsUsableForDesktopGUI },
+};
+
 static BOOL isWineWindow(NSWindow *w) { return w && w != frameWindow && [NSStringFromClass(w.class) hasPrefix:@"Wine"]; }
 
 /// The window server transform for one Wine window: shows the whole Wine desktop region scaled into the frame.
@@ -72,7 +234,9 @@ static void applyTransforms(void) {
         // The window server still hit-tests a transformed window by its untransformed shape: let the mouse
         // pass through to the frame below (this library hands each event to the game itself).
         if (!w.ignoresMouseEvents) w.ignoresMouseEvents = YES;
-        CGAffineTransform m = nok_present_window_transform(&geo, toTopLeft(w.frame));
+        NokPresentGeometry real = geo;          // the window server works in real screen coordinates
+        real.game = toTopLeft(gameWindow.frame);
+        CGAffineTransform m = nok_present_window_transform(&real, toTopLeft(w.frame));
         CGError e = SLSSetWindowTransform(SLSMainConnectionID(), (uint32_t)w.windowNumber, m);
         if (e) note(@"transform window %ld failed %d", (long)w.windowNumber, e);
     }
@@ -85,9 +249,22 @@ static CGFloat padding(void) { return 0; }
 static void updateGeometry(void) {
     NSWindow *g = gameWindow;
     if (!g || !frameWindow) return;
+    // The game switched resolution (a new shape): the window takes the new shape, keeping its width.
+    static NSSize lastGame;
+    if (!NSEqualSizes(lastGame, g.frame.size)) {
+        BOOL first = lastGame.width == 0;
+        lastGame = g.frame.size;
+        frameWindow.contentAspectRatio = lastGame;
+        if (!first && !filling && !(frameWindow.styleMask & NSWindowStyleMaskFullScreen)) {
+            NSRect c = [frameWindow contentRectForFrameRect:frameWindow.frame];
+            CGFloat h = c.size.width * lastGame.height / lastGame.width;
+            c.origin.y += c.size.height - h; c.size.height = h;          // keep the top edge in place
+            [frameWindow setFrame:[frameWindow frameRectForContentRect:c] display:YES];
+        }
+    }
     NSRect content = [frameWindow contentRectForFrameRect:frameWindow.frame];
     CGFloat pad = padding();
-    nok_present_update(&geo, toTopLeft(g.frame), CGRectInset(toTopLeft(content), pad, pad));
+    nok_present_update(&geo, toWin(g.frame), CGRectInset(toTopLeft(content), pad, pad));
     NokPresentContent *v = (NokPresentContent *)frameWindow.contentView;
     if ([v isKindOfClass:NokPresentContent.class] && geo.valid) {
         CGFloat h = primaryHeight();
@@ -180,7 +357,7 @@ static void solidTitlebar(void) {
 // hidden until the pointer reaches them. The green button, Control-Command-F and Window > Exit Full Screen
 // switch it.
 static NSRect savedFrame;
-static BOOL nativeFS(void) { const char *v = getenv("NOKCANDU_PRESENT_NATIVEFS"); return v && *v == '1'; }
+static BOOL nativeFS(void) { const char *v = getenv("NOKCANDU_PRESENT_NATIVEFS"); return !v || *v != '0'; }
 static void setFilling(BOOL on) {
     if (nativeFS()) { if (on != ((frameWindow.styleMask & NSWindowStyleMaskFullScreen) != 0)) [frameWindow toggleFullScreen:nil]; return; }
     if (on == filling || !frameWindow) return;
@@ -224,18 +401,19 @@ static void addMenuItem(void) {
 // MARK: Resizing from inside the edges
 // The window server resizes windows from their outer edge, but there the game's own (full-size, transformed)
 // window sits on top, so the frame never sees it. A thin band just inside the picture's edge resizes instead.
-static const CGFloat band = 7;     // the padding (plus a hair of the picture) counts as edge
+static const CGFloat band = 5;     // the window's outermost points: resize there (macOS's own zone sits outside)
+static CGRect frameRectTL(void) { return toTopLeft(frameWindow.frame); }
 static BOOL inResizeBand(CGPoint p) {
-    if (!frameWindow || padding() == 0 || (frameWindow.styleMask & NSWindowStyleMaskFullScreen)) return NO;
-    CGRect outer = CGRectInset(geo.display, -band - 1, -band - 1), inner = CGRectInset(geo.display, 2, 2);
-    return CGRectContainsPoint(outer, p) && !CGRectContainsPoint(inner, p);
+    if (!frameWindow || filling || (frameWindow.styleMask & NSWindowStyleMaskFullScreen)) return NO;
+    CGRect f = frameRectTL();
+    return CGRectContainsPoint(f, p) && !CGRectContainsPoint(CGRectInset(f, band, band), p);
 }
 
 /// Which edges a point is on, as NSCursor frame-resize directions.
 static void edgesAt(CGPoint p, BOOL *l, BOOL *r, BOOL *t, BOOL *b) {
-    CGRect d = geo.display; CGFloat k = band + 6;      // corners are generous
-    *l = p.x < CGRectGetMinX(d) + 2; *r = p.x > CGRectGetMaxX(d) - 2;
-    *t = p.y < CGRectGetMinY(d) + 2; *b = p.y > CGRectGetMaxY(d) - 2;
+    CGRect d = frameRectTL(); CGFloat k = 18;          // corners are generous
+    *l = p.x < CGRectGetMinX(d) + band; *r = p.x > CGRectGetMaxX(d) - band;
+    *t = p.y < CGRectGetMinY(d) + band; *b = p.y > CGRectGetMaxY(d) - band;
     if (*l || *r) { *t = *t || p.y < CGRectGetMinY(d) + k; *b = *b || p.y > CGRectGetMaxY(d) - k; }
     if (*t || *b) { *l = *l || p.x < CGRectGetMinX(d) + k; *r = *r || p.x > CGRectGetMaxX(d) - k; }
 }
@@ -268,9 +446,8 @@ static void trackResize(NSEvent *down) {
         CGFloat w = c0.size.width + (right ? dx : left ? -dx : 0);
         CGFloat h = c0.size.height + (bottom ? dy : top ? -dy : 0);
         // Keep the game's shape: follow whichever edge moved more.
-        CGFloat pad = 2 * padding();
-        if ((left || right) && (!(top || bottom) || fabs(dx) >= fabs(dy))) h = (w - pad) * aspect.height / aspect.width + pad;
-        else w = (h - pad) * aspect.width / aspect.height + pad;
+        if ((left || right) && (!(top || bottom) || fabs(dx) >= fabs(dy))) h = w * aspect.height / aspect.width;
+        else w = h * aspect.width / aspect.height;
         w = MAX(w, aspect.width / 8); h = MAX(h, aspect.height / 8);
         NSRect c = c0;                                       // Cocoa: origin is bottom-left
         c.size = NSMakeSize(w, h);
@@ -287,7 +464,9 @@ static void adoptGameWindow(NSWindow *g) {
     gameWindow = g;
     NSSize gs = g.frame.size;
     NSRect screen = NSScreen.mainScreen.visibleFrame;
-    NSSize size = firstSize.width > 0 ? firstSize : NSMakeSize(gs.width * 0.6, gs.height * 0.6);
+    // First size: about three quarters of the screen, the game's shape (older games' small resolutions grow).
+    CGFloat fit = MIN(screen.size.width * 0.75 / gs.width, screen.size.height * 0.75 / gs.height);
+    NSSize size = firstSize.width > 0 ? firstSize : NSMakeSize(round(gs.width * fit), round(gs.height * fit));
     NSRect content = NSMakeRect(NSMidX(screen) - size.width / 2, NSMidY(screen) - size.height / 2, size.width, size.height);
     frameWindow = [[NokPresentFrame alloc] initWithContentRect:content
                                               styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable
@@ -329,6 +508,7 @@ static void scan(void) {
     if (!enabled) return;
     NSWindow *g = gameWindow;
     CGRect screen = CGDisplayBounds(CGMainDisplayID());
+    if (virtW > 0) screen.size = CGSizeMake(virtW, virtH);     // the game's screen
     if (!g || !g.isVisible) {
         for (NSWindow *w in NSApp.windows) {
             if (!isWineWindow(w) || !w.isVisible) continue;
@@ -379,6 +559,17 @@ static void selfTest(void) {
     const char *mode = getenv("NOKCANDU_PRESENT_SELFTEST");
     if (!mode) return;
     after(1.5, ^{ clickCorners(@"start"); });
+    if (strcmp(mode, "modes") == 0) {
+        for (int k = 0; k < 2; k++) {
+            after(2.5 + k * 3, ^{ NSWindow *g = gameWindow;
+                NSEvent *d = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:g.windowNumber context:nil characters:@"m" charactersIgnoringModifiers:@"m" isARepeat:NO keyCode:46];
+                NSEvent *u = [NSEvent keyEventWithType:NSEventTypeKeyUp location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:g.windowNumber context:nil characters:@"m" charactersIgnoringModifiers:@"m" isARepeat:NO keyCode:46];
+                [NSApp sendEvent:d]; [NSApp sendEvent:u]; note(@"selftest: pressed M"); });
+            after(4.5 + k * 3, ^{ note(@"after mode change: game window %@ real screen %@", NSStringFromRect(gameWindow.frame), NSStringFromRect(CGDisplayBounds(CGMainDisplayID())));
+                                  clickCorners([NSString stringWithFormat:@"mode %d", k]); });
+        }
+        return;
+    }
     after(3, ^{ NSRect f = frameWindow.frame; f.size.width *= 1.3; f.size.height = (f.size.height - 28) * 1.3 + 28;
                 [frameWindow setFrame:f display:YES]; updateGeometry(); });
     after(4, ^{ clickCorners(@"larger"); });
@@ -450,8 +641,8 @@ static NSEvent *rewrite(NSEvent *e) {
     }
     // Rebuild the event addressed to the game's window, at the matching point (in that window's own
     // bottom-left coordinates). Wine reads the window and the event's screen location from it.
-    NSRect gf = target.frame;
-    NSPoint local = NSMakePoint(gp.x - gf.origin.x, primaryHeight() - gp.y - gf.origin.y);
+    CGRect gw = geo.game;                               // the game window, in Windows coordinates
+    NSPoint local = NSMakePoint(gp.x - gw.origin.x, CGRectGetMaxY(gw) - gp.y);
     NSEvent *n = [NSEvent mouseEventWithType:e.type location:local modifierFlags:e.modifierFlags timestamp:e.timestamp
                                 windowNumber:target.windowNumber context:nil eventNumber:e.eventNumber
                                   clickCount:(e.type == NSEventTypeMouseMoved ? 0 : e.clickCount)
@@ -464,6 +655,16 @@ static NSEvent *rewrite(NSEvent *e) {
         CGEventSetIntegerValueField(c, kCGMouseEventButtonNumber, e.buttonNumber);
         n = [NSEvent eventWithCGEvent:c] ?: n;
         CFRelease(c);
+    }
+    // Wine reads the event's screen location as Windows coordinates; with a virtual display those differ from
+    // where AppKit put it.
+    if (n && virtW > 0) {
+        CGEventRef c = CGEventCreateCopy(n.CGEvent);
+        CGEventSetLocation(c, gp);
+        NSEvent *m = [NSEvent eventWithCGEvent:c];
+        CFRelease(c);
+        if (m.windowNumber == target.windowNumber) n = m;
+        else note(@"virtual display: re-addressed event lost its window");
     }
     return n ?: e;
 }
@@ -483,21 +684,6 @@ static void my_orderRelative(NSWindow *self, SEL _cmd, NSWindowOrderingMode mode
         orig_orderRelative(self, _cmd, NSWindowBelow, frameWindow.windowNumber);
 }
 
-// ClipCursor: Wine confines the pointer with a rect relative to its (untransformed) window. Confine it to the
-// matching part of the picture instead.
-static void (*orig_setConfinement)(id, SEL, NSRect);
-static void my_setConfinement(NSWindow *self, SEL _cmd, NSRect r) {
-    if (enabled && geo.valid && !NSIsEmptyRect(r) && isWineWindow(self)) {
-        NSRect f = self.frame; CGFloat h = primaryHeight();
-        CGPoint a = nok_present_to_screen(&geo, CGPointMake(f.origin.x + r.origin.x, h - (f.origin.y + NSMaxY(r))));
-        CGPoint b = nok_present_to_screen(&geo, CGPointMake(f.origin.x + NSMaxX(r), h - (f.origin.y + r.origin.y)));
-        NSRect mapped = NSMakeRect(a.x - f.origin.x, (h - b.y) - f.origin.y, b.x - a.x, b.y - a.y);
-        note(@"confine %@ -> %@", NSStringFromRect(r), NSStringFromRect(mapped));
-        r = mapped;
-    }
-    orig_setConfinement(self, _cmd, r);
-}
-
 // A fullscreen game that hides the pointer (aiming, camera control) expects it can't leave its screen. In a
 // window it could: while the game hides the pointer and is in front, the pointer is kept inside the picture.
 static ptrdiff_t hiddenIvar = -1;
@@ -508,23 +694,29 @@ static BOOL gameHidesCursor(void) {
     return hiddenIvar > 0 && *((BOOL *)((__bridge void *)ctl + hiddenIvar));
 }
 static BOOL confining;
+static BOOL manualCapture;          // Control-Command-Escape: keep the pointer in the picture until pressed again
+static double escDownSince;         // holding Escape for a second also lets go of a manual capture
+static double lastGameWarp;         // when the game last moved the pointer itself (aiming re-centres every frame)
+/// Aiming: the game hides the pointer and keeps moving it back (FPS cameras). Then, like in real full screen,
+/// the pointer can't wander out of the picture. Games that only hide the Mac pointer to draw their own (most
+/// strategy games) are left free, so you can move out to other apps or the window's edges.
 static void updateCapture(void) {
     NSWindow *g = gameWindow;
-    if (!g || !geo.valid || !orig_setConfinement) return;
-    BOOL want = NSApp.isActive && g.isKeyWindow && gameHidesCursor();
-    if (want) {
-        NSRect f = g.frame;   // the whole game, mapped to the picture, in the game window's own coordinates
-        CGPoint a = nok_present_to_screen(&geo, CGPointMake(geo.game.origin.x, geo.game.origin.y));
-        CGPoint b = nok_present_to_screen(&geo, CGPointMake(CGRectGetMaxX(geo.game), CGRectGetMaxY(geo.game)));
-        CGFloat h = primaryHeight();
-        NSRect r = NSMakeRect(a.x - f.origin.x + 1, (h - b.y) - f.origin.y + 1, b.x - a.x - 2, b.y - a.y - 2);
-        orig_setConfinement(g, NSSelectorFromString(@"setMouseConfinementRect:"), r);
-        if (!confining) note(@"pointer kept in the picture %@", NSStringFromRect(r));
-    } else if (confining) {
-        orig_setConfinement(g, NSSelectorFromString(@"setMouseConfinementRect:"), NSZeroRect);
-        note(@"pointer released");
-    }
+    if (!g || !geo.valid) return;
+    if (!NSApp.isActive) manualCapture = NO;           // switching away (Command-Tab) always lets go
+    BOOL want = NSApp.isActive && g.isKeyWindow &&
+        (manualCapture || (gameHidesCursor() && CFAbsoluteTimeGetCurrent() - lastGameWarp < 0.5));
+    if (want != confining) note(want ? @"pointer kept in the picture (aiming)" : @"pointer released");
     confining = want;
+}
+/// While aiming, a pointer that leaves the picture is put back at its edge.
+static BOOL keepInside(CGPoint p) {
+    if (!confining) return NO;
+    CGRect d = CGRectInset(geo.display, 1, 1);
+    if (CGRectContainsPoint(d, p)) return NO;
+    CGPoint q = CGPointMake(MIN(MAX(p.x, CGRectGetMinX(d)), CGRectGetMaxX(d)), MIN(MAX(p.y, CGRectGetMinY(d)), CGRectGetMaxY(d)));
+    CGWarpMouseCursorPosition(q);
+    return YES;
 }
 
 // Wine finds the window under the pointer itself (for plain mouse moves). Over the picture, that's the game.
@@ -549,11 +741,27 @@ static NSInteger my_numberAtPoint(id self, SEL _cmd, NSPoint p, NSInteger below)
 
 static void (*orig_sendEvent)(id, SEL, NSEvent *);
 static void my_sendEvent(id self, SEL _cmd, NSEvent *e) {
+    if (confining && e.CGEvent && (e.type == NSEventTypeMouseMoved || e.type == NSEventTypeLeftMouseDragged || e.type == NSEventTypeRightMouseDragged)
+        && keepInside(CGEventGetLocation(e.CGEvent))) return;
     if (frameWindow && e.CGEvent && (e.type == NSEventTypeLeftMouseDown || e.type == NSEventTypeMouseMoved)
         && inResizeBand(CGEventGetLocation(e.CGEvent))) {
         showResizeCursor(CGEventGetLocation(e.CGEvent));
         if (e.type == NSEventTypeLeftMouseDown) trackResize(e);
         return;
+    }
+    // Control-Command-Escape: capture the pointer in the picture (or let go). Holding Escape a second also lets go.
+    if (frameWindow && e.type == NSEventTypeKeyDown && e.keyCode == 53 &&
+        (e.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask) == (NSEventModifierFlagControl | NSEventModifierFlagCommand)) {
+        manualCapture = !manualCapture; updateCapture();
+        note(@"pointer capture %@ (Control-Command-Escape)", manualCapture ? @"on" : @"off");
+        return;
+    }
+    if (manualCapture && e.keyCode == 53 && (e.type == NSEventTypeKeyDown || e.type == NSEventTypeKeyUp)) {
+        double now = CFAbsoluteTimeGetCurrent();
+        if (e.type == NSEventTypeKeyDown && !e.isARepeat) escDownSince = now;
+        else if (e.type == NSEventTypeKeyDown && escDownSince > 0 && now - escDownSince > 1.0) {
+            manualCapture = NO; escDownSince = 0; updateCapture(); note(@"pointer capture off (held Escape)");
+        } else if (e.type == NSEventTypeKeyUp) escDownSince = 0;
     }
     // Control-Command-F: full screen (see setFilling).
     if (frameWindow && e.type == NSEventTypeKeyDown && [e.charactersIgnoringModifiers.lowercaseString isEqualToString:@"f"] &&
@@ -587,15 +795,15 @@ static void my_sendEvent(id self, SEL _cmd, NSEvent *e) {
 static NSPoint (*orig_mouseLocation)(id, SEL);
 static NSPoint my_mouseLocation(id self, SEL _cmd) {
     NSPoint p = orig_mouseLocation(self, _cmd);
-    if (!enabled || !geo.valid) return p;
-    CGFloat h = primaryHeight();
-    CGPoint g = nok_present_to_game(&geo, CGPointMake(p.x, h - p.y));
-    return NSMakePoint(g.x, h - g.y);
+    if (!enabled || !geo.valid || !fromWine(__builtin_return_address(0))) return p;
+    CGPoint g = nok_present_to_game(&geo, CGPointMake(p.x, primaryHeight() - p.y));
+    return NSMakePoint(g.x, wineHeight() - g.y);
 }
 
 // The game moving the cursor (aiming re-centres it, menus place it) lands at the matching point in the frame.
 static CGError my_warp(CGPoint p) {
     CGPoint in = p;
+    lastGameWarp = CFAbsoluteTimeGetCurrent();     // the game (through Wine) moved the pointer
     if (enabled && geo.valid) p = nok_present_to_screen(&geo, p);
     static int n; if (n++ < 20) note(@"warp %@ -> %@", NSStringFromPoint(NSPointFromCGPoint(in)), NSStringFromPoint(NSPointFromCGPoint(p)));
     return CGWarpMouseCursorPosition(p);
@@ -608,9 +816,30 @@ static void hook(Class c, SEL s, IMP mine, IMP *orig, BOOL meta) {
     if (m) *orig = method_setImplementation(m, mine);
 }
 
-__attribute__((constructor)) static void start(void) {
+/// The game's setting, next to this library (SharedSupport/nokcandu/windowed): "on" plus an optional line with
+/// the game's resolution ("1280x720"). The environment (NOKCANDU_PRESENT=1, NOKCANDU_PRESENT_RESOLUTION) is
+/// for testing.
+static BOOL readSetting(void) {
     const char *on = getenv("NOKCANDU_PRESENT");
-    if (!on || strcmp(on, "1") != 0) return;
+    if (on) return strcmp(on, "1") == 0;
+    Dl_info self;
+    if (!dladdr((const void *)readSetting, &self) || !self.dli_fname) return NO;
+    NSString *dir = [[NSString stringWithUTF8String:self.dli_fname] stringByDeletingLastPathComponent];
+    NSString *t = [NSString stringWithContentsOfFile:[dir stringByAppendingPathComponent:@"windowed"] encoding:NSUTF8StringEncoding error:nil];
+    if (!t) return NO;
+    BOOL enabledHere = NO;
+    for (NSString *line in [t componentsSeparatedByString:@"\n"]) {
+        NSString *l = [line stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        int w, h;
+        if ([l isEqualToString:@"on"]) enabledHere = YES;
+        else if (sscanf(l.UTF8String, "%dx%d", &w, &h) == 2 && !getenv("NOKCANDU_PRESENT_RESOLUTION"))
+            setenv("NOKCANDU_PRESENT_RESOLUTION", l.UTF8String, 1);
+    }
+    return enabledHere;
+}
+
+__attribute__((constructor)) static void start(void) {
+    if (!readSetting()) return;
     int w = 0, h = 0; const char *sz = getenv("NOKCANDU_PRESENT_SIZE");
     if (sz && sscanf(sz, "%dx%d", &w, &h) == 2 && w > 100 && h > 100) firstSize = NSMakeSize(w, h);
     void *sl = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY);
@@ -619,6 +848,17 @@ __attribute__((constructor)) static void start(void) {
     SLSAddWindowToWindowOrderingGroup = sl ? dlsym(sl, "SLSAddWindowToWindowOrderingGroup") : NULL;
     SLSRemoveFromOrderingGroup = sl ? dlsym(sl, "SLSRemoveFromOrderingGroup") : NULL;
     if (!SLSSetWindowTransform || !SLSMainConnectionID) { note(@"window transforms unavailable on this macOS; staying off"); return; }
+    // The virtual display has to exist before Wine first looks at the screen.
+    enabled = YES;
+    hook([NSScreen class], @selector(frame), (IMP)my_screenFrame, (IMP *)&orig_screenFrame, NO);
+    hook([NSScreen class], @selector(visibleFrame), (IMP)my_screenVisible, (IMP *)&orig_screenVisible, NO);
+    hook([NSScreen class], @selector(screens), (IMP)my_screens, (IMP *)&orig_screens, YES);
+    int rw = 0, rh = 0; const char *res = getenv("NOKCANDU_PRESENT_RESOLUTION");
+    if (readSharedMode(&rw, &rh) || (res && sscanf(res, "%dx%d", &rw, &rh) == 2)) {
+        CGRect real = CGDisplayBounds(CGMainDisplayID());
+        CGDisplayModeRef m = (rw == real.size.width && rh == real.size.height) ? NULL : carrierFor(rw, rh);
+        if (m || rw == real.size.width) setVirtualMode(m); else note(@"no mode for %dx%d", rw, rh);
+    }
     // Wine's Mac driver loads after this library: wait for its application class on the main thread.
     dispatch_async(dispatch_get_main_queue(), ^{
         [NSTimer scheduledTimerWithTimeInterval:0.25 repeats:YES block:^(NSTimer *t) {
@@ -629,12 +869,26 @@ __attribute__((constructor)) static void start(void) {
             hook(app, @selector(sendEvent:), (IMP)my_sendEvent, (IMP *)&orig_sendEvent, NO);
             hook([NSEvent class], @selector(mouseLocation), (IMP)my_mouseLocation, (IMP *)&orig_mouseLocation, YES);
             hook([NSWindow class], @selector(windowNumberAtPoint:belowWindowWithWindowNumber:), (IMP)my_numberAtPoint, (IMP *)&orig_numberAtPoint, YES);
+            Class ctl = objc_getClass("WineApplicationController");
+            if (ctl) hook(ctl, NSSelectorFromString(@"setMode:forDisplay:"), (IMP)my_setModeForDisplay, (IMP *)&orig_setModeForDisplay, NO);
             Class ww = objc_getClass("WineWindow");
             if (ww) hook(ww, @selector(setLevel:), (IMP)my_setLevel, (IMP *)&orig_setLevel, NO);
             if (ww) hook(ww, @selector(orderWindow:relativeTo:), (IMP)my_orderRelative, (IMP *)&orig_orderRelative, NO);
-            SEL conf = NSSelectorFromString(@"setMouseConfinementRect:");
-            if ([NSWindow instancesRespondToSelector:conf]) hook([NSWindow class], conf, (IMP)my_setConfinement, (IMP *)&orig_setConfinement, NO);
-            [NSTimer scheduledTimerWithTimeInterval:0.25 repeats:YES block:^(NSTimer *t2) { scan(); }];
+            // ClipCursor isn't mapped yet: macOS confines to a rect inside the (untransformed) window, which can't
+            // describe the picture. Aiming games are kept inside by keepInside() instead.
+            [NSTimer scheduledTimerWithTimeInterval:0.25 repeats:YES block:^(NSTimer *t2) {
+                // Another process of the game changed the display mode.
+                int fw, fh;
+                if (readSharedMode(&fw, &fh)) {
+                    CGRect real = CGDisplayBounds(CGMainDisplayID());
+                    CGFloat cw = virtW > 0 ? virtW : real.size.width, ch = virtW > 0 ? virtH : real.size.height;
+                    if (fw != cw || fh != ch) {
+                        setVirtualMode((fw == real.size.width && fh == real.size.height) ? NULL : carrierFor(fw, fh));
+                        displaysChanged();
+                    }
+                }
+                scan();
+            }];
             for (NSString *n in @[NSApplicationDidBecomeActiveNotification, NSApplicationDidResignActiveNotification])
                 [NSNotificationCenter.defaultCenter addObserverForName:n object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note_) { tieToFrame(); }];
             note(@"presentation ready");
