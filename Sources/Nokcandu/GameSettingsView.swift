@@ -161,14 +161,9 @@ struct GameSettingsSection: View {
         guard dirty || always else { return }
         saving = true
         let c = edited, g = game, f = force || launcherEdited
-        Task {
-            let r = await Task.detached { Result { try CustomGames.saveAll(c, to: g, force: f) } }.value
-            saving = false
-            switch r {
-            case .success: model.say("Settings saved."); model.refresh()
-            case .failure(let e): model.fail(e)
-            }
-        }
+        model.changeSetting(for: g, title: "Game Settings", edit: { fresh in
+            try await Task.detached { try CustomGames.saveAll(c, to: fresh, force: f) }.value
+        }, completion: { _ in saving = false })
     }
 }
 

@@ -160,37 +160,31 @@ struct PerformanceSection: View {
     var autoFPS: Int { LowLatency.autoFPS(refresh: refresh) }
 
     func setLowLatency(_ on: Bool) {
-        let g = game
-        Task {
-            let r = await Task.detached { Result { try LowLatency.apply(on, to: g) } }.value
-            switch r {
-            case .success: model.say(on ? "Low-latency aiming on. Takes effect the next time the game starts." : "Low-latency aiming off."); model.refresh()
-            case .failure(let e): model.fail(e)
-            }
-        }
+        model.changeSetting(for: game, title: "Low-latency Aiming", edit: { current in
+            try await Task.detached { try LowLatency.apply(on, to: current) }.value
+        })
     }
 
     func setCap(_ fps: Int?) {
-        let g = game
-        Task {
-            let r = await Task.detached { Result { try LowLatency.applyCap(fps, to: g) } }.value
-            switch r {
-            case .success: model.say("Frame cap: \(fps.map { $0 == 0 ? "unlimited" : "\($0) FPS" } ?? "game's default"). Takes effect the next time the game starts."); model.refresh()
-            case .failure(let e): model.fail(e)
-            }
-        }
+        model.changeSetting(for: game, title: "Game Frame Cap", edit: { current in
+            try await Task.detached { try LowLatency.applyCap(fps, to: current) }.value
+        })
     }
 
     func setBuffer(_ ms: Int) {
-        do { try AudioBuffer.apply(ms, for: game); buffer = AudioBuffer.current(for: game); model.say("Audio buffer: \(ms) ms chunks. Takes effect next start.") }
-        catch { model.fail(error) }
+        model.changeSetting(for: game, title: "Audio Buffer", success: "Audio buffer: \(ms) ms chunks.", edit: { current in
+            try await Task.detached { try AudioBuffer.apply(ms, for: current) }.value
+        }, completion: { _ in buffer = AudioBuffer.current(for: game) })
     }
 
     func save() {
         guard loaded else { return }
-        do { try Performance.apply(s, for: game); model.say(steam ? "Saved. Restart Steam to apply." : "Saved. Applies next time the game starts.") }
-        catch { model.fail(error) }
+        let value = s
+        model.changeSetting(for: game, title: "Performance", success: "Performance settings applied.", edit: { current in
+            try Performance.apply(value, for: current)
+        }, completion: { _ in s = Performance.settings(for: game) })
     }
+
 }
 
 // MARK: - Storage
@@ -430,24 +424,18 @@ struct GameResolutionSection: View {
     var logger: @Sendable (String) -> Void { { line in Task { @MainActor in status = line } } }
     func choose(_ tag: String) {
         let px: [Int]? = tag == "desktop" ? nil : tag.split(separator: "x").compactMap { Int($0) }
-        let g = game, lib = model.games
+        let lib = model.games
         working = true
-        Task {
-            let r = await Task.detached { Result { try GameDisplay.apply(px, to: g, library: lib) } }.value
-            switch r {
-            case .success: model.say("Saved the Mac screen resolution for this game."); model.refresh()
-            case .failure(let e): model.fail(e)
-            }
-            working = false
-        }
+        model.changeSetting(for: game, title: "Mac Screen Resolution", success: "Saved the Mac screen resolution for this game.", edit: { current in
+            try await Task.detached { try GameDisplay.apply(px, to: current, library: lib) }.value
+        }, completion: { _ in working = false })
     }
     func windowStyle(_ borderless: Bool) {
         working = true; status = ""
-        Task {
-            do { try await GameWindowStyle.apply(borderless: borderless, to: game, log: logger); model.refresh() }
-            catch { model.fail(error) }
-            working = false
-        }
+        let log = logger
+        model.changeSetting(for: game, title: "Window Style", edit: { current in
+            try await GameWindowStyle.apply(borderless: borderless, to: current, log: log)
+        }, completion: { _ in working = false })
     }
     func openUASettings() {
         working = true; status = ""

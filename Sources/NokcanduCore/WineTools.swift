@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// Windows tools and folders for a game's private Windows environment (or the shared Steam's).
 public enum WineTools {
@@ -78,9 +79,27 @@ public enum WineTools {
         guard let c = hostContents(for: g) else { throw NokError("This game has no Windows environment.") }
         let ws = c.appendingPathComponent("SharedSupport/wine/bin/wineserver").path
         let stopped = try await Shell.runAsync(ws, ["-k"], env: environment(contents: c), timeout: 60)
-        guard stopped.ok else { throw NokError("Couldn’t stop this Windows environment. Try again before restarting it.") }
+        // A broken Wine client can survive its server (EA activation/relaunch can leave one
+        // behind). Verify the actual native executable, never a game name shared by other prefixes.
         let waited = try await Shell.runAsync(ws, ["-w"], env: environment(contents: c), timeout: 60)
-        guard waited.ok else { throw NokError("Windows programs are still closing. Wait before restarting the launcher.") }
+        var remaining = ownedProcesses(contents: c)
+        if !remaining.isEmpty {
+            for pid in remaining where owns(pid: pid, contents: c) { kill(pid, SIGTERM) }
+            for _ in 0..<30 {
+                remaining = ownedProcesses(contents: c)
+                if remaining.isEmpty { break }
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            for pid in remaining where owns(pid: pid, contents: c) { kill(pid, SIGKILL) }
+            for _ in 0..<20 {
+                if ownedProcesses(contents: c).isEmpty { break }
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+        }
+        guard ownedProcesses(contents: c).isEmpty else { throw NokError("Some Windows programs did not close. Your setting has not been changed.") }
+        // -k returns 1 when a server has already exited; that is safe only after the native
+        // process check above and a successful server wait.
+        guard waited.ok, stopped.ok || stopped.status == 1 else { throw NokError("Windows programs are still closing. Wait before restarting the launcher.") }
         // The shell supervisor may briefly outlive wineserver; wait before removing its lock.
         let pidFile = c.appendingPathComponent("SharedSupport/Logs/game.lock/pid")
         if let text = try? String(contentsOf: pidFile, encoding: .utf8), let pid = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 1 {
@@ -92,6 +111,54 @@ public enum WineTools {
         }
         for lock in ["game.lock", "steam.lock"] {
             try? FileManager.default.removeItem(at: c.appendingPathComponent("SharedSupport/Logs/\(lock)"))
+        }
+    }
+
+    static func owns(executable path: String, contents: URL) -> Bool {
+        let support = contents.appendingPathComponent("SharedSupport").standardizedFileURL.path
+        let file = URL(fileURLWithPath: path).standardizedFileURL.path
+        if ["wine", "wine64", "wine-preloader", "wine64-preloader", "wineserver"].contains((file as NSString).lastPathComponent),
+           (file as NSString).deletingLastPathComponent == support + "/wine/bin" { return true }
+        return file.hasPrefix(support + "/GameApp/") && file.hasSuffix(".app/Contents/MacOS/wine")
+    }
+    static func owns(pid: Int32, contents: URL) -> Bool {
+        guard pid > 1, pid != getpid() else { return false }
+        var bytes = [CChar](repeating: 0, count: 4096)
+        guard proc_pidpath(pid, &bytes, UInt32(bytes.count)) > 0 else { return false }
+        return owns(executable: String(cString: bytes), contents: contents)
+    }
+    static func ownedProcesses(contents: URL) -> [Int32] {
+        guard let rows = try? Shell.run("/bin/ps", ["-axo", "pid="], timeout: 10), rows.ok else { return [] }
+        return rows.stdout.split(whereSeparator: \.isWhitespace).compactMap { Int32($0) }.filter { owns(pid: $0, contents: contents) }
+    }
+
+    /// Read-only probe, including background services with no visible launcher window.
+    /// `wineserver -w` returns immediately when no server exists; a live environment keeps it waiting.
+    public static func environmentIsRunning(for game: InstalledGame) async -> Bool {
+        guard let contents = hostContents(for: game) else { return false }
+        if !ownedProcesses(contents: contents).isEmpty { return true }
+        do {
+            let result = try await Shell.runAsync(contents.appendingPathComponent("SharedSupport/wine/bin/wineserver").path,
+                ["-w"], env: environment(contents: contents), timeout: 0.3)
+            return !result.ok
+        } catch { return true }
+    }
+    /// Apply while the entire environment is closed, then reopen its actual host. Callers obtain
+    /// confirmation first; mouse settings that apply live never use this path.
+    public static func applySettings(for game: InstalledGame, restart: Bool,
+                                     edit: (InstalledGame) async throws -> Void,
+                                     reopen: (InstalledGame) throws -> Void = { try GameLauncher.launch($0) }) async throws {
+        let contents = hostContents(for: game)
+        let hostURL = contents?.deletingLastPathComponent()
+        if restart { try await stopAll(for: game) }
+        do { try await edit(GameLibrary.inspect(game.appURL) ?? game) }
+        catch {
+            if restart, let hostURL, let host = GameLibrary.inspect(hostURL) { try? reopen(host) }
+            throw error
+        }
+        if restart, let hostURL, let host = GameLibrary.inspect(hostURL) {
+            CustomGames.upgradeLaunchers([host])
+            try reopen(GameLibrary.inspect(hostURL) ?? host)
         }
     }
 

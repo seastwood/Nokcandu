@@ -154,6 +154,13 @@ public enum EASetupRecovery {
         }
         try Data(diagnostic.utf8).write(to: log, options: .atomic)
         guard result.ok else { throw NokError("EA's game setup didn't finish (exit \(result.status)). Details: \(log.path)") }
+        try EACompatibility.stage(host)
+        let helper = host.prefix.appendingPathComponent("drive_c/nokcandu/nokcandu-ea-compat.exe")
+        if FileManager.default.fileExists(atPath: helper.path) {
+            let fixed = try await Shell.runAsync(host.support.appendingPathComponent("wine/bin/wine").path,
+                [helper.path], env: WineTools.environment(contents: host.contents), timeout: 30)
+            guard fixed.ok else { throw NokError("EA setup finished, but its compatibility settings could not be refreshed. Restart EA from Nokcandu.") }
+        }
         if !plan.isDLC, PhysXRuntime.required(in: plan.folder) {
             try await PhysXRuntime.install(for: host)
         }

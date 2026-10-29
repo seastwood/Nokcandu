@@ -39,6 +39,8 @@ final class HostedSettingsTests: XCTestCase {
         XCTAssertNotEqual(Performance.settings(for: host), perf)
         let script = try String(contentsOf: game.launcherURL!, encoding: .utf8)
         XCTAssertTrue(script.contains("WINEDLLPATH_D9VK"))
+        XCTAssertTrue(script.contains(#"DYLD_INSERT_LIBRARIES="${NOKCANDU_HELPER_LIBRARY:-}" "$SUPPORT/wine/bin/wine""#))
+        XCTAssertFalse(script.contains(#"export DYLD_INSERT_LIBRARIES="#))
         XCTAssertTrue(script.contains("GAME_STATE/perf.env"))
         XCTAssertTrue(script.contains("'two words'"))
         XCTAssertTrue(try Shell.run("/bin/bash", ["-n", game.launcherURL!.path]).ok)

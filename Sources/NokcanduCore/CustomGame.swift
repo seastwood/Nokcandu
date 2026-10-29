@@ -435,6 +435,9 @@ public enum CustomGames {
 
         """
         s += CustomGames.registryEnvBlock
+        if c.exe.lowercased().hasSuffix("\\eadesktop.exe") {
+            s += "if [ \"$CHECK_ONLY\" = 0 ]; then\n" + EACompatibility.block(watch: true) + "fi\n"
+        }
         if let d = c.disc, c.extraDiscs?.isEmpty ?? true {
             s += """
             # Disc: mount the game's own image read-only and map D: (volume) and D:: (raw device).

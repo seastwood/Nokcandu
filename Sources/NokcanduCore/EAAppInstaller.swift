@@ -71,6 +71,7 @@ enum EAAppInstaller {
         return sha.finalize().map { String(format: "%02x", $0) }.joined() == package.sha1
     }
     static func configureClient(_ game: InstalledGame, log: @escaping @Sendable (String) -> Void) async throws {
+        try EACompatibility.stage(game)
         // Shared optional components, referenced by the same IDs in saved and shared profiles.
         for fix in [CompatibilityFix.bundledVC, .crossProcessWindows, .shaderCompiler47, .borderless] {
             let current = CompatibilityFixes.fresh(game)

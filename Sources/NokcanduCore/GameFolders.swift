@@ -462,6 +462,24 @@ public enum LibraryOrganizer {
         return [recorded, log].compactMap { $0 }.max()
     }
 
+    /// Startup selection is independent of sidebar ordering. Launcher activity must not displace
+    /// the last actual game; a normal refresh keeps the user's existing selection.
+    public static func mostRecentlyPlayed(_ games: [InstalledGame], dates: [String: Date]? = nil) -> InstalledGame? {
+        let playable = games.filter { !isLauncher($0) }
+        let times = dates ?? startupHistory(playable, recorded: load().played,
+            legacy: Dictionary(playable.map { ($0.id, lastPlayed($0) ?? .distantPast) }, uniquingKeysWith: { a, _ in a }))
+        return playable.sorted { a, b in
+            let x = times[a.id] ?? .distantPast, y = times[b.id] ?? .distantPast
+            return x == y ? a.name.localizedStandardCompare(b.name) == .orderedAscending : x > y
+        }.first ?? games.first
+    }
+
+    static func startupHistory(_ playable: [InstalledGame], recorded: [String: Date], legacy: [String: Date]) -> [String: Date] {
+        let explicit = Dictionary(playable.compactMap { g in recorded[key(g)].map { (g.id, $0) } }, uniquingKeysWith: { a, _ in a })
+        // Health checks update older launch logs; actual Play records take precedence.
+        return explicit.isEmpty ? legacy : explicit
+    }
+
     /// Games in sidebar order.
     public static func sorted(_ games: [InstalledGame]) -> [InstalledGame] {
         let v = load()

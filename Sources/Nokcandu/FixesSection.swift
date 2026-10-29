@@ -61,14 +61,9 @@ struct FixesSection: View {
     func install(zips: [CinematicFix.Arch: URL] = [:]) {
         working = true; log = []
         let g = game, l = logger
-        Task {
-            do {
-                try await CinematicFix.install(for: g, localZips: zips, log: l)
-                model.say("Cinematic fix installed. Try the game again.")
-            } catch { model.fail(error) }
-            working = false
-            present = CinematicFix.isPresent(for: g)
-        }
+        model.changeSetting(for: g, title: "Video Playback Fix", success: "Cinematic fix installed.", edit: { current in
+            try await CinematicFix.install(for: current, localZips: zips, log: l)
+        }, completion: { _ in working = false; present = CinematicFix.isPresent(for: g) })
     }
 
     func installFromZip() {
@@ -87,11 +82,9 @@ struct FixesSection: View {
     func undo() {
         working = true; log = []
         let g = game, l = logger
-        Task {
-            do { try await CinematicFix.undo(for: g, log: l); model.say("Cinematic fix removed.") } catch { model.fail(error) }
-            working = false
-            present = CinematicFix.isPresent(for: g)
-        }
+        model.changeSetting(for: g, title: "Video Playback Fix", success: "Cinematic fix removed.", edit: { current in
+            try await CinematicFix.undo(for: current, log: l)
+        }, completion: { _ in working = false; present = CinematicFix.isPresent(for: g) })
     }
 }
 
@@ -155,13 +148,9 @@ private struct ComponentFixesView: View {
         working = fix; status = ""
         let undo = installed.contains(fix.id), g = game
         let logger: @Sendable (String) -> Void = { line in Task { @MainActor in status = line } }
-        Task {
-            do {
-                if undo { try CompatibilityFixes.undo(fix, for: g, log: logger) }
-                else { try await CompatibilityFixes.install(fix, for: g, log: logger) }
-                model.refresh(); model.say(undo ? "Removed \(fix.title)." : "Installed \(fix.title). Try the game again.")
-            } catch { model.fail(error) }
-            reload(); working = nil
-        }
+        model.changeSetting(for: g, title: fix.title, success: undo ? "Removed \(fix.title)." : "Installed \(fix.title).", edit: { current in
+            if undo { try CompatibilityFixes.undo(fix, for: current, log: logger) }
+            else { try await CompatibilityFixes.install(fix, for: current, log: logger) }
+        }, completion: { _ in reload(); working = nil })
     }
 }

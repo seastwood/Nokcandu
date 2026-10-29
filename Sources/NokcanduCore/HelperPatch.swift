@@ -77,6 +77,7 @@ public enum HelperPatch {
             if case .launcherRunning = GameLauncher.runState(of: g) { continue }
             do { try BF1942DisplayFix.refreshMenuCopies(g) } catch { continue }
             CompatibilityFixes.refreshBundledHelpers(g)
+            do { try EACompatibility.stage(g) } catch { continue }
             if let config = g.custom {
                 guard config.launcherSHA == Hashing.sha256(data: Data(text.utf8)), CustomGames.launcherScript(for: config) != text else { continue }
                 do { try CustomGames.save(config, to: g); changed.append(g.name) } catch { continue }

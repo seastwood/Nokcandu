@@ -13,7 +13,7 @@ final class WindowsProcessRoleTests: XCTestCase {
         try #"""
         #include "windows-process-role.h"
         int main(void) {
-            const char *background[] = {"EAGEP.exe", "C:\\Program Files\\EA\\eagep.EXE", "/wine/EALocalHostSvc.exe",
+            const char *background[] = {"nokcandu-ea-compat.exe", "EAGEP.exe", "C:\\Program Files\\EA\\eagep.EXE", "/wine/EALocalHostSvc.exe",
                 "EABackgroundService.exe", "services.exe", "steamservice.exe", "QtWebEngineProcess.exe", NULL};
             const char *foreground[] = {"EADesktop.exe", "BF1942.exe", "DOSBox.exe", "C:\\Games\\A Game\\game.exe",
                 "upc.exe", "myEAGEP.exe", "", NULL};

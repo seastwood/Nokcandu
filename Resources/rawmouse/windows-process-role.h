@@ -10,7 +10,7 @@ static bool nokcandu_background_program(const char *path) {
     const char *name = path;
     for (const char *p = path; *p; ++p) if (*p == '/' || *p == '\\') name = p + 1;
     static const char *names[] = {
-        "services.exe", "winedevice.exe", "plugplay.exe", "svchost.exe", "explorer.exe", "rpcss.exe",
+        "nokcandu-ea-compat.exe", "services.exe", "winedevice.exe", "plugplay.exe", "svchost.exe", "explorer.exe", "rpcss.exe",
         "conhost.exe", "start.exe", "wineboot.exe", "winemenubuilder.exe", "rundll32.exe", "tabtip.exe",
         "wineconsole.exe", "regedit.exe", "reg.exe", "msiexec.exe", "cmd.exe", "steamerrorreporter.exe",
         "steamservice.exe", "gldriverquery.exe", "gldriverquery64.exe", "vulkandriverquery.exe",

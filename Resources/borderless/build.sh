@@ -23,3 +23,5 @@ for arch in x86 x86_64; do
  "$ZIG" cc -target "$arch-windows-gnu" -Os -s launcher.c -o "$DEST/borderless-$arch.exe" -luser32 -Wl,--subsystem,windows
  "$ZIG" cc -target "$arch-windows-gnu" -Os -s -shared window.c -o "$DEST/borderless-$arch.dll" -luser32
  done
+
+"$ZIG" cc -target x86_64-windows-gnu -Os -s ea-compat.c -o "$DEST/nokcandu-ea-compat.exe" -ladvapi32 -municode

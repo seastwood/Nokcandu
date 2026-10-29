@@ -74,7 +74,7 @@ final class AppModel: ObservableObject {
         // and otherwise at most every 10 minutes (it hashes and rewrites files, so not on every refresh).
         let paths = Set(games.map(\.appURL.path))
         guard paths != maintainedPaths || Date().timeIntervalSince(lastMaintenance) > 600 else {
-            if selection == nil || !games.contains(where: { $0.id == selection }) { selection = games.first?.id }
+            if selection == nil || !games.contains(where: { $0.id == selection }) { selection = LibraryOrganizer.mostRecentlyPlayed(games)?.id }
             refreshRunStates()
             return
         }
@@ -91,8 +91,41 @@ final class AppModel: ObservableObject {
                 await MainActor.run { self.games = refreshed; self.refreshRunStates() }
             }
         }
-        if selection == nil || !games.contains(where: { $0.id == selection }) { selection = games.first?.id }
+        if selection == nil || !games.contains(where: { $0.id == selection }) { selection = LibraryOrganizer.mostRecentlyPlayed(games)?.id }
         refreshRunStates()
+    }
+
+    private var settingHosts = Set<String>()
+    /// One restart/confirmation flow for private games and shared Steam/Battle.net/EA environments.
+    func changeSetting(for game: InstalledGame, title: String, success: String = "Settings applied.",
+                       edit: @escaping (InstalledGame) async throws -> Void,
+                       completion: @escaping (Bool) -> Void = { _ in }) {
+        let contents = WineTools.hostContents(for: game)
+        let host = contents.flatMap { GameLibrary.inspect($0.deletingLastPathComponent()) }
+        let key = host?.id ?? game.id
+        guard settingHosts.insert(key).inserted else { fail(NokError("Another setting is still being applied in this Windows environment.")); completion(false); return }
+        Task {
+            var applied = false
+            defer { settingHosts.remove(key); completion(applied) }
+            let running = contents != nil ? await WineTools.environmentIsRunning(for: game) : false
+            if running {
+                let name = host?.name ?? game.name
+                let alert = NSAlert()
+                alert.messageText = "Restart \(name) to apply \(title.lowercased())?"
+                alert.informativeText = "Nokcandu will fully close all Windows programs in this environment, including its running games. Unsaved progress will be lost. It will apply the setting while everything is closed, then reopen \(name)."
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "Apply and Restart")
+                alert.addButton(withTitle: "Cancel")
+                guard alert.runModal() == .alertFirstButtonReturn else { return }
+                say("Closing \(name) and its Windows programs…")
+            }
+            do {
+                try await WineTools.applySettings(for: game, restart: running, edit: edit)
+                applied = true
+                refresh()
+                say(running ? "\(host?.name ?? game.name) restarted. \(success)" : success)
+            } catch { fail(error) }
+        }
     }
 
     func checkForUpdates(quiet: Bool = false) async {
