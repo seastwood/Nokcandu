@@ -635,7 +635,9 @@ public enum SharedSteam {
     /// program exists, look at it and pick the right mode (unless the player confirmed one).
     @discardableResult
     public static func refreshDetection(_ g: InstalledGame) -> Bool {
-        guard g.usesSharedSteam, var c = g.custom, c.detectedAPIs.isEmpty, c.confirmedGraphics == nil, let id = c.steamAppID,
+        // Only a game that was never inspected (is64Bit unknown): once a mode was picked from its program, or
+        // chosen by hand, Play must never change it again.
+        guard g.usesSharedSteam, var c = g.custom, c.is64Bit == nil, c.detectedAPIs.isEmpty, c.confirmedGraphics == nil, let id = c.steamAppID,
               let lib = installedGames().first(where: { $0.appID == id && $0.installed }), let folder = lib.folder,
               let exe = mainExecutable(in: folder, gameName: lib.name), let pe = PEFile.inspectWithLoadedDLLs(exe) else { return false }
         c.is64Bit = pe.is64Bit
