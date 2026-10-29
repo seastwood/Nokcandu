@@ -40,8 +40,11 @@ public enum Recommendations {
         /// Lower-cased DLLs the game ships in its own folder.
         public var shipped: Set<String>
         public var programImports: Set<String>
-        public init(program: String, is64Bit: Bool, importedBy: [String: String], shipped: Set<String>, programImports: Set<String>) {
+        /// Graphics evidence reached through the program and its imported local engine DLLs.
+        public var graphicsImports: Set<String>
+        public init(program: String, is64Bit: Bool, importedBy: [String: String], shipped: Set<String>, programImports: Set<String>, graphicsImports: Set<String>? = nil) {
             self.program = program; self.is64Bit = is64Bit; self.importedBy = importedBy; self.shipped = shipped; self.programImports = programImports
+            self.graphicsImports = graphicsImports ?? programImports
         }
     }
 
@@ -60,7 +63,8 @@ public enum Recommendations {
         }
         return Evidence(program: name, is64Bit: pe.is64Bit, importedBy: by,
                         shipped: Set(dlls.map { $0.lastPathComponent.lowercased() }),
-                        programImports: Set(pe.imports.map { $0.lowercased() }))
+                        programImports: Set(pe.imports.map { $0.lowercased() }),
+                        graphicsImports: Set((PEFile.inspectWithLoadedDLLs(exe) ?? pe).imports.map { $0.lowercased() }))
     }
 
     /// The rules, kept free of file access so they can be tested.
@@ -68,7 +72,7 @@ public enum Recommendations {
                                  installed: Set<CompatibilityFix>, usesDirectShow: Bool = false, cinematicPresent: Bool = false) -> [Recommendation] {
         var out: [Recommendation] = []
         func uses(_ dll: String) -> String? { e.importedBy[dll] }
-        let p = e.programImports
+        let p = e.graphicsImports
         let modernAPI = ["d3d10.dll", "d3d10_1.dll", "d3d11.dll", "d3d12.dll", "dxgi.dll"].contains { p.contains($0) }
         let dx9 = p.contains("d3d9.dll"), dx8 = p.contains("d3d8.dll"), ddraw = p.contains("ddraw.dll")
 
@@ -76,7 +80,7 @@ public enum Recommendations {
         // player hasn't marked the current one as playing well.
         var mode: GraphicsPreset?
         var why = ""
-        if let f = uses("d3d12.dll"), e.is64Bit, graphics != .appleMetal {
+        if p.contains("d3d12.dll"), let f = uses("d3d12.dll"), e.is64Bit, graphics != .appleMetal {
             mode = .appleMetal; why = "\(f) uses DirectX 12 (d3d12.dll), which only Apple Metal runs."
         } else if dx8, !modernAPI, !e.is64Bit, graphics != .classic3D {
             mode = .classic3D; why = "\(e.program) uses DirectX 8 (d3d8.dll)."
@@ -86,6 +90,11 @@ public enum Recommendations {
             mode = .classic2D; why = "\(e.program) draws with DirectDraw (ddraw.dll), from the late-'90s."
         } else if p.contains("d3d11.dll") || p.contains("dxgi.dll"), !dx9, [.classic3D, .classic2D].contains(graphics) {
             mode = .modern3D; why = "\(e.program) uses DirectX 11 (d3d11.dll); \(graphics.title) is for DirectX 9 and older."
+        } else if p.contains("opengl32.dll"),
+                  !p.contains(where: { $0.hasPrefix("d3d") || $0 == "dxgi.dll" || $0 == "ddraw.dll" }),
+                  graphics != .compatible {
+            mode = .compatible
+            why = "\(uses("opengl32.dll") ?? e.program) uses OpenGL (opengl32.dll). Compatibility keeps Wine's own graphics path, including video presentation."
         }
         if let m = mode, confirmedGraphics != graphics {
             out.append(Recommendation(action: .graphics(m), title: "Graphics: \(m.title)", reason: why))

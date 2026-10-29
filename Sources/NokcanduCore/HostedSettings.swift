@@ -15,7 +15,7 @@ public enum HostedSettings {
         if let data = try? Data(contentsOf: url(game.contents)), let saved = try? JSONDecoder().decode(Settings.self, from: data) { return saved }
         var defaults = Settings()
         if let link = game.hosted, let host = host(link), let exe = link.exe,
-           let file = BattleNet.unixPath(exe, prefix: host.prefix), let info = PEFile.inspect(file) { defaults.graphics = GraphicsPreset.suggest(for: info) }
+           let file = BattleNet.unixPath(exe, prefix: host.prefix), let info = PEFile.inspectWithLoadedDLLs(file) { defaults.graphics = GraphicsPreset.suggest(for: info) }
         return defaults
     }
     static func host(_ link: HostedGameLink) -> InstalledGame? { GameLibrary.inspect(URL(fileURLWithPath: link.hostApp)) }
@@ -146,7 +146,7 @@ public enum HostedSettings {
     }
     static func initialize(_ link: HostedGameLink, contents: URL, host: InstalledGame) throws {
         var settings = Settings()
-        let info = link.exe.flatMap { BattleNet.unixPath($0, prefix: host.prefix) }.flatMap(PEFile.inspect)
+        let info = link.exe.flatMap { BattleNet.unixPath($0, prefix: host.prefix) }.flatMap(PEFile.inspectWithLoadedDLLs)
         settings.graphics = GraphicsPreset.suggest(for: info)
         let script = script(link, settings: settings)
         settings.launcherSHA = Hashing.sha256(data: Data(script.utf8))

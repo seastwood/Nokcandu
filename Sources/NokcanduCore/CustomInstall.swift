@@ -447,7 +447,7 @@ public enum CustomInstall {
             } else if let exe = ctx.input("exe"), let rel = CustomGames.driveCRelative(windowsPath: exe) {
                 probe = ctx.prefix.appendingPathComponent("drive_c/\(rel)")
             }
-            let pe = probe.flatMap(PEFile.inspect)
+            let pe = probe.flatMap(PEFile.inspectWithLoadedDLLs)
             let preset: GraphicsPreset = ctx.input("launcherKind") == PCLauncher.ubisoft.rawValue ? .dxmt : GraphicsPreset.suggest(for: pe)
             ctx.state.inputs["graphics"] = preset.rawValue
             if let pe {

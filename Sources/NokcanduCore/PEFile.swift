@@ -67,15 +67,46 @@ public enum PEFile {
         return PEInfo(is64Bit: p.is64, imports: imports)
     }
 
-    /// Like `inspect`, but also counts graphics libraries the program loads by name at run time (many games
-    /// call LoadLibrary("d3d11.dll") instead of importing it, which left them looking like DirectX 9 games).
+    private static let graphicsDLLs: Set<String> = ["d3d8.dll", "d3d9.dll", "d3d10.dll", "d3d10_1.dll", "d3d11.dll", "d3d12.dll", "dxgi.dll", "ddraw.dll", "opengl32.dll"]
+
+    /// Include runtime graphics names and imported engine DLLs beside the executable.
+    /// Many games put OpenGL/DirectX imports in their engine rather than their main program.
+    /// Direct evidence in the executable retains precedence. Never search Windows/PATH or
+    /// unrelated DLLs; cap the dependency walk and keep it inside the game's real directory.
     public static func inspectWithLoadedDLLs(_ url: URL) -> PEInfo? {
         guard var info = inspect(url) else { return nil }
-        let have = Set(info.imports.map { $0.lowercased() })
-        if have.contains(where: { ["d3d8.dll", "d3d9.dll", "d3d10.dll", "d3d10_1.dll", "d3d11.dll", "d3d12.dll", "dxgi.dll", "ddraw.dll", "opengl32.dll"].contains($0) }) {
-            return info
+        func graphics(_ names: [String]) -> [String] {
+            names.filter { graphicsDLLs.contains($0.lowercased()) }
         }
-        info.imports += loadedGraphicsDLLs(url).filter { !have.contains($0) }
+        if !graphics(info.imports).isEmpty { return info }
+        let loaded = loadedGraphicsDLLs(url)
+        if !loaded.isEmpty { info.imports += loaded; return info }
+
+        let root = url.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL
+        let files = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey])) ?? []
+        var local: [String:URL] = [:], ambiguous = Set<String>()
+        for file in files where file.pathExtension.lowercased() == "dll" {
+            let key = file.lastPathComponent.lowercased()
+            // A case-sensitive directory can contain ambiguous Windows names. Do not guess.
+            if local[key] != nil { ambiguous.insert(key); continue }
+            local[key] = file
+        }
+        var pending = info.imports.filter { local[$0.lowercased()] != nil }, visited = Set<String>(), found = Set<String>()
+        var index = 0, bytesRemaining = 256 * 1024 * 1024
+        while index < pending.count && visited.count < 64 {
+            let name = pending[index].lowercased(); index += 1
+            guard visited.insert(name).inserted, !ambiguous.contains(name), let file = local[name] else { continue }
+            let resolved = file.resolvingSymlinksInPath().standardizedFileURL
+            guard resolved.deletingLastPathComponent() == root,
+                  let values = try? resolved.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]),
+                  values.isRegularFile == true, let size = values.fileSize, size <= min(64 * 1024 * 1024, bytesRemaining),
+                  let dependency = inspect(resolved), dependency.is64Bit == info.is64Bit else { continue }
+            bytesRemaining -= size
+            let direct = graphics(dependency.imports)
+            found.formUnion((direct.isEmpty ? loadedGraphicsDLLs(resolved) : direct).map { $0.lowercased() })
+            pending += dependency.imports.filter { local[$0.lowercased()] != nil }
+        }
+        info.imports += found.sorted()
         return info
     }
 

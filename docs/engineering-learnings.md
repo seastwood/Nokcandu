@@ -26,6 +26,10 @@ Chrono Trigger's logo-then-black-screen failure was resolved in a controlled lau
 
 Apply and Restart now relaunches the selected game's standard launcher after a successful edit, so it starts both its host and the game. An edit failure recovers only the host. The full suite passed 182 tests with six optional skips; the signed build passed. The installed normal restart API check also passed; visual inspection of that relaunch stalled. See the [dated evidence and limits](investigations/chrono-trigger-media-2026-10-29.md).
 
+### Follow-up: choose graphics from the engine, not just the main executable
+
+Chrono Trigger's normal launch needed Compatibility as well as the media path fix. Its default Older 3D games mode failed to create the movie presentation surface; the direct diagnostic had not selected that renderer. The user confirmed the corrected normal Steam launch works. The OpenGL import resides in `libcocos2d.dll`, which the main executable imports. Shared detection now follows bounded, same-directory imported engine dependencies; install defaults and Recommended Settings use that evidence, while preserving saved choices and confirmed working modes. Unrelated DLLs, outside-directory symlinks and wrong-architecture dependencies cannot choose the mode. See the [follow-up evidence](investigations/chrono-trigger-media-2026-10-29.md#follow-up-normal-launch-black-screen-and-engine-detection).
+
 ## Launcher-specific findings
 
 ### Ubisoft Connect — sign-in rendering verified
