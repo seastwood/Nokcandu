@@ -13,8 +13,8 @@ with tested settings, one-click fixes and safe updates. Think of it as a free al
 1. Download `Nokcandu-<version>.dmg` from [Releases](https://github.com/seastwood/Nokcandu/releases/latest), open it and drag **Nokcandu** into **Applications**.
 2. Open Nokcandu. It isn't signed with a paid Apple Developer certificate yet, so the first time macOS says it can't verify the app:
    click **Done**, open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**. You only do this once.
-3. The setup checklist installs **Rosetta 2** (Apple's Intel translator, which Wine needs) and downloads the tested Wine engine (about 260 MB).
-4. Click **Install a Game…** or **Set Up Steam**.
+3. The setup checklist installs **Rosetta 2** (Apple's Intel translator, which Wine needs) and downloads the tested Wine engine (about 260 MB). (Note: ARM support is being fully considered in the design of Nokcandu, and will be worked into it as ARM Wine support matures.)
+5. Click **Install a Game…** or **Set Up Steam**.
 
 **Requirements:** Mac with Apple silicon (M1 or later) · macOS 14 Sonoma or newer · space for your games (external SSDs work).
 
