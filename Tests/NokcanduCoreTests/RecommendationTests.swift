@@ -55,3 +55,21 @@ final class RecommendationTests: XCTestCase {
         XCTAssertEqual(StoreJobs.key(.epic, "Jaguar"), "epic-Jaguar")
     }
 }
+
+final class ProblemReportTests: XCTestCase {
+    func testRedaction() {
+        let raw = """
+        App: /Users/jdoe/Applications/Sikarugir/Game.app
+        Owner John Doe on John's MacBook, contact john.doe@example.com
+        steamid 76561198012345678
+        C:\\users\\jdoe\\AppData and drive_c/users/jdoe/Documents, drive_c/users/Public
+        """
+        let r = ProblemReport.redact(raw, home: "/Users/jdoe", user: "jdoe", fullName: "John Doe", host: "John's MacBook")
+        XCTAssertFalse(r.contains("jdoe")); XCTAssertFalse(r.contains("John")); XCTAssertFalse(r.contains("example.com"))
+        XCTAssertTrue(r.contains("~/Applications/Sikarugir/Game.app"))
+        XCTAssertTrue(r.contains("<steam id>"))
+        XCTAssertTrue(r.contains("drive_c/users/Public"))
+        let link = ProblemReport.issueLink(title: "T", body: String(repeating: "x", count: 9000))
+        XCTAssertLessThan(link.absoluteString.count, 7000)
+    }
+}

@@ -26,6 +26,9 @@ struct NokcanduApp: App {
                 Button("Updates…") { model.showUpdates = true }.keyboardShortcut("u", modifiers: [.command, .shift])
                 Button("Setup Checklist…") { model.showWelcome = true }
             }
+            CommandGroup(after: .help) {
+                Button("Report a Problem…") { model.showReport = true }
+            }
         }
         Settings {
             SettingsView().environmentObject(model)
@@ -166,6 +169,7 @@ struct LibraryView: View {
         } message: { g in
             Text(g.native != nil ? "Unsaved progress may be lost." : GameLauncher.quitScope(g))
         }
+        .sheet(isPresented: $model.showReport) { ReportProblemView(game: model.selectedGame).environmentObject(model) }
         .sheet(isPresented: $model.showWelcome) {
             WelcomeView().environmentObject(model)
         }

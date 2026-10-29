@@ -168,6 +168,11 @@ public enum GameRemoval {
                 break // Keep the app and records if the game files could not be trashed.
             }
         }
+        // The app's restore points go with it (to the Trash, so they can still be recovered).
+        let points = RestorePoints.root(for: game.appURL)
+        if failures.isEmpty, !FileManager.default.fileExists(atPath: game.appURL.path), FileManager.default.fileExists(atPath: points.path) {
+            try? trash(points)
+        }
         return failures
     }
 

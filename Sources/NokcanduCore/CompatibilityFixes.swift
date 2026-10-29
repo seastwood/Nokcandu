@@ -3,7 +3,7 @@ import Foundation
 /// Optional, app-owned components. Community profiles can reference these IDs, never supply code,
 /// downloads or patch bytes. DLLs are private to the selected executable's folder; Wine's system DLLs
 /// and registry are untouched. File undo uses the same conflict-aware journal as other Nokcandu edits.
-public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable {
+public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable, Sendable {
     case shaderCompiler47 = "shader-compiler-47"
     case directx9Extras = "directx9-extras", d3d8to9, borderless, cursorVisibility = "cursor-visibility", openUA = "openua-display", bundledVC = "bundled-vc-runtime", crossProcessWindows = "cross-process-windows"
     public var id: String { rawValue }
@@ -212,6 +212,7 @@ public enum CompatibilityFixes {
         return c
     }
     public static func install(_ fix: CompatibilityFix, for game: InstalledGame, log: @escaping @Sendable (String) -> Void) async throws {
+        RestorePoints.before(game, "Before \(fix.title)", log: log)
         let g = fresh(game)
         try begin(g); defer { end(g) }
         try await installReserved(fix, for: g, log: log)

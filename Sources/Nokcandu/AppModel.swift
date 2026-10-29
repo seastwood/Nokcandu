@@ -41,6 +41,7 @@ final class AppModel: ObservableObject {
     @Published var interruptedDownloads: [StoreJob] = []
     struct StoreDownload: Equatable { var line: String; var progress: StoreTools.Progress? }
     @Published var showUpdates = false
+    @Published var showReport = false
     @Published var showStorage = false
     @Published var showProfiles = false
     @Published var profileFocus: Int?

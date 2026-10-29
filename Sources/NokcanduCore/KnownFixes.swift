@@ -174,6 +174,7 @@ public enum KnownFixes {
     /// Adds the launch options, environment and DLL overrides to the game's settings, then installs any
     /// Windows components with winetricks.
     public static func apply(_ fix: KnownFix, to g: InstalledGame, log: @escaping @Sendable (String) -> Void) async throws {
+        RestorePoints.before(g, "Before Proton community fixes", log: log)
         guard var c = g.custom else { throw NokError("Only games set up by Nokcandu can take fixes.") }
         var changed = false
         let existing = CustomGames.splitArguments(c.arguments)

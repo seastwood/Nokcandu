@@ -131,6 +131,11 @@ struct UpdatesView: View {
         } label: { Label("Wine engine & graphics", systemImage: "cpu").font(.headline) }
     }
 
+    func hold(_ g: InstalledGame, _ on: Bool) {
+        do { try EngineUpdate.setHeld(g, on); tick += 1; model.say(on ? "\(g.name) will stay on its current engine." : "\(g.name) can try new engines again.") }
+        catch { model.fail(error) }
+    }
+
     @ViewBuilder
     func hostRow(_ g: InstalledGame, newest: EngineVersion) -> some View {
         let cur = EngineUpdate.current(g)
@@ -145,7 +150,10 @@ struct UpdatesView: View {
             }
             Spacer()
             if busy == g.id { ProgressView().controlSize(.small) }
-            else if st?.status == .trying {
+            else if EngineUpdate.isHeld(g) {
+                Label("Staying on this engine", systemImage: "pin.fill").font(.caption).foregroundStyle(.secondary)
+                Button("Allow Updates") { hold(g, false) }.disabled(busy != nil)
+            } else if st?.status == .trying {
                 Button("Keep") { keep(g) }.disabled(busy != nil)
                 Button("Roll Back") { rollBack(g) }.disabled(busy != nil || running)
             } else if let c = cur, c < newest, failedTest {
@@ -153,6 +161,8 @@ struct UpdatesView: View {
             } else if let c = cur, c < newest {
                 Button("Try \(newest.description)") { tryEngine(g) }.disabled(busy != nil || running)
                     .help(running ? "Quit it first." : "Switches this app to the newest engine; you can roll back.")
+                Button { hold(g, true) } label: { Image(systemName: "pin") }.buttonStyle(.borderless)
+                    .help("Keep \(g.name) on its current engine (for a game that plays well as it is).")
             } else if cur != nil {
                 Text("Up to date").font(.caption).foregroundStyle(.secondary)
             }

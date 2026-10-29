@@ -33,7 +33,7 @@ public enum GameSource: String, Codable, CaseIterable, Identifiable {
 }
 
 /// Graphics modes offered for general games. Plain names first; the technical parts live in `technical`.
-public enum GraphicsPreset: String, Codable, CaseIterable, Identifiable {
+public enum GraphicsPreset: String, Codable, CaseIterable, Identifiable, Sendable {
     case classic3D = "dx9"
     case modern3D = "dx11"
     case appleMetal = "d3dmetal"

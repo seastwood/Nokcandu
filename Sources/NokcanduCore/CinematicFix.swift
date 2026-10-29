@@ -82,6 +82,7 @@ public enum CinematicFix {
     // MARK: Install / undo
 
     public static func install(for g: InstalledGame, localZips: [Arch: URL] = [:], release: Release = .pinned, log: @escaping @Sendable (String) -> Void) async throws {
+        RestorePoints.before(g, "Before the cinematic fix", log: log)
         guard let h = host(g) else { throw NokError("This game has no Windows environment.") }
         if case .launcherRunning = GameLauncher.runState(of: g) { throw NokError("Quit the game first.") }
         if g.usesSharedSteam && SharedSteam.isRunning { throw NokError("Quit Steam first (Steam menu → Exit).") }

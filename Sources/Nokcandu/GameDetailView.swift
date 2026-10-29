@@ -9,6 +9,7 @@ struct GameDetailView: View {
     @State private var checking = false
     @State private var checkResult: ShellResult?
     @State private var showDiagnostics = false
+    @State private var showReport = false
     @State private var showSettingsBackups = false
     @State private var confirmReset = false
     @State private var busy = false
@@ -105,6 +106,7 @@ struct GameDetailView: View {
                 checkSection
                 if !WineTools.places(for: game).isEmpty { FilesToolsSection(game: game) }
                 if WineTools.hostContents(for: game) != nil, game.hosted == nil { FixesSection(game: game).id("\(game.id)-\(fixVersion)") }
+                if RestorePoints.hostApp(for: game) != nil { RestorePointsSection(game: game).id("restore-\(game.id)-\(fixVersion)-\(model.games.count)") }
                 if game.custom != nil || game.battleNet != nil || game.hosted?.exe != nil { ProfilesSection(game: game).id("profiles-\(game.id)") }
                 if game.isManaged { NotesSection(game: game).id(game.id) }
                 aboutSection
@@ -117,6 +119,7 @@ struct GameDetailView: View {
         .onAppear { reloadDisplay(); cinematicDiagnosis = CinematicFix.diagnoseLastRun(game); graphicsHint = CrashHints.diagnose(game) }
         .onChange(of: running) { if !running { cinematicDiagnosis = CinematicFix.diagnoseLastRun(game); graphicsHint = CrashHints.diagnose(game) } }
         .sheet(isPresented: $showDiagnostics) { DiagnosticsView(game: game) }
+        .sheet(isPresented: $showReport) { ReportProblemView(game: game) }
         .sheet(isPresented: $showSettingsBackups) { SettingsBackupsView(game: game).environmentObject(model) }
         .confirmationDialog("Repair \(game.name)?", isPresented: $confirmRepair) {
             Button("Repair") { runRepair() }
@@ -221,6 +224,7 @@ struct GameDetailView: View {
                     .disabled(checking || running)
                     Button("Settings Backups…") { showSettingsBackups = true }
                     Button { showDiagnostics = true } label: { Label("Diagnostics…", systemImage: "list.bullet.clipboard") }
+                    Button { showReport = true } label: { Label("Report a Problem…", systemImage: "exclamationmark.bubble") }
                     Button { confirmRepair = true } label: { Label("Repair…", systemImage: "wrench.and.screwdriver") }
                         .disabled(running || repairing || !game.isManaged)
                     if checking || repairing { ProgressView().controlSize(.small) }
