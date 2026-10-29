@@ -109,3 +109,17 @@ final class BottleTests: XCTestCase {
         XCTAssertNil(f("setup.exe"))
     }
 }
+
+final class SteamRunningTests: XCTestCase {
+    func testMatchRunningGames() {
+        let ps = """
+          89693 D:\\SteamLibrary\\steamapps\\common\\Chrono Trigger\\Chrono Trigger.exe
+          64698 C:\\Program Files (x86)\\Steam\\steam.exe -no-cef-sandbox
+          70001 C:\\Program Files (x86)\\Steam\\steamapps\\common\\Counter-Strike Global Offensive\\game\\bin\\win64\\cs2.exe -steam
+        """
+        let m = SharedSteam.matchRunning(ps, folders: ["chrono trigger": 613830, "counter-strike global offensive": 730])
+        XCTAssertEqual(m[613830], 89693)
+        XCTAssertEqual(m[730], 70001)
+        XCTAssertEqual(m.count, 2)
+    }
+}

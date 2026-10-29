@@ -58,7 +58,7 @@ public enum SharedSteam {
         return HelperPatch.scopeWineLibrary("""
         #!/bin/bash
         # Nokcandu shared Steam helper. Usage:
-        #   nokcandu-steam [--mode <graphics>] [--applaunch <AppID>] [--url steam://…] [--restart-steam] [--check] [--shutdown]
+        #   nokcandu-steam [--mode <graphics>] [--applaunch <AppID>] [--url steam://…] [--restart-steam] [--no-restart] [--status] [--check] [--shutdown]
         set -euo pipefail
         CONTENTS="$(cd "$(dirname "$0")/.." && pwd)"
         SUPPORT="$CONTENTS/SharedSupport"
@@ -83,7 +83,7 @@ public enum SharedSteam {
         STATE="$SUPPORT/nokcandu"
         LOG_DIR="$SUPPORT/Logs"
         MODE="$(cat "$STATE/default-mode" 2>/dev/null || echo dx9)"
-        APP=""; URL=""; CHECK=0; RESTART=0; SHUTDOWN=0; EXTRA=()
+        APP=""; URL=""; CHECK=0; RESTART=0; SHUTDOWN=0; STATUS=0; NORESTART=0; EXTRA=()
         while [ $# -gt 0 ]; do
          case "$1" in
           --mode) MODE="${2:-dx9}"; shift 2 ;;
@@ -91,6 +91,8 @@ public enum SharedSteam {
           --url) URL="${2:-}"; shift 2 ;;
           --check) CHECK=1; shift ;;
           --restart-steam) RESTART=1; shift ;;
+          --no-restart) NORESTART=1; shift ;;
+          --status) STATUS=1; shift ;;
           --shutdown) SHUTDOWN=1; shift ;;
           --) shift; EXTRA=("$@"); break ;;
           *) shift ;;
@@ -158,10 +160,26 @@ public enum SharedSteam {
          { echo "$MODE"; cat "$STATE/perf.env" "$STATE/raw-mouse-debug" 2>/dev/null || true; if [ -f "$STATE/steam-gpu" ]; then echo gpu; fi
            /sbin/md5 -q "$STATE/nokcandu-rawmouse.dylib" 2>/dev/null || true; } | /sbin/md5 -q
         }
+        # --status: what starting this game would do (Nokcandu asks about restarting in its own window).
+        if [ "$STATUS" = 1 ]; then
+         if ! running; then echo stopped
+         else
+          CURRENT="$(cat "$STATE/running-mode" 2>/dev/null || true)"
+          if [ "$CURRENT" != "$MODE" ]; then echo "mode $CURRENT"
+          elif [ "$(cat "$STATE/running-config" 2>/dev/null || true)" != "$(config_id)" ]; then echo changed
+          else echo same; fi
+         fi
+         exit 0
+        fi
         if running; then
          CURRENT="$(cat "$STATE/running-mode" 2>/dev/null || true)"
          if [ -n "$APP" ] && [ "$CURRENT" = "$MODE" ] && [ "$(cat "$STATE/running-config" 2>/dev/null || true)" != "$(config_id)" ]; then
           CURRENT="changed"
+         fi
+         # Nokcandu already asked and the answer was to keep Steam as it is.
+         if [ "$NORESTART" = 1 ]; then
+          "$WINE" "$STEAM_EXE" ${PASS[@]+"${PASS[@]}"} >/dev/null 2>&1 &
+          exit 0
          fi
          # Opening Steam itself while it runs for a game: you're using Steam now, so it stays open.
          [ -z "$APP" ] && [ -z "$URL" ] && rm -f "$STATE/started-for-game"
@@ -216,6 +234,21 @@ public enum SharedSteam {
         fi
 
         """)
+    }
+
+    /// What starting this Steam game would do to the running Steam: nil = nothing to ask; otherwise why
+    /// Steam would need a restart (asked in Nokcandu's own window, not a dialog from a background script).
+    public static func restartReason(for g: InstalledGame) -> String? {
+        let helper = contents.appendingPathComponent("Resources/\(helperName)")
+        // An older helper (Steam was running when Nokcandu updated) doesn't know --status and would start the game.
+        guard g.usesSharedSteam, let mode = g.custom?.graphics.rawValue,
+              (try? String(contentsOf: helper, encoding: .utf8))?.contains("--status)") == true,
+              let r = try? Shell.run("/bin/bash", [helper.path, "--status", "--mode", mode], timeout: 20),
+              r.ok else { return nil }
+        let out = r.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if out == "changed" { return "Steam is running with settings from before your last change in Nokcandu (graphics, performance or mouse, or a Nokcandu update)." }
+        if out.hasPrefix("mode ") { return "Steam is running with a different graphics mode than \(g.name) uses." }
+        return nil
     }
 
     /// Steam.app's own launcher: opens Steam (its default graphics mode).
@@ -568,6 +601,48 @@ public enum SharedSteam {
     }
 
     public static func shutdown() async { _ = try? await Shell.runAsync("/bin/bash", [helper.path, "--shutdown"], timeout: 180) }
+
+    /// Steam games running right now (app id → process id), found from Windows processes started from a
+    /// steamapps\common\<folder> (the game's launcher app exits as soon as it hands off to Steam).
+    public static func runningGames() -> [Int: Int32] {
+        guard let r = try? Shell.run("/bin/ps", ["-axo", "pid=,command="], timeout: 5), r.ok else { return [:] }
+        return matchRunning(r.stdout, folders: installFolders())
+    }
+
+    static func matchRunning(_ ps: String, folders: [String: Int]) -> [Int: Int32] {
+        var out: [Int: Int32] = [:]
+        for line in ps.split(separator: "\n") {
+            guard let r = line.range(of: #"steamapps[\\/]common[\\/]"#, options: [.regularExpression, .caseInsensitive]) else { continue }
+            let rest = line[r.upperBound...]
+            let folder = rest.prefix { $0 != "\\" && $0 != "/" }.lowercased()
+            guard let id = folders[folder], out[id] == nil,
+                  let pid = Int32(line.trimmingCharacters(in: .whitespaces).split(separator: " ").first ?? "") else { continue }
+            out[id] = pid
+        }
+        return out
+    }
+
+    private static let folderCache = Locked<(Date, [String: Int])>((.distantPast, [:]))
+    static func installFolders() -> [String: Int] {
+        if Date().timeIntervalSince(folderCache.value.0) < 60 { return folderCache.value.1 }
+        var m: [String: Int] = [:]
+        for g in installedGames() { if let d = g.installDir, !d.isEmpty { m[d.lowercased()] = g.appID } }
+        folderCache.value = (Date(), m)
+        return m
+    }
+
+    /// A Steam game added before Steam finished downloading it got a guessed graphics mode. Once its
+    /// program exists, look at it and pick the right mode (unless the player confirmed one).
+    @discardableResult
+    public static func refreshDetection(_ g: InstalledGame) -> Bool {
+        guard g.usesSharedSteam, var c = g.custom, c.is64Bit == nil, c.detectedAPIs.isEmpty, let id = c.steamAppID,
+              let lib = installedGames().first(where: { $0.appID == id && $0.installed }), let folder = lib.folder,
+              let exe = mainExecutable(in: folder, gameName: lib.name), let pe = PEFile.inspect(exe) else { return false }
+        c.is64Bit = pe.is64Bit
+        c.detectedAPIs = pe.imports.map { $0.lowercased() }.filter { $0.hasPrefix("d3d") || $0 == "dxgi.dll" || $0 == "ddraw.dll" || $0 == "opengl32.dll" }
+        if c.confirmedGraphics == nil { c.graphics = GraphicsPreset.suggest(for: pe) }
+        return (try? CustomGames.saveAll(c, to: g)) != nil
+    }
 
     /// Existing Nokcandu app for a Steam game, if any.
     public static func addedApp(appID: Int, in games: [InstalledGame]) -> InstalledGame? {

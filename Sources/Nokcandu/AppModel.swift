@@ -181,11 +181,14 @@ final class AppModel: ObservableObject {
     func refreshRunStates() {
         HotCorners.recoverIfStale()        // a game that switched hot corners off may have crashed
         var s: [InstalledGame.ID: RunState] = [:]
+        let steamRunning = games.contains(where: \.usesSharedSteam) ? SharedSteam.runningGames() : [:]
         for g in games {
             if g.native != nil {
                 // Mac games: running if macOS lists the app as running.
                 let running = NSWorkspace.shared.runningApplications.first { $0.bundleURL?.standardizedFileURL == g.appURL.standardizedFileURL }
                 s[g.id] = running.map { .launcherRunning(pid: $0.processIdentifier) } ?? .notRunning
+            } else if g.usesSharedSteam {
+                s[g.id] = steamRunning[g.custom?.steamAppID ?? -1].map { .launcherRunning(pid: $0) } ?? .notRunning
             } else {
                 s[g.id] = GameLauncher.runState(of: g)
             }
@@ -227,6 +230,27 @@ final class AppModel: ObservableObject {
 
     func play(_ g: InstalledGame) {
         if let m = GameMover.missingDrive(g) { fail(NokError(m)); return }
+        // Steam games: if the running Steam has other settings, ask here (a dialog from the background
+        // helper could open behind other windows, so it looked like nothing happened).
+        if g.usesSharedSteam, let why = SharedSteam.restartReason(for: g) {
+            let alert = NSAlert()
+            alert.messageText = "Restart Steam to play \(g.name)?"
+            let gameRunning = (try? Shell.run("/bin/ps", ["-axo", "command="], timeout: 5))?.stdout.range(of: #"steamapps[\\/]common"#, options: [.regularExpression, .caseInsensitive]) != nil
+            alert.informativeText = why + " Restarting applies them." + (gameRunning ? " The Steam game that's running now will close." : "")
+            alert.addButton(withTitle: "Restart Steam")
+            alert.addButton(withTitle: "Play Without Restarting")
+            alert.addButton(withTitle: "Cancel")
+            switch alert.runModal() {
+            case .alertFirstButtonReturn: launch(g, extra: ["--restart-steam"])
+            case .alertSecondButtonReturn: launch(g, extra: ["--no-restart"])
+            default: break
+            }
+            return
+        }
+        launch(g, extra: [])
+    }
+
+    private func launch(_ g: InstalledGame, extra: [String]) {
         say("Starting \(g.name)…")
         Task {
             let r = await Task.detached(priority: .userInitiated) { () -> Result<Void, Error> in
@@ -235,6 +259,8 @@ final class AppModel: ObservableObject {
                 if StuckGames.end(stuck) > 0 {
                     await MainActor.run { self.say("\(g.name) was still running from before without a window — closed it and starting fresh.") }
                 }
+                // A Steam game added before its download finished: pick its graphics mode now.
+                if SharedSteam.refreshDetection(g) { await MainActor.run { self.refresh() } }
                 if DisplayController.supports(g) { DisplayController.prepareForLaunch(g) }
                 LibraryOrganizer.notePlayed(g)
                 GameDataSpec.forGame(g)?.snapshot()     // keep a copy of settings that live outside the app
@@ -244,7 +270,7 @@ final class AppModel: ObservableObject {
                     do { args = try await StoreAccounts.launchArguments(link) }
                     catch { await MainActor.run { self.say("Starting without Epic sign-in — \(error.localizedDescription). Online features may not work.") } }
                 }
-                let launchArgs = args
+                let launchArgs = args + extra
                 // Epic cloud saves: get a newer save from the cloud before the game reads it.
                 if CloudSaves.supported(g) != nil {
                     await MainActor.run { self.say("Checking \(g.name)'s cloud saves…") }
