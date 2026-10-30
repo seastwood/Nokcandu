@@ -1,0 +1,41 @@
+name: Wine Mac driver
+# Builds Nokcandu's Wine Mac driver (resizable game windows) from Wine 10.0's source and Engine/winemac/patches,
+# only when those change (or by hand), and keeps the result for releases. A build takes 20-30 minutes; releases
+# reuse the kept one (same key), so they stay fast.
+on:
+  push:
+    branches: [main]
+    paths: ['Engine/winemac/**', '.github/workflows/winemac.yml']
+  workflow_dispatch:
+jobs:
+  driver:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Kept driver for these patches
+        id: kept
+        uses: actions/cache@v4
+        with:
+          path: build/winemac
+          key: winemac-${{ hashFiles('Engine/winemac/**') }}
+      - name: Wine source and tools (downloads, checksummed)
+        if: steps.kept.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: build/winemac-work/*.tar.xz
+          key: winemac-downloads-${{ hashFiles('Engine/winemac/checksums/*') }}
+      - name: Build the driver
+        if: steps.kept.outputs.cache-hit != 'true'
+        run: |
+          /usr/sbin/softwareupdate --install-rosetta --agree-to-license >/dev/null 2>&1 || true
+          Engine/winemac/build.sh
+      - name: Check it
+        run: |
+          cat build/winemac/SHA256SUMS
+          strings build/winemac/x86_64-unix/winemac.so | grep -q nokcandu-virtual-display
+          strings build/winemac/x86_64-unix/winemac.so | grep -q macdrv_vulkan_surface_create
+      - uses: actions/upload-artifact@v4
+        with:
+          name: winemac
+          path: build/winemac
