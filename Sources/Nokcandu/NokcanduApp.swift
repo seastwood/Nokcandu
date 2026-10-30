@@ -107,6 +107,7 @@ struct LibraryView: View {
                 if !model.isRunning(g) || g.isSteamHost { model.play(g) }
             }
             .navigationSplitViewColumnWidth(min: 220, ideal: 250)
+            .modifier(SoftTopEdge())
             .toolbar {
                 if #available(macOS 26.0, *) { ToolbarSpacer(.flexible) }
                 ToolbarItem(placement: .automatic) {
@@ -366,5 +367,13 @@ struct RenameGameSheet: View {
         }
         .padding(20).frame(width: 460)
         .onAppear { name = game.name; subtitle = LibraryOrganizer.subtitle(game) ?? "" }
+    }
+}
+
+
+/// The sidebar's top edge while scrolled: a soft fade under the title bar rather than a hard line across it.
+struct SoftTopEdge: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) { content.scrollEdgeEffectStyle(.soft, for: .top) } else { content }
     }
 }

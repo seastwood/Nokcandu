@@ -112,7 +112,7 @@ final class AppModel: ObservableObject {
             if StoreAccounts.refreshIcons(snapshot) { await MainActor.run { self.games = GameLibrary.scan() } }
             HotCorners.recoverIfStale()
             let migratedLaunchers = HelperPatch.refresh(snapshot)
-            RawMouse.refreshLibraries(snapshot); Performance.refreshEnvFiles(snapshot); BattleNet.refreshLaunchers(snapshot); PCLaunchers.refreshLaunchers(snapshot); BattleNet.refreshSteamLaunchers(snapshot); AudioBuffer.fixMicrophones(snapshot)
+            RawMouse.refreshLibraries(snapshot); Performance.refreshEnvFiles(snapshot); BattleNet.refreshLaunchers(snapshot); PCLaunchers.refreshLaunchers(snapshot); BattleNet.refreshSteamLaunchers(snapshot); AudioBuffer.fixMicrophones(snapshot); WindowedPresentation.refresh(snapshot)
             if !migratedLaunchers.isEmpty {
                 // Migration updates saved launcher hashes; replace the old in-memory configs too.
                 let refreshed = GameLibrary.scan()
@@ -231,6 +231,34 @@ final class AppModel: ObservableObject {
 
     func play(_ g: InstalledGame) {
         if let m = GameMover.missingDrive(g) { fail(NokError(m)); return }
+        // Resizable window: each game has its own choice; a launcher running with another one restarts.
+        Task {
+            if let why = await WindowedPresentation.restartReason(for: g) {
+                let alert = NSAlert()
+                let host = WineTools.hostContents(for: g).flatMap { GameLibrary.inspect($0.deletingLastPathComponent()) }
+                alert.messageText = "Restart \(host?.name ?? "the launcher") to play \(g.name)?"
+                alert.informativeText = why + " Restarting closes everything running in it (unsaved progress in other games is lost) and starts \(g.name) with its setting."
+                alert.addButton(withTitle: "Restart and Play")
+                alert.addButton(withTitle: "Play Without Restarting")
+                alert.addButton(withTitle: "Cancel")
+                switch alert.runModal() {
+                case .alertFirstButtonReturn:
+                    say("Restarting \(host?.name ?? "the launcher") for \(g.name)…")
+                    do {
+                        try await WineTools.stopAll(for: g)
+                        try await WindowedPresentation.prepareForLaunch(g)
+                    } catch { fail(error); return }
+                    launch(g, extra: [])
+                case .alertSecondButtonReturn: playChecked(g)
+                default: break
+                }
+                return
+            }
+            playChecked(g)
+        }
+    }
+
+    private func playChecked(_ g: InstalledGame) {
         // Steam games: if the running Steam has other settings, ask here (a dialog from the background
         // helper could open behind other windows, so it looked like nothing happened).
         if g.usesSharedSteam, let why = SharedSteam.restartReason(for: g) {
@@ -263,6 +291,8 @@ final class AppModel: ObservableObject {
                 // A Steam game added before its download finished: pick its graphics mode now.
                 if SharedSteam.refreshDetection(g) { await MainActor.run { self.refresh() } }
                 if DisplayController.supports(g) { DisplayController.prepareForLaunch(g) }
+                do { try await WindowedPresentation.prepareForLaunch(g) }
+                catch { await MainActor.run { self.say("Couldn't set up the resizable window: \(error.localizedDescription)") } }
                 LibraryOrganizer.notePlayed(g)
                 GameDataSpec.forGame(g)?.snapshot()     // keep a copy of settings that live outside the app
                 // Mac versions from Epic need Epic's sign-in details, or they close right after their first screen.

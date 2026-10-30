@@ -348,6 +348,7 @@ struct GameResolutionSection: View {
                             }
                         }
                     }.labelsHidden().frame(width: 280)
+                        .disabled(WindowedPresentation.setting(for: game) != nil)
                 }
                 Text("Changes your Mac's display while the game runs and restores it afterward. Desktop keeps your current screen resolution. Nokcandu doesn't edit the game's own settings, but many games (like Counter-Strike 2) only offer resolutions that fit the screen, so pick the size here first, then choose it in the game.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -422,6 +423,7 @@ struct GameResolutionSection: View {
         .sheet(isPresented: $showSettingsBackups) { SettingsBackupsView(game: game).environmentObject(model) }
     }
     var logger: @Sendable (String) -> Void { { line in Task { @MainActor in status = line } } }
+
     func choose(_ tag: String) {
         let px: [Int]? = tag == "desktop" ? nil : tag.split(separator: "x").compactMap { Int($0) }
         let lib = model.games
@@ -843,5 +845,74 @@ struct SettingsBackupsView: View {
                 }
                 Button("Cancel", role: .cancel) { selected = nil }
             } message: { Text("This replaces \(selected?.original.lastPathComponent ?? "the settings file"). Your current version is backed up first.") }
+    }
+}
+
+
+// MARK: - Resizable window (virtual screen)
+
+/// Every Windows game can have its own choice; games sharing a launcher get it when they start (the launcher
+/// restarts if it's running with another choice).
+struct ResizableWindowSection: View {
+    @EnvironmentObject var model: AppModel
+    let game: InstalledGame
+    @State private var size: [Int]?
+    @State private var working = false
+    @State private var status = ""
+
+    var tag: String { size.map(WindowedPresentation.text) ?? "" }
+    var shared: Bool { game.usesSharedSteam || game.battleNet != nil || game.hosted != nil || game.isSteamHost || BattleNet.isHost(game) || PCLaunchers.kind(of: game) != nil }
+
+    var body: some View {
+        let reason = WindowedPresentation.unavailable(for: game)
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Toggle("Play in a resizable window", isOn: Binding(get: { size != nil }, set: { on in
+                        set(on ? (size ?? WindowedPresentation.lastChoice(for: game)) : nil)
+                    }))
+                    .disabled(reason != nil && size == nil)
+                    Spacer()
+                    if size != nil {
+                        Picker("Virtual screen", selection: Binding(get: { tag }, set: { t in
+                            if let px = WindowedPresentation.parse(t) { set(px) }
+                        })) {
+                            Text("Automatic (follows the game)").tag("auto")
+                            if let w = size, w != WindowedPresentation.automatic, !WindowedPresentation.resolutions.contains(w) { Text("\(w[0]) × \(w[1])").tag(tag) }
+                            ForEach(WindowedPresentation.resolutions, id: \.self) { r in Text("\(r[0]) × \(r[1])").tag("\(r[0])x\(r[1])") }
+                        }.frame(width: 240)
+                    }
+                }
+                Text("Runs the game on a virtual screen shown in a normal Mac window you can move, resize, minimize or make full screen (green button). Your Mac's display isn't changed. Automatic starts like your Mac's screen (or at the game's last resolution) and follows the resolution the game picks; a fixed size suits games that use the desktop resolution. Shift-Cmd-Esc always gives you the mouse back; click the game or press Ctrl-Cmd-Esc to return it. Experimental.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if shared {
+                    Text("Only the game's fullscreen picture goes in the resizable window; its launcher's windows (like Steam's) stay separate Mac windows. If the launcher is already running with a different choice, Nokcandu offers to restart it when you play.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if let reason { Text(reason).font(.caption).foregroundStyle(.secondary) }
+                if working { ProgressView().controlSize(.small) }
+                if !status.isEmpty { Text(status).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
+            }
+            .disabled(working)
+            .padding(6).frame(maxWidth: .infinity, alignment: .leading)
+        } label: { Text("Resizable Window").font(.headline) }
+        .onAppear { size = WindowedPresentation.setting(for: game) }
+    }
+
+    func set(_ new: [Int]?) {
+        let old = size
+        size = new; working = true; status = ""
+        let g = game
+        Task {
+            do {
+                try await WindowedPresentation.save(new, for: g)
+                status = new == nil ? "Off — the game uses the Mac's screen." : "On — takes effect the next time the game starts."
+                model.refresh()
+            } catch {
+                size = old
+                model.fail(error)
+            }
+            working = false
+        }
     }
 }

@@ -58,6 +58,13 @@ xcrun clang -arch x86_64 -arch arm64 -mmacosx-version-min=11.0 -dynamiclib -fobj
   -framework AppKit -framework GameController -framework CoreGraphics -framework IOKit -framework OpenGL \
   -install_name @rpath/nokcandu-rawmouse.dylib \
   -o "$APP/Contents/Resources/nokcandu-rawmouse.dylib" Resources/rawmouse/rawmouse.m Resources/present/present.m
+# Nokcandu's Wine Mac driver (resizable game windows): Wine 10.0 + Engine/winemac/patches, built by
+# Engine/winemac/build.sh. A fresh local build wins over the copy kept in Resources/winemac.
+WINEMAC=Resources/winemac; [ -f build/winemac/SHA256SUMS ] && WINEMAC=build/winemac
+if [ -f "$WINEMAC/x86_64-unix/winemac.so" ]; then
+  rm -rf "$APP/Contents/Resources/winemac"; mkdir -p "$APP/Contents/Resources/winemac"
+  cp -R "$WINEMAC/x86_64-unix" "$WINEMAC/x86_64-windows" "$WINEMAC/i386-windows" "$APP/Contents/Resources/winemac/"
+fi
 # Signing identity: a stable one keeps macOS permissions (Input Monitoring, drives, folders) across builds.
 # NOKCANDU_SIGN_IDENTITY, else the "Nokcandu Signing" identity from scripts/make-signing-identity.sh, else ad-hoc.
 SIGN_ID="${NOKCANDU_SIGN_IDENTITY:-}"
@@ -78,6 +85,7 @@ if [ -z "${NOKCANDU_SIGN_IDENTITY:-}" ] && [ -f "$KC" ] && [ -f "$KC_PW" ] && se
 fi
 [ "$SIGN_ID" = "-" ] && echo "Signing: ad-hoc (macOS will re-ask for permissions after each build)" || echo "Signing: $SIGN_ID"
 codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/nokcandu-rawmouse.dylib"
+[ -f "$APP/Contents/Resources/winemac/x86_64-unix/winemac.so" ] && codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/winemac/x86_64-unix/winemac.so"
 
 codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/cabextract"
 

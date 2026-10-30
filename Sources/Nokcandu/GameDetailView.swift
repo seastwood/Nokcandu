@@ -94,6 +94,9 @@ struct GameDetailView: View {
                     CinematicCrashBanner(game: game, diagnosis: d) { fixFromBanner() }
                 }
                 if DisplayController.supports(game) { displaySection }
+                if game.native == nil, WineTools.hostContents(for: game) != nil {
+                    ResizableWindowSection(game: game).id("resizable-\(game.id)")
+                }
                 if game.hosted?.exe != nil { HostedGameSettingsSection(game: game).id("hosted-\(game.id)") }
                 if game.custom != nil {
                     GroupBox {

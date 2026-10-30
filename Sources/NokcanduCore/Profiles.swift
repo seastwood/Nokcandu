@@ -73,6 +73,9 @@ public struct GameProfile: Codable, Hashable {
     public var displayPixels: [Int]? = nil
     /// Wine virtual screen size ([width, height]) for old games, shown in a window.
     public var virtualScreen: [Int]? = nil
+    /// Resizable window: the game's virtual screen ([width, height]) shown in a normal Mac window.
+    /// Absent = leave the game's own choice as it is.
+    public var resizableWindow: [Int]? = nil
 
     /// Paths inside the game's own app are shared as `{app}/…` and expanded on the other Mac.
     public static let appToken = "{app}"
@@ -138,6 +141,7 @@ public struct GameProfile: Codable, Hashable {
         for d in drives ?? [] where d.range(of: #"^[D-Yd-y]$"#, options: .regularExpression) == nil { p.append("drive \(d) isn't a letter from D to Y") }
         if let b = audioBuffer, !AudioBuffer.choices.contains(b) { p.append("audioBuffer must be 10, 20 or 40") }
         if let v = virtualScreen, v.count != 2 || !v.allSatisfy({ (320...8192).contains($0) }) { p.append("virtualScreen must be [width, height]") }
+        if let r = resizableWindow, r.count != 2 || WindowedPresentation.parse(WindowedPresentation.text(r)) == nil { p.append("resizableWindow must be [width, height] or [0, 0] (automatic)") }
         if let d = displayPixels, d.count != 2 || !d.allSatisfy({ (320...8192).contains($0) }) { p.append("displayPixels must be [width, height] in pixels") }
         for (name, text) in [("install", install), ("notes", notes)] where (text?.count ?? 0) > 4000 { p.append("\(name) is too long") }
         return p
@@ -375,6 +379,7 @@ public enum Profiles {
         p.schema = 2
         p.audioBuffer = hosted == nil ? AudioBuffer.current(for: g) : nil
         if g.battleNet == nil { p.displayPixels = c?.displayPixels }
+        p.resizableWindow = WindowedPresentation.setting(for: g)
         if p.arguments?.isEmpty == true { p.arguments = nil }
         return p
     }
@@ -523,6 +528,10 @@ public enum Profiles {
             }
 
         }
+        if let r = p.resizableWindow, r != WindowedPresentation.setting(for: g) {
+            if let why = WindowedPresentation.unavailable(for: g) { plan.skipped.append("Resizable window — \(why)") }
+            else { plan.gameSettings.append("Resizable window: \(WindowedPresentation.title(r)) virtual screen") }
+        }
         if p.fixes?.contains("cinematic") == true {
             if CinematicFix.isPresent(for: g) { plan.gameSettings.append("Cinematic fix (LAV Filters): already installed") }
             else { plan.needsCinematicFix = true }
@@ -556,6 +565,7 @@ public enum Profiles {
         var displayCheckpoint: BF1942DisplayFix.Checkpoint? = nil
         var hosted: HostedSettings.Settings? = nil
         var bc2Display: BC2DisplaySettings.Checkpoint? = nil
+        var resizable: [Int]?? = nil
         public var gameName: String { game.name }
     }
 
@@ -564,6 +574,7 @@ public enum Profiles {
 
     /// Puts back the settings from before `apply`.
     public static func undo(_ s: Snapshot) throws {
+        if let r = s.resizable { try WindowedPresentation.saveSetting(r, for: s.game) }
         try s.displayCheckpoint?.restore()
         try s.bc2Display?.restore()
         if let c = s.config, GameLibrary.inspect(s.target.appURL)?.custom != c {
@@ -585,6 +596,10 @@ public enum Profiles {
         let target = g.battleNet.flatMap { GameLibrary.inspect(URL(fileURLWithPath: $0.hostApp)) } ?? g
         var snapshot = Snapshot(target: target, config: target.custom, game: g, raw: RawMouse.settings(for: g), perf: Performance.settings(for: g),
                                 buffer: g.hosted == nil ? AudioBuffer.current(for: g) : nil)
+        if let r = p.resizableWindow, WindowedPresentation.unavailable(for: g) == nil, r != WindowedPresentation.setting(for: g) {
+            snapshot.resizable = .some(WindowedPresentation.setting(for: g))
+            try WindowedPresentation.saveSetting(r, for: g)     // applied when the game next starts
+        }
         if let d = p.gameDisplay, ["bfbc2", "bfbc2-desktop"].contains(d.recipe), displayUnavailable(d, for: g) == nil {
             snapshot.bc2Display = try BC2DisplaySettings.Checkpoint(game: g, size: d.resolution)
         }

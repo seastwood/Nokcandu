@@ -1,0 +1,1606 @@
+diff --git a/dlls/winemac.drv/cocoa_app.h b/dlls/winemac.drv/cocoa_app.h
+index b2b8187..1596fd6 100644
+--- a/dlls/winemac.drv/cocoa_app.h
++++ b/dlls/winemac.drv/cocoa_app.h
+@@ -136,6 +136,9 @@ @interface WineApplicationController : NSObject <NSApplicationDelegate>
+ @property (readonly, nonatomic) BOOL areDisplaysCaptured;
+ 
+ @property (readonly) BOOL clippingCursor;
++
++    - (void) presentFramesChanged;
++    - (void) presentSetReleased:(BOOL)released;
+ @property (nonatomic) NSTimeInterval lastSetCursorPositionTime;
+ 
+     + (WineApplicationController*) sharedController;
+diff --git a/dlls/winemac.drv/cocoa_app.m b/dlls/winemac.drv/cocoa_app.m
+index 82334d4..5c60c5f 100644
+--- a/dlls/winemac.drv/cocoa_app.m
++++ b/dlls/winemac.drv/cocoa_app.m
+@@ -19,6 +19,9 @@
+  */
+ 
+ #import <Carbon/Carbon.h>
++#include <fcntl.h>
++#include <sys/file.h>
++#include <unistd.h>
+ 
+ #import "cocoa_app.h"
+ #import "cocoa_cursorclipping.h"
+@@ -124,6 +127,19 @@ - (void) applicationDidBecomeActive:(NSNotification *)notification;
+ @end
+ 
+ 
++int present_enabled = FALSE;
++int present_on = FALSE;
++double present_scale = 1;
++CGPoint present_origin;
++CGSize present_desktop;
++
++int present_released = FALSE;
++double present_user_scale;   /* The picture's scale the user chose (by resizing); resolution changes keep it. */
++int present_fullscreen;      /* The picture's window is in Mac full screen. */
++static BOOL present_swallow_mouse_up;
++static CGRect present_wanted_clip;   /* What the game asked to clip to, in Windows pixels. */
++static BOOL present_wants_clip;
++
+ @implementation WineApplicationController
+ 
+     @synthesize keyboardType, lastFlagsChanged;
+@@ -554,6 +570,9 @@ - (CGFloat) primaryScreenHeight
+                 {
+                     CGRect temp = NSRectToCGRect([screen frame]);
+                     temp.origin.y = primaryScreenHeight - CGRectGetMaxY(temp);
++                    /* Presenting: the game's desktop is the picture, wherever it is shown. */
++                    if (present_on)
++                        temp = (screen == screens[0]) ? present_rect() : CGRectZero;
+                     *rect++ = temp;
+                 }
+             }
+@@ -948,9 +967,11 @@ - (BOOL) areDisplaysCaptured
+ 
+     - (void) updateCursor:(BOOL)force
+     {
++        BOOL wantsHidden = clientWantsCursorHidden && !(present_on && present_released);
++
+         if (force || lastTargetWindow)
+         {
+-            if (clientWantsCursorHidden && !cursorHidden)
++            if (wantsHidden && !cursorHidden)
+             {
+                 [NSCursor hide];
+                 cursorHidden = TRUE;
+@@ -962,7 +983,7 @@ - (void) updateCursor:(BOOL)force
+                 cursorIsCurrent = TRUE;
+             }
+ 
+-            if (!clientWantsCursorHidden && cursorHidden)
++            if (!wantsHidden && cursorHidden)
+             {
+                 [NSCursor unhide];
+                 cursorHidden = FALSE;
+@@ -1170,6 +1191,8 @@ - (BOOL) setCursorPosition:(CGPoint)pos
+ 
+         if ([windowsBeingDragged count])
+             ret = FALSE;
++        else if (present_on && present_released)
++            ret = TRUE;   /* The mouse belongs to the user until they give it back. */
+         else if (self.clippingCursor && [clipCursorHandler respondsToSelector:@selector(setCursorPosition:)])
+             ret = [clipCursorHandler setCursorPosition:pos];
+         else
+@@ -1448,7 +1471,7 @@ - (void) handleMouseMove:(NSEvent*)anEvent
+             {
+                 if (self.clippingCursor)
+                     [clipCursorHandler clipCursorLocation:&point];
+-                point = cgpoint_win_from_mac(point);
++                point = cgpoint_win_from_mac_global(point);
+ 
+                 event = macdrv_create_event(MOUSE_MOVED_ABSOLUTE, targetWindow);
+                 event->mouse_moved.x = floor(point.x);
+@@ -1459,7 +1482,7 @@ - (void) handleMouseMove:(NSEvent*)anEvent
+             }
+             else
+             {
+-                double scale = retina_on ? 2 : 1;
++                double scale = present_on ? win_per_mac() : (retina_on ? 2 : 1);
+ 
+                 /* Add event delta to accumulated delta error */
+                 /* deltaY is already flipped */
+@@ -1593,7 +1616,7 @@ - (void) handleMouseButton:(NSEvent*)theEvent
+             {
+                 macdrv_event* event;
+ 
+-                pt = cgpoint_win_from_mac(pt);
++                pt = cgpoint_win_from_mac_global(pt);
+ 
+                 event = macdrv_create_event(MOUSE_BUTTON, window);
+                 event->mouse_button.button = [theEvent buttonNumber];
+@@ -1676,7 +1699,7 @@ - (void) handleScrollWheel:(NSEvent*)theEvent
+                 double x, y;
+                 BOOL continuous = FALSE;
+ 
+-                pt = cgpoint_win_from_mac(pt);
++                pt = cgpoint_win_from_mac_global(pt);
+ 
+                 event = macdrv_create_event(MOUSE_SCROLL, window);
+                 event->mouse_scroll.x = floor(pt.x);
+@@ -1799,11 +1822,77 @@ - (void) handleScrollWheel:(NSEvent*)theEvent
+     // Returns TRUE if the event was handled and caller should do nothing more
+     // with it.  Returns FALSE if the caller should process it as normal and
+     // then call -didSendEvent:.
++    /* Nokcandu: give the mouse back to the user, or to the game. Releasing always works, whatever the game
++       is doing: no clipping, no warping, the cursor shown. */
++    - (void) presentSetReleased:(BOOL)released
++    {
++        if (!present_on || present_released == released) return;
++        present_released = released;
++        if (released)
++            [self stopClippingCursor];
++        else if (present_wants_clip)
++            [self startClippingCursor:cgrect_mac_from_win_global(present_wanted_clip)];
++        cursorIsCurrent = FALSE;
++        [self updateCursor:TRUE];
++        forceNextMouseMoveAbsolute = TRUE;
++    }
++
++    - (BOOL) presentHandleEvent:(NSEvent*)anEvent
++    {
++        NSEventType type = [anEvent type];
++
++        if (!present_on) return FALSE;
++
++        if (type == NSEventTypeKeyDown && [anEvent keyCode] == kVK_Escape)
++        {
++            NSUInteger mods = [anEvent modifierFlags] & (NSEventModifierFlagCommand | NSEventModifierFlagControl |
++                                                         NSEventModifierFlagShift | NSEventModifierFlagOption);
++            if (mods == (NSEventModifierFlagCommand | NSEventModifierFlagShift))
++            {
++                [self presentSetReleased:TRUE];       /* Shift-Cmd-Esc: release */
++                return TRUE;
++            }
++            if (mods == (NSEventModifierFlagCommand | NSEventModifierFlagControl))
++            {
++                [self presentSetReleased:!present_released];   /* Ctrl-Cmd-Esc: capture / release */
++                return TRUE;
++            }
++        }
++        else if (type == NSEventTypeKeyUp && [anEvent keyCode] == kVK_Escape &&
++                 ([anEvent modifierFlags] & NSEventModifierFlagCommand))
++            return TRUE;
++        else if (type == NSEventTypeLeftMouseDown && present_released)
++        {
++            /* A click on the game takes the mouse back; the click itself is not the game's. */
++            WineWindow* window = (WineWindow*)[anEvent window];
++            if ([window isKindOfClass:[WineWindow class]])
++            {
++                NSView* content = [window contentView];
++                NSPoint pt = [content convertPoint:[anEvent locationInWindow] fromView:nil];
++                if (NSPointInRect(pt, [content bounds]))
++                {
++                    [self presentSetReleased:FALSE];
++                    present_swallow_mouse_up = TRUE;
++                    return TRUE;
++                }
++            }
++        }
++        else if (type == NSEventTypeLeftMouseUp && present_swallow_mouse_up)
++        {
++            present_swallow_mouse_up = FALSE;
++            return TRUE;
++        }
++        return FALSE;
++    }
++
+     - (BOOL) handleEvent:(NSEvent*)anEvent
+     {
+         BOOL ret = FALSE;
+         NSEventType type = [anEvent type];
+ 
++        if ([self presentHandleEvent:anEvent])
++            return TRUE;
++
+         if (type == NSEventTypeFlagsChanged)
+             self.lastFlagsChanged = anEvent;
+         else if (type == NSEventTypeMouseMoved || type == NSEventTypeLeftMouseDragged ||
+@@ -2226,6 +2315,15 @@ - (void)applicationDidBecomeActive:(NSNotification *)notification
+         forceNextMouseMoveAbsolute = TRUE;
+     }
+ 
++    - (void) presentFramesChanged
++    {
++        primaryScreenHeightValid = FALSE;
++        forceNextMouseMoveAbsolute = TRUE;
++        /* The game's clip follows the picture. */
++        if (present_wants_clip && !present_released)
++            [self startClippingCursor:cgrect_mac_from_win_global(present_wanted_clip)];
++    }
++
+     - (void)applicationDidChangeScreenParameters:(NSNotification *)notification
+     {
+         primaryScreenHeightValid = FALSE;
+@@ -2545,7 +2643,7 @@ int macdrv_get_cursor_position(CGPoint *pos)
+     OnMainThread(^{
+         NSPoint location = [NSEvent mouseLocation];
+         location = [[WineApplicationController sharedController] flippedMouseLocation:location];
+-        *pos = cgpoint_win_from_mac(NSPointToCGPoint(location));
++        *pos = cgpoint_win_from_mac_global(NSPointToCGPoint(location));
+     });
+ 
+     return TRUE;
+@@ -2562,7 +2660,7 @@ int macdrv_set_cursor_position(CGPoint pos)
+     __block int ret;
+ 
+     OnMainThread(^{
+-        ret = [[WineApplicationController sharedController] setCursorPosition:cgpoint_mac_from_win(pos)];
++        ret = [[WineApplicationController sharedController] setCursorPosition:cgpoint_mac_from_win_global(pos)];
+     });
+ 
+     return ret;
+@@ -2584,10 +2682,16 @@ int macdrv_clip_cursor(CGRect r)
+         BOOL clipping = FALSE;
+         CGRect rect = r;
+ 
+-        if (!CGRectIsInfinite(rect))
+-            rect = cgrect_mac_from_win(rect);
++        if (present_on && !CGRectIsInfinite(rect) &&
++            CGRectContainsRect(rect, CGRectMake(0, 0, present_desktop.width, present_desktop.height)))
++            rect = CGRectInfinite;
+ 
+         if (!CGRectIsInfinite(rect))
++            rect = cgrect_mac_from_win_global(rect);
++
++        if (present_on && !CGRectIsInfinite(rect))
++            clipping = TRUE;
++        else if (!CGRectIsInfinite(rect))
+         {
+             NSRect nsrect = NSRectFromCGRect(rect);
+             NSScreen* screen;
+@@ -2606,6 +2710,13 @@ int macdrv_clip_cursor(CGRect r)
+             }
+         }
+ 
++        if (present_on)
++        {
++            present_wants_clip = clipping;
++            present_wanted_clip = r;
++            if (present_released) clipping = FALSE;
++        }
++
+         if (clipping)
+             ret = [controller startClippingCursor:rect];
+         else
+@@ -2730,6 +2841,193 @@ int macdrv_select_input_source(TISInputSourceRef input_source)
+     return ret;
+ }
+ 
++/* Nokcandu: the virtual monitor's mode, shared between the game's processes through a small file in the
++ * prefix ("WxH"). */
++static char present_mode_path[1024], present_lock_path[1100];
++static int present_lock_fd = -1;
++
++static void present_paths(void)
++{
++    const char *prefix = getenv("WINEPREFIX"), *home = getenv("HOME");
++    char fallback[1024];
++
++    if (!prefix || !*prefix)
++    {
++        snprintf(fallback, sizeof(fallback), "%s/.wine", home ? home : "/tmp");
++        prefix = fallback;
++    }
++    snprintf(present_mode_path, sizeof(present_mode_path), "%s/.nokcandu-virtual-display", prefix);
++    snprintf(present_lock_path, sizeof(present_lock_path), "%s.lock", present_mode_path);
++}
++
++static void present_write_mode(int width, int height)
++{
++    char tmp[1100];
++    FILE *f;
++
++    if (!present_mode_path[0]) return;
++    snprintf(tmp, sizeof(tmp), "%s.%d", present_mode_path, (int)getpid());
++    if (!(f = fopen(tmp, "w"))) return;
++    fprintf(f, "%dx%d\n", width, height);
++    fclose(f);
++    rename(tmp, present_mode_path);
++}
++
++static BOOL present_read_mode(int *width, int *height)
++{
++    FILE *f;
++    int w = 0, h = 0, n;
++
++    if (!present_mode_path[0] || !(f = fopen(present_mode_path, "r"))) return FALSE;
++    n = fscanf(f, "%dx%d", &w, &h);
++    fclose(f);
++    if (n != 2 || w < 1 || h < 1 || w > 16384 || h > 16384) return FALSE;
++    *width = w;
++    *height = h;
++    return TRUE;
++}
++
++/* Resizes the virtual monitor (main thread). */
++static void present_resize(int width, int height)
++{
++        double old_scale = present_scale;
++        CGPoint old_origin = present_origin;
++        CGRect old_rect = present_rect();
++        NSScreen *screen = [NSScreen screens].firstObject;
++        NSRect full = screen.frame, visible = screen.visibleFrame;
++        CGRect area;   /* where the picture may go, Mac global top-left coordinates */
++        double s;
++
++        if (!present_on || width <= 0 || height <= 0) return;
++        if (present_fullscreen)
++        {
++            /* Full screen: as big as the screen allows, centred (black bars around). */
++            area = CGRectMake(NSMinX(full), 0, NSWidth(full), NSHeight(full));
++            s = fmin(NSWidth(full) / width, NSHeight(full) / height);
++        }
++        else
++        {
++            /* Same scale as the user chose, like a monitor: more pixels make a bigger window, never larger than
++               the screen. Always from the user's scale, so changing modes back and forth doesn't shrink it. */
++            area = CGRectMake(NSMinX(visible), NSMaxY(full) - NSMaxY(visible), NSWidth(visible), NSHeight(visible) - 28);
++            s = fmin(present_user_scale, fmin(area.size.width / width, area.size.height / height));
++        }
++        present_desktop = CGSizeMake(width, height);
++        present_scale = s;
++        if (present_fullscreen)
++            present_origin = CGPointMake(round(CGRectGetMidX(area) - width * s / 2), round(CGRectGetMidY(area) - height * s / 2));
++        else
++        {
++            /* Keep the window's top-left corner, nudged back on screen (title bar below the menu bar). */
++            double x = old_rect.origin.x, y = old_rect.origin.y;
++            x = fmax(area.origin.x, fmin(x, CGRectGetMaxX(area) - width * s));
++            y = fmax(area.origin.y + 28, fmin(y, area.origin.y + 28 + area.size.height - height * s));
++            present_origin = CGPointMake(x, y);
++        }
++        macdrv_present_relayout(old_scale, old_origin);
++        [[WineApplicationController sharedController] applicationDidChangeScreenParameters:nil];
++}
++
++/***********************************************************************
++ *              macdrv_present_start
++ *
++ * Starts windowed presentation with a virtual desktop of the given size: shown at about three quarters of the
++ * main screen, centred, keeping the desktop's shape.
++ */
++void macdrv_present_start(int requested_width, int requested_height)
++{
++    int fw, fh;
++
++    /* The virtual monitor's current mode is shared by all of the game's processes (Wine's desktop process
++       re-reads it too): the first one starts it at the chosen resolution, later ones join it. Each holds a
++       shared lock for its lifetime, so "first" means no other process of this prefix is presenting. */
++    present_paths();
++    present_lock_fd = open(present_lock_path, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
++    if (present_lock_fd >= 0 && !flock(present_lock_fd, LOCK_EX | LOCK_NB))
++    {
++        if (requested_width > 0 && requested_height > 0)
++            present_write_mode(requested_width, requested_height);
++        else if (present_read_mode(&fw, &fh))
++        {
++            /* Automatic: start at the resolution the game used last time. */
++            requested_width = fw;
++            requested_height = fh;
++        }
++        flock(present_lock_fd, LOCK_SH);
++    }
++    else
++    {
++        if (present_lock_fd >= 0) flock(present_lock_fd, LOCK_SH);
++        if (present_read_mode(&fw, &fh))
++        {
++            requested_width = fw;
++            requested_height = fh;
++        }
++    }
++
++    OnMainThread(^{
++        int width = requested_width, height = requested_height;
++        NSScreen *screen = [NSScreen screens].firstObject;
++        NSRect visible = screen.visibleFrame, full = screen.frame;
++        double s;
++
++        if (width <= 0 || height <= 0)
++        {
++            width = NSWidth(full);
++            height = NSHeight(full);
++        }
++        s = fmin(NSWidth(visible) * 0.75 / width, NSHeight(visible) * 0.75 / height);
++        present_desktop = CGSizeMake(width, height);
++        present_scale = s;
++        present_user_scale = s;
++        /* Centre in the visible area (Cocoa bottom-left -> global top-left). */
++        present_origin.x = round(NSMidX(visible) - width * s / 2);
++        present_origin.y = round((NSMaxY(full) - NSMaxY(visible)) + (NSHeight(visible) - height * s) / 2);
++        present_on = TRUE;
++        [[WineApplicationController sharedController] applicationDidChangeScreenParameters:nil];
++    });
++}
++
++/***********************************************************************
++ *              macdrv_present_set_desktop_size
++ *
++ * The game switched resolution: the virtual monitor takes the new size (for all the game's processes).
++ */
++void macdrv_present_set_desktop_size(int width, int height)
++{
++    if (!present_on || width <= 0 || height <= 0) return;
++    present_write_mode(width, height);
++    OnMainThread(^{ present_resize(width, height); });
++}
++
++/***********************************************************************
++ *              macdrv_present_sync
++ *
++ * Another of the game's processes may have changed the virtual monitor's mode: follow it.
++ */
++void macdrv_present_sync(void)
++{
++    int w, h;
++
++    if (!present_on || !present_read_mode(&w, &h)) return;
++    if (w == (int)present_desktop.width && h == (int)present_desktop.height) return;
++    OnMainThread(^{
++        if (w != (int)present_desktop.width || h != (int)present_desktop.height)
++            present_resize(w, h);
++    });
++}
++
++/***********************************************************************
++ *              macdrv_present_frames_changed
++ *
++ * The desktop picture moved or was rescaled: forget cached screen frames and mouse baselines.
++ */
++void macdrv_present_frames_changed(void)
++{
++    WineApplicationController* controller = [WineApplicationController sharedController];
++    [controller presentFramesChanged];
++}
++
+ void macdrv_set_cocoa_retina_mode(int new_mode)
+ {
+     OnMainThread(^{
+diff --git a/dlls/winemac.drv/cocoa_display.m b/dlls/winemac.drv/cocoa_display.m
+index 3f6246e..17e4fbf 100644
+--- a/dlls/winemac.drv/cocoa_display.m
++++ b/dlls/winemac.drv/cocoa_display.m
+@@ -63,6 +63,20 @@ int macdrv_get_displays(struct macdrv_display** displays, int* count)
+ @autoreleasepool
+ {
+     NSArray* screens = [NSScreen screens];
++
++    /* Presenting: the game sees one monitor, its virtual desktop. */
++    if (present_on && screens.count)
++    {
++        macdrv_present_sync();
++        struct macdrv_display* disps = malloc(sizeof(disps[0]));
++        if (!disps) return -1;
++        disps[0].displayID = [[screens[0] deviceDescription][@"NSScreenNumber"] unsignedIntValue];
++        disps[0].frame = disps[0].work_frame = CGRectMake(0, 0, present_desktop.width, present_desktop.height);
++        *displays = disps;
++        *count = 1;
++        return 0;
++    }
++
+     if (screens)
+     {
+         NSUInteger num_screens = [screens count];
+diff --git a/dlls/winemac.drv/cocoa_event.m b/dlls/winemac.drv/cocoa_event.m
+index 336de1c..a94cc4f 100644
+--- a/dlls/winemac.drv/cocoa_event.m
++++ b/dlls/winemac.drv/cocoa_event.m
+@@ -348,7 +348,7 @@ - (void) resetMouseEventPositions:(CGPoint)pos
+     {
+         MacDrvEvent* event;
+ 
+-        pos = cgpoint_win_from_mac(pos);
++        pos = cgpoint_win_from_mac_global(pos);
+ 
+         [eventsLock lock];
+ 
+diff --git a/dlls/winemac.drv/cocoa_opengl.m b/dlls/winemac.drv/cocoa_opengl.m
+index 5e3ad03..f58090a 100644
+--- a/dlls/winemac.drv/cocoa_opengl.m
++++ b/dlls/winemac.drv/cocoa_opengl.m
+@@ -71,7 +71,7 @@ + (NSView*) dummyView
+     // need to destroy and recreate the surface or we get weird behavior.
+     - (void) resetSurfaceIfBackingSizeChanged
+     {
+-        if (!retina_enabled)
++        if (!retina_enabled && !present_on)
+             return;
+ 
+         int view_backing[2];
+@@ -99,7 +99,7 @@ - (void) wine_updateBackingSize:(const CGSize*)size
+     {
+         GLint enabled;
+ 
+-        if (!retina_enabled)
++        if (!retina_enabled && !present_on)
+             return;
+ 
+         if (size)
+diff --git a/dlls/winemac.drv/cocoa_window.h b/dlls/winemac.drv/cocoa_window.h
+index 1d7b310..f72f372 100644
+--- a/dlls/winemac.drv/cocoa_window.h
++++ b/dlls/winemac.drv/cocoa_window.h
+@@ -108,5 +108,7 @@ - (WineWindow*) ancestorWineWindow;
+     - (void) updateForCursorClipping;
+ 
+     - (void) setRetinaMode:(int)mode;
++    - (BOOL) isPresentedWindow;
++    - (void) presentRelayoutFromScale:(double)oldScale origin:(CGPoint)oldOrigin;
+ 
+ @end
+diff --git a/dlls/winemac.drv/cocoa_window.m b/dlls/winemac.drv/cocoa_window.m
+index ce8b571..cc06ce8 100644
+--- a/dlls/winemac.drv/cocoa_window.m
++++ b/dlls/winemac.drv/cocoa_window.m
+@@ -398,7 +398,31 @@ - (WineMetalView*) newMetalViewWithDevice:(id<MTLDevice>)device;
+ @end
+ 
+ 
++@interface WineMetalView ()
++    - (void) presentUpdateLayer;
++@end
++
++@interface WineContentView ()
++    - (void) setLayerRetinaProperties:(int)mode;
++@end
++
+ @interface WineWindow ()
++{
++    /* Nokcandu windowed presentation: this window is the game's (virtual) desktop picture. */
++    BOOL presented;
++    CGRect presentWinFrame;                       /* Its Win32 frame, in Windows pixels. */
++    CGRect presentPlacedFrame;                    /* The part of it the Mac window shows (Windows pixels). */
++    struct macdrv_window_features lastFeatures;   /* As last set by Wine. */
++    BOOL presentZooming;                          /* The user clicked zoom (a size they chose). */
++    BOOL presentShown;                            /* Shown (and brought to the front) once already. */
++}
++
++    - (BOOL) updatePresentedForWineFrame:(CGRect)winFrame;
++    - (BOOL) presentScales;
++    - (CGSize) presentShape;
++    - (void) setFrameFromWineWin:(CGRect)winFrame;
++    - (void) presentedFrameChanged:(CGRect)content;
++    - (void) presentRescaleViewsIn:(NSView*)view by:(double)ratio;
+ 
+ @property (readwrite, nonatomic) BOOL disabled;
+ @property (readwrite, nonatomic) BOOL noForeground;
+@@ -434,6 +458,9 @@ - (void) windowDidDrawContent;
+ @end
+ 
+ 
++/* Nokcandu: set while windows are being re-laid out, so the moves it makes are not taken for the user's. */
++static int present_relayout_depth;
++
+ @implementation WineBaseView
+ 
+     - (void) setRetinaMode:(int)mode
+@@ -707,9 +734,11 @@ - (WineMetalView*) newMetalViewWithDevice:(id<MTLDevice>)device
+ 
+     - (void) setLayerRetinaProperties:(int)mode
+     {
+-        [self layer].contentsScale = mode ? 2.0 : 1.0;
+-        [self layer].minificationFilter = mode ? kCAFilterLinear : kCAFilterNearest;
+-        [self layer].magnificationFilter = mode ? kCAFilterLinear : kCAFilterNearest;
++        double scale = present_on ? win_per_mac() : (mode ? 2.0 : 1.0);
++        BOOL smooth = present_on ? (scale != 1) : mode;
++        [self layer].contentsScale = scale;
++        [self layer].minificationFilter = smooth ? kCAFilterLinear : kCAFilterNearest;
++        [self layer].magnificationFilter = smooth ? kCAFilterLinear : kCAFilterNearest;
+ 
+         /* On macOS 10.13 and earlier, the desired minificationFilter seems to be
+          * ignored and "nearest" filtering is used, which looks terrible.
+@@ -940,7 +969,7 @@ - (NSRect) firstRectForCharacterRange:(NSRange)aRange actualRange:(NSRangePointe
+         if ([window.queue query:query timeout:0.3 flags:WineQueryNoPreemptWait])
+         {
+             aRange = NSMakeRange(query->ime_char_rect.range.location, query->ime_char_rect.range.length);
+-            ret = NSRectFromCGRect(cgrect_mac_from_win(query->ime_char_rect.rect));
++            ret = NSRectFromCGRect(cgrect_mac_from_win_global(query->ime_char_rect.rect));
+             [[WineApplicationController sharedController] flipRect:&ret];
+         }
+         else
+@@ -992,14 +1021,23 @@ - (void) setRetinaMode:(int)mode
+         [super setRetinaMode:mode];
+     }
+ 
++    - (void) presentUpdateLayer
++    {
++        double scale = win_per_mac();
++        self.layer.contentsScale = scale;
++        self.layer.magnificationFilter = (scale != 1) ? kCAFilterLinear : kCAFilterNearest;
++        self.layer.minificationFilter = (scale != 1) ? kCAFilterLinear : kCAFilterNearest;
++    }
++
+     - (CALayer*) makeBackingLayer
+     {
+         CAMetalLayer *layer = [CAMetalLayer layer];
+         layer.device = _device;
+         layer.framebufferOnly = YES;
+-        layer.magnificationFilter = kCAFilterNearest;
++        layer.magnificationFilter = (present_on && win_per_mac() != 1) ? kCAFilterLinear : kCAFilterNearest;
++        layer.minificationFilter = layer.magnificationFilter;
+         layer.backgroundColor = CGColorGetConstantColor(kCGColorBlack);
+-        layer.contentsScale = retina_on ? 2.0 : 1.0;
++        layer.contentsScale = present_on ? win_per_mac() : (retina_on ? 2.0 : 1.0);
+         return layer;
+     }
+ 
+@@ -1058,6 +1096,7 @@ + (WineWindow*) createWindowWithFeatures:(const struct macdrv_window_features*)w
+         window->savedContentMinSize = NSZeroSize;
+         window->savedContentMaxSize = NSMakeSize(FLT_MAX, FLT_MAX);
+         window->resizable = wf->resizable;
++        window->lastFeatures = *wf;
+         window->_lastDisplayTime = [[NSDate distantPast] timeIntervalSinceReferenceDate];
+ 
+         [window registerForDraggedTypes:@[(NSString*)kUTTypeData, (NSString*)kUTTypeContent]];
+@@ -1119,6 +1158,7 @@ - (void) dealloc
+     - (BOOL) preventResizing
+     {
+         BOOL preventForClipping = cursor_clipping_locks_windows && [[WineApplicationController sharedController] clippingCursor];
++        if ([self presentScales]) return NO;
+         return ([self styleMask] & NSWindowStyleMaskResizable) && (disabled || !resizable || preventForClipping);
+     }
+ 
+@@ -1151,6 +1191,15 @@ - (void) adjustFeaturesForState
+             [self setContentMinSize:size];
+             [self setContentMaxSize:size];
+         }
++        else if ([self presentScales])
++        {
++            /* Any size, keeping the shape. */
++            CGSize shape = [self presentShape];
++            double minWidth = fmin(320, shape.width);
++            [self setContentAspectRatio:NSSizeFromCGSize(shape)];
++            [self setContentMinSize:NSMakeSize(minWidth, minWidth * shape.height / shape.width)];
++            [self setContentMaxSize:NSMakeSize(FLT_MAX, FLT_MAX)];
++        }
+         else
+         {
+             [self setContentMaxSize:savedContentMaxSize];
+@@ -1193,7 +1242,17 @@ - (void) setWindowFeatures:(const struct macdrv_window_features*)wf
+                                              NSWindowStyleMaskResizable | NSWindowStyleMaskUtilityWindow | NSWindowStyleMaskBorderless |
+                                              NSWindowStyleMaskNonactivatingPanel;
+         NSUInteger currentStyle = [self styleMask];
+-        NSUInteger newStyle = style_mask_for_features(wf) | (currentStyle & ~usedStyles);
++        NSUInteger newStyle;
++
++        if (wf != &lastFeatures) lastFeatures = *wf;
++        /* The game's desktop picture is a normal Mac window: moved, resized, minimized, made full screen. */
++        if ([self isPresentedWindow])
++            newStyle = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable |
++                       NSWindowStyleMaskResizable | (currentStyle & ~usedStyles);
++        else if (present_on && wf->title_bar && !wf->resizable && !wf->utility && !self.parentWindow && !self.latentParentWindow)
++            newStyle = style_mask_for_features(wf) | NSWindowStyleMaskResizable | (currentStyle & ~usedStyles);   /* scales */
++        else
++            newStyle = style_mask_for_features(wf) | (currentStyle & ~usedStyles);
+ 
+         self.preventsAppActivation = wf->prevents_app_activation;
+ 
+@@ -1237,7 +1296,7 @@ - (void) setWindowFeatures:(const struct macdrv_window_features*)wf
+ 
+         resizable = wf->resizable;
+         [self adjustFeaturesForState];
+-        [self setHasShadow:wf->shadow];
++        [self setHasShadow:wf->shadow || [self isPresentedWindow]];
+     }
+ 
+     // Indicates if the window would be visible if the app were not hidden.
+@@ -1352,7 +1411,8 @@ - (void) setMacDrvState:(const struct macdrv_window_state*)state
+             {
+                 if ([self wouldBeVisible])
+                 {
+-                    if (([self styleMask] & NSWindowStyleMaskFullScreen) || stage_manager_enabled())
++                    if (([self styleMask] & NSWindowStyleMaskFullScreen) || stage_manager_enabled() ||
++                        [self isPresentedWindow])
+                     {
+                         [self postDidUnminimizeEvent];
+                         discard &= ~event_mask_for_type(WINDOW_DID_UNMINIMIZE);
+@@ -1755,6 +1815,13 @@ - (void) orderBelow:(WineWindow*)prev orAbove:(WineWindow*)next activate:(BOOL)a
+                 [NSApp unhide:nil];
+             wasVisible = [self isVisible];
+ 
++            /* The game's picture comes up in front of everything the first time it's shown. */
++            if ([self isPresentedWindow] && !presentShown)
++            {
++                presentShown = TRUE;
++                activate = TRUE;
++            }
++
+             if (activate)
+                 [controller tryToActivateIgnoringOtherApps:YES];
+ 
+@@ -1842,7 +1909,12 @@ - (void) orderBelow:(WineWindow*)prev orAbove:(WineWindow*)next activate:(BOOL)a
+                 [controller adjustWindowLevels];
+             }
+ 
+-            if (pendingMinimize)
++            if (pendingMinimize && [self isPresentedWindow])
++            {
++                [self postDidUnminimizeEvent];
++                pendingMinimize = FALSE;
++            }
++            else if (pendingMinimize)
+             {
+                 [self setStyleMask:([self styleMask] | NSWindowStyleMaskMiniaturizable)];
+                 [super miniaturize:nil];
+@@ -1902,8 +1974,11 @@ - (void) doOrderOut
+         else
+             [self orderOut:nil];
+         [self checkWineDisplayLink];
+-        [self setBackgroundColor:[NSColor clearColor]];
+-        [self setOpaque:NO];
++        if (![self isPresentedWindow])
++        {
++            [self setBackgroundColor:[NSColor clearColor]];
++            [self setOpaque:NO];
++        }
+         drawnSinceShown = NO;
+         savedVisibleState = FALSE;
+         if (wasVisible && wasOnActiveSpace && fullscreen)
+@@ -2078,7 +2153,16 @@ - (BOOL) needsTransparency
+ 
+     - (void) checkTransparency
+     {
+-        if (![self isOpaque] && !self.needsTransparency)
++        /* The desktop picture is an ordinary opaque Mac window (its title bar must not show what's behind). */
++        if ([self isPresentedWindow])
++        {
++            if (![self isOpaque])
++            {
++                [self setBackgroundColor:[NSColor windowBackgroundColor]];
++                [self setOpaque:YES];
++            }
++        }
++        else if (![self isOpaque] && !self.needsTransparency)
+         {
+             self.shapeChangedSinceLastDraw = TRUE;
+             [[self contentView] setNeedsDisplay:YES];
+@@ -2200,6 +2284,185 @@ - (void) postBroughtForwardEvent
+         macdrv_release_event(event);
+     }
+ 
++    /* ---------- Nokcandu windowed presentation ---------- */
++
++    - (BOOL) isPresentedWindow
++    {
++        return present_on && presented;
++    }
++
++    /* Windows whose Mac resizing scales the whole virtual screen instead of resizing the Windows window: the
++       desktop picture, and a game's own fixed-size window (a game running windowed on the virtual screen). */
++    - (BOOL) presentScales
++    {
++        if ([self isPresentedWindow]) return YES;
++        return present_on && lastFeatures.title_bar && !lastFeatures.resizable && !lastFeatures.utility &&
++               !self.parentWindow && !self.latentParentWindow && presentWinFrame.size.width > 0;
++    }
++
++    /* The Win32 size whose shape the Mac window keeps while scaling. */
++    - (CGSize) presentShape
++    {
++        return [self isPresentedWindow] ? presentPlacedFrame.size : presentWinFrame.size;
++    }
++
++    /* Wine is setting this window's frame: it is the desktop picture when it covers the whole virtual desktop.
++       Returns NO when the frame is to be ignored: a minimized picture keeps its place (Windows parks minimized
++       windows far off screen), so the Dock can bring it back as it was. */
++    - (BOOL) updatePresentedForWineFrame:(CGRect)winFrame
++    {
++        CGRect desk = CGRectMake(0, 0, present_desktop.width, present_desktop.height);
++        /* The picture: a window covering the whole virtual screen, or a game's own borderless window (a game
++           running "windowed" without a frame) that fills most of it. */
++        BOOL now = present_on &&
++                   (CGRectContainsRect(winFrame, desk) ||
++                    (!lastFeatures.title_bar && !self.parentWindow && !self.latentParentWindow &&
++                     winFrame.size.width >= desk.size.width / 2 && winFrame.size.height >= desk.size.height / 2 &&
++                     CGRectIntersectsRect(winFrame, desk)));
++
++        if ([self isPresentedWindow] && !now &&
++            ([self isMiniaturized] || pendingMinimize || winFrame.origin.x <= -16000 || winFrame.origin.y <= -16000))
++            return NO;
++
++        if (present_on && !CGSizeEqualToSize(presentWinFrame.size, winFrame.size))
++        {
++            presentWinFrame = winFrame;
++            [self adjustFeaturesForState];   /* the shape kept while scaling */
++        }
++        presentWinFrame = winFrame;
++        if (now != presented)
++        {
++            presented = now;
++            if (!now)
++                [self setContentResizeIncrements:NSMakeSize(1, 1)];  /* drops the aspect ratio */
++            [self setWindowFeatures:&lastFeatures];
++            if (now && ![self.title length])
++                [self setTitle:[[NSProcessInfo processInfo] processName]];
++            [self checkTransparency];
++            if (now && !presentShown && [self isVisible])
++            {
++                presentShown = TRUE;
++                [[WineApplicationController sharedController] tryToActivateIgnoringOtherApps:YES];
++                [self orderFront:nil];
++            }
++        }
++        return YES;
++    }
++
++    /* The part of a presented window's Win32 frame that is shown: the virtual monitor shows nothing beyond its
++       edges, so a window larger than it (left over from a higher resolution, until the game resizes it) is cut
++       to the monitor rather than spilling the Mac window over the screen. */
++    - (CGRect) presentPlace:(CGRect)winFrame
++    {
++        CGRect desk = CGRectMake(0, 0, present_desktop.width, present_desktop.height);
++        if (winFrame.origin.x == 0 && winFrame.origin.y == 0 && CGRectContainsRect(winFrame, desk))
++            return desk;
++        return winFrame;
++    }
++
++    /* Wine sets the frame (Win32 coordinates). */
++    - (void) setFrameFromWineWin:(CGRect)winFrame
++    {
++        if (![self updatePresentedForWineFrame:winFrame]) return;
++        if ([self isPresentedWindow])
++        {
++            presentPlacedFrame = [self presentPlace:winFrame];
++            [self adjustFeaturesForState];
++            winFrame = presentPlacedFrame;
++        }
++        [self setFrameFromWine:NSRectFromCGRect(cgrect_mac_from_win_global(winFrame))];
++    }
++
++    /* The picture's window moved or changed size (the user, Cocoa, or full screen): derive where the desktop is
++       shown and at what scale, then move the game's other windows along. */
++    - (void) presentedFrameChanged:(CGRect)content
++    {
++        double oldScale = present_scale;
++        CGPoint oldOrigin = present_origin;
++        double scale;
++
++        CGRect ref = [self isPresentedWindow] ? presentPlacedFrame : presentWinFrame;
++
++        if (present_relayout_depth || ref.size.width <= 0 || content.size.width <= 0) return;
++        if ([self isMiniaturized]) return;
++        if ([self isPresentedWindow]) present_fullscreen = ([self styleMask] & NSWindowStyleMaskFullScreen) != 0;
++        scale = content.size.width / ref.size.width;
++        present_scale = scale;
++        present_origin = CGPointMake(content.origin.x - ref.origin.x * scale,
++                                     content.origin.y - ref.origin.y * scale);
++        /* Remember the size the user picks (a resize, or zoom), not the ones full screen or modes make. */
++        if (!([self styleMask] & NSWindowStyleMaskFullScreen) && !enteringFullScreen && !exitingFullScreen &&
++            ([self inLiveResize] || presentZooming))
++            present_user_scale = scale;
++        if (fabs(oldScale - present_scale) < 1e-9 &&
++            fabs(oldOrigin.x - present_origin.x) < 0.01 && fabs(oldOrigin.y - present_origin.y) < 0.01)
++            return;
++        macdrv_present_relayout(oldScale, oldOrigin);
++    }
++
++    - (void) presentRescaleViewsIn:(NSView*)view by:(double)ratio
++    {
++        for (NSView* subview in [view subviews])
++        {
++            if ([subview isKindOfClass:[WineContentView class]])
++            {
++                WineContentView* cv = (WineContentView*)subview;
++                if (ratio != 1)
++                {
++                    NSRect f = cv.frame;
++                    f.origin.x *= ratio; f.origin.y *= ratio;
++                    f.size.width *= ratio; f.size.height *= ratio;
++                    [cv setFrame:f];
++                }
++                [cv setLayerRetinaProperties:retina_on];
++                [cv updateGLContexts];
++                [self presentRescaleViewsIn:cv by:ratio];
++            }
++            else if ([subview isKindOfClass:[WineMetalView class]])
++                [(WineMetalView*)subview presentUpdateLayer];
++        }
++    }
++
++    /* The desktop picture moved or was rescaled: put this window where its Win32 frame now is. */
++    - (void) presentRelayoutFromScale:(double)oldScale origin:(CGPoint)oldOrigin
++    {
++        double ratio = present_scale / oldScale;
++        WineContentView* contentView = [self contentView];
++
++        if (!([self styleMask] & NSWindowStyleMaskFullScreen) || [self isPresentedWindow])
++        {
++            NSRect content = [self contentRectForFrameRect:self.wine_fractionalFrame];
++            CGRect win;
++
++            [[WineApplicationController sharedController] flipRect:&content];
++            win = NSRectToCGRect(content);
++            win.origin.x = (win.origin.x - oldOrigin.x) / oldScale;
++            win.origin.y = (win.origin.y - oldOrigin.y) / oldScale;
++            win.size.width /= oldScale;
++            win.size.height /= oldScale;
++            if ([self isPresentedWindow]) win = presentPlacedFrame = [self presentPlace:presentWinFrame];
++
++            content = NSRectFromCGRect(cgrect_mac_from_win_global(win));
++            [[WineApplicationController sharedController] flipRect:&content];
++            content = [self frameRectForContentRect:content];
++            if (!NSEqualRects(content, self.frame) && ![self inLiveResize])
++            {
++                ignore_windowResize = TRUE;
++                [self setFrameAndWineFrame:content];
++                ignore_windowResize = FALSE;
++            }
++        }
++
++        if ([contentView isKindOfClass:[WineContentView class]])
++        {
++            [contentView setLayerRetinaProperties:retina_on];
++            contentView.layer.mask.contentsScale = win_per_mac();
++            [contentView updateGLContexts];
++        }
++        [self presentRescaleViewsIn:contentView by:ratio];
++        [contentView setNeedsDisplay:YES];
++    }
++
+     - (void) postWindowFrameChanged:(NSRect)frame fullscreen:(BOOL)isFullscreen resizing:(BOOL)resizing skipSizeMove:(BOOL)skipSizeMove
+     {
+         macdrv_event* event;
+@@ -2212,12 +2475,22 @@ - (void) postWindowFrameChanged:(NSRect)frame fullscreen:(BOOL)isFullscreen resi
+         frame = [[self class] contentRectForFrameRect:frame styleMask:style];
+         [[WineApplicationController sharedController] flipRect:&frame];
+ 
++        /* The user moved or resized the game's desktop picture: that moves or rescales the picture, Windows
++           sees nothing change. */
++        if ([self isPresentedWindow] ||
++            ([self presentScales] && ([self inLiveResize] || presentZooming || enteringFullScreen || exitingFullScreen ||
++                                      (style & NSWindowStyleMaskFullScreen))))
++        {
++            [self presentedFrameChanged:NSRectToCGRect(frame)];
++            return;
++        }
++
+         /* Coalesce events by discarding any previous ones still in the queue. */
+         [queue discardEventsMatchingMask:event_mask_for_type(WINDOW_FRAME_CHANGED)
+                                forWindow:self];
+ 
+         event = macdrv_create_event(WINDOW_FRAME_CHANGED, self);
+-        event->window_frame_changed.frame = cgrect_win_from_mac(NSRectToCGRect(frame));
++        event->window_frame_changed.frame = cgrect_win_from_mac_global(NSRectToCGRect(frame));
+         event->window_frame_changed.fullscreen = isFullscreen;
+         event->window_frame_changed.in_resize = resizing;
+         event->window_frame_changed.skip_size_move_loop = skipSizeMove;
+@@ -2472,6 +2745,8 @@ - (NSRect) constrainFrameRect:(NSRect)frameRect toScreen:(NSScreen *)screen
+         // it.
+         NSArray* screens = [NSScreen screens];
+         NSRect contentRect = [self contentRectForFrameRect:frameRect];
++        if ([self isPresentedWindow])
++            return [super constrainFrameRect:frameRect toScreen:screen];
+         if (!screen_covered_by_rect(contentRect, screens) &&
+             frame_intersects_screens(frameRect, screens))
+             frameRect = [super constrainFrameRect:frameRect toScreen:screen];
+@@ -2622,7 +2897,7 @@ - (void) sendEvent:(NSEvent*)event
+ 
+                     event = macdrv_create_event(WINDOW_RESTORE_REQUESTED, self);
+                     event->window_restore_requested.keep_frame = TRUE;
+-                    event->window_restore_requested.frame = cgrect_win_from_mac(NSRectToCGRect(frame));
++                    event->window_restore_requested.frame = cgrect_win_from_mac_global(NSRectToCGRect(frame));
+                     [queue postEvent:event];
+                     macdrv_release_event(event);
+ 
+@@ -2643,6 +2918,13 @@ - (void) miniaturize:(id)sender
+          * the background rather than minimizing the window.
+          * Don't start minimizing the window on the Win32 side.
+          */
++        /* The desktop picture minimizes on the Mac side only: Windows never hears of it, so the game keeps
++           running as if it were on screen (many fullscreen games can't survive being minimized). */
++        if ([self isPresentedWindow])
++        {
++            [super miniaturize:sender];
++            return;
++        }
+         if (stage_manager_enabled())
+         {
+             [super miniaturize:sender];
+@@ -2886,6 +3168,14 @@ - (NSSize) window:(NSWindow*)window willUseFullScreenContentSize:(NSSize)propose
+         macdrv_query* query;
+         NSSize size;
+ 
++        if ([self presentScales])
++        {
++            /* Full screen keeps the game's shape; macOS centres it with black around. */
++            CGSize shape = [self presentShape];
++            double s = fmin(proposedSize.width / shape.width, proposedSize.height / shape.height);
++            return NSMakeSize(floor(shape.width * s), floor(shape.height * s));
++        }
++
+         query = macdrv_create_query();
+         query->type = QUERY_MIN_MAX_INFO;
+         query->window = (macdrv_window)[self retain];
+@@ -2926,7 +3216,7 @@ - (void)windowDidDeminiaturize:(NSNotification *)notification
+     {
+         WineApplicationController* controller = [WineApplicationController sharedController];
+ 
+-        if (!ignore_windowDeminiaturize)
++        if (!ignore_windowDeminiaturize && ![self isPresentedWindow])
+             [self postDidUnminimizeEvent];
+         ignore_windowDeminiaturize = FALSE;
+ 
+@@ -2953,7 +3243,7 @@ - (void)windowDidDeminiaturize:(NSNotification *)notification
+ 
+     - (void) windowDidEndLiveResize:(NSNotification *)notification
+     {
+-        if (!maximized)
++        if (!maximized && ![self presentScales])
+         {
+             macdrv_event* event = macdrv_create_event(WINDOW_RESIZE_ENDED, self);
+             [queue postEvent:event];
+@@ -3003,6 +3293,8 @@ - (void)windowDidMiniaturize:(NSNotification *)notification
+ 
+         [self checkWineDisplayLink];
+ 
++        if ([self isPresentedWindow]) return;   /* see -miniaturize: */
++
+         event = macdrv_create_event(WINDOW_DID_MINIMIZE, self);
+         [queue postEvent:event];
+         macdrv_release_event(event);
+@@ -3069,6 +3361,12 @@ - (BOOL)windowShouldClose:(id)sender
+ 
+     - (BOOL) windowShouldZoom:(NSWindow*)window toFrame:(NSRect)newFrame
+     {
++        if ([self presentScales])
++        {
++            presentZooming = TRUE;
++            dispatch_async(dispatch_get_main_queue(), ^{ presentZooming = FALSE; });
++            return YES;
++        }
+         if (maximized)
+         {
+             macdrv_event* event = macdrv_create_event(WINDOW_RESTORE_REQUESTED, self);
+@@ -3126,7 +3424,7 @@ - (void)windowWillMiniaturize:(NSNotification *)notification
+ 
+     - (NSSize) windowWillResize:(NSWindow*)sender toSize:(NSSize)frameSize
+     {
+-        if ([self inLiveResize])
++        if ([self inLiveResize] && ![self presentScales])
+         {
+             if (maximized)
+                 return self.wine_fractionalFrame.size;
+@@ -3146,13 +3444,13 @@ - (NSSize) windowWillResize:(NSWindow*)sender toSize:(NSSize)frameSize
+             query = macdrv_create_query();
+             query->type = QUERY_RESIZE_SIZE;
+             query->window = (macdrv_window)[self retain];
+-            query->resize_size.rect = cgrect_win_from_mac(NSRectToCGRect(rect));
++            query->resize_size.rect = cgrect_win_from_mac_global(NSRectToCGRect(rect));
+             query->resize_size.from_left = resizingFromLeft;
+             query->resize_size.from_top = resizingFromTop;
+ 
+             if ([self.queue query:query timeout:0.1])
+             {
+-                rect = NSRectFromCGRect(cgrect_mac_from_win(query->resize_size.rect));
++                rect = NSRectFromCGRect(cgrect_mac_from_win_global(query->resize_size.rect));
+                 rect = [self frameRectForContentRect:rect];
+                 frameSize = rect.size;
+             }
+@@ -3167,7 +3465,9 @@ - (void) windowWillStartLiveResize:(NSNotification *)notification
+     {
+         [self endWindowDragging];
+ 
+-        if (maximized)
++        if ([self presentScales])
++            ;
++        else if (maximized)
+         {
+             macdrv_event* event;
+             NSRect frame = [self contentRectForFrameRect:self.frame];
+@@ -3176,7 +3476,7 @@ - (void) windowWillStartLiveResize:(NSNotification *)notification
+ 
+             event = macdrv_create_event(WINDOW_RESTORE_REQUESTED, self);
+             event->window_restore_requested.keep_frame = TRUE;
+-            event->window_restore_requested.frame = cgrect_win_from_mac(NSRectToCGRect(frame));
++            event->window_restore_requested.frame = cgrect_win_from_mac_global(NSRectToCGRect(frame));
+             [queue postEvent:event];
+             macdrv_release_event(event);
+         }
+@@ -3193,6 +3493,19 @@ - (NSRect) windowWillUseStandardFrame:(NSWindow*)window defaultFrame:(NSRect)pro
+         NSRect currentContentRect, proposedContentRect, newContentRect, screenRect;
+         NSSize maxSize;
+ 
++        if ([self presentScales])
++        {
++            /* Zoom: as big as fits on this screen, keeping the shape. */
++            CGSize shape = [self presentShape];
++            NSRect content = [self contentRectForFrameRect:proposedFrame];
++            double s = fmin(NSWidth(content) / shape.width, NSHeight(content) / shape.height);
++            NSSize size = NSMakeSize(floor(shape.width * s), floor(shape.height * s));
++            content.origin.x += (NSWidth(content) - size.width) / 2;
++            content.origin.y += NSHeight(content) - size.height;
++            content.size = size;
++            return [self frameRectForContentRect:content];
++        }
++
+         query = macdrv_create_query();
+         query->type = QUERY_MIN_MAX_INFO;
+         query->window = (macdrv_window)[self retain];
+@@ -3286,7 +3599,7 @@ - (NSDragOperation) draggingUpdated:(id <NSDraggingInfo>)sender
+     {
+         NSDragOperation ret;
+         NSPoint pt = [[self contentView] convertPoint:[sender draggingLocation] fromView:nil];
+-        CGPoint cgpt = cgpoint_win_from_mac(NSPointToCGPoint(pt));
++        CGPoint cgpt = cgpoint_win_from_mac_global(NSPointToCGPoint(pt));
+ 
+         macdrv_query* query = macdrv_create_query();
+         query->type = QUERY_DRAG_DROP_DRAG;
+@@ -3306,7 +3619,7 @@ - (BOOL) performDragOperation:(id <NSDraggingInfo>)sender
+     {
+         BOOL ret;
+         NSPoint pt = [[self contentView] convertPoint:[sender draggingLocation] fromView:nil];
+-        CGPoint cgpt = cgpoint_win_from_mac(NSPointToCGPoint(pt));
++        CGPoint cgpt = cgpoint_win_from_mac_global(NSPointToCGPoint(pt));
+ 
+         macdrv_query* query = macdrv_create_query();
+         query->type = QUERY_DRAG_DROP_DROP;
+@@ -3343,9 +3656,10 @@ macdrv_window macdrv_create_cocoa_window(const struct macdrv_window_features* wf
+ 
+     OnMainThread(^{
+         window = [[WineWindow createWindowWithFeatures:wf
+-                                           windowFrame:NSRectFromCGRect(cgrect_mac_from_win(frame))
++                                           windowFrame:NSRectFromCGRect(cgrect_mac_from_win_global(frame))
+                                                   hwnd:hwnd
+                                                  queue:(WineEventQueue*)queue] retain];
++        [window setFrameFromWineWin:frame];
+     });
+ 
+     return (macdrv_window)window;
+@@ -3488,7 +3802,7 @@ void macdrv_set_cocoa_window_frame(macdrv_window w, const CGRect* new_frame)
+     WineWindow* window = (WineWindow*)w;
+ 
+     OnMainThread(^{
+-        [window setFrameFromWine:NSRectFromCGRect(cgrect_mac_from_win(*new_frame))];
++        [window setFrameFromWineWin:*new_frame];
+     });
+ }
+ 
+@@ -3506,7 +3820,7 @@ void macdrv_get_cocoa_window_frame(macdrv_window w, CGRect* out_frame)
+ 
+         frame = [window contentRectForFrameRect:[window wine_fractionalFrame]];
+         [[WineApplicationController sharedController] flipRect:&frame];
+-        *out_frame = cgrect_win_from_mac(NSRectToCGRect(frame));
++        *out_frame = cgrect_win_from_mac_global(NSRectToCGRect(frame));
+     });
+ }
+ 
+@@ -3758,7 +4072,7 @@ void macdrv_set_view_frame(macdrv_view v, CGRect rect)
+                 [view setFrame:newFrame];
+             [view setNeedsDisplay:YES];
+ 
+-            if (retina_enabled)
++            if (retina_enabled || present_on)
+             {
+                 int backing_size[2] = { 0 };
+                 [view wine_setBackingSize:backing_size];
+@@ -4057,3 +4371,23 @@ void macdrv_clear_ime_text(void)
+             [[window contentView] clearMarkedText];
+     });
+ }
++
++
++/***********************************************************************
++ *              macdrv_present_relayout
++ *
++ * Nokcandu: the desktop picture moved or was rescaled (present_origin and present_scale are already new). Every
++ * window keeps its Win32 position; its Mac frame and its views follow.
++ */
++void macdrv_present_relayout(double old_scale, CGPoint old_origin)
++{
++    if (old_scale <= 0) return;
++    present_relayout_depth++;
++    for (NSWindow* window in [NSApp windows])
++    {
++        if ([window isKindOfClass:[WineWindow class]])
++            [(WineWindow*)window presentRelayoutFromScale:old_scale origin:old_origin];
++    }
++    present_relayout_depth--;
++    macdrv_present_frames_changed();
++}
+diff --git a/dlls/winemac.drv/display.c b/dlls/winemac.drv/display.c
+index 5aad67f..b73f548 100644
+--- a/dlls/winemac.drv/display.c
++++ b/dlls/winemac.drv/display.c
+@@ -742,6 +742,57 @@ static CGDisplayModeRef find_best_display_mode(DEVMODEW *devmode, CFArrayRef dis
+  *              ChangeDisplaySettings  (MACDRV.@)
+  *
+  */
++/* Nokcandu: the virtual monitor's modes. Any size works; these are the ones games look for. */
++static const struct { int w, h; } present_sizes[] =
++{
++    {640, 480}, {720, 480}, {800, 600}, {1024, 768}, {1152, 864}, {1280, 720}, {1280, 800}, {1280, 960},
++    {1280, 1024}, {1360, 768}, {1366, 768}, {1440, 900}, {1600, 900}, {1600, 1200}, {1680, 1050},
++    {1920, 1080}, {1920, 1200}, {2048, 1152}, {2560, 1080}, {2560, 1440}, {2560, 1600}, {3440, 1440},
++    {3840, 2160},
++};
++
++static void present_devmode(DEVMODEW *devmode, int w, int h, int bpp)
++{
++    devmode->dmDisplayOrientation = DMDO_DEFAULT;
++    devmode->dmDisplayFixedOutput = DMDFO_DEFAULT;
++    devmode->dmBitsPerPel = bpp;
++    devmode->dmPelsWidth = w;
++    devmode->dmPelsHeight = h;
++    devmode->dmDisplayFlags = 0;
++    devmode->dmDisplayFrequency = 60;
++    devmode->dmFields |= DM_DISPLAYORIENTATION | DM_DISPLAYFIXEDOUTPUT | DM_BITSPERPEL | DM_PELSWIDTH |
++                         DM_PELSHEIGHT | DM_DISPLAYFLAGS | DM_DISPLAYFREQUENCY;
++}
++
++static DEVMODEW *present_get_modes(int *modes_count)
++{
++    static const int bpps[] = {32, 16, 8};
++    int sizes = ARRAY_SIZE(present_sizes) + 1, count = 0, i, b;
++    DEVMODEW *devmodes = calloc(sizes * ARRAY_SIZE(bpps), sizeof(DEVMODEW));
++    int cw = present_desktop.width, ch = present_desktop.height;
++    BOOL have_current = FALSE;
++
++    if (!devmodes) return NULL;
++    for (i = 0; i < ARRAY_SIZE(present_sizes); i++)
++        if (present_sizes[i].w == cw && present_sizes[i].h == ch) have_current = TRUE;
++
++    for (b = 0; b < ARRAY_SIZE(bpps); b++)
++    {
++        for (i = 0; i < sizes; i++)
++        {
++            int w, h;
++            if (i < ARRAY_SIZE(present_sizes)) { w = present_sizes[i].w; h = present_sizes[i].h; }
++            else if (!have_current) { w = cw; h = ch; }
++            else continue;
++            devmodes[count].dmSize = sizeof(DEVMODEW);
++            present_devmode(devmodes + count, w, h, bpps[b]);
++            count++;
++        }
++    }
++    *modes_count = count;
++    return devmodes;
++}
++
+ LONG macdrv_ChangeDisplaySettings(LPDEVMODEW displays, LPCWSTR primary_name, HWND hwnd, DWORD flags, LPVOID lpvoid)
+ {
+     LONG ret = DISP_CHANGE_SUCCESSFUL;
+@@ -755,6 +806,21 @@ LONG macdrv_ChangeDisplaySettings(LPDEVMODEW displays, LPCWSTR primary_name, HWN
+ 
+     TRACE("%p %s %p 0x%08x %p\n", displays, debugstr_w(primary_name), hwnd, (unsigned int)flags, lpvoid);
+ 
++    /* Nokcandu: a resolution change resizes the virtual monitor; the Mac's display is never touched. */
++    if (present_on)
++    {
++        for (mode = displays; mode->dmSize; mode = NEXT_DEVMODEW(mode))
++        {
++            if (wcsicmp(primary_name, mode->dmDeviceName) || is_detached_mode(mode)) continue;
++            if (mode->dmPelsWidth < 1 || mode->dmPelsHeight < 1 ||
++                mode->dmPelsWidth > 16384 || mode->dmPelsHeight > 16384)
++                return DISP_CHANGE_BADMODE;
++            TRACE("virtual monitor -> %ux%u\n", (unsigned int)mode->dmPelsWidth, (unsigned int)mode->dmPelsHeight);
++            macdrv_present_set_desktop_size(mode->dmPelsWidth, mode->dmPelsHeight);
++        }
++        return DISP_CHANGE_SUCCESSFUL;
++    }
++
+     init_original_display_mode();
+ 
+     if (macdrv_get_displays(&macdrv_displays, &num_displays))
+@@ -822,6 +888,9 @@ static DEVMODEW *display_get_modes(CGDirectDisplayID display_id, int *modes_coun
+     DEVMODEW *devmodes;
+     CFArrayRef modes;
+ 
++    if (present_on)
++        return present_get_modes(modes_count);
++
+     modes = copy_display_modes(display_id, TRUE);
+     if (!modes)
+         return NULL;
+@@ -890,12 +959,19 @@ static void display_get_current_mode(struct macdrv_display *display, DEVMODEW *d
+     CGDirectDisplayID display_id;
+ 
+     display_id = display->displayID;
+-    display_mode = CGDisplayCopyDisplayMode(display_id);
+ 
+     devmode->dmPosition.x = CGRectGetMinX(display->frame);
+     devmode->dmPosition.y = CGRectGetMinY(display->frame);
+     devmode->dmFields |= DM_POSITION;
+ 
++    if (present_on)
++    {
++        present_devmode(devmode, present_desktop.width, present_desktop.height, get_default_bpp());
++        return;
++    }
++
++    display_mode = CGDisplayCopyDisplayMode(display_id);
++
+     display_mode_to_devmode_fields(display_id, display_mode, devmode);
+     if (retina_enabled)
+     {
+diff --git a/dlls/winemac.drv/gdi.c b/dlls/winemac.drv/gdi.c
+index 4921fc2..987e9da 100644
+--- a/dlls/winemac.drv/gdi.c
++++ b/dlls/winemac.drv/gdi.c
+@@ -74,6 +74,8 @@ static void compute_desktop_rect(void)
+     for (i = 0; i < count; i++)
+         desktop_rect = CGRectUnion(desktop_rect, CGDisplayBounds(displayIDs[i]));
+     desktop_rect = cgrect_win_from_mac(desktop_rect);
++    if (present_on)
++        desktop_rect = CGRectMake(0, 0, present_desktop.width, present_desktop.height);
+ }
+ 
+ 
+diff --git a/dlls/winemac.drv/macdrv_cocoa.h b/dlls/winemac.drv/macdrv_cocoa.h
+index 20d82b9..ce62330 100644
+--- a/dlls/winemac.drv/macdrv_cocoa.h
++++ b/dlls/winemac.drv/macdrv_cocoa.h
+@@ -159,14 +159,40 @@
+ extern int retina_on;       /* Whether Retina mode is currently active (enabled and display is in default mode). */
+ extern int enable_app_nap;
+ 
++/* Nokcandu: windowed presentation of fullscreen games. The game's whole (virtual) desktop is shown inside one
++ * normal, resizable Mac window: Windows pixels map to Mac points by present_scale, and the desktop's top-left
++ * appears at present_origin (Mac global coordinates, top-left origin). The Mac's own display is never
++ * changed; the game sees a monitor of present_desktop's size. Like Retina mode, but with any scale and a
++ * position. */
++extern int present_enabled;        /* Whether windowed presentation is enabled via registry setting. */
++extern int present_on;             /* Whether it is currently active. */
++extern double present_scale;       /* Mac points per Windows pixel. */
++extern CGPoint present_origin;     /* Mac global point (top-left origin) of the desktop's top-left. */
++extern CGSize present_desktop;     /* The virtual desktop, in Windows pixels. */
++
++/* Mac points per Windows pixel. */
++static inline double mac_per_win(void)
++{
++    if (present_on) return present_scale;
++    return retina_on ? 0.5 : 1;
++}
++
++/* Windows pixels per Mac point: what a layer showing Windows pixels uses as its contentsScale. */
++static inline double win_per_mac(void)
++{
++    return 1 / mac_per_win();
++}
++
++/* Sizes, and positions relative to a window or view: scale only. */
+ static inline CGRect cgrect_mac_from_win(CGRect rect)
+ {
+-    if (retina_on)
++    double s = mac_per_win();
++    if (s != 1)
+     {
+-        rect.origin.x /= 2;
+-        rect.origin.y /= 2;
+-        rect.size.width /= 2;
+-        rect.size.height /= 2;
++        rect.origin.x *= s;
++        rect.origin.y *= s;
++        rect.size.width *= s;
++        rect.size.height *= s;
+     }
+ 
+     return rect;
+@@ -174,12 +200,13 @@ static inline CGRect cgrect_mac_from_win(CGRect rect)
+ 
+ static inline CGRect cgrect_win_from_mac(CGRect rect)
+ {
+-    if (retina_on)
++    double s = win_per_mac();
++    if (s != 1)
+     {
+-        rect.origin.x *= 2;
+-        rect.origin.y *= 2;
+-        rect.size.width *= 2;
+-        rect.size.height *= 2;
++        rect.origin.x *= s;
++        rect.origin.y *= s;
++        rect.size.width *= s;
++        rect.size.height *= s;
+     }
+ 
+     return rect;
+@@ -187,10 +214,11 @@ static inline CGRect cgrect_win_from_mac(CGRect rect)
+ 
+ static inline CGSize cgsize_mac_from_win(CGSize size)
+ {
+-    if (retina_on)
++    double s = mac_per_win();
++    if (s != 1)
+     {
+-        size.width /= 2;
+-        size.height /= 2;
++        size.width *= s;
++        size.height *= s;
+     }
+ 
+     return size;
+@@ -198,10 +226,11 @@ static inline CGSize cgsize_mac_from_win(CGSize size)
+ 
+ static inline CGSize cgsize_win_from_mac(CGSize size)
+ {
+-    if (retina_on)
++    double s = win_per_mac();
++    if (s != 1)
+     {
+-        size.width *= 2;
+-        size.height *= 2;
++        size.width *= s;
++        size.height *= s;
+     }
+ 
+     return size;
+@@ -209,10 +238,11 @@ static inline CGSize cgsize_win_from_mac(CGSize size)
+ 
+ static inline CGPoint cgpoint_mac_from_win(CGPoint point)
+ {
+-    if (retina_on)
++    double s = mac_per_win();
++    if (s != 1)
+     {
+-        point.x /= 2;
+-        point.y /= 2;
++        point.x *= s;
++        point.y *= s;
+     }
+ 
+     return point;
+@@ -220,15 +250,60 @@ static inline CGPoint cgpoint_mac_from_win(CGPoint point)
+ 
+ static inline CGPoint cgpoint_win_from_mac(CGPoint point)
+ {
+-    if (retina_on)
++    double s = win_per_mac();
++    if (s != 1)
+     {
+-        point.x *= 2;
+-        point.y *= 2;
++        point.x *= s;
++        point.y *= s;
+     }
+ 
+     return point;
+ }
+ 
++/* Screen positions (window frames, the mouse, cursor clipping): scale, then place the desktop. */
++static inline CGPoint cgpoint_mac_from_win_global(CGPoint point)
++{
++    point = cgpoint_mac_from_win(point);
++    if (present_on)
++    {
++        point.x += present_origin.x;
++        point.y += present_origin.y;
++    }
++    return point;
++}
++
++static inline CGPoint cgpoint_win_from_mac_global(CGPoint point)
++{
++    if (present_on)
++    {
++        point.x -= present_origin.x;
++        point.y -= present_origin.y;
++    }
++    return cgpoint_win_from_mac(point);
++}
++
++static inline CGRect cgrect_mac_from_win_global(CGRect rect)
++{
++    rect = cgrect_mac_from_win(rect);
++    if (present_on && !CGRectIsInfinite(rect))
++        rect = CGRectOffset(rect, present_origin.x, present_origin.y);
++    return rect;
++}
++
++static inline CGRect cgrect_win_from_mac_global(CGRect rect)
++{
++    if (present_on && !CGRectIsInfinite(rect))
++        rect = CGRectOffset(rect, -present_origin.x, -present_origin.y);
++    return cgrect_win_from_mac(rect);
++}
++
++/* Where the desktop is shown (Mac global points, top-left origin). */
++static inline CGRect present_rect(void)
++{
++    return CGRectMake(present_origin.x, present_origin.y,
++                      present_desktop.width * present_scale, present_desktop.height * present_scale);
++}
++
+ extern int macdrv_start_cocoa_app(unsigned long long tickcount);
+ extern void macdrv_window_rejected_focus(const struct macdrv_event *event);
+ extern void macdrv_beep(void);
+@@ -237,6 +312,14 @@ static inline CGPoint cgpoint_win_from_mac(CGPoint point)
+ extern int macdrv_using_input_method(void);
+ extern void macdrv_set_mouse_capture_window(macdrv_window window);
+ extern void macdrv_set_cocoa_retina_mode(int new_mode);
++extern void macdrv_present_start(int width, int height);
++extern void macdrv_present_set_desktop_size(int width, int height);
++extern void macdrv_present_relayout(double old_scale, CGPoint old_origin);
++extern void macdrv_present_sync(void);
++extern void macdrv_present_frames_changed(void);
++extern int present_released;
++extern double present_user_scale;
++extern int present_fullscreen;       /* The user released the mouse from the game (Shift-Cmd-Esc). */
+ 
+ 
+ /* cursor */
+diff --git a/dlls/winemac.drv/macdrv_main.c b/dlls/winemac.drv/macdrv_main.c
+index 24859c6..049bd4b 100644
+--- a/dlls/winemac.drv/macdrv_main.c
++++ b/dlls/winemac.drv/macdrv_main.c
+@@ -58,6 +58,7 @@ int cursor_clipping_locks_windows = TRUE;
+ int use_precise_scrolling = TRUE;
+ int gl_surface_mode = GL_SURFACE_IN_FRONT_OPAQUE;
+ int retina_enabled = FALSE;
++static int present_requested_width = 0, present_requested_height = 0;
+ int enable_app_nap = FALSE;
+ 
+ UINT64 app_icon_callback = 0;
+@@ -384,6 +385,27 @@ static void setup_options(void)
+     if (!get_config_key(hkey, NULL, "RetinaMode", buffer, sizeof(buffer)))
+         retina_enabled = IS_OPTION_TRUE(buffer[0]);
+ 
++    /* Nokcandu: show the game's whole screen in a resizable Mac window (a virtual monitor). Prefix-wide, like
++       RetinaMode, so every process of the game agrees. */
++    if (!get_config_key(hkey, NULL, "WindowedFullscreen", buffer, sizeof(buffer)))
++        present_enabled = IS_OPTION_TRUE(buffer[0]);
++    if (present_enabled)
++    {
++        if (!get_config_key(hkey, NULL, "WindowedResolution", buffer, sizeof(buffer)))
++        {
++            int w = 0, h = 0, i = 0;
++            while (buffer[i] >= '0' && buffer[i] <= '9') w = w * 10 + (buffer[i++] - '0');
++            if (buffer[i] == 'x' || buffer[i] == 'X') i++;
++            while (buffer[i] >= '0' && buffer[i] <= '9') h = h * 10 + (buffer[i++] - '0');
++            if (w >= 320 && h >= 200 && w <= 16384 && h <= 16384)
++            {
++                present_requested_width = w;
++                present_requested_height = h;
++            }
++        }
++        retina_enabled = FALSE;   /* The picture is scaled anyway. */
++    }
++
+     retina_on = retina_enabled;
+ 
+     if (appkey) NtClose(appkey);
+@@ -460,6 +482,9 @@ static NTSTATUS macdrv_init(void *arg)
+         return STATUS_UNSUCCESSFUL;
+     }
+ 
++    if (present_enabled)
++        macdrv_present_start(present_requested_width, present_requested_height);
++
+     init_user_driver();
+     return STATUS_SUCCESS;
+ }
+diff --git a/dlls/winemac.drv/surface.c b/dlls/winemac.drv/surface.c
+index a849918..03cb19b 100644
+--- a/dlls/winemac.drv/surface.c
++++ b/dlls/winemac.drv/surface.c
+@@ -89,7 +89,7 @@ static BOOL macdrv_surface_flush(struct window_surface *window_surface, const RE
+     colorspace = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+     image = CGImageCreate(color_info->bmiHeader.biWidth, abs(color_info->bmiHeader.biHeight), 8, 32,
+                           color_info->bmiHeader.biSizeImage / abs(color_info->bmiHeader.biHeight), colorspace,
+-                          alpha_info | kCGBitmapByteOrder32Little, surface->provider, NULL, retina_on, kCGRenderingIntentDefault);
++                          alpha_info | kCGBitmapByteOrder32Little, surface->provider, NULL, retina_on || present_on, kCGRenderingIntentDefault);
+     CGColorSpaceRelease(colorspace);
+ 
+     macdrv_window_set_color_image(surface->window, image, cgrect_from_rect(*rect), cgrect_from_rect(*dirty));
+diff --git a/dlls/winemac.drv/vulkan.c b/dlls/winemac.drv/vulkan.c
+index 8b375b6..6eaa1c6 100644
+--- a/dlls/winemac.drv/vulkan.c
++++ b/dlls/winemac.drv/vulkan.c
+@@ -41,6 +41,12 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(vulkan);
+ 
++/* Nokcandu builds the driver without a Vulkan SDK; the engine it drops into ships the Vulkan loader
++   (libvulkan.1.dylib, loaded by win32u). Without this the driver has no Vulkan surfaces at all, so DXVK fails. */
++#ifndef SONAME_LIBVULKAN
++#define SONAME_LIBVULKAN "libvulkan.1.dylib"
++#endif
++
+ #ifdef SONAME_LIBVULKAN
+ 
+ typedef VkFlags VkMacOSSurfaceCreateFlagsMVK;

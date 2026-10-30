@@ -169,6 +169,9 @@ public struct CustomGameConfig: Codable, Hashable {
     public var displayPixels: [Int]?
     /// Unused: Wine's Mac driver has no virtual screen (kept so settings saved by test builds still load).
     public var virtualScreen: [Int]?
+    /// Resizable window: the game runs on a virtual monitor of this size, shown in one normal Mac window
+    /// (nil = off). Needs Nokcandu's Wine Mac driver in the game's engine (WindowedPresentation).
+    public var windowedPresentation: [Int]?
     /// The store the game came from (GOG, Epic, Amazon); Epic and Amazon add sign-in details at launch.
     public var store: StoreLink?
 
