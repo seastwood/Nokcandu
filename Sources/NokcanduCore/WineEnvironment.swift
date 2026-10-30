@@ -20,6 +20,7 @@ import Foundation
 /// - SDL_JOYSTICK_MFI=0: controllers reach games once, through their USB/Bluetooth driver (not twice).
 /// - DXVK_SHADER_CACHE_PATH: one shader cache for every game, the same folder Sikarugir uses, so shaders a game
 ///   compiled once are reused instead of stuttering again.
+/// - BRIDGE_RPC_PATH: where the Mac Discord app's socket is, for the Discord bridge (DiscordBridge).
 public enum WineEnvironment {
     static let mediaSuffix = "/Frameworks/GStreamer.framework/Versions/1.0/lib"
     static let pluginSuffix = "/Frameworks/GStreamer.framework/Libraries/gstreamer-1.0"
@@ -39,6 +40,8 @@ public enum WineEnvironment {
         env["GST_PLUGIN_PATH"] = contents.path + pluginSuffix
         env["CX_ROOT"] = contents.appendingPathComponent("SharedSupport/wine").path
         env["DXVK_SHADER_CACHE_PATH"] = NSHomeDirectory() + "/.cache/dxvk"
+        // The Discord bridge (if installed) finds the Mac Discord app's socket here.
+        if let t = ProcessInfo.processInfo.environment["TMPDIR"] { env["BRIDGE_RPC_PATH"] = t.hasSuffix("/") ? String(t.dropLast()) : t }
         for (k, v) in engineVariables { env[k] = v }
     }
 
@@ -47,17 +50,22 @@ public enum WineEnvironment {
     static func legacyLine(_ v: String) -> String { "export DYLD_FALLBACK_LIBRARY_PATH=\"$\(v)/Frameworks:/usr/lib\"" }
     static func mediaLine(_ v: String) -> String { "export DYLD_FALLBACK_LIBRARY_PATH=\"$\(v)/Frameworks:$\(v)\(mediaSuffix):/usr/lib\"" }
     static func versions(_ v: String) -> [String] {
-        [legacyLine(v), mediaLine(v), mediaLine(v) + "\nexport SikarugirAppWine11=1", exportLineV3(v), exportLine(v)]
+        [legacyLine(v), mediaLine(v), mediaLine(v) + "\nexport SikarugirAppWine11=1", exportLineV3(v), exportLineV4(v), exportLine(v)]
     }
     static func exportLineV3(_ v: String) -> String {
         mediaLine(v)
             + "\nexport GST_PLUGIN_PATH=\"$\(v)\(pluginSuffix)\" CX_ROOT=\"$\(v)/SharedSupport/wine\""
             + "\nexport SikarugirAppWine11=1 ROSETTA_ADVERTISE_AVX=1 DOTNET_EnableWriteXorExecute=0 MVK_CONFIG_RESUME_LOST_DEVICE=1 MVK_CONFIG_FAST_MATH_ENABLED=0 CX_FWD_COMPAT_GL_CTX=1 WINEBOOT_HIDE_DIALOG=1 QMLSCENE_DEVICE=softwarecontext"
     }
+    static func exportLineV4(_ v: String) -> String {
+        mediaLine(v)
+            + "\nexport GST_PLUGIN_PATH=\"$\(v)\(pluginSuffix)\" CX_ROOT=\"$\(v)/SharedSupport/wine\" DXVK_SHADER_CACHE_PATH=\"$HOME/.cache/dxvk\""
+            + "\nexport SikarugirAppWine11=1 ROSETTA_ADVERTISE_AVX=1 DOTNET_EnableWriteXorExecute=0 MVK_CONFIG_RESUME_LOST_DEVICE=1 MVK_CONFIG_FAST_MATH_ENABLED=0 CX_FWD_COMPAT_GL_CTX=1 WINEBOOT_HIDE_DIALOG=1 QMLSCENE_DEVICE=softwarecontext SDL_JOYSTICK_MFI=0"
+    }
     static func exportLine(_ variable:String = "CONTENTS") -> String {
         let v = variable
         return mediaLine(v)
-            + "\nexport GST_PLUGIN_PATH=\"$\(v)\(pluginSuffix)\" CX_ROOT=\"$\(v)/SharedSupport/wine\" DXVK_SHADER_CACHE_PATH=\"$HOME/.cache/dxvk\""
+            + "\nexport GST_PLUGIN_PATH=\"$\(v)\(pluginSuffix)\" CX_ROOT=\"$\(v)/SharedSupport/wine\" DXVK_SHADER_CACHE_PATH=\"$HOME/.cache/dxvk\" BRIDGE_RPC_PATH=\"${TMPDIR%/}\""
             + "\nexport " + engineVariables.map { "\($0.0)=\($0.1)" }.joined(separator: " ")
     }
     static func upgradeExports(_ text:String) -> String {

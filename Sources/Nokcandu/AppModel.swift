@@ -299,6 +299,7 @@ final class AppModel: ObservableObject {
                     await MainActor.run { self.say("\(g.name) is playing on the Mac's screen: \(why)") }
                 }
                 await BonjourService.prepareForLaunch(g)
+                await DiscordBridge.prepareForLaunch(g)
                 LibraryOrganizer.notePlayed(g)
                 GameDataSpec.forGame(g)?.snapshot()     // keep a copy of settings that live outside the app
                 // Mac versions from Epic need Epic's sign-in details, or they close right after their first screen.

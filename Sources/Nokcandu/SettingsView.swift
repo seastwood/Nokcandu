@@ -27,6 +27,7 @@ struct SettingsView: View {
 struct GeneralSettings: View {
     @EnvironmentObject var model: AppModel
     @State private var installTo = GameFolders.installFolder
+    @State private var discordTick = 0
 
     var body: some View {
         Form {
@@ -36,6 +37,12 @@ struct GeneralSettings: View {
                 }
                 Text("Drag games in the sidebar to put them in your own order; right-click a game to add it to Favorites.")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Discord") {
+                Toggle("Show what you're playing in Discord", isOn: Binding(get: { DiscordBridge.enabled }, set: { DiscordBridge.enabled = $0; discordTick += 1 }))
+                Text("Windows games that support Discord Rich Presence show up in your Discord status. Nokcandu adds a small bridge (rpc-bridge, the one Sikarugir uses) to each game's Windows environment the next time it starts; turning this off removes it.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .id(discordTick)
             }
             Section("New games") {
                 InstallFolderPicker(folder: $installTo)
