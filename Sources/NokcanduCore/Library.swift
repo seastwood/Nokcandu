@@ -155,21 +155,41 @@ public enum GameLauncher {
         return .notRunning
     }
 
-    /// The running Windows program of a game a launcher started, if any.
+    /// A running copy of the game that its own launcher script didn't record: a game its launcher (Battle.net,
+    /// Steam, EA app) started, a Mac game, or any game after Nokcandu restarted. Found by the game's own program.
     static func launchedGameProcess(_ game: InstalledGame) -> Int32? {
+        if let n = game.native {
+            // A Mac game: its app's own program.
+            let prefix = URL(fileURLWithPath: n.appPath).standardizedFileURL.path + "/Contents/MacOS/"
+            return processSnapshot().first { $0.1.hasPrefix(prefix) }?.0
+        }
         var match: ((String) -> Bool)?
-        if let b = game.battleNet {
+        if BattleNet.isHost(game) || PCLaunchers.kind(of: game) != nil {
+            // A launcher app (Battle.net, EA app, Ubisoft Connect): running while any of its programs is, besides
+            // Wine's own background ones.
+            match = { c in !c.isEmpty && !c.hasPrefix(#"c:\windows\"#) }
+        } else if let b = game.battleNet {
+            // Battle.net starts each game with its product code.
             let uid = "-uid \(b.uid.lowercased())"
             match = { c in c.hasSuffix(uid) || c.contains(uid + " ") }
-        } else if let exe = game.hosted?.exe, !exe.isEmpty {
-            let name = exe.replacingOccurrences(of: "\\", with: "/").split(separator: "/").last.map { String($0).lowercased() } ?? ""
-            if !name.isEmpty { match = { c in c.contains("\\" + name) } }
+        } else if let tail = windowsProgramTail(game.hosted?.exe ?? game.custom?.exe) {
+            // The game's program by its folder and file name ("StarCraft\\x86_64\\starcraft.exe"), so two games
+            // in one environment with the same file name (game.exe) aren't mixed up.
+            match = { c in c.contains(tail) }
         }
         guard let match, let host = WineTools.hostContents(for: game) else { return nil }
         for (pid, command) in processSnapshot() where match(command.lowercased()) {
             if WineTools.owns(pid: pid, contents: host) { return pid }
         }
         return nil
+    }
+
+    /// The last two parts of a Windows program path, lowercased with backslashes ("folder\\game.exe").
+    static func windowsProgramTail(_ path: String?) -> String? {
+        guard let path, !path.isEmpty else { return nil }
+        let parts = path.replacingOccurrences(of: "/", with: "\\").split(separator: "\\").map(String.init)
+        guard let file = parts.last, file.lowercased().hasSuffix(".exe") else { return nil }
+        return (parts.count >= 2 ? parts[parts.count - 2] + "\\" + file : "\\" + file).lowercased()
     }
 
     private static let snapshotLock = NSLock()

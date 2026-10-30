@@ -119,7 +119,11 @@ public enum WineTools {
         let file = URL(fileURLWithPath: path).standardizedFileURL.path
         if ["wine", "wine64", "wine-preloader", "wine64-preloader", "wineserver"].contains((file as NSString).lastPathComponent),
            (file as NSString).deletingLastPathComponent == support + "/wine/bin" { return true }
-        return file.hasPrefix(support + "/GameApp/") && file.hasSuffix(".app/Contents/MacOS/wine")
+        // Wine's loader for the environment's programs, named after the app it belongs to
+        // (GameApp/StarCraft.app/Contents/MacOS/StarCraft) or plain "wine".
+        guard file.hasPrefix(support + "/GameApp/") else { return false }
+        let rest = file.dropFirst(support.count + "/GameApp/".count).components(separatedBy: "/")
+        return rest.count == 4 && rest[0].hasSuffix(".app") && rest[1] == "Contents" && rest[2] == "MacOS"
     }
     static func owns(pid: Int32, contents: URL) -> Bool {
         guard pid > 1, pid != getpid() else { return false }
