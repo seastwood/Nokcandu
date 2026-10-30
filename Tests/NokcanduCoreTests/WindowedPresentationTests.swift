@@ -59,4 +59,26 @@ final class WindowedPresentationTests: XCTestCase {
         XCTAssertNil(d.range(of: Data("built without Vulkan".utf8)), "driver was built without Vulkan support")
         XCTAssertNotNil(d.range(of: Data("macdrv_vulkan_surface_create".utf8)))
     }
+
+    func testDriverGoesOnlyIntoEnginesOfItsWineVersion() throws {
+        let h = FileManager.default.temporaryDirectory.appendingPathComponent("nok-wp-ver-\(UUID().uuidString)")
+        let lib = WindowedPresentation.lib(h)
+        for f in WindowedPresentation.files {
+            let u = lib.appendingPathComponent(f)
+            try FileManager.default.createDirectory(at: u.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("a newer Sikarugir revision's own driver".utf8).write(to: u)
+        }
+        WindowedPresentation.driversForTesting = ["10.0": h]
+        defer { WindowedPresentation.driversForTesting = nil }
+        let version = h.appendingPathComponent("SharedSupport/wine/version")
+        // Another revision of Wine 10.0: its own driver can be swapped for Nokcandu's.
+        try "wine sikarugir 10.0 (revision 9)".write(to: version, atomically: true, encoding: .utf8)
+        XCTAssertEqual(WindowedPresentation.engineState(host: h), .stock)
+        XCTAssertTrue(WindowedPresentation.supports(EngineVersion(major: 10, minor: 0, revision: 12)))
+        // A newer Wine: not until Nokcandu has a driver built for it.
+        try "wine sikarugir 11.0".write(to: version, atomically: true, encoding: .utf8)
+        XCTAssertEqual(WindowedPresentation.engineState(host: h), .unsupported)
+        XCTAssertFalse(WindowedPresentation.supports(EngineVersion(major: 11, minor: 0, revision: 0)))
+        XCTAssertEqual(WindowedPresentation.supportedWine, ["10.0"])
+    }
 }

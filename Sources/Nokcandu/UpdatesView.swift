@@ -13,6 +13,7 @@ struct UpdatesView: View {
     @State private var busy: String?          // what's running now
     @State private var log: [String] = []
     @State private var tick = 0
+    @State private var confirmTry: InstalledGame?     // an app whose games use the resizable window
 
     var cat: UpdateCatalog? { model.catalog }
     var hosts: [InstalledGame] { _ = tick; return EngineUpdate.hosts(in: model.games) }
@@ -53,6 +54,13 @@ struct UpdatesView: View {
             }
         }
         .frame(width: 720, height: 640)
+        .confirmationDialog("Try \(newestEngine?.description ?? "the new engine") for \(confirmTry?.name ?? "this app")?",
+                            isPresented: Binding(get: { confirmTry != nil }, set: { if !$0 { confirmTry = nil } })) {
+            Button("Keep the Current Engine", role: .cancel) { confirmTry = nil }
+            Button("Try It Anyway") { if let g = confirmTry { tryEngine(g) }; confirmTry = nil }
+        } message: {
+            Text(confirmTry.flatMap { g in newestEngine.flatMap { WindowedPresentation.engineUpdateWarning(host: g, games: model.games, target: $0) } } ?? "")
+        }
         .task { if cat == nil { checking = true; await model.checkForUpdates(quiet: true); checking = false } }
     }
 
@@ -158,6 +166,11 @@ struct UpdatesView: View {
                 Button("Roll Back") { rollBack(g) }.disabled(busy != nil || running)
             } else if let c = cur, c < newest, failedTest {
                 Text("Newest didn't pass test").font(.caption).foregroundStyle(.secondary)
+            } else if let c = cur, c < newest, let warning = WindowedPresentation.engineUpdateWarning(host: g, games: model.games, target: newest) {
+                // Games here use the resizable window, which this engine doesn't support yet: held back by default.
+                InfoButton(warning)
+                Text("Kept for the resizable window").font(.caption).foregroundStyle(.secondary)
+                Button("Try Anyway…") { confirmTry = g }.disabled(busy != nil || running)
             } else if let c = cur, c < newest {
                 Button("Try \(newest.description)") { tryEngine(g) }.disabled(busy != nil || running)
                     .help(running ? "Quit it first." : "Switches this app to the newest engine; you can roll back.")

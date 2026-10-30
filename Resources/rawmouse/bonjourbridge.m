@@ -16,6 +16,7 @@
 // When that process quits, another takes over within seconds.
 
 #include <arpa/inet.h>
+#include <CoreFoundation/CoreFoundation.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
@@ -37,15 +38,44 @@
 #define CANCEL_REQUEST 63
 #define MAX_DATA 70000
 
+// Debug log: NOKCANDU_BONJOUR_DEBUG=1 (to stderr), or a file named .nokcandu-bonjour-debug in the Wine prefix
+// (then to nokcandu-bonjour.log next to it).
+static FILE *bb_out;
+static pthread_once_t bb_once = PTHREAD_ONCE_INIT;
+static void bb_open(void)
+{
+    const char *prefix = getenv("WINEPREFIX");
+    char path[1200];
+    if (getenv("NOKCANDU_BONJOUR_DEBUG")) { bb_out = stderr; return; }
+    if (!prefix) return;
+    snprintf(path, sizeof(path), "%s/.nokcandu-bonjour-debug", prefix);
+    if (access(path, F_OK)) return;
+    snprintf(path, sizeof(path), "%s/nokcandu-bonjour.log", prefix);
+    bb_out = fopen(path, "a");
+}
+
 static void bb_log(const char *fmt, ...)
 {
-    if (!getenv("NOKCANDU_BONJOUR_DEBUG")) return;
+    pthread_once(&bb_once, bb_open);
+    if (!bb_out) return;
     va_list a;
     va_start(a, fmt);
-    fprintf(stderr, "nokcandu-bonjour[%d]: ", (int)getpid());
-    vfprintf(stderr, fmt, a);
-    fputc('\n', stderr);
+    flockfile(bb_out);
+    fprintf(bb_out, "nokcandu-bonjour[%d] %.3f: ", (int)getpid(), CFAbsoluteTimeGetCurrent());
+    vfprintf(bb_out, fmt, a);
+    fputc('\n', bb_out);
+    fflush(bb_out);
+    funlockfile(bb_out);
     va_end(a);
+}
+
+static void bb_hex(const char *what, int fd, const uint8_t *p, ssize_t n)
+{
+    char hex[3 * 48 + 1] = "";
+    pthread_once(&bb_once, bb_open);
+    if (!bb_out) return;
+    for (ssize_t i = 0; i < n && i < 48; i++) snprintf(hex + 3 * i, 4, "%02x ", p[i]);
+    bb_log("%s fd %d, %zd bytes: %s", what, fd, n, hex);
 }
 
 static int read_all(int fd, void *buf, size_t len)
@@ -100,7 +130,10 @@ static void *pump(void *arg)
     ssize_t n;
     free(arg);
     while ((n = read(a.from, buf, sizeof(buf))) > 0 || (n < 0 && errno == EINTR))
+    {
+        if (n > 0) bb_hex(a.owns ? "result" : "reply", a.to, (const uint8_t *)buf, n);
         if (n > 0 && write_all(a.to, buf, (size_t)n)) break;
+    }
     shutdown(a.to, SHUT_WR);
     shutdown(a.from, SHUT_RD);
     if (a.owns) { close(a.from); close(a.to); }
@@ -193,6 +226,7 @@ static void *serve_client(void *arg)
     // Replies (and the daemon closing) flow back on their own.
     if (start_pump(daemon, client, 0, &replies)) { close(daemon); close(client); return NULL; }
 
+    bb_log("client fd %d connected", client);
     for (;;)
     {
         uint8_t hdr[HDR_SIZE];
@@ -214,7 +248,9 @@ static void *serve_client(void *arg)
         // flagged as having none.
         separate = !first && op != CANCEL_REQUEST && !(flags & IPC_FLAGS_NOERRSD) && datalen >= 2;
         first = 0;
-        bb_log("request op %u, %u bytes%s", op, datalen, separate ? ", separate result socket" : "");
+        bb_log("client fd %d: request op %u, %u bytes, flags %#x%s", client, op, datalen, flags,
+               separate ? ", separate result socket" : "");
+        bb_hex("request data", client, msg + HDR_SIZE, datalen);
 
         if (!separate)
         {
@@ -248,6 +284,7 @@ static void *serve_client(void *arg)
         }
     }
     free(msg);
+    bb_log("client fd %d closed", client);
     shutdown(daemon, SHUT_RDWR);
     shutdown(client, SHUT_RDWR);
     pthread_join(replies, NULL);

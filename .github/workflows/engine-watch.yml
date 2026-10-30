@@ -1,0 +1,62 @@
+name: Engine watch
+# Daily: is Sikarugir shipping engines on a newer Wine than Nokcandu's driver (Engine/winemac/SUPPORTED_WINE)
+# is built for? Then try Nokcandu's driver patches on that Wine and open an issue with the result, so the
+# resizable window catches up quickly. Games stay on supported engines meanwhile (Nokcandu holds them back).
+on:
+  schedule:
+    - cron: '23 10 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: write
+jobs:
+  watch:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Newest Wine in Sikarugir's engines
+        id: v
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          V=$(gh api 'repos/Sikarugir-App/Engines/releases?per_page=20' --jq '.[].assets[].name' \
+                | sed -nE 's/^WS12WineSikarugir([0-9]+\.[0-9]+)(_[0-9]+)?\.tar\.xz$/\1/p' | sort -t. -k1,1n -k2,2n -u | tail -1)
+          echo "Newest Sikarugir Wine: ${V:-none}; driver supports: $(tr '\n' ' ' < Engine/winemac/SUPPORTED_WINE)"
+          echo "wine=$V" >> "$GITHUB_OUTPUT"
+          if [ -n "$V" ] && ! grep -qx "$V" Engine/winemac/SUPPORTED_WINE; then echo "new=true" >> "$GITHUB_OUTPUT"; else echo "new=false" >> "$GITHUB_OUTPUT"; fi
+      - name: Already reported?
+        if: steps.v.outputs.new == 'true'
+        id: seen
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          T="Resizable window: support Wine ${{ steps.v.outputs.wine }} engines"
+          N=$(gh issue list --state open --search "in:title \"$T\"" --json title --jq "[.[] | select(.title == \"$T\")] | length")
+          echo "title=$T" >> "$GITHUB_OUTPUT"; echo "open=$N" >> "$GITHUB_OUTPUT"
+      - name: Try the driver patches on it
+        if: steps.v.outputs.new == 'true' && steps.seen.outputs.open == '0'
+        id: try
+        continue-on-error: true
+        run: |
+          /usr/sbin/softwareupdate --install-rosetta --agree-to-license >/dev/null 2>&1 || true
+          set -o pipefail
+          WINE_VERSION='${{ steps.v.outputs.wine }}' WINEMAC_TRY=1 Engine/winemac/build.sh "$RUNNER_TEMP/winemac" 2>&1 | tee "$RUNNER_TEMP/try.log"
+      - name: Report
+        if: steps.v.outputs.new == 'true' && steps.seen.outputs.open == '0'
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          V='${{ steps.v.outputs.wine }}'
+          {
+            echo "Sikarugir now ships engines on **Wine $V**; Nokcandu's driver supports $(tr '\n' ' ' < Engine/winemac/SUPPORTED_WINE)."
+            echo "Until it supports Wine $V, Nokcandu keeps games that use the resizable window on their current engine (others update normally)."
+            echo
+            if [ '${{ steps.try.outcome }}' = success ]; then
+              echo "✅ The driver patches apply and build on Wine $V as they are. Next: pin the source checksum (shown in the log below) in Engine/winemac/checksums, add $V to Engine/winemac/SUPPORTED_WINE, test a game, release."
+            else
+              echo "❌ The driver patches don't build on Wine $V yet; they need porting. The end of the log shows where."
+            fi
+            echo; echo '<details><summary>Build log (end)</summary>'; echo; echo '```'
+            tail -60 "$RUNNER_TEMP/try.log" 2>/dev/null
+            echo '```'; echo '</details>'; echo
+            echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } > body.md
+          gh issue create --title '${{ steps.seen.outputs.title }}' --body-file body.md

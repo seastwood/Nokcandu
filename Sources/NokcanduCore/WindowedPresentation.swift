@@ -27,11 +27,43 @@ public enum WindowedPresentation {
     static func lib(_ host: URL) -> URL { host.appendingPathComponent("SharedSupport/wine/lib/wine") }
     static func backup(_ host: URL) -> URL { host.appendingPathComponent("SharedSupport/nokcandu/winemac.original", isDirectory: true) }
 
-    /// Nokcandu's driver as bundled in the app (Resources/winemac, built by Engine/winemac/build.sh).
-    public static var bundled: URL? {
-        guard let d = NokPaths.bundledResource("winemac") else { return nil }
-        return files.allSatisfy { FileManager.default.fileExists(atPath: d.appendingPathComponent($0).path) } ? d : nil
+    /// Nokcandu's drivers as bundled in the app: Resources/winemac/<Wine major.minor>/…, one per Wine version
+    /// (built by Engine/winemac/build.sh; an older single-driver layout with a wine-version file still works).
+    /// A driver talks to the rest of Wine through that version's internals, so it only goes into engines of the
+    /// same Wine version (any Sikarugir revision of it).
+    nonisolated(unsafe) static var driversForTesting: [String: URL]?
+    static var bundledDrivers: [String: URL] {
+        if let t = driversForTesting { return t }
+        guard let root = NokPaths.bundledResource("winemac") else { return [:] }
+        let fm = FileManager.default
+        func complete(_ d: URL) -> Bool { files.allSatisfy { fm.fileExists(atPath: d.appendingPathComponent($0).path) } }
+        var out: [String: URL] = [:]
+        for name in (try? fm.contentsOfDirectory(atPath: root.path)) ?? [] where name.first?.isNumber == true {
+            let d = root.appendingPathComponent(name, isDirectory: true)
+            if complete(d) { out[name] = d }
+        }
+        if complete(root) {
+            let v = (try? String(contentsOf: root.appendingPathComponent("wine-version"), encoding: .utf8))?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            out[(v?.isEmpty == false ? v! : "10.0")] = root
+        }
+        return out
     }
+    /// The Wine versions (major.minor) Nokcandu has a driver for.
+    public static var supportedWine: [String] {
+        bundledDrivers.keys.sorted { $0.compare($1, options: .numeric) == .orderedAscending }
+    }
+    public static func supports(_ v: EngineVersion) -> Bool { bundledDrivers["\(v.major).\(v.minor)"] != nil }
+    /// The engine's Wine version, from its version file.
+    static func engineVersion(host h: URL) -> EngineVersion? {
+        (try? String(contentsOf: h.appendingPathComponent("SharedSupport/wine/version"), encoding: .utf8)).flatMap(EngineVersion.init(versionString:))
+    }
+    /// The driver for this engine (nil when Nokcandu has none for its Wine version).
+    static func bundled(host h: URL) -> URL? {
+        engineVersion(host: h).flatMap { bundledDrivers["\($0.major).\($0.minor)"] }
+    }
+    /// Whether this copy of Nokcandu carries any driver at all.
+    public static var bundled: URL? { bundledDrivers.values.first }
 
     public enum EngineState: Equatable { case stock, nokcandu, outdated, unsupported, missing }
 
@@ -43,7 +75,7 @@ public enum WindowedPresentation {
         guard files.allSatisfy({ FileManager.default.fileExists(atPath: l.appendingPathComponent($0).path) }) else { return .missing }
         // The .so is re-signed when installed, so compare the Windows halves and recognise ours by its exports' strings.
         if files.allSatisfy({ sha(l.appendingPathComponent($0)) == stockSHA[$0] }) { return .stock }
-        if let b = bundled {
+        if let b = bundled(host: h) {
             let ours = files.dropFirst().allSatisfy { sha(l.appendingPathComponent($0)) == sha(b.appendingPathComponent($0)) }
             if ours, isOurs(l.appendingPathComponent(files[0])) {
                 // Current = the installed file is the one Nokcandu signed, made from the driver this Nokcandu carries.
@@ -53,6 +85,8 @@ public enum WindowedPresentation {
             }
         }
         if isOurs(l.appendingPathComponent(files[0])) { return .outdated }
+        // The engine's own driver, from a Sikarugir revision of a Wine version the driver is built for.
+        if let v = engineVersion(host: h), supports(v) { return .stock }
         return .unsupported
     }
 
@@ -118,7 +152,9 @@ public enum WindowedPresentation {
         guard let h = WineTools.hostContents(for: g) else { return "This game has no Windows environment." }
         if bundled == nil { return "This copy of Nokcandu doesn't include its Wine Mac driver." }
         switch engineState(host: h) {
-        case .unsupported: return "This game's Wine engine isn't one Nokcandu's driver is built for."
+        case .unsupported:
+            let v = engineVersion(host: h).map { "Wine \($0.major).\($0.minor)" } ?? "This game's engine"
+            return "\(v) isn't supported by the resizable window yet (it's built for Wine \(supportedWine.joined(separator: ", "))). Roll back the engine in Updates to use it; the game plays on the Mac's screen meanwhile."
         case .missing: return "This game's Wine engine has no Mac driver."
         default: return nil
         }
@@ -208,7 +244,8 @@ public enum WindowedPresentation {
 
     /// Puts Nokcandu's driver into the app's engine (keeping the original once), re-signed.
     static func install(host h: URL) throws {
-        guard let b = bundled else { throw NokError("This copy of Nokcandu doesn't include its Wine Mac driver.") }
+        guard bundled != nil else { throw NokError("This copy of Nokcandu doesn't include its Wine Mac driver.") }
+        guard let b = bundled(host: h) else { throw NokError("This game's Wine engine isn't one Nokcandu's driver is built for; nothing was changed.") }
         let fm = FileManager.default, l = lib(h), bk = backup(h)
         switch engineState(host: h) {
         case .nokcandu: return
@@ -222,7 +259,7 @@ public enum WindowedPresentation {
                 try fm.copyItem(at: l.appendingPathComponent(f), to: dst)
             }
         case .outdated:
-            guard files.allSatisfy({ sha(bk.appendingPathComponent($0)) == stockSHA[$0] }) else {
+            guard backupIsOriginal(h) else {
                 throw NokError("The engine's original Mac driver is missing from its backup; repair the game's engine first.")
             }
         }
@@ -240,11 +277,41 @@ public enum WindowedPresentation {
         }
     }
 
+    /// The kept original driver is complete and isn't Nokcandu's.
+    static func backupIsOriginal(_ h: URL) -> Bool {
+        let bk = backup(h), fm = FileManager.default
+        return files.allSatisfy { fm.fileExists(atPath: bk.appendingPathComponent($0).path) } && !isOurs(bk.appendingPathComponent(files[0]))
+    }
+
+    /// Before the engine is replaced (an engine update): the engine gets its own driver back, so the copy kept
+    /// for rolling back is clean, and the next launch puts the driver into the new engine if it's supported.
+    public static func prepareForEngineChange(host h: URL) {
+        try? restore(host: h)
+        try? FileManager.default.removeItem(at: appliedFile(h))
+    }
+
+    /// Games with the resizable window on that run in this app's engine.
+    public static func users(ofHost h: URL, in games: [InstalledGame]) -> [InstalledGame] {
+        let host = h.standardizedFileURL.path
+        return games.filter { g in
+            g.native == nil && setting(for: g) != nil && WineTools.hostContents(for: g).map { $0.standardizedFileURL.path == host } == true
+        }
+    }
+
+    /// Before switching an app to another engine: what stops working (nil = nothing).
+    public static func engineUpdateWarning(host g: InstalledGame, games: [InstalledGame], target: EngineVersion) -> String? {
+        guard !supports(target), let h = WineTools.hostContents(for: g) else { return nil }
+        let names = users(ofHost: h, in: games).map(\.name)
+        guard !names.isEmpty else { return nil }
+        let list = names.count <= 3 ? ListFormatter.localizedString(byJoining: names) : "\(names.count) games"
+        return "The resizable window isn't ready for Wine \(target.major).\(target.minor) engines yet. \(list) would play on the Mac's screen until it is (you can roll back any time)."
+    }
+
     /// Puts the engine's own driver back (no-op if it never had ours).
     static func restore(host h: URL) throws {
         let fm = FileManager.default, l = lib(h), bk = backup(h)
         guard engineState(host: h) == .nokcandu || engineState(host: h) == .outdated else { return }
-        guard files.allSatisfy({ sha(bk.appendingPathComponent($0)) == stockSHA[$0] }) else {
+        guard backupIsOriginal(h) else {
             throw NokError("The engine's original Mac driver is missing from its backup.")
         }
         for f in files {

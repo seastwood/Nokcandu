@@ -352,6 +352,9 @@ public enum EngineUpdate {
 
         // Include native clients that survived their Wine server.
         try await WineTools.stopAll(for: g)
+        // The engine's own Mac driver goes back first, so the copy kept for rolling back is the engine as it came;
+        // the resizable window's driver is put into the new engine at the next launch if it supports it.
+        WindowedPresentation.prepareForEngineChange(host: c)
 
         let rb = rollbackDir(c)
         if fm.fileExists(atPath: rb.path) { try fm.removeItem(at: rb) }
@@ -404,6 +407,7 @@ public enum EngineUpdate {
         guard FileManager.default.fileExists(atPath: rollbackDir(g.contents).path) else { throw NokError("There's no previous engine kept for \(g.name).") }
         try await WineTools.stopAll(for: g)
         try restore(g.contents, prefix: g.prefix, log: log)
+        WindowedPresentation.prepareForEngineChange(host: g.contents)     // the driver goes back in at the next launch
         log("Rolled back to \(g.reload().wineVersion ?? "the previous engine").")
     }
 

@@ -292,7 +292,11 @@ final class AppModel: ObservableObject {
                 if SharedSteam.refreshDetection(g) { await MainActor.run { self.refresh() } }
                 if DisplayController.supports(g) { DisplayController.prepareForLaunch(g) }
                 do { try await WindowedPresentation.prepareForLaunch(g) }
-                catch { await MainActor.run { self.say("Couldn't set up the resizable window: \(error.localizedDescription)") } }
+                catch {
+                    // Never in the way of playing: the game starts on the Mac's screen, and says why.
+                    let why = WindowedPresentation.unavailable(for: g) ?? error.localizedDescription
+                    await MainActor.run { self.say("\(g.name) is playing on the Mac's screen: \(why)") }
+                }
                 await BonjourService.prepareForLaunch(g)
                 LibraryOrganizer.notePlayed(g)
                 GameDataSpec.forGame(g)?.snapshot()     // keep a copy of settings that live outside the app

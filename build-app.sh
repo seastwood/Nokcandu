@@ -69,6 +69,7 @@ fi
 if [ -f "$WINEMAC/x86_64-unix/winemac.so" ]; then
   rm -rf "$APP/Contents/Resources/winemac"; mkdir -p "$APP/Contents/Resources/winemac"
   cp -R "$WINEMAC/x86_64-unix" "$WINEMAC/x86_64-windows" "$WINEMAC/i386-windows" "$APP/Contents/Resources/winemac/"
+  if [ -f "$WINEMAC/wine-version" ]; then cp "$WINEMAC/wine-version" "$APP/Contents/Resources/winemac/"; else cat Engine/winemac/SUPPORTED_WINE > "$APP/Contents/Resources/winemac/wine-version"; fi
 fi
 # Signing identity: a stable one keeps macOS permissions (Input Monitoring, drives, folders) across builds.
 # NOKCANDU_SIGN_IDENTITY, else the "Nokcandu Signing" identity from scripts/make-signing-identity.sh, else ad-hoc.
