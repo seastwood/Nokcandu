@@ -13,11 +13,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 ROOT="$(pwd)"
-OUT="${1:-$ROOT/build/winemac}"
+OUT_ARG="${1:-}"
 WORK="$ROOT/build/winemac-work"
 WINE_VERSION="${WINE_VERSION:-$(head -1 "$ROOT/Engine/winemac/SUPPORTED_WINE")}"
 WINE_DIR="${WINE_VERSION%%.*}.$( [ "${WINE_VERSION#*.}" = 0 ] && echo 0 || echo x )"
 BISON=bison-3.8.2; LLVM_MINGW=llvm-mingw-20261006-ucrt-macos-universal
+OUT="${OUT_ARG:-$ROOT/build/winemac-$WINE_VERSION}"
 mkdir -p "$WORK" "$OUT"; cd "$WORK"
 
 fetch() {   # url file sha256

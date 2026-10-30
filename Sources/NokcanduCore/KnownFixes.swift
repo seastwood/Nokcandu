@@ -233,7 +233,7 @@ public enum Winetricks {
         env["WINEPREFIX"] = support.appendingPathComponent("prefix").path
         env["WINE"] = wineBin.appendingPathComponent("wine").path
         env["WINESERVER"] = wineBin.appendingPathComponent("wineserver").path
-        env["DYLD_FALLBACK_LIBRARY_PATH"] = WineEnvironment.libraryPath(contents: host)
+        WineEnvironment.apply(contents: host, to: &env)
         env["PATH"] = [cab.path, wineBin.path, "/usr/bin", "/bin", "/usr/sbin", "/sbin"].joined(separator: ":")
         env["W_OPT_UNATTENDED"] = "1"
         env["WINEDEBUG"] = "-all"

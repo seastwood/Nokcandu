@@ -17,8 +17,8 @@ jobs:
         id: kept
         uses: actions/cache@v4
         with:
-          path: build/winemac
-          key: winemac-${{ hashFiles('Engine/winemac/**') }}
+          path: build/winemac-[0-9]*
+          key: winemac-v2-${{ hashFiles('Engine/winemac/**') }}
       - name: Wine source and tools (downloads, checksummed)
         if: steps.kept.outputs.cache-hit != 'true'
         uses: actions/cache@v4
@@ -29,13 +29,15 @@ jobs:
         if: steps.kept.outputs.cache-hit != 'true'
         run: |
           /usr/sbin/softwareupdate --install-rosetta --agree-to-license >/dev/null 2>&1 || true
-          bash Engine/winemac/build.sh
-      - name: Check it
+          for V in $(cat Engine/winemac/SUPPORTED_WINE); do WINE_VERSION=$V bash Engine/winemac/build.sh; done
+      - name: Check them
         run: |
-          cat build/winemac/SHA256SUMS
-          strings build/winemac/x86_64-unix/winemac.so | grep -q nokcandu-virtual-display
-          strings build/winemac/x86_64-unix/winemac.so | grep -q macdrv_vulkan_surface_create
+          for V in $(cat Engine/winemac/SUPPORTED_WINE); do
+            echo "Wine $V:"; cat build/winemac-$V/SHA256SUMS
+            strings build/winemac-$V/x86_64-unix/winemac.so | grep -q nokcandu-virtual-display
+            nm -gU build/winemac-$V/x86_64-unix/winemac.so | grep -q _macdrv_functions
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: winemac
-          path: build/winemac
+          path: build/winemac-[0-9]*

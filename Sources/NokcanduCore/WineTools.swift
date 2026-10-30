@@ -50,7 +50,7 @@ public enum WineTools {
         var env = ProcessInfo.processInfo.environment
         let support = c.appendingPathComponent("SharedSupport")
         env["WINEPREFIX"] = support.appendingPathComponent("prefix").path
-        env["DYLD_FALLBACK_LIBRARY_PATH"] = WineEnvironment.libraryPath(contents: c)
+        WineEnvironment.apply(contents: c, to: &env)
         env["WINEDEBUG"] = "-all"
         env["WINEMSYNC"] = "1"
         env["PATH"] = support.appendingPathComponent("wine/bin").path + ":/usr/bin:/bin:/usr/sbin:/sbin"

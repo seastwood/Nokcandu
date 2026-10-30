@@ -88,7 +88,7 @@ public final class InstallContext: @unchecked Sendable {
     public var wineEnvironment: [String: String] {
         var env = ProcessInfo.processInfo.environment
         env["WINEPREFIX"] = prefix.path
-        env["DYLD_FALLBACK_LIBRARY_PATH"] = WineEnvironment.libraryPath(contents: contents)
+        WineEnvironment.apply(contents: contents, to: &env)
         env["WINEDEBUG"] = "-all"
         env["WINEMSYNC"] = "1"      // same as every launcher: a wineserver started without it can't be shared
         env["PATH"] = support.appendingPathComponent("wine/bin").path + ":/usr/bin:/bin:/usr/sbin:/sbin"

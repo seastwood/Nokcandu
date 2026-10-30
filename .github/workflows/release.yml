@@ -51,8 +51,8 @@ jobs:
         id: driver
         uses: actions/cache@v4
         with:
-          path: build/winemac
-          key: winemac-${{ hashFiles('Engine/winemac/**') }}
+          path: build/winemac-[0-9]*
+          key: winemac-v2-${{ hashFiles('Engine/winemac/**') }}
       - name: Wine source and tools for the driver (only when it must be built here)
         if: steps.driver.outputs.cache-hit != 'true'
         uses: actions/cache@v4
@@ -63,11 +63,12 @@ jobs:
         if: steps.driver.outputs.cache-hit != 'true'
         run: |
           /usr/sbin/softwareupdate --install-rosetta --agree-to-license >/dev/null 2>&1 || true
-          bash Engine/winemac/build.sh
+          for V in $(cat Engine/winemac/SUPPORTED_WINE); do WINE_VERSION=$V bash Engine/winemac/build.sh; done
       - name: Check the driver
         run: |
-          test -f build/winemac/x86_64-unix/winemac.so
-          strings build/winemac/x86_64-unix/winemac.so | grep -q nokcandu-virtual-display
+          for V in $(cat Engine/winemac/SUPPORTED_WINE); do
+            strings build/winemac-$V/x86_64-unix/winemac.so | grep -q nokcandu-virtual-display
+          done
       - name: Build, test and package
         env:
           NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}

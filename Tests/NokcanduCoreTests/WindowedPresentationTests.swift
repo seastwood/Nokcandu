@@ -51,7 +51,7 @@ final class WindowedPresentationTests: XCTestCase {
 
     func testBuiltDriverCarriesItsMarker() throws {
         let so = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("build/winemac/x86_64-unix/winemac.so")
+            .appendingPathComponent("build/winemac-10.0/x86_64-unix/winemac.so")
         guard FileManager.default.fileExists(atPath: so.path) else { throw XCTSkip("driver not built here") }
         XCTAssertTrue(WindowedPresentation.isOurs(so))
         // Vulkan surfaces (DXVK, MoltenVK) must be built in: the stock driver has them.

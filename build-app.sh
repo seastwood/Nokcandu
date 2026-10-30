@@ -60,17 +60,22 @@ xcrun clang -arch x86_64 -arch arm64 -mmacosx-version-min=11.0 -dynamiclib -fobj
   -framework AudioToolbox -framework CoreAudio \
   -install_name @rpath/nokcandu-rawmouse.dylib \
   -o "$APP/Contents/Resources/nokcandu-rawmouse.dylib" Resources/rawmouse/rawmouse.m Resources/rawmouse/audiofollow.m Resources/rawmouse/bonjourbridge.m
-# Nokcandu's Wine Mac driver (resizable game windows): Wine 10.0 + Engine/winemac/patches, built by
-# Engine/winemac/build.sh. A fresh local build wins over the copy kept in Resources/winemac.
-WINEMAC=Resources/winemac; [ -f build/winemac/SHA256SUMS ] && WINEMAC=build/winemac
-if [ "${NOKCANDU_REQUIRE_WINEMAC:-0}" = 1 ] && [ ! -f "$WINEMAC/x86_64-unix/winemac.so" ]; then
-  echo "Nokcandu's Wine Mac driver isn't built (Engine/winemac/build.sh): a release needs it."; exit 1
-fi
-if [ -f "$WINEMAC/x86_64-unix/winemac.so" ]; then
-  rm -rf "$APP/Contents/Resources/winemac"; mkdir -p "$APP/Contents/Resources/winemac"
-  cp -R "$WINEMAC/x86_64-unix" "$WINEMAC/x86_64-windows" "$WINEMAC/i386-windows" "$APP/Contents/Resources/winemac/"
-  if [ -f "$WINEMAC/wine-version" ]; then cp "$WINEMAC/wine-version" "$APP/Contents/Resources/winemac/"; else cat Engine/winemac/SUPPORTED_WINE > "$APP/Contents/Resources/winemac/wine-version"; fi
-fi
+# Nokcandu's Wine Mac drivers (resizable game windows), one per Wine version in Engine/winemac/SUPPORTED_WINE,
+# built by Engine/winemac/build.sh into build/winemac-<version> (Wine 10.0's may also be in build/winemac).
+# Bundled as Resources/winemac/<version>/; Nokcandu puts each into engines of that Wine version.
+rm -rf "$APP/Contents/Resources/winemac"
+for V in $(cat Engine/winemac/SUPPORTED_WINE); do
+  D="build/winemac-$V"; [ -f "$D/x86_64-unix/winemac.so" ] || { [ "$V" = 10.0 ] && D=build/winemac; }
+  if [ -f "$D/x86_64-unix/winemac.so" ]; then
+    mkdir -p "$APP/Contents/Resources/winemac/$V"
+    cp -R "$D/x86_64-unix" "$D/x86_64-windows" "$D/i386-windows" "$APP/Contents/Resources/winemac/$V/"
+    echo "$V" > "$APP/Contents/Resources/winemac/$V/wine-version"
+  elif [ "${NOKCANDU_REQUIRE_WINEMAC:-0}" = 1 ]; then
+    echo "Nokcandu's Wine Mac driver for Wine $V isn't built (Engine/winemac/build.sh): a release needs it."; exit 1
+  else
+    echo "Note: no Wine Mac driver for Wine $V here (the resizable window won't be offered on those engines)."
+  fi
+done
 # Signing identity: a stable one keeps macOS permissions (Input Monitoring, drives, folders) across builds.
 # NOKCANDU_SIGN_IDENTITY, else the "Nokcandu Signing" identity from scripts/make-signing-identity.sh, else ad-hoc.
 SIGN_ID="${NOKCANDU_SIGN_IDENTITY:-}"
@@ -91,7 +96,9 @@ if [ -z "${NOKCANDU_SIGN_IDENTITY:-}" ] && [ -f "$KC" ] && [ -f "$KC_PW" ] && se
 fi
 [ "$SIGN_ID" = "-" ] && echo "Signing: ad-hoc (macOS will re-ask for permissions after each build)" || echo "Signing: $SIGN_ID"
 codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/nokcandu-rawmouse.dylib"
-[ -f "$APP/Contents/Resources/winemac/x86_64-unix/winemac.so" ] && codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/winemac/x86_64-unix/winemac.so"
+for SO in "$APP"/Contents/Resources/winemac/*/x86_64-unix/winemac.so; do
+  [ -f "$SO" ] && codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$SO"
+done
 
 codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/cabextract"
 

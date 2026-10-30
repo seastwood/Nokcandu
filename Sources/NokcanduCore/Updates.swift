@@ -479,7 +479,8 @@ extension InstalledGame {
 
 /// Remembers which engine builds failed or passed the self-test on this Mac.
 public enum EngineSelfTests {
-    static var url: URL { NokPaths.support.appendingPathComponent("engine-selftests.json") }
+    /// v2: results from before engines got SikarugirAppWine11 (every Wine 11 engine failed) are forgotten.
+    static var url: URL { NokPaths.support.appendingPathComponent("engine-selftests-v2.json") }
     static func load() -> [String: Bool] {
         (try? Data(contentsOf: url)).flatMap { try? JSONDecoder().decode([String: Bool].self, from: $0) } ?? [:]
     }
