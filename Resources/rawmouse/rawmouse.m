@@ -147,7 +147,6 @@ static NSWindow *aim_window(id ctl) {
     return recentering || clip_is_small(ctl, w) ? w : nil;
 }
 
-void nok_present_warp_real(CGPoint p);   // Resources/present: maps the point when the game is shown in a window
 static NSWindow *update_aiming(id ctl) {
     NSWindow *w = aim_window(ctl);
     BOOL now = w != nil;
@@ -167,14 +166,14 @@ static NSWindow *update_aiming(id ctl) {
             os_unfair_lock_unlock(&vcur_lock);
             vcur_set(p.x, p.y);
             }
-            nok_present_warp_real(CGPointMake(NSMidX(f), top - NSMidY(f)));
+            CGWarpMouseCursorPosition(CGPointMake(NSMidX(f), top - NSMidY(f)));
         } else if (game_cursor) {
             // Hand the pointer back where the game's cursor is, so the next move doesn't jump.
             os_unfair_lock_lock(&vcur_lock);
             CGPoint p = CGPointMake(vcur_x, vcur_y);
             BOOL known = !CGRectIsEmpty(vcur_bounds);
             os_unfair_lock_unlock(&vcur_lock);
-            if (known) nok_present_warp_real(p);
+            if (known) CGWarpMouseCursorPosition(p);
         }
         CGAssociateMouseAndMouseCursorPosition(!aiming);
         if (aiming) {

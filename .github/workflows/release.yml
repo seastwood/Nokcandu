@@ -47,11 +47,23 @@ jobs:
           ID="$(security find-identity -v -p codesigning "$KC" | awk -F'"' '/Developer ID Application/ { print $2; exit }')"
           echo "NOKCANDU_SIGN_IDENTITY=$ID" >> "$GITHUB_ENV"
           echo "NOKCANDU_HARDENED=1" >> "$GITHUB_ENV"
+      - name: Cache the Wine source and build tools for the Mac driver
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/winemac-work/*.tar.xz
+          key: winemac-downloads-${{ hashFiles('Engine/winemac/checksums/*') }}
+      - name: Build Nokcandu's Wine Mac driver (resizable game windows)
+        run: |
+          /usr/sbin/softwareupdate --install-rosetta --agree-to-license >/dev/null 2>&1 || true
+          Engine/winemac/build.sh
+          test -f build/winemac/x86_64-unix/winemac.so
       - name: Build, test and package
         env:
           NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
           NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
           NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+          NOKCANDU_REQUIRE_WINEMAC: '1'
         run: ./make-dmg.sh
       - name: Publish release
         env:

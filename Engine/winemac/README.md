@@ -19,8 +19,8 @@ command line tools. Output includes `SHA256SUMS`.
 ## Patches
 
 - `0001-macdrv-functions-for-d3dmetal-and-dxmt.patch`: exports `macdrv_functions`, the table Apple's D3DMetal
-  and DXMT use to reach Wine's Metal views, with the registry callbacks it needs. From CrossOver's Wine 10.0
-  source (CodeWeavers, LGPL-2.1-or-later), as published in PhoenicisOrg/winecx. The Sikarugir engine's own
+  and DXMT use to reach Wine's Metal views, with the registry callbacks it needs. From the Wine 10.0
+  source published in PhoenicisOrg/winecx (LGPL-2.1-or-later; its copyright notice is kept in the patch). The Sikarugir engine's own
   `winemac.so` exports the same table, so the replacement keeps Apple Metal and DXMT working.
 
 ## License

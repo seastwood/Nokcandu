@@ -43,7 +43,7 @@ struct WelcomeView: View {
                 Text(log.suffix(4).joined(separator: "\n")).font(.caption.monospaced()).foregroundStyle(.secondary)
             }
             Divider()
-            Text("Only use games you own. Nokcandu isn't affiliated with Microsoft, Valve, Blizzard, Apple or CodeWeavers. Games with kernel anti-cheat generally can't run under Wine.")
+            Text("Only use games you own. Nokcandu isn't affiliated with Microsoft, Valve, Blizzard or Apple. Games with kernel anti-cheat generally can't run under Wine.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
                 Spacer()

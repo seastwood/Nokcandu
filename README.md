@@ -4,7 +4,7 @@
 
 **Play the Windows games you own on an Apple silicon Mac — free.** Nokcandu turns each game into its own
 Mac app, built on [Wine](https://www.winehq.org) via the open-source [Sikarugir](https://github.com/Sikarugir-App) engines,
-with tested settings, one-click fixes and safe updates. Think of it as a free alternative to CrossOver.
+with tested settings, one-click fixes and safe updates.
 
 [**Download the latest release →**](https://github.com/seastwood/Nokcandu/releases/latest)
 
@@ -26,6 +26,8 @@ with tested settings, one-click fixes and safe updates. Think of it as a free al
 - **Your games, your drives** — choose where each game installs (external drives included), move games later, and see which ones need a drive plugged in. Mac games you already have can be added too.
 - **Graphics modes** — Classic 3D (DirectX 8/9 → Vulkan), Modern 3D (DirectX 10/11), Apple Metal (DirectX 11/12, 64-bit), DXMT (DirectX 10/11 → Metal), Classic 2D, Compatibility.
 - **Raw mouse capture** — optional and off by default; reads your mouse directly whenever a game captures it (aiming, camera control) (hundreds of updates a second, no macOS acceleration), which can improve aiming in compatible games. Toggle it while playing; compatibility varies by game.
+- **Play in a resizable window** — optional, per game: the game runs on a virtual screen shown in a normal Mac window you can move, resize, minimize or make full screen, without changing your Mac's display. Change its resolution while the game runs. Control-Command-C frees or captures the mouse, Control-Command-F toggles full screen, Shift-Command-Esc always frees the mouse.
+- **Local network games** — Windows games that use Bonjour (like StarCraft's Local Area Network) use the Mac's own Bonjour; nothing to install. Sound follows the Mac's output when you plug in headphones.
 - **Performance** — FPS counter, vsync, frame limit. **Drives** — map D:, E:… to external SSDs. **Storage** — see and free space.
 - **Fixes & health** — Optional DirectX 8 compatibility (d3d8to9 + bundled DXVK 2.3), DirectX 9 shader extras, borderless windows, cinematic playback (LAV Filters), known community fixes (winetricks), anti-cheat notes, Repair, Diagnostics, crash recognition with suggested fixes, notes per game.
 - **Stays current** — checks this repo for new Nokcandu releases and the Sikarugir/LAV projects for new components. New engines are self-tested before they're offered, each game tries them separately, and you can roll back.
@@ -55,7 +57,10 @@ When you use them: the store clients [gogdl](https://github.com/Heroic-Games-Lau
 and [nile](https://github.com/imLinguin/nile) (GPL-3.0, run as separate programs), [winetricks](https://github.com/Winetricks/winetricks) (LGPL-2.1+),
 fix data from [umu-protonfixes](https://github.com/Open-Wine-Components/umu-protonfixes) (BSD-2-Clause) and anti-cheat data from
 [AreWeAntiCheatYet](https://github.com/AreWeAntiCheatYet/AreWeAntiCheatYet) (MIT).
-Nokcandu isn't affiliated with Apple, Microsoft, Valve, Blizzard, GOG, Epic Games, Amazon, EA, Ubisoft, CodeWeavers or the Wine project.
+Nokcandu's Wine Mac driver (for the resizable window) is built from Wine 10.0's source with the patches in
+[Engine/winemac](Engine/winemac) (LGPL-2.1+). **Settings → Credits** in the app lists every open-source project
+Nokcandu uses, with links to support them.
+Nokcandu isn't affiliated with Apple, Microsoft, Valve, Blizzard, GOG, Epic Games, Amazon, EA, Ubisoft or the Wine project.
 
 ## Documentation
 

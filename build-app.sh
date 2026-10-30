@@ -51,17 +51,21 @@ cp Resources/bonjour/nokcandu-bonjour-service.exe Resources/refresh-generals-lau
 chmod 755 "$APP/Contents/Resources/generals-launcher" "$APP/Contents/Resources/screen-size"
 ./Resources/borderless/build.sh "$(pwd)/$APP/Contents/Resources"
 ./Resources/cabextract/build.sh "$(pwd)/$APP/Contents/Resources"
-# Nokcandu's helper library loaded into Wine: raw mouse, hot corners, game names, and fullscreen games in a
-# resizable window (Resources/present). Built for both x86_64 (today's Wine runs under Rosetta) and arm64
-# (a native Wine later) — nothing in it is specific to one architecture.
+# Nokcandu's helper library loaded into Wine: raw mouse, hot corners, game names, sound that follows the Mac's
+# devices and Bonjour from the Mac (the resizable window lives in Nokcandu's Wine Mac driver, Engine/winemac).
+# Built for both x86_64 (today's Wine runs under Rosetta) and arm64 (a native Wine later) — nothing in it is
+# specific to one architecture.
 xcrun clang -arch x86_64 -arch arm64 -mmacosx-version-min=11.0 -dynamiclib -fobjc-arc -O2 -Wall \
   -framework AppKit -framework GameController -framework CoreGraphics -framework IOKit -framework OpenGL \
   -framework AudioToolbox -framework CoreAudio \
   -install_name @rpath/nokcandu-rawmouse.dylib \
-  -o "$APP/Contents/Resources/nokcandu-rawmouse.dylib" Resources/rawmouse/rawmouse.m Resources/rawmouse/audiofollow.m Resources/rawmouse/bonjourbridge.m Resources/present/present.m
+  -o "$APP/Contents/Resources/nokcandu-rawmouse.dylib" Resources/rawmouse/rawmouse.m Resources/rawmouse/audiofollow.m Resources/rawmouse/bonjourbridge.m
 # Nokcandu's Wine Mac driver (resizable game windows): Wine 10.0 + Engine/winemac/patches, built by
 # Engine/winemac/build.sh. A fresh local build wins over the copy kept in Resources/winemac.
 WINEMAC=Resources/winemac; [ -f build/winemac/SHA256SUMS ] && WINEMAC=build/winemac
+if [ "${NOKCANDU_REQUIRE_WINEMAC:-0}" = 1 ] && [ ! -f "$WINEMAC/x86_64-unix/winemac.so" ]; then
+  echo "Nokcandu's Wine Mac driver isn't built (Engine/winemac/build.sh): a release needs it."; exit 1
+fi
 if [ -f "$WINEMAC/x86_64-unix/winemac.so" ]; then
   rm -rf "$APP/Contents/Resources/winemac"; mkdir -p "$APP/Contents/Resources/winemac"
   cp -R "$WINEMAC/x86_64-unix" "$WINEMAC/x86_64-windows" "$WINEMAC/i386-windows" "$APP/Contents/Resources/winemac/"

@@ -1,10 +1,14 @@
 import Foundation
 
-/// Windows setups made by other apps (Whisky, CrossOver) that Nokcandu can bring a game over from:
+/// Windows setups made by other Mac Wine apps that Nokcandu can bring a game over from:
 /// the game's folder is copied (an instant clone on the same drive) and the saves and settings it kept
 /// in the bottle's user folders come along. Nothing in the other app is changed.
 public struct Bottle: Identifiable, Hashable, Sendable {
-    public enum Kind: String, Sendable { case whisky = "Whisky", crossover = "CrossOver" }
+    public enum Kind: String, Sendable {
+        case whisky = "Whisky", crossover = "CrossOver"
+        /// How the app shows where a bottle came from.
+        public var title: String { self == .whisky ? "Whisky" : "other Wine app" }
+    }
     public var kind: Kind
     public var name: String
     /// The folder holding drive_c.

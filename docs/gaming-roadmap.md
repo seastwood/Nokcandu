@@ -14,7 +14,7 @@ MetalSharp documents selection from game imports and tested routing rules. The u
 
 Extend runtime trials into a “Try in a test copy” workflow covering configuration, registry, components, and saves. Clearly name the working baseline and the trial, and track their roles explicitly rather than inferring them from filenames. APFS cloning can reduce the initial cost, but the UI must explain logical size versus uniquely allocated storage. Never overwrite the working baseline because a menu opened successfully.
 
-CrossOver exposes bottle duplication and archive/restore, and recommends archives before configuration changes. These are useful workflow ideas to adapt to Nokcandu's own per-game model. [CrossOver bottle commands](https://support.codeweavers.com/en_US/crossover-mac-user-guide#bottle-commands-via-main-menu).
+Duplicating a game's environment and archiving/restoring it before configuration changes are useful workflow ideas to adapt to Nokcandu's own per-game model.
 
 ## 3. Turn compatibility reports into useful evidence
 

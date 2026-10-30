@@ -260,11 +260,11 @@ struct InstallerView: View {
                 }
             }
             if !bottles.isEmpty {
-                Section("Bring games over from Whisky or CrossOver") {
-                    Text("Copies the game's folder (instantly on the same drive) and the saves and settings it kept in that bottle. Whisky and CrossOver aren't changed. Windows components the game installed there (like .NET) may need installing again in Fixes.")
+                Section("Bring games over from other Mac Wine apps") {
+                    Text("Copies the game's folder (instantly on the same drive) and the saves and settings it kept in that bottle. The other app isn't changed. Windows components the game installed there (like .NET) may need installing again in Fixes.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     ForEach(bottles) { b in
-                        DisclosureGroup("\(b.name) (\(b.kind.rawValue))") {
+                        DisclosureGroup("\(b.name) (\(b.kind.title))") {
                             let list = bottleGames[b.id] ?? []
                             if bottleGames[b.id] == nil { ProgressView().controlSize(.small).task { await loadGames(b) } }
                             else if list.isEmpty { Text("No games found in this bottle.").font(.caption).foregroundStyle(.secondary) }

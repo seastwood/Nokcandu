@@ -2,7 +2,7 @@ import Foundation
 
 /// Ubisoft disables CEF command-line switches. This exact-version compatibility edit lets
 /// --in-process-gpu avoid Wine's cross-process presentation failure. No sandbox switches are used.
-/// Research: https://github.com/Pab450/trackmania-mac (CrossOver's CW HACK 25737).
+/// Research: https://github.com/Pab450/trackmania-mac.
 public enum UbisoftBrowser {
     static let originalSHA = "5680f2b2447011771d02b7e649da319d8df32aa0b4562e5e6d0dce89278012b9"
     static let patchedSHA = "ddf4e66f0f65e08a0991e33d22b5185502e76fe3c5cc050a7ff94815107e2337"

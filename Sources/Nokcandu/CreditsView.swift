@@ -31,7 +31,7 @@ struct CreditsSettings: View {
                     donate: [("Ko-fi", "https://ko-fi.com/gcenx"), ("PayPal", "https://paypal.me/gcenx")]),
             Project(name: "DXVK", by: "Philip Rebohle and contributors",
                     what: "Direct3D 8–11 on Vulkan.", license: "zlib", site: "https://github.com/doitsujin/dxvk"),
-            Project(name: "DXMT", by: "Feifan He (3Shain), for CodeWeavers",
+            Project(name: "DXMT", by: "Feifan He (3Shain)",
                     what: "Direct3D 10 and 11 on Metal.", license: "LGPL 2.1", site: "https://github.com/3Shain/dxmt"),
             Project(name: "MoltenVK", by: "The Khronos Group and contributors",
                     what: "Vulkan on Metal, under DXVK.", license: "Apache 2.0", site: "https://github.com/KhronosGroup/MoltenVK"),
