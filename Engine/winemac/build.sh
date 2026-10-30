@@ -38,7 +38,7 @@ fetch "https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/$LLVM_M
 
 if [ ! -x tools/bin/bison ]; then
     rm -rf "$BISON"; tar xf "$BISON.tar.xz"
-    (cd "$BISON" && ./configure --prefix="$WORK/tools" >/dev/null && make -j8 >/dev/null && make install >/dev/null)
+    (cd "$BISON" && ./configure --prefix="$WORK/tools" >/dev/null 2>&1 && make -j8 >/dev/null 2>&1 && make install >/dev/null 2>&1)
 fi
 [ -d "$LLVM_MINGW" ] || tar xf "$LLVM_MINGW.tar.xz"
 export PATH="$WORK/tools/bin:$PATH:$WORK/$LLVM_MINGW/bin"
