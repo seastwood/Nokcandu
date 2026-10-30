@@ -883,7 +883,7 @@ struct ResizableWindowSection: View {
                         }.frame(width: 240)
                     }
                 }
-                Text("Runs the game on a virtual screen shown in a normal Mac window you can move, resize, minimize or make full screen (green button). Your Mac's display isn't changed. Automatic starts like your Mac's screen (or at the game's last resolution) and follows the resolution the game picks; a fixed size suits games that use the desktop resolution. Shift-Cmd-Esc always gives you the mouse back; click the game or press Ctrl-Cmd-Esc to return it. Experimental.")
+                Text("Runs the game on a virtual screen shown in a normal Mac window you can move, resize, minimize or make full screen (green button). Your Mac's display isn't changed. Automatic starts like your Mac's screen (or at the game's last resolution) and follows the resolution the game picks; a fixed size suits games that use the desktop resolution. Ctrl-Cmd-C frees the mouse from the game or gives it back (Shift-Cmd-Esc always frees it); Ctrl-Cmd-F switches full screen. Experimental.")
                     .font(.caption).foregroundStyle(.secondary)
                 if shared {
                     Text("Only the game's fullscreen picture goes in the resizable window; its launcher's windows (like Steam's) stay separate Mac windows. If the launcher is already running with a different choice, Nokcandu offers to restart it when you play.")

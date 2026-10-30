@@ -9,7 +9,7 @@ import Foundation
 /// Fail-safe by design: the driver only does anything when the game's Windows registry says
 /// "WindowedFullscreen"="y", and the stock driver ignores that value — so an engine update that brings
 /// back the stock driver just means the game runs normally until Nokcandu reinstalls its driver.
-/// While playing, Shift-Cmd-Esc always gives the mouse back (Ctrl-Cmd-Esc toggles), whatever the game does.
+/// While playing, Ctrl-Cmd-C frees or returns the mouse and Shift-Cmd-Esc always frees it, whatever the game does.
 public enum WindowedPresentation {
     /// The three files that make up the driver, relative to the engine's lib/wine.
     static let files = ["x86_64-unix/winemac.so", "x86_64-windows/winemac.drv", "i386-windows/winemac.drv"]

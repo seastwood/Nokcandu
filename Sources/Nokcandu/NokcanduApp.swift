@@ -372,8 +372,42 @@ struct RenameGameSheet: View {
 
 
 /// The sidebar's top edge while scrolled: a soft fade under the title bar rather than a hard line across it.
+/// The line itself is the title bar separator AppKit draws over the sidebar once its list scrolls; it's turned
+/// off for the window and for each split-view column.
 struct SoftTopEdge: ViewModifier {
     func body(content: Content) -> some View {
-        if #available(macOS 26.0, *) { content.scrollEdgeEffectStyle(.soft, for: .top) } else { content }
+        let base = content.background(NoTitlebarSeparator())
+        if #available(macOS 26.0, *) { base.scrollEdgeEffectStyle(.soft, for: .top) } else { base }
+    }
+}
+
+private struct NoTitlebarSeparator: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { Probe() }
+    func updateNSView(_ view: NSView, context: Context) { (view as? Probe)?.apply() }
+
+    final class Probe: NSView {
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); apply() }
+        override func layout() { super.layout(); apply() }
+        func apply() {
+            guard let window else { return }
+            if window.titlebarSeparatorStyle != .none { window.titlebarSeparatorStyle = .none }
+            var vc = window.contentViewController
+            var seen = 0
+            while let c = vc, seen < 8 {
+                if let split = c as? NSSplitViewController {
+                    for item in split.splitViewItems where item.titlebarSeparatorStyle != .none { item.titlebarSeparatorStyle = .none }
+                    break
+                }
+                vc = c.children.first; seen += 1
+            }
+            // SwiftUI may host the split view controller deeper; search the whole tree once.
+            func walk(_ c: NSViewController) {
+                if let split = c as? NSSplitViewController {
+                    for item in split.splitViewItems where item.titlebarSeparatorStyle != .none { item.titlebarSeparatorStyle = .none }
+                }
+                c.children.forEach(walk)
+            }
+            if let root = window.contentViewController { walk(root) }
+        }
     }
 }

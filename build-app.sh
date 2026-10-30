@@ -56,8 +56,9 @@ chmod 755 "$APP/Contents/Resources/generals-launcher" "$APP/Contents/Resources/s
 # (a native Wine later) — nothing in it is specific to one architecture.
 xcrun clang -arch x86_64 -arch arm64 -mmacosx-version-min=11.0 -dynamiclib -fobjc-arc -O2 -Wall \
   -framework AppKit -framework GameController -framework CoreGraphics -framework IOKit -framework OpenGL \
+  -framework AudioToolbox -framework CoreAudio \
   -install_name @rpath/nokcandu-rawmouse.dylib \
-  -o "$APP/Contents/Resources/nokcandu-rawmouse.dylib" Resources/rawmouse/rawmouse.m Resources/present/present.m
+  -o "$APP/Contents/Resources/nokcandu-rawmouse.dylib" Resources/rawmouse/rawmouse.m Resources/rawmouse/audiofollow.m Resources/present/present.m
 # Nokcandu's Wine Mac driver (resizable game windows): Wine 10.0 + Engine/winemac/patches, built by
 # Engine/winemac/build.sh. A fresh local build wins over the copy kept in Resources/winemac.
 WINEMAC=Resources/winemac; [ -f build/winemac/SHA256SUMS ] && WINEMAC=build/winemac
