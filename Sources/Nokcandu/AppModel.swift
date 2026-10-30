@@ -281,6 +281,7 @@ final class AppModel: ObservableObject {
 
     private func launch(_ g: InstalledGame, extra: [String]) {
         say("Starting \(g.name)…")
+        ActivationHandoff.expect(g)
         Task {
             let r = await Task.detached(priority: .userInitiated) { () -> Result<Void, Error> in
                 // A copy of this game left over from an earlier run (no window) blocks the launcher from starting it.

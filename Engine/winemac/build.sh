@@ -47,7 +47,14 @@ export PATH="$WORK/tools/bin:$PATH:$WORK/$LLVM_MINGW/bin"
 # One source and build folder per Wine version (10.0 keeps the original names).
 SRC=src OBJ=obj; [ "$WINE_VERSION" = 10.0 ] || { SRC="src-$WINE_VERSION"; OBJ="obj-$WINE_VERSION"; }
 rm -rf "$SRC"; mkdir "$SRC"; tar xf "wine-$WINE_VERSION.tar.xz" -C "$SRC"
-for p in "$ROOT"/Engine/winemac/patches/*.patch; do
+# Each Wine version has its own port of the patches (patches/ is Wine 10.0's). Trying a version with none yet uses
+# the newest port.
+PATCHES="$ROOT/Engine/winemac/patches-$WINE_VERSION"
+[ "$WINE_VERSION" = 10.0 ] && PATCHES="$ROOT/Engine/winemac/patches"
+[ -d "$PATCHES" ] || PATCHES="$(ls -d "$ROOT"/Engine/winemac/patches-* 2>/dev/null | sort -V | tail -1)"
+[ -d "$PATCHES" ] || PATCHES="$ROOT/Engine/winemac/patches"
+echo "Patches: ${PATCHES#$ROOT/}"
+for p in "$PATCHES"/*.patch; do
     (cd "$SRC/wine-$WINE_VERSION" && patch -p1 --quiet < "$p") || { echo "PATCH FAILED: $(basename "$p") on Wine $WINE_VERSION"; exit 2; }
 done
 
