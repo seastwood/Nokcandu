@@ -682,23 +682,20 @@ struct GraphicsPicker: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Picker("Graphics", selection: Binding(get: { current }, set: { apply($0) })) {
-                ForEach(GraphicsPreset.allCases) { p in
-                    Text(p.title + (p == game.custom?.confirmedGraphics ? " ✓" : "")).tag(p)
+        VStack(alignment: .leading, spacing: 8) {
+            SettingRow(title: "Graphics",
+                       info: current.detail + (current.validated ? "" : " Not yet tested by Nokcandu.") + " A ✓ marks the mode you confirmed plays well."
+                           + (current == .appleMetal && game.custom?.is64Bit == false && isGameLauncher
+                              ? "\n\nApplies to the games this launcher starts (they must be 64-bit, like Diablo II: Resurrected). The launcher itself draws its window separately." : "")) {
+                Picker("Graphics", selection: Binding(get: { current }, set: { apply($0) })) {
+                    ForEach(GraphicsPreset.allCases) { p in
+                        Text(p.title + (p == game.custom?.confirmedGraphics ? " ✓" : "")).tag(p)
+                    }
                 }
+                .labelsHidden().frame(width: settingControlWidth)
             }
-            .frame(maxWidth: 320)
-            Text(current.detail + (current.validated ? "" : " Not yet tested by Nokcandu."))
-                .font(.caption).foregroundStyle(.secondary)
-            if current == .appleMetal, game.custom?.is64Bit == false {
-                if isGameLauncher {
-                    Label("Applies to the games this launcher starts (they must be 64-bit, like Diablo II: Resurrected). The launcher itself draws its window separately.", systemImage: "info.circle")
-                        .font(.caption).foregroundStyle(.secondary)
-                } else {
-                    Label("This game is 32-bit; Apple Metal only works with 64-bit games.", systemImage: "exclamationmark.triangle")
-                        .font(.caption).foregroundStyle(.orange)
-                }
+            if current == .appleMetal, game.custom?.is64Bit == false, !isGameLauncher {
+                SettingNote("This game is 32-bit; Apple Metal only works with 64-bit games.", warning: true)
             }
         }
     }

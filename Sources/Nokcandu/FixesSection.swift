@@ -13,43 +13,29 @@ struct FixesSection: View {
     @State private var confirmUndo = false
 
     var body: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "film").font(.title3).foregroundStyle(present ? .green : .secondary).frame(width: 24)
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack {
-                            Text("Fix video and music playback").font(.body.bold())
-                            if present { Text("Installed").font(.caption2.bold()).padding(.horizontal, 6).padding(.vertical, 2)
-                                .background(.green.opacity(0.18), in: Capsule()).foregroundStyle(.green) }
-                        }
-                        Text("Adds a movie reader, video decoder and audio decoder (LAV Filters \(CinematicFix.version), open source) to \(game.usesSharedSteam ? "the shared Steam's" : "this game's") Windows environment, for games whose videos crash or stay black, or whose MP3 music won't play (“Music Error: Can not play file”). Confirmed to fix Warcraft III's cinematics on this Mac.")
-                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                        if CinematicFix.likelyUsesDirectShow(game) && !present {
-                            Label("This game looks like it plays videos through DirectShow, so it may need this.", systemImage: "lightbulb")
-                                .font(.caption).foregroundStyle(.orange)
-                        }
-                    }
-                    Spacer()
-                    if working { ProgressView().controlSize(.small) }
-                    else if present {
-                        Button("Undo…") { confirmUndo = true }
-                    } else {
+        SettingsSection(title: "Fixes") {
+            SettingRow(title: "Video and music playback",
+                       info: "Adds a movie reader, video decoder and audio decoder (LAV Filters \(CinematicFix.version), open source) to \(game.usesSharedSteam ? "the shared Steam's" : "this game's") Windows environment, for games whose videos crash or stay black, or whose MP3 music won't play (“Music Error: Can not play file”). Confirmed to fix Warcraft III's cinematics.") {
+                if working { ProgressView().controlSize(.small) }
+                else if present {
+                    InstalledBadge()
+                    Button("Undo…") { confirmUndo = true }
+                } else {
+                    Menu("Install") {
                         Button("Install Fix") { install() }
-                    }
-                }
-                if !present && !working {
-                    Button("Use Downloaded Zip Instead…") { installFromZip() }.buttonStyle(.link).font(.caption)
-                }
-                Divider()
-                ComponentFixesView(game: game)
-                if !log.isEmpty {
-                    Text(log.suffix(6).joined(separator: "\n")).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+                        Button("Use Downloaded Zip Instead…") { installFromZip() }
+                    } primaryAction: { install() }
+                    .fixedSize()
                 }
             }
-            .padding(6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        } label: { Text("Fixes").font(.headline) }
+            if CinematicFix.likelyUsesDirectShow(game) && !present {
+                SettingNote("This game looks like it plays videos through DirectShow, so it may need this.", warning: true)
+            }
+            ComponentFixesView(game: game)
+            if !log.isEmpty {
+                Text(log.suffix(6).joined(separator: "\n")).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+            }
+        }
         .onAppear { present = CinematicFix.isPresent(for: game) }
         .confirmationDialog("Remove the cinematic fix from \(game.usesSharedSteam ? "the shared Steam" : game.name)?", isPresented: $confirmUndo) {
             Button("Remove", role: .destructive) { undo() }
@@ -119,26 +105,21 @@ private struct ComponentFixesView: View {
     @State private var installed: Set<String> = []
     @State private var status = ""
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             ForEach(CompatibilityFix.allCases.filter { CompatibilityFixes.visible($0, for: game) }) { fix in
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(fix.title).font(.body.bold())
-                        Text(fix.detail).font(.caption).foregroundStyle(.secondary)
-                        if let reason = CompatibilityFixes.unavailable(fix, for: game), !installed.contains(fix.id) {
-                            Text(reason).font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    Spacer()
+                let on = installed.contains(fix.id)
+                let reason = on ? nil : CompatibilityFixes.unavailable(fix, for: game)
+                SettingRow(title: fix.title, info: fix.detail + (reason.map { "\n\n" + $0 } ?? "")) {
                     if working == fix { ProgressView().controlSize(.small) }
                     else {
-                        Button(installed.contains(fix.id) ? "Undo" : (fix == .openUA ? "Apply Recommended Settings" : "Install Fix")) { run(fix) }
-                            .disabled(working != nil || (!installed.contains(fix.id) && CompatibilityFixes.unavailable(fix, for: game) != nil))
+                        if on { InstalledBadge() }
+                        Button(on ? "Undo" : (fix == .openUA ? "Apply" : "Install")) { run(fix) }
+                            .disabled(working != nil || reason != nil)
                     }
                 }
             }
             Link("Microsoft DirectX download and license information", destination: URL(string: "https://www.microsoft.com/en-us/download/details.aspx?id=8109")!).font(.caption)
-            if !status.isEmpty { Text(status).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
+            if !status.isEmpty { SettingNote(status) }
         }
         .onAppear { reload() }
         .onChange(of: game) { reload() }
@@ -152,5 +133,14 @@ private struct ComponentFixesView: View {
             if undo { try CompatibilityFixes.undo(fix, for: current, log: logger) }
             else { try await CompatibilityFixes.install(fix, for: current, log: logger) }
         }, completion: { _ in reload(); working = nil })
+    }
+}
+
+
+/// "Installed" capsule next to a fix's Undo button.
+struct InstalledBadge: View {
+    var body: some View {
+        Text("Installed").font(.caption2.bold()).padding(.horizontal, 6).padding(.vertical, 2)
+            .background(.green.opacity(0.18), in: Capsule()).foregroundStyle(.green)
     }
 }

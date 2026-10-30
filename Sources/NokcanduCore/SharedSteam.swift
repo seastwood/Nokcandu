@@ -137,14 +137,14 @@ public enum SharedSteam {
          sleep 5
          pid=$(cat "$LOG_DIR/steam.lock/pid" 2>/dev/null || true)
          while running && [ "$(cat "$LOG_DIR/steam.lock/pid" 2>/dev/null || true)" = "$pid" ]; do
-          if [ ! -f "$STATE/started-for-game" ] || [ -f "$STATE/keep-steam-open" ]; then return 0; fi
+          if [ ! -f "$STATE/started-for-game" ] || [ ! -f "$STATE/close-steam-with-game" ]; then return 0; fi
           cmds=$(/bin/ps -axo command= 2>/dev/null || true)
           if /usr/bin/grep -qiE 'steamapps[\\/]common' <<<"$cmds"; then seen=1; gone=0
           elif [ "$seen" = 1 ]; then gone=$((gone + 1)); [ "$gone" -ge 6 ] && break
           fi
           sleep 5
          done
-         if [ "$seen" != 1 ] || [ "$gone" -lt 6 ] || [ ! -f "$STATE/started-for-game" ] || [ -f "$STATE/keep-steam-open" ]; then return 0; fi
+         if [ "$seen" != 1 ] || [ "$gone" -lt 6 ] || [ ! -f "$STATE/started-for-game" ] || [ ! -f "$STATE/close-steam-with-game" ]; then return 0; fi
          echo "== $(date) the game closed; closing Steam (it was started for the game)" >>"$LOG_DIR/steam.log"
          rm -f "$STATE/started-for-game"
          stop_steam
@@ -228,7 +228,7 @@ public enum SharedSteam {
         "$WINE" "$STEAM_EXE" "${STEAM_FLAGS[@]}" ${PASS[@]+"${PASS[@]}"} > >(\(CustomGames.logFilter) >>"$LOG_DIR/steam.log") 2>&1 </dev/null &
         echo $! > "$LOCK/pid"
         disown $! 2>/dev/null || true
-        if [ -n "$APP" ] && [ ! -f "$STATE/keep-steam-open" ]; then
+        if [ -n "$APP" ] && [ -f "$STATE/close-steam-with-game" ]; then
          ( trap '' HUP; watch_game ) </dev/null >/dev/null 2>&1 &
          disown $! 2>/dev/null || true
         fi
@@ -581,12 +581,13 @@ public enum SharedSteam {
         return files.allSatisfy { $0.contains(#/"EnableGameOverlay"\s+"0"/#) }
     }
 
-    /// "Close Steam when its game quits" (on unless the keep-open file exists).
+    /// "Close Steam when its game quits": off unless chosen (the close-steam-with-game file exists). Launchers
+    /// stay open by default, like on Windows; restarting them for every game made launches slower and fragile.
     public static var closesWithGame: Bool {
-        get { !FileManager.default.fileExists(atPath: contents.appendingPathComponent("SharedSupport/nokcandu/keep-steam-open").path) }
+        get { FileManager.default.fileExists(atPath: contents.appendingPathComponent("SharedSupport/nokcandu/close-steam-with-game").path) }
         set {
-            let f = contents.appendingPathComponent("SharedSupport/nokcandu/keep-steam-open")
-            if newValue { try? FileManager.default.removeItem(at: f) } else { FileManager.default.createFile(atPath: f.path, contents: Data()) }
+            let f = contents.appendingPathComponent("SharedSupport/nokcandu/close-steam-with-game")
+            if newValue { FileManager.default.createFile(atPath: f.path, contents: Data()) } else { try? FileManager.default.removeItem(at: f) }
         }
     }
 

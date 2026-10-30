@@ -159,7 +159,36 @@ public enum GameLauncher {
         var args = [game.appURL.path]
         if !arguments.isEmpty { args += ["--args"] + arguments }
         let r = try Shell.run("/usr/bin/open", args, timeout: 30)
-        if !r.ok { throw NokError("macOS could not open \(game.name): \(r.combined)") }
+        if r.ok { return }
+        try selfHealLaunch(game, arguments: arguments, firstError: r.combined)
+    }
+
+    /// Play must work: when macOS refuses or times out opening the game's app (a stale copy of it that stopped
+    /// answering, LaunchServices out of date: errors like -1712, -600, -10810), Nokcandu clears that up and tries
+    /// again, and as a last resort starts the game's launcher itself.
+    static func selfHealLaunch(_ game: InstalledGame, arguments: [String], firstError: String) throws {
+        let app = game.appURL.standardizedFileURL.path
+        // 1. A stale copy of this app (Nokcandu only offers Play when the game isn't running).
+        _ = try? Shell.run("/usr/bin/pkill", ["-9", "-f", "^" + NSRegularExpression.escapedPattern(for: app + "/Contents/MacOS/")], timeout: 10)
+        // 2. LaunchServices' record of the app.
+        _ = try? Shell.run("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
+                           ["-f", app], timeout: 30)
+        Thread.sleep(forTimeInterval: 1)
+        var args = [app]
+        if !arguments.isEmpty { args += ["--args"] + arguments }
+        if let r = try? Shell.run("/usr/bin/open", args, timeout: 30), r.ok { return }
+        // 3. Start the launcher directly (detached, like an app would run it).
+        guard let launcher = game.launcherURL, FileManager.default.isExecutableFile(atPath: launcher.path) else {
+            throw NokError("macOS could not open \(game.name): \(firstError)")
+        }
+        let p = Process()
+        p.executableURL = launcher
+        p.arguments = arguments
+        p.currentDirectoryURL = launcher.deletingLastPathComponent()
+        p.standardInput = FileHandle.nullDevice
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { throw NokError("macOS could not open \(game.name): \(firstError)") }
     }
 
     /// The launcher's own preflight (`--check`): validates game files, engine, and (Worms) the disc.

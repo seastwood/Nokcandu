@@ -145,18 +145,19 @@ public enum BattleNet {
         }
     }
 
-    /// "Close Battle.net when its game quits" (on unless the keep-open file exists in the Battle.net app).
+    /// "Close Battle.net when its game quits": off unless chosen (the close-with-game file exists in the
+    /// Battle.net app). Closing Battle.net mid-session made the next launch slow or fail; keeping it open is safer.
     public static func closesWithGame(host: InstalledGame) -> Bool {
-        !FileManager.default.fileExists(atPath: keepOpenFile(host).path)
+        FileManager.default.fileExists(atPath: closeFile(host).path)
     }
     public static func setClosesWithGame(_ on: Bool, host: InstalledGame) {
-        let f = keepOpenFile(host)
-        if on { try? FileManager.default.removeItem(at: f) }
-        else { try? FileManager.default.createDirectory(at: f.deletingLastPathComponent(), withIntermediateDirectories: true)
-               FileManager.default.createFile(atPath: f.path, contents: Data()) }
+        let f = closeFile(host)
+        if on { try? FileManager.default.createDirectory(at: f.deletingLastPathComponent(), withIntermediateDirectories: true)
+                FileManager.default.createFile(atPath: f.path, contents: Data()) }
+        else { try? FileManager.default.removeItem(at: f) }
     }
-    static func keepOpenFile(_ host: InstalledGame) -> URL {
-        host.appURL.appendingPathComponent("Contents/SharedSupport/nokcandu/keep-open")
+    static func closeFile(_ host: InstalledGame) -> URL {
+        host.appURL.appendingPathComponent("Contents/SharedSupport/nokcandu/close-with-game")
     }
 
     /// Starts Battle.net (with its own settings) if needed, waits until it has signed in, then asks it
@@ -202,13 +203,13 @@ public enum BattleNet {
         watch_game() {
          local seen=0 gone=0
          while bnet_up; do
-          if [ ! -f "$STATE/started-for-game" ] || [ -f "$STATE/keep-open" ]; then return 0; fi
+          if [ ! -f "$STATE/started-for-game" ] || [ ! -f "$STATE/close-with-game" ]; then return 0; fi
           if game_up; then seen=1; gone=0
           elif [ "$seen" = 1 ]; then gone=$((gone + 1)); [ "$gone" -ge 6 ] && break
           fi
           sleep 5
          done
-         if [ "$seen" != 1 ] || [ "$gone" -lt 6 ] || [ ! -f "$STATE/started-for-game" ] || [ -f "$STATE/keep-open" ]; then return 0; fi
+         if [ "$seen" != 1 ] || [ "$gone" -lt 6 ] || [ ! -f "$STATE/started-for-game" ] || [ ! -f "$STATE/close-with-game" ]; then return 0; fi
          echo "nokcandu: $GAME closed; closing Battle.net (it was started for the game) $(date)" >>"$SUPPORT/Logs/launch.log"
          rm -f "$STATE/started-for-game"
          # Like signing out of Windows: programs get to save and exit; anything left is stopped after 30 s.
@@ -235,7 +236,7 @@ public enum BattleNet {
         trap '' HUP
         "$SUPPORT/wine/bin/wine" "$BNET" --in-process-gpu --use-gl=swiftshader --exec="launch $CODE" >/dev/null 2>&1 </dev/null &
         disown $! 2>/dev/null || true
-        if [ "$STARTED" = 1 ] && [ ! -f "$STATE/keep-open" ]; then
+        if [ "$STARTED" = 1 ] && [ -f "$STATE/close-with-game" ]; then
          ( trap '' HUP; sleep 10; watch_game ) </dev/null >/dev/null 2>&1 &
          disown $! 2>/dev/null || true
         fi

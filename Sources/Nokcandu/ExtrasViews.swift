@@ -83,75 +83,66 @@ struct PerformanceSection: View {
     var d3dmetal: Bool { graphics == .appleMetal }
     var dxmt: Bool { graphics == .dxmt }
 
+    var when: String { steam ? "Applies to all Steam games when Steam next starts." : "Takes effect the next time the game starts." }
+
     var body: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Toggle("Show FPS counter", isOn: Binding(get: { s.fpsCounter }, set: { s.fpsCounter = $0; save() }))
-                    if s.fpsCounter {
-                        Picker("", selection: Binding(get: { s.hud ?? "graph" }, set: { s.hud = $0; save() })) {
-                            Text("FPS only").tag("fps"); Text("FPS + frame graph").tag("graph"); Text("Full details").tag("full")
-                        }.labelsHidden().frame(width: 170)
-                        Picker("", selection: Binding(get: { s.hudSize ?? "small" }, set: { s.hudSize = $0; save() })) {
-                            Text("Small").tag("small"); Text("Medium").tag("medium"); Text("Large").tag("large")
-                        }.labelsHidden().frame(width: 100)
-                    }
+        SettingsSection(title: "Performance") {
+            SettingToggle(title: "Show FPS counter", info: "Shows frames per second (and optionally a frame-time graph) in a corner of the game.",
+                          isOn: Binding(get: { s.fpsCounter }, set: { s.fpsCounter = $0; save() }))
+            if s.fpsCounter {
+                SettingRow(title: "Counter style") {
+                    Picker("Counter style", selection: Binding(get: { s.hud ?? "graph" }, set: { s.hud = $0; save() })) {
+                        Text("FPS only").tag("fps"); Text("FPS + frame graph").tag("graph"); Text("Full details").tag("full")
+                    }.labelsHidden().frame(width: 150)
+                    Picker("Counter size", selection: Binding(get: { s.hudSize ?? "small" }, set: { s.hudSize = $0; save() })) {
+                        Text("Small").tag("small"); Text("Medium").tag("medium"); Text("Large").tag("large")
+                    }.labelsHidden().frame(width: 66)
                 }
-                if !metal {
-                    Toggle("Low-latency mode", isOn: Binding(get: { s.lowLatency == true }, set: { s.lowLatency = $0 ? true : nil; save() }))
-                    Text("The graphics layer prepares at most one frame ahead instead of up to three, so what you see reacts to the mouse sooner — at a small cost in FPS. Works in Classic 3D and Modern 3D (Apple Metal and DXMT have no such setting). Takes effect the next time the game\(steam ? " (and Steam)" : "") starts.")
-                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                }
-                if let c = game.custom, LowLatency.supported(c) {
-                    Toggle("Low-latency aiming", isOn: Binding(get: { LowLatency.isOn(c) }, set: { setLowLatency($0) }))
-                    Text("For competitive play: turns the game's vsync off (the Mac never tears and always shows the newest frame)\(c.steamAppID == 730 ? " and has CS2 read the mouse as late as possible before each frame" : ""). Takes effect the next time the game starts.")
-                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    HStack {
-                        Text("Game frame cap")
-                        Picker("", selection: Binding(get: { LowLatency.cap(c) ?? -1 }, set: { setCap($0 < 0 ? nil : $0) })) {
-                            Text("Game's default").tag(-1)
-                            if let cur = LowLatency.cap(c), !LowLatency.caps.contains(cur) { Text("\(cur) FPS").tag(cur) }
-                            ForEach(LowLatency.caps, id: \.self) { f in
-                                Text(f == 0 ? "Unlimited" : f == autoFPS ? "\(f) FPS (recommended)" : "\(f) FPS").tag(f)
-                            }
-                        }.labelsHidden().frame(width: 190)
-                    }
-                    Text("Recommended is twice your \(refresh) Hz screen: every frame you see then carries fresher mouse input. Higher caps use more power; if the Mac gets hot, pick a lower one. Both settings are the game's launch options (see Settings).")
-                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                }
-                Toggle(metal ? "Vsync (every refresh gets a new frame; low delay)" : "Vsync (smoother motion, no tearing; adds a little delay)",
-                       isOn: Binding(get: { s.vsync }, set: { s.vsync = $0; save() }))
-                if metal {
-                    Text("Without it, the game's frames drift against the screen's refresh and now and then one is shown twice — a visible hitch when you turn. With it, frames wait for the refresh, but at most one at a time, so it adds far less delay than a game's own vsync (keep that off). Pair it with Frame limit \(refresh) FPS.")
-                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                }
-                HStack {
-                    Text("Frame limit")
-                    Picker("", selection: Binding(get: { s.fpsLimit }, set: { s.fpsLimit = $0; save() })) {
-                        Text("Off").tag(0)
-                        // DXMT paces through the screen's refresh: limits above it act like the refresh itself.
-                        ForEach([30, 60, 90, 120].filter { !dxmt || $0 <= max(refresh, 60) || $0 == s.fpsLimit }, id: \.self) { Text("\($0) FPS").tag($0) }
-                    }
-                    .labelsHidden().frame(width: 110).disabled(d3dmetal)
-                }
-                if let b = buffer {
-                    HStack {
-                        Text("Audio buffer")
-                        Picker("", selection: Binding(get: { b }, set: { setBuffer($0) })) {
-                            Text("Normal (10 ms)").tag(10); Text("Large (20 ms)").tag(20); Text("Extra large (40 ms)").tag(40)
-                        }.labelsHidden().frame(width: 170)
-                    }
-                    Text("If sound crackles or has static, choose Large: games get a 3× bigger sound buffer, so a busy moment doesn't cause gaps (adds a little sound delay). \(steam ? "Applies to all Steam games; quit Steam first." : "Quit the game first.")")
-                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                }
-                Text(d3dmetal ? "Apple Metal uses Apple's own overlay. The frame limit doesn't work in Apple Metal — use the game's own cap instead (e.g. +fps_max 60 for Source games)."
-                     : dxmt ? "DXMT's frame limit spaces frames evenly through Metal's own timing, without vsync's queue of waiting frames — set it to your screen's \(refresh) Hz and the game's own cap to unlimited for the smoothest motion with the least delay. It can't go above the screen's refresh; for more frames than that, turn it off and use the game's own cap. \(steam ? "Applies to all Steam games when Steam next starts." : "Takes effect the next time the game starts.")"
-                           : "A frame limit keeps the Mac cooler and quieter, makes motion more even, and leaves CPU for sound — also in Compatibility mode. \(steam ? "Applies to all Steam games when Steam next starts." : "Takes effect the next time the game starts.")")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
-            .toggleStyle(.switch)
-            .padding(6).frame(maxWidth: .infinity, alignment: .leading)
-        } label: { Text("Performance").font(.headline) }
+            if !metal {
+                SettingToggle(title: "Low-latency mode",
+                              info: "The graphics layer prepares at most one frame ahead instead of up to three, so what you see reacts to the mouse sooner, at a small cost in FPS. Works in Classic 3D and Modern 3D (Apple Metal and DXMT have no such setting). \(when)",
+                              isOn: Binding(get: { s.lowLatency == true }, set: { s.lowLatency = $0 ? true : nil; save() }))
+            }
+            if let c = game.custom, LowLatency.supported(c) {
+                SettingToggle(title: "Low-latency aiming",
+                              info: "For competitive play: turns the game's vsync off (the Mac never tears and always shows the newest frame)\(c.steamAppID == 730 ? " and has CS2 read the mouse as late as possible before each frame" : ""). Uses the game's launch options. Takes effect the next time the game starts.",
+                              isOn: Binding(get: { LowLatency.isOn(c) }, set: { setLowLatency($0) }))
+                SettingRow(title: "Game frame cap",
+                           info: "Recommended is twice your \(refresh) Hz screen: every frame you see then carries fresher mouse input. Higher caps use more power; if the Mac gets hot, pick a lower one.") {
+                    Picker("Game frame cap", selection: Binding(get: { LowLatency.cap(c) ?? -1 }, set: { setCap($0 < 0 ? nil : $0) })) {
+                        Text("Game's default").tag(-1)
+                        if let cur = LowLatency.cap(c), !LowLatency.caps.contains(cur) { Text("\(cur) FPS").tag(cur) }
+                        ForEach(LowLatency.caps, id: \.self) { f in
+                            Text(f == 0 ? "Unlimited" : f == autoFPS ? "\(f) FPS (recommended)" : "\(f) FPS").tag(f)
+                        }
+                    }.labelsHidden().frame(width: settingControlWidth)
+                }
+            }
+            SettingToggle(title: "Vsync",
+                          info: metal ? "Every screen refresh gets a new frame, with low delay. Without it, the game's frames drift against the screen's refresh and now and then one is shown twice: a visible hitch when you turn. With it, frames wait for the refresh, but at most one at a time, so it adds far less delay than a game's own vsync (keep that off). Pair it with a \(refresh) FPS frame limit."
+                                      : "Smoother motion and no tearing, at the cost of a little delay.",
+                          isOn: Binding(get: { s.vsync }, set: { s.vsync = $0; save() }))
+            SettingRow(title: "Frame limit",
+                       info: d3dmetal ? "The frame limit doesn't work with Apple Metal: use the game's own cap instead (e.g. +fps_max 60 for Source games)."
+                           : dxmt ? "DXMT's frame limit spaces frames evenly through Metal's own timing, without vsync's queue of waiting frames. Set it to your screen's \(refresh) Hz and the game's own cap to unlimited for the smoothest motion with the least delay. It can't go above the screen's refresh. \(when)"
+                           : "A frame limit keeps the Mac cooler and quieter, makes motion more even, and leaves CPU for sound. \(when)") {
+                Picker("Frame limit", selection: Binding(get: { s.fpsLimit }, set: { s.fpsLimit = $0; save() })) {
+                    Text("Off").tag(0)
+                    // DXMT paces through the screen's refresh: limits above it act like the refresh itself.
+                    ForEach([30, 60, 90, 120].filter { !dxmt || $0 <= max(refresh, 60) || $0 == s.fpsLimit }, id: \.self) { Text("\($0) FPS").tag($0) }
+                }
+                .labelsHidden().frame(width: settingControlWidth).disabled(d3dmetal)
+            }
+            if let b = buffer {
+                SettingRow(title: "Audio buffer",
+                           info: "If sound crackles or has static, choose Large: games get a bigger sound buffer, so a busy moment doesn't cause gaps (adds a little sound delay). \(steam ? "Applies to all Steam games; quit Steam first." : "Quit the game first.")") {
+                    Picker("Audio buffer", selection: Binding(get: { b }, set: { setBuffer($0) })) {
+                        Text("Normal (10 ms)").tag(10); Text("Large (20 ms)").tag(20); Text("Extra large (40 ms)").tag(40)
+                    }.labelsHidden().frame(width: settingControlWidth)
+                }
+            }
+        }
         .onAppear { s = Performance.settings(for: game); buffer = game.hosted == nil ? AudioBuffer.current(for: game) : nil; loaded = true }
     }
 
@@ -335,10 +326,9 @@ struct GameResolutionSection: View {
     var selection: String { current.map { "\($0[0])x\($0[1])" } ?? "desktop" }
     var gameSelection: String { BF1942DisplayFix.resolution(for: game).map { "\($0[0])x\($0[1])" } ?? "current" }
     var body: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text("Mac screen resolution")
+        SettingsSection(title: "Display") {
+                SettingRow(title: "Mac screen resolution",
+                           info: "Changes your Mac's display while the game runs and restores it afterward. Desktop keeps your current screen resolution. Nokcandu doesn't edit the game's own settings, but many games (like Counter-Strike 2) only offer resolutions that fit the screen, so pick the size here first, then choose it in the game.\(game.usesSharedSteam ? " Changing it needs Steam closed." : "")") {
                     Picker("Mac screen resolution", selection: Binding(get: { selection }, set: choose)) {
                         Text("Desktop (don't switch)").tag("desktop")
                         if let c = current, !options.contains(where: { $0.pixels == c }) { Text("\(c[0]) × \(c[1])").tag("\(c[0])x\(c[1])") }
@@ -347,26 +337,19 @@ struct GameResolutionSection: View {
                                 Text("\(r.width) × \(r.height)\(i == 0 ? " — native" : "")").tag(r.id)
                             }
                         }
-                    }.labelsHidden().frame(width: 280)
+                    }.labelsHidden().frame(width: settingControlWidth)
                         .disabled(WindowedPresentation.setting(for: game) != nil)
                 }
-                Text("Changes your Mac's display while the game runs and restores it afterward. Desktop keeps your current screen resolution. Nokcandu doesn't edit the game's own settings, but many games (like Counter-Strike 2) only offer resolutions that fit the screen, so pick the size here first, then choose it in the game.")
-                    .font(.caption).foregroundStyle(.secondary)
-                if game.usesSharedSteam { Text("Changing the Mac screen resolution needs Steam closed.").font(.caption).foregroundStyle(.secondary) }
-                Divider()
-                HStack {
-                    Text("Window style")
+                if WindowedPresentation.setting(for: game) != nil {
+                    SettingNote("The game is in a resizable window, so your Mac's screen isn't switched.")
+                }
+                SettingRow(title: "Window style",
+                           info: CompatibilityFixes.unavailable(.borderless, for: game) ?? "Choose Windowed inside the game before using Fullscreen (Borderless). This uses the same optional borderless fix as the Fixes panel and leaves the Mac's display mode alone.") {
                     Picker("Window style", selection: Binding(get: { game.custom?.borderless == true }, set: windowStyle)) {
                         Text("Game default").tag(false)
                         Text("Fullscreen (Borderless)").tag(true)
-                    }.labelsHidden().frame(width: 280)
+                    }.labelsHidden().frame(width: settingControlWidth)
                         .disabled(CompatibilityFixes.unavailable(.borderless, for: game) != nil && game.custom?.borderless != true)
-                }
-                if let reason = CompatibilityFixes.unavailable(.borderless, for: game) {
-                    Text(reason).font(.caption).foregroundStyle(.secondary)
-                } else {
-                    Text("Choose Windowed inside the game before using Fullscreen (Borderless). This uses the same optional borderless fix as the Fixes panel and leaves the Mac's display mode alone.")
-                        .font(.caption).foregroundStyle(.secondary)
                 }
                 if OpenUASettings.supports(game) {
                     Divider()
@@ -402,17 +385,14 @@ struct GameResolutionSection: View {
                     if let reason = BF1942DisplayFix.menuUnavailable(for: game) {
                         Text(reason).font(.caption).foregroundStyle(.secondary)
                     }
-                } else {
-                    Text("Set this game's own resolution inside the game.")
-                        .font(.caption).foregroundStyle(.secondary)
                 }
-                Button("Settings Backups…") { showSettingsBackups = true }
+                SettingRow(title: "Game settings backups", info: "Copies of the game's own settings files, kept before Nokcandu or the game changes them, so you can put an earlier set back.") {
+                    Button("Settings Backups…") { showSettingsBackups = true }
+                }
                 if working { ProgressView().controlSize(.small) }
-                if !status.isEmpty { Text(status).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
-            }
-            .disabled(working)
-            .padding(6).frame(maxWidth: .infinity, alignment: .leading)
-        } label: { Text("Display").font(.headline) }
+                if !status.isEmpty { SettingNote(status) }
+        }
+        .disabled(working)
         .onAppear { options = GameDisplay.resolutions() }
         .confirmationDialog("Apply recommended Battlefield 1942 setup?", isPresented: $confirmBFSetup, titleVisibility: .visible) {
             Button("Apply Recommended Setup") { completeBFSetup() }
@@ -865,37 +845,27 @@ struct ResizableWindowSection: View {
 
     var body: some View {
         let reason = WindowedPresentation.unavailable(for: game)
-        GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Toggle("Play in a resizable window", isOn: Binding(get: { size != nil }, set: { on in
-                        set(on ? (size ?? WindowedPresentation.lastChoice(for: game)) : nil)
-                    }))
-                    .disabled(reason != nil && size == nil)
-                    Spacer()
-                    if size != nil {
-                        Picker("Virtual screen", selection: Binding(get: { tag }, set: { t in
-                            if let px = WindowedPresentation.parse(t) { set(px) }
-                        })) {
-                            Text("Automatic (follows the game)").tag("auto")
-                            if let w = size, w != WindowedPresentation.automatic, !WindowedPresentation.resolutions.contains(w) { Text("\(w[0]) × \(w[1])").tag(tag) }
-                            ForEach(WindowedPresentation.resolutions, id: \.self) { r in Text("\(r[0]) × \(r[1])").tag("\(r[0])x\(r[1])") }
-                        }.frame(width: 240)
-                    }
+        SettingsSection(title: "Resizable Window") {
+            SettingToggle(title: "Play in a resizable window",
+                          info: "Runs the game on a virtual screen shown in a normal Mac window you can move, resize, minimize or make full screen. Your Mac's display isn't changed.\n\nAutomatic starts like your Mac's screen (or at the game's last resolution) and follows the resolution the game picks; a fixed size suits games that use the desktop resolution.\n\nCtrl-Cmd-C frees the mouse from the game or gives it back (Shift-Cmd-Esc always frees it). Ctrl-Cmd-F switches full screen.\n\nOnly the game's picture goes in the window; launcher windows (like Steam's) stay separate. If the launcher is already running with a different choice, Nokcandu offers to restart it when you play.",
+                          isOn: Binding(get: { size != nil }, set: { on in set(on ? (size ?? WindowedPresentation.lastChoice(for: game)) : nil) }))
+                .disabled(working || (reason != nil && size == nil))
+            if size != nil {
+                SettingRow(title: "Virtual screen") {
+                    Picker("Virtual screen", selection: Binding(get: { tag }, set: { t in
+                        if let px = WindowedPresentation.parse(t) { set(px) }
+                    })) {
+                        Text("Automatic").tag("auto")
+                        if let w = size, w != WindowedPresentation.automatic, !WindowedPresentation.resolutions.contains(w) { Text("\(w[0]) × \(w[1])").tag(tag) }
+                        ForEach(WindowedPresentation.resolutions, id: \.self) { r in Text("\(r[0]) × \(r[1])").tag("\(r[0])x\(r[1])") }
+                    }.labelsHidden().frame(width: settingControlWidth)
                 }
-                Text("Runs the game on a virtual screen shown in a normal Mac window you can move, resize, minimize or make full screen (green button). Your Mac's display isn't changed. Automatic starts like your Mac's screen (or at the game's last resolution) and follows the resolution the game picks; a fixed size suits games that use the desktop resolution. Ctrl-Cmd-C frees the mouse from the game or gives it back (Shift-Cmd-Esc always frees it); Ctrl-Cmd-F switches full screen. Experimental.")
-                    .font(.caption).foregroundStyle(.secondary)
-                if shared {
-                    Text("Only the game's fullscreen picture goes in the resizable window; its launcher's windows (like Steam's) stay separate Mac windows. If the launcher is already running with a different choice, Nokcandu offers to restart it when you play.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                if let reason { Text(reason).font(.caption).foregroundStyle(.secondary) }
-                if working { ProgressView().controlSize(.small) }
-                if !status.isEmpty { Text(status).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
+                .disabled(working)
             }
-            .disabled(working)
-            .padding(6).frame(maxWidth: .infinity, alignment: .leading)
-        } label: { Text("Resizable Window").font(.headline) }
+            if let reason { SettingNote(reason) }
+            if working { ProgressView().controlSize(.small) }
+            if !status.isEmpty { SettingNote(status) }
+        }
         .onAppear { size = WindowedPresentation.setting(for: game) }
     }
 

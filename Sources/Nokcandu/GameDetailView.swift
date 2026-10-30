@@ -99,9 +99,7 @@ struct GameDetailView: View {
                 }
                 if game.hosted?.exe != nil { HostedGameSettingsSection(game: game).id("hosted-\(game.id)") }
                 if game.custom != nil {
-                    GroupBox {
-                        GraphicsPicker(game: game).padding(6).frame(maxWidth: .infinity, alignment: .leading)
-                    } label: { Text("Graphics").font(.headline) }
+                    SettingsSection(title: "Graphics") { GraphicsPicker(game: game) }
                 }
                 if game.custom != nil, game.battleNet == nil, !BattleNet.isHost(game), !DisplayController.supports(game) {
                     GameResolutionSection(game: game).id("res-\(game.id)-\(game.custom?.displayPixels ?? [])")

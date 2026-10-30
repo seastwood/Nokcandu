@@ -31,11 +31,9 @@ struct BlizzardGamesSection: View {
                         }
                     }
                 }
-                Toggle("Close Battle.net when its game quits", isOn: Binding(get: { closes }, set: { closes = $0; BattleNet.setClosesWithGame($0, host: host) }))
-                Text("Battle.net opened by a game closes about 30 seconds after that game quits, so the next game starts it fresh with its own settings. Battle.net you open yourself stays open.")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                Text("Each game gets its own app that opens Battle.net (signed in) and starts the game. They use this app's Graphics, Performance, Mouse and extra settings — e.g. Apple Metal and ROSETTA_ADVERTISE_AVX for Diablo II: Resurrected.")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                SettingToggle(title: "Close Battle.net when its game quits",
+                              info: "When on, Battle.net opened by a game closes about 30 seconds after that game quits. Battle.net you open yourself always stays open. Off by default.\n\nEach game gets its own app that opens Battle.net (signed in) and starts the game. They use this app's Graphics, Performance, Mouse and extra settings.",
+                              isOn: Binding(get: { closes }, set: { closes = $0; BattleNet.setClosesWithGame($0, host: host) }))
             }
             .padding(6).frame(maxWidth: .infinity, alignment: .leading)
         } label: {
@@ -112,15 +110,13 @@ struct SteamGamesSection: View {
                         }
                     }
                 }
-                Toggle("Smoother Steam windows (GPU drawing)", isOn: Binding(get: { gpu }, set: { gpu = $0; SharedSteam.gpuDrawing = $0
-                    model.say("Takes effect when Steam next starts.") }))
-                Text("Steam's windows, scrolling and friends list move more smoothly, but Steam then uses the graphics chip alongside the game, which can add a little delay in games. If Steam's windows turn black, switch it off. Takes effect when Steam next starts.")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                Toggle("Close Steam when its game quits", isOn: Binding(get: { closes }, set: { closes = $0; SharedSteam.closesWithGame = $0 }))
-                Text("Steam opened by a game closes about 30 seconds after that game quits, so the next game starts Steam fresh with its own graphics settings. Steam you open yourself (Open Steam) stays open.")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                Text("Each game gets its own app with its icon; Play starts it through this shared Steam. Steam games share Steam's Mouse and Performance settings; graphics is chosen per game.")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                SettingToggle(title: "Smoother Steam windows (GPU drawing)",
+                              info: "Steam's windows, scrolling and friends list move more smoothly, but Steam then uses the graphics chip alongside the game, which can add a little delay in games. If Steam's windows turn black, switch it off. Takes effect when Steam next starts.",
+                              isOn: Binding(get: { gpu }, set: { gpu = $0; SharedSteam.gpuDrawing = $0
+                                  model.say("Takes effect when Steam next starts.") }))
+                SettingToggle(title: "Close Steam when its game quits",
+                              info: "When on, Steam opened by a game closes about 30 seconds after that game quits. Steam you open yourself (Open Steam) always stays open. Off by default.\n\nEach game gets its own app with its icon; Play starts it through this shared Steam. Steam games share Steam's Mouse and Performance settings; graphics is chosen per game.",
+                              isOn: Binding(get: { closes }, set: { closes = $0; SharedSteam.closesWithGame = $0 }))
             }
             .padding(6).frame(maxWidth: .infinity, alignment: .leading)
         } label: {
