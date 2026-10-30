@@ -293,6 +293,7 @@ final class AppModel: ObservableObject {
                 if DisplayController.supports(g) { DisplayController.prepareForLaunch(g) }
                 do { try await WindowedPresentation.prepareForLaunch(g) }
                 catch { await MainActor.run { self.say("Couldn't set up the resizable window: \(error.localizedDescription)") } }
+                await BonjourService.prepareForLaunch(g)
                 LibraryOrganizer.notePlayed(g)
                 GameDataSpec.forGame(g)?.snapshot()     // keep a copy of settings that live outside the app
                 // Mac versions from Epic need Epic's sign-in details, or they close right after their first screen.

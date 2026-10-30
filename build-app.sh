@@ -47,7 +47,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN/Nokcandu" "$APP/Contents/MacOS/Nokcandu"
 cp "$BIN/nokcandu-screen-size" "$APP/Contents/Resources/screen-size"
-cp Resources/refresh-generals-launcher.py Resources/build-icu-adapter.py Resources/generals-launcher "$APP/Contents/Resources/"
+cp Resources/bonjour/nokcandu-bonjour-service.exe Resources/refresh-generals-launcher.py Resources/build-icu-adapter.py Resources/generals-launcher "$APP/Contents/Resources/"
 chmod 755 "$APP/Contents/Resources/generals-launcher" "$APP/Contents/Resources/screen-size"
 ./Resources/borderless/build.sh "$(pwd)/$APP/Contents/Resources"
 ./Resources/cabextract/build.sh "$(pwd)/$APP/Contents/Resources"
@@ -58,7 +58,7 @@ xcrun clang -arch x86_64 -arch arm64 -mmacosx-version-min=11.0 -dynamiclib -fobj
   -framework AppKit -framework GameController -framework CoreGraphics -framework IOKit -framework OpenGL \
   -framework AudioToolbox -framework CoreAudio \
   -install_name @rpath/nokcandu-rawmouse.dylib \
-  -o "$APP/Contents/Resources/nokcandu-rawmouse.dylib" Resources/rawmouse/rawmouse.m Resources/rawmouse/audiofollow.m Resources/present/present.m
+  -o "$APP/Contents/Resources/nokcandu-rawmouse.dylib" Resources/rawmouse/rawmouse.m Resources/rawmouse/audiofollow.m Resources/rawmouse/bonjourbridge.m Resources/present/present.m
 # Nokcandu's Wine Mac driver (resizable game windows): Wine 10.0 + Engine/winemac/patches, built by
 # Engine/winemac/build.sh. A fresh local build wins over the copy kept in Resources/winemac.
 WINEMAC=Resources/winemac; [ -f build/winemac/SHA256SUMS ] && WINEMAC=build/winemac
