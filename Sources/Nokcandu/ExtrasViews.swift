@@ -344,10 +344,9 @@ struct GameResolutionSection: View {
                     SettingNote("The game is in a resizable window, so your Mac's screen isn't switched.")
                 }
                 SettingRow(title: "Window style",
-                           info: CompatibilityFixes.unavailable(.borderless, for: game) ?? "Choose Windowed inside the game before using Fullscreen (Borderless). This uses the same optional borderless fix as the Fixes panel and leaves the Mac's display mode alone.") {
-                    Picker("Window style", selection: Binding(get: { game.custom?.borderless == true }, set: windowStyle)) {
-                        Text("Game default").tag(false)
-                        Text("Fullscreen (Borderless)").tag(true)
+                           info: CompatibilityFixes.unavailable(.borderless, for: game) ?? "Game default: the game decides. Fullscreen (Borderless): the game's window fills its screen without borders, leaving the Mac's display mode alone. Fullscreen: the same, and with the resizable window the game opens in Mac full screen in its own Space (Control-Command-F switches back); without it, the borderless window covers the whole Mac screen. For either fullscreen style, choose Windowed inside the game.") {
+                    Picker("Window style", selection: Binding(get: { GameWindowStyle.current(game) }, set: windowStyle)) {
+                        ForEach(GameWindowStyle.allCases) { Text($0.title).tag($0) }
                     }.labelsHidden().frame(width: settingControlWidth)
                         .disabled(CompatibilityFixes.unavailable(.borderless, for: game) != nil && game.custom?.borderless != true)
                 }
@@ -412,11 +411,11 @@ struct GameResolutionSection: View {
             try await Task.detached { try GameDisplay.apply(px, to: current, library: lib) }.value
         }, completion: { _ in working = false })
     }
-    func windowStyle(_ borderless: Bool) {
+    func windowStyle(_ style: GameWindowStyle) {
         working = true; status = ""
         let log = logger
         model.changeSetting(for: game, title: "Window Style", edit: { current in
-            try await GameWindowStyle.apply(borderless: borderless, to: current, log: log)
+            try await GameWindowStyle.apply(style, to: current, log: log)
         }, completion: { _ in working = false })
     }
     func openUASettings() {

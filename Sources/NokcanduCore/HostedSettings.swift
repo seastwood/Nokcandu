@@ -6,6 +6,8 @@ public enum HostedSettings {
         public var graphics: GraphicsPreset? = nil
         public var arguments = ""
         public var borderless: Bool? = nil
+        /// Window style "Fullscreen" (with borderless): Mac full screen in the resizable window.
+        public var macFullScreen: Bool? = nil
         public var environment: [String: String] = [:]
         public var launcherSHA: String? = nil
         public init() {}
@@ -91,6 +93,7 @@ public enum HostedSettings {
         \(extraRules.isEmpty ? "" : "export WINEDLLOVERRIDES=" + q(extraRules))
         \(extra)
         \(link.launcher == .ea ? EACompatibility.block(watch: false) : "")
+        \(settings.borderless == true && settings.macFullScreen == true ? "export NOKCANDU_MAC_FULLSCREEN=1" : "")
         \(settings.borderless == true && link.exe != nil ? "export NOKCANDU_BORDERLESS_TARGET=" + q(link.exe!) + "\nexport NOKCANDU_BORDERLESS_DLL=" + q(borderlessPath(link, ext: "dll")) + "\nBORDERLESS_LAUNCHER=" + q(borderlessPath(link, ext: "exe")) : "")
         if [ -f "$GAME_STATE/perf.env" ]; then . "$GAME_STATE/perf.env"; fi
         \(program.map { "cd " + q($0.deletingLastPathComponent().path) } ?? ":")

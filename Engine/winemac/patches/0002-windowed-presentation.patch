@@ -768,22 +768,23 @@ index 5e3ad03..d87917d 100644
              [super setView:newView];
          else OnMainThread(^{
 diff --git a/dlls/winemac.drv/cocoa_window.h b/dlls/winemac.drv/cocoa_window.h
-index 1d7b310..2be9486 100644
+index 1d7b310..d8dfe61 100644
 --- a/dlls/winemac.drv/cocoa_window.h
 +++ b/dlls/winemac.drv/cocoa_window.h
-@@ -108,5 +108,10 @@ - (WineWindow*) ancestorWineWindow;
+@@ -108,5 +108,11 @@ - (WineWindow*) ancestorWineWindow;
      - (void) updateForCursorClipping;
  
      - (void) setRetinaMode:(int)mode;
 +    - (BOOL) isPresentedWindow;
 +    - (BOOL) presentScales;
 +    - (void) presentToggleFullScreen;
++    - (void) presentStartFullScreenIfWanted;
 +    - (void) presentRefit;
 +    - (void) presentRelayoutFromScale:(double)oldScale origin:(CGPoint)oldOrigin;
  
  @end
 diff --git a/dlls/winemac.drv/cocoa_window.m b/dlls/winemac.drv/cocoa_window.m
-index ce8b571..dda622f 100644
+index ce8b571..5ef11a8 100644
 --- a/dlls/winemac.drv/cocoa_window.m
 +++ b/dlls/winemac.drv/cocoa_window.m
 @@ -372,6 +372,9 @@ @interface WineContentView : WineBaseView <NSTextInputClient, NSViewLayerContent
@@ -1162,7 +1163,7 @@ index ce8b571..dda622f 100644
              macdrv_event_mask discard = event_mask_for_type(WINDOW_DID_UNMINIMIZE);
  
              pendingMinimize = FALSE;
-@@ -1755,6 +1976,15 @@ - (void) orderBelow:(WineWindow*)prev orAbove:(WineWindow*)next activate:(BOOL)a
+@@ -1755,6 +1976,16 @@ - (void) orderBelow:(WineWindow*)prev orAbove:(WineWindow*)next activate:(BOOL)a
                  [NSApp unhide:nil];
              wasVisible = [self isVisible];
  
@@ -1173,12 +1174,13 @@ index ce8b571..dda622f 100644
 +            {
 +                presentShown = TRUE;
 +                activate = TRUE;
++                [self presentStartFullScreenIfWanted];
 +            }
 +
              if (activate)
                  [controller tryToActivateIgnoringOtherApps:YES];
  
-@@ -1902,8 +2132,11 @@ - (void) doOrderOut
+@@ -1902,8 +2133,11 @@ - (void) doOrderOut
          else
              [self orderOut:nil];
          [self checkWineDisplayLink];
@@ -1192,7 +1194,7 @@ index ce8b571..dda622f 100644
          drawnSinceShown = NO;
          savedVisibleState = FALSE;
          if (wasVisible && wasOnActiveSpace && fullscreen)
-@@ -2078,7 +2311,16 @@ - (BOOL) needsTransparency
+@@ -2078,7 +2312,16 @@ - (BOOL) needsTransparency
  
      - (void) checkTransparency
      {
@@ -1210,7 +1212,7 @@ index ce8b571..dda622f 100644
          {
              self.shapeChangedSinceLastDraw = TRUE;
              [[self contentView] setNeedsDisplay:YES];
-@@ -2200,6 +2442,327 @@ - (void) postBroughtForwardEvent
+@@ -2200,6 +2443,328 @@ - (void) postBroughtForwardEvent
          macdrv_release_event(event);
      }
  
@@ -1338,6 +1340,7 @@ index ce8b571..dda622f 100644
 +                presentShown = TRUE;
 +                [[WineApplicationController sharedController] tryToActivateIgnoringOtherApps:YES];
 +                [self orderFront:nil];
++                [self presentStartFullScreenIfWanted];
 +            }
 +        }
 +        return YES;
@@ -1538,7 +1541,7 @@ index ce8b571..dda622f 100644
      - (void) postWindowFrameChanged:(NSRect)frame fullscreen:(BOOL)isFullscreen resizing:(BOOL)resizing skipSizeMove:(BOOL)skipSizeMove
      {
          macdrv_event* event;
-@@ -2212,12 +2775,27 @@ - (void) postWindowFrameChanged:(NSRect)frame fullscreen:(BOOL)isFullscreen resi
+@@ -2212,12 +2777,27 @@ - (void) postWindowFrameChanged:(NSRect)frame fullscreen:(BOOL)isFullscreen resi
          frame = [[self class] contentRectForFrameRect:frame styleMask:style];
          [[WineApplicationController sharedController] flipRect:&frame];
  
@@ -1567,7 +1570,7 @@ index ce8b571..dda622f 100644
          event->window_frame_changed.fullscreen = isFullscreen;
          event->window_frame_changed.in_resize = resizing;
          event->window_frame_changed.skip_size_move_loop = skipSizeMove;
-@@ -2472,6 +3050,8 @@ - (NSRect) constrainFrameRect:(NSRect)frameRect toScreen:(NSScreen *)screen
+@@ -2472,6 +3052,8 @@ - (NSRect) constrainFrameRect:(NSRect)frameRect toScreen:(NSScreen *)screen
          // it.
          NSArray* screens = [NSScreen screens];
          NSRect contentRect = [self contentRectForFrameRect:frameRect];
@@ -1576,7 +1579,7 @@ index ce8b571..dda622f 100644
          if (!screen_covered_by_rect(contentRect, screens) &&
              frame_intersects_screens(frameRect, screens))
              frameRect = [super constrainFrameRect:frameRect toScreen:screen];
-@@ -2521,7 +3101,7 @@ - (BOOL) validateMenuItem:(NSMenuItem *)menuItem
+@@ -2521,7 +3103,7 @@ - (BOOL) validateMenuItem:(NSMenuItem *)menuItem
  
          if ([menuItem action] == @selector(makeKeyAndOrderFront:))
              ret = [self isKeyWindow] || (!self.disabled && !self.noForeground);
@@ -1585,7 +1588,7 @@ index ce8b571..dda622f 100644
              ret = NO;
  
          return ret;
-@@ -2622,7 +3202,7 @@ - (void) sendEvent:(NSEvent*)event
+@@ -2622,7 +3204,7 @@ - (void) sendEvent:(NSEvent*)event
  
                      event = macdrv_create_event(WINDOW_RESTORE_REQUESTED, self);
                      event->window_restore_requested.keep_frame = TRUE;
@@ -1594,7 +1597,7 @@ index ce8b571..dda622f 100644
                      [queue postEvent:event];
                      macdrv_release_event(event);
  
-@@ -2643,6 +3223,13 @@ - (void) miniaturize:(id)sender
+@@ -2643,6 +3225,13 @@ - (void) miniaturize:(id)sender
           * the background rather than minimizing the window.
           * Don't start minimizing the window on the Win32 side.
           */
@@ -1608,7 +1611,7 @@ index ce8b571..dda622f 100644
          if (stage_manager_enabled())
          {
              [super miniaturize:sender];
-@@ -2660,10 +3247,25 @@ - (void) miniaturize:(id)sender
+@@ -2660,10 +3249,37 @@ - (void) miniaturize:(id)sender
  
      - (void) toggleFullScreen:(id)sender
      {
@@ -1620,6 +1623,18 @@ index ce8b571..dda622f 100644
      }
  
 +    /* Ctrl-Cmd-F: in or out of Mac full screen, whatever Windows thinks of the window. */
++    /* Window style "Fullscreen" (NOKCANDU_MAC_FULLSCREEN=1 from the launcher): the game's picture opens in
++       Mac full screen, in its own Space, the first time it's shown. Control-Command-F still switches back. */
++    - (void) presentStartFullScreenIfWanted
++    {
++        const char *want = getenv("NOKCANDU_MAC_FULLSCREEN");
++        if (!want || strcmp(want, "1")) return;
++        dispatch_async(dispatch_get_main_queue(), ^{
++            if ([self isVisible] && ![self isMiniaturized] && !([self styleMask] & NSWindowStyleMaskFullScreen))
++                [self presentToggleFullScreen];
++        });
++    }
++
 +    - (void) presentToggleFullScreen
 +    {
 +        NSWindowCollectionBehavior behavior = [self collectionBehavior];
@@ -1635,7 +1650,7 @@ index ce8b571..dda622f 100644
      - (void) setViewsNeedDisplay:(BOOL)value
      {
          if (value && ![self viewsNeedDisplay])
-@@ -2886,6 +3488,14 @@ - (NSSize) window:(NSWindow*)window willUseFullScreenContentSize:(NSSize)propose
+@@ -2886,6 +3502,14 @@ - (NSSize) window:(NSWindow*)window willUseFullScreenContentSize:(NSSize)propose
          macdrv_query* query;
          NSSize size;
  
@@ -1650,7 +1665,7 @@ index ce8b571..dda622f 100644
          query = macdrv_create_query();
          query->type = QUERY_MIN_MAX_INFO;
          query->window = (macdrv_window)[self retain];
-@@ -2924,9 +3534,10 @@ - (void) windowDidChangeScreen:(NSNotification*)notification
+@@ -2924,9 +3548,10 @@ - (void) windowDidChangeScreen:(NSNotification*)notification
  
      - (void)windowDidDeminiaturize:(NSNotification *)notification
      {
@@ -1662,7 +1677,7 @@ index ce8b571..dda622f 100644
              [self postDidUnminimizeEvent];
          ignore_windowDeminiaturize = FALSE;
  
-@@ -2953,7 +3564,8 @@ - (void)windowDidDeminiaturize:(NSNotification *)notification
+@@ -2953,7 +3578,8 @@ - (void)windowDidDeminiaturize:(NSNotification *)notification
  
      - (void) windowDidEndLiveResize:(NSNotification *)notification
      {
@@ -1672,7 +1687,7 @@ index ce8b571..dda622f 100644
          {
              macdrv_event* event = macdrv_create_event(WINDOW_RESIZE_ENDED, self);
              [queue postEvent:event];
-@@ -3003,6 +3615,8 @@ - (void)windowDidMiniaturize:(NSNotification *)notification
+@@ -3003,6 +3629,8 @@ - (void)windowDidMiniaturize:(NSNotification *)notification
  
          [self checkWineDisplayLink];
  
@@ -1681,7 +1696,7 @@ index ce8b571..dda622f 100644
          event = macdrv_create_event(WINDOW_DID_MINIMIZE, self);
          [queue postEvent:event];
          macdrv_release_event(event);
-@@ -3061,7 +3675,39 @@ - (void)windowDidResize:(NSNotification *)notification
+@@ -3061,7 +3689,39 @@ - (void)windowDidResize:(NSNotification *)notification
  
      - (BOOL)windowShouldClose:(id)sender
      {
@@ -1722,7 +1737,7 @@ index ce8b571..dda622f 100644
          [queue postEvent:event];
          macdrv_release_event(event);
          return NO;
-@@ -3069,6 +3715,12 @@ - (BOOL)windowShouldClose:(id)sender
+@@ -3069,6 +3729,12 @@ - (BOOL)windowShouldClose:(id)sender
  
      - (BOOL) windowShouldZoom:(NSWindow*)window toFrame:(NSRect)newFrame
      {
@@ -1735,7 +1750,7 @@ index ce8b571..dda622f 100644
          if (maximized)
          {
              macdrv_event* event = macdrv_create_event(WINDOW_RESTORE_REQUESTED, self);
-@@ -3120,13 +3772,17 @@ - (void) windowWillExitFullScreen:(NSNotification*)notification
+@@ -3120,13 +3786,17 @@ - (void) windowWillExitFullScreen:(NSNotification*)notification
  
      - (void)windowWillMiniaturize:(NSNotification *)notification
      {
@@ -1754,7 +1769,7 @@ index ce8b571..dda622f 100644
          {
              if (maximized)
                  return self.wine_fractionalFrame.size;
-@@ -3146,13 +3802,13 @@ - (NSSize) windowWillResize:(NSWindow*)sender toSize:(NSSize)frameSize
+@@ -3146,13 +3816,13 @@ - (NSSize) windowWillResize:(NSWindow*)sender toSize:(NSSize)frameSize
              query = macdrv_create_query();
              query->type = QUERY_RESIZE_SIZE;
              query->window = (macdrv_window)[self retain];
@@ -1770,7 +1785,7 @@ index ce8b571..dda622f 100644
                  rect = [self frameRectForContentRect:rect];
                  frameSize = rect.size;
              }
-@@ -3167,7 +3823,9 @@ - (void) windowWillStartLiveResize:(NSNotification *)notification
+@@ -3167,7 +3837,9 @@ - (void) windowWillStartLiveResize:(NSNotification *)notification
      {
          [self endWindowDragging];
  
@@ -1781,7 +1796,7 @@ index ce8b571..dda622f 100644
          {
              macdrv_event* event;
              NSRect frame = [self contentRectForFrameRect:self.frame];
-@@ -3176,7 +3834,7 @@ - (void) windowWillStartLiveResize:(NSNotification *)notification
+@@ -3176,7 +3848,7 @@ - (void) windowWillStartLiveResize:(NSNotification *)notification
  
              event = macdrv_create_event(WINDOW_RESTORE_REQUESTED, self);
              event->window_restore_requested.keep_frame = TRUE;
@@ -1790,7 +1805,7 @@ index ce8b571..dda622f 100644
              [queue postEvent:event];
              macdrv_release_event(event);
          }
-@@ -3193,6 +3851,19 @@ - (NSRect) windowWillUseStandardFrame:(NSWindow*)window defaultFrame:(NSRect)pro
+@@ -3193,6 +3865,19 @@ - (NSRect) windowWillUseStandardFrame:(NSWindow*)window defaultFrame:(NSRect)pro
          NSRect currentContentRect, proposedContentRect, newContentRect, screenRect;
          NSSize maxSize;
  
@@ -1810,7 +1825,7 @@ index ce8b571..dda622f 100644
          query = macdrv_create_query();
          query->type = QUERY_MIN_MAX_INFO;
          query->window = (macdrv_window)[self retain];
-@@ -3286,7 +3957,7 @@ - (NSDragOperation) draggingUpdated:(id <NSDraggingInfo>)sender
+@@ -3286,7 +3971,7 @@ - (NSDragOperation) draggingUpdated:(id <NSDraggingInfo>)sender
      {
          NSDragOperation ret;
          NSPoint pt = [[self contentView] convertPoint:[sender draggingLocation] fromView:nil];
@@ -1819,7 +1834,7 @@ index ce8b571..dda622f 100644
  
          macdrv_query* query = macdrv_create_query();
          query->type = QUERY_DRAG_DROP_DRAG;
-@@ -3306,7 +3977,7 @@ - (BOOL) performDragOperation:(id <NSDraggingInfo>)sender
+@@ -3306,7 +3991,7 @@ - (BOOL) performDragOperation:(id <NSDraggingInfo>)sender
      {
          BOOL ret;
          NSPoint pt = [[self contentView] convertPoint:[sender draggingLocation] fromView:nil];
@@ -1828,7 +1843,7 @@ index ce8b571..dda622f 100644
  
          macdrv_query* query = macdrv_create_query();
          query->type = QUERY_DRAG_DROP_DROP;
-@@ -3343,9 +4014,10 @@ macdrv_window macdrv_create_cocoa_window(const struct macdrv_window_features* wf
+@@ -3343,9 +4028,10 @@ macdrv_window macdrv_create_cocoa_window(const struct macdrv_window_features* wf
  
      OnMainThread(^{
          window = [[WineWindow createWindowWithFeatures:wf
@@ -1840,7 +1855,7 @@ index ce8b571..dda622f 100644
      });
  
      return (macdrv_window)window;
-@@ -3488,7 +4160,7 @@ void macdrv_set_cocoa_window_frame(macdrv_window w, const CGRect* new_frame)
+@@ -3488,7 +4174,7 @@ void macdrv_set_cocoa_window_frame(macdrv_window w, const CGRect* new_frame)
      WineWindow* window = (WineWindow*)w;
  
      OnMainThread(^{
@@ -1849,7 +1864,7 @@ index ce8b571..dda622f 100644
      });
  }
  
-@@ -3506,7 +4178,7 @@ void macdrv_get_cocoa_window_frame(macdrv_window w, CGRect* out_frame)
+@@ -3506,7 +4192,7 @@ void macdrv_get_cocoa_window_frame(macdrv_window w, CGRect* out_frame)
  
          frame = [window contentRectForFrameRect:[window wine_fractionalFrame]];
          [[WineApplicationController sharedController] flipRect:&frame];
@@ -1858,7 +1873,7 @@ index ce8b571..dda622f 100644
      });
  }
  
-@@ -3687,6 +4359,7 @@ macdrv_view macdrv_create_view(CGRect rect)
+@@ -3687,6 +4373,7 @@ macdrv_view macdrv_create_view(CGRect rect)
          NSNotificationCenter* nc = [NSNotificationCenter defaultCenter];
  
          view = [[WineContentView alloc] initWithFrame:NSRectFromCGRect(cgrect_mac_from_win(rect))];
@@ -1866,7 +1881,7 @@ index ce8b571..dda622f 100644
          [view setAutoresizingMask:NSViewNotSizable];
          [view setHidden:YES];
          [view setWantsBestResolutionOpenGLSurface:retina_on];
-@@ -3747,6 +4420,15 @@ void macdrv_set_view_frame(macdrv_view v, CGRect rect)
+@@ -3747,6 +4434,15 @@ void macdrv_set_view_frame(macdrv_view v, CGRect rect)
          NSRect newFrame = NSRectFromCGRect(cgrect_mac_from_win(rect));
          NSRect oldFrame = [view frame];
  
@@ -1882,7 +1897,7 @@ index ce8b571..dda622f 100644
          if (!NSEqualRects(oldFrame, newFrame))
          {
              [[view superview] setNeedsDisplayInRect:oldFrame];
-@@ -3758,7 +4440,7 @@ void macdrv_set_view_frame(macdrv_view v, CGRect rect)
+@@ -3758,7 +4454,7 @@ void macdrv_set_view_frame(macdrv_view v, CGRect rect)
                  [view setFrame:newFrame];
              [view setNeedsDisplay:YES];
  
@@ -1891,7 +1906,7 @@ index ce8b571..dda622f 100644
              {
                  int backing_size[2] = { 0 };
                  [view wine_setBackingSize:backing_size];
-@@ -3919,7 +4601,7 @@ macdrv_metal_layer macdrv_view_get_metal_layer(macdrv_metal_view v)
+@@ -3919,7 +4615,7 @@ macdrv_metal_layer macdrv_view_get_metal_layer(macdrv_metal_view v)
      __block CAMetalLayer* layer;
  
      OnMainThread(^{
@@ -1900,7 +1915,7 @@ index ce8b571..dda622f 100644
      });
  
      return (macdrv_metal_layer)layer;
-@@ -4057,3 +4739,23 @@ void macdrv_clear_ime_text(void)
+@@ -4057,3 +4753,23 @@ void macdrv_clear_ime_text(void)
              [[window contentView] clearMarkedText];
      });
  }

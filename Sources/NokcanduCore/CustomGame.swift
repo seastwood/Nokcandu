@@ -158,6 +158,8 @@ public struct CustomGameConfig: Codable, Hashable {
     /// Built-in BF1942 display recipe uses a verified menu-size copy beside the original.
     public var bf1942MenuCopy: Bool?
     public var borderless: Bool?
+    /// Window style "Fullscreen": borderless, and in the resizable window the game opens in Mac full screen.
+    public var macFullScreen: Bool?
     public var legacyD3D9: Bool?
     /// Graphics mode the user confirmed actually played well (nil = not play-tested yet).
     public var confirmedGraphics: GraphicsPreset?
@@ -531,6 +533,7 @@ public enum CustomGames {
         \(GameDisplay.launcherLines(c.displayPixels, tool: #""$SUPPORT/nokcandu/screen-size""#, log: #""$LOG_DIR/display.log""#,
                                      pattern: GameDisplay.watchPattern(exeName: c.bf1942MenuCopy == true ? BF1942DisplayFix.copyName : exeName)))cd "$GAME_DIR"
         STATUS=0
+        \(c.borderless == true && c.macFullScreen == true ? "export NOKCANDU_MAC_FULLSCREEN=1" : "")
         \(c.borderless == true ? #"export NOKCANDU_BORDERLESS_TARGET="$GAME_EXE"; export NOKCANDU_BORDERLESS_DLL='C:\nokcandu\borderless\window.dll'; GAME_EXE='C:\nokcandu\borderless\launcher.exe'"# : "")
         "$SUPPORT/wine/bin/wine" "$GAME_EXE"\(args.isEmpty ? "" : " " + args)\(storeArgs) || STATUS=$?
         echo "nokcandu: game exited with status $STATUS after ${SECONDS}s"

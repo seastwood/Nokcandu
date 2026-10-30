@@ -16,11 +16,10 @@ struct HostedGameSettingsSection: View {
                 }.frame(maxWidth: 380)
                 Text((settings.graphics ?? HostedSettings.graphics(game)).detail).font(.caption).foregroundStyle(.secondary)
                 if game.hosted?.launcher == .ea {
-                    Picker("Window style", selection: Binding(get: { settings.borderless == true }, set: { settings.borderless = $0 ? true : nil })) {
-                        Text("Game default").tag(false)
-                        Text("Fullscreen (Borderless)").tag(true)
+                    Picker("Window style", selection: Binding(get: { GameWindowStyle.current(settings) }, set: { GameWindowStyle.set($0, in: &settings) })) {
+                        ForEach(GameWindowStyle.allCases) { Text($0.title).tag($0) }
                     }.frame(maxWidth: 380)
-                    Text("For borderless, select Windowed in the game first.").font(.caption).foregroundStyle(.secondary)
+                    Text("For either fullscreen style, select Windowed in the game first. Fullscreen also opens the resizable window in Mac full screen.").font(.caption).foregroundStyle(.secondary)
                 }
                 TextField("Launch options", text: $settings.arguments).font(.body.monospaced())
                 if let link = game.hosted {
