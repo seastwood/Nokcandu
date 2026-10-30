@@ -1,0 +1,13 @@
+Sikarugir's Wine 11 wineserver has one extra request, flush_key_done, right after
+flush_key (from the registry-flush patches it carries). Requests are numbered by
+position, so without it every request the driver sends after that point reaches the
+wrong handler: set_queue_fd never happens, the thread is never told about Mac events,
+and games get no mouse or keyboard input. Nokcandu also checks an engine's request
+table before installing the driver (WindowedPresentation.serverRequestsMatch).
+
+--- a/include/wine/server_protocol.h
++++ b/include/wine/server_protocol.h
+@@ -6253,2 +6253,3 @@
+     REQ_flush_key,
++    REQ_flush_key_done,
+     REQ_enum_key,

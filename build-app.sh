@@ -70,6 +70,7 @@ for V in $(cat Engine/winemac/SUPPORTED_WINE); do
     mkdir -p "$APP/Contents/Resources/winemac/$V"
     cp -R "$D/x86_64-unix" "$D/x86_64-windows" "$D/i386-windows" "$APP/Contents/Resources/winemac/$V/"
     echo "$V" > "$APP/Contents/Resources/winemac/$V/wine-version"
+    [ -f "$D/server-requests" ] && cp "$D/server-requests" "$APP/Contents/Resources/winemac/$V/"
   elif [ "${NOKCANDU_REQUIRE_WINEMAC:-0}" = 1 ]; then
     echo "Nokcandu's Wine Mac driver for Wine $V isn't built (Engine/winemac/build.sh): a release needs it."; exit 1
   else

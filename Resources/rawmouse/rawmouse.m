@@ -981,6 +981,10 @@ static void run_from_game_app_as(bool background);
 static void run_from_game_app(void) { run_from_game_app_as(false); }
 static void run_from_game_app_as(bool background) {
     if (getenv("NOKCANDU_NO_GAME_APP")) return;
+    // Wine 11 engines (they need SikarugirAppWine11) can't start from the wrapper's copy of the loader while this
+    // library is loaded: the process fails to map Windows' shared user data (0x7ffe0000) and the game quits at
+    // once. Those games keep running as plain wine; the library still gives them their name.
+    if (getenv("SikarugirAppWine11")) return;
     char exe[PATH_MAX]; uint32_t size = sizeof exe;
     if (_NSGetExecutablePath(exe, &size) != 0 || strstr(exe, "/GameApp/")) return;
     const char *base = strrchr(exe, '/');

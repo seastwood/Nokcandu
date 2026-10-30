@@ -73,5 +73,6 @@ cp dlls/winemac.drv/winemac.so "$OUT/x86_64-unix/"
 cp dlls/winemac.drv/x86_64-windows/winemac.drv "$OUT/x86_64-windows/"
 cp dlls/winemac.drv/i386-windows/winemac.drv "$OUT/i386-windows/"
 echo "$WINE_VERSION" > "$OUT/wine-version"      # which engines this driver goes into (Wine major.minor)
+bash "$ROOT/Engine/winemac/server-requests.sh" "../$SRC/wine-$WINE_VERSION" > "$OUT/server-requests"   # checked against each engine
 ( cd "$OUT" && shasum -a 256 */winemac.* > SHA256SUMS )
 echo "Built into $OUT"; cat "$OUT/SHA256SUMS"

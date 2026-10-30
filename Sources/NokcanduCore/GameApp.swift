@@ -89,6 +89,9 @@ public enum GameApp {
         let support = h.appendingPathComponent("SharedSupport")
         let wine = support.appendingPathComponent("wine/bin/wine")
         guard enabled else { removeAll(host: h); return }
+        // Wine 11 engines can't start from a wrapper while the helper library is loaded (Windows' shared user
+        // data can't be mapped and the game quits at once), so those games run as plain wine.
+        if let v = WindowedPresentation.engineVersion(host: h), v.major >= 11 { removeAll(host: h); return }
         guard fm.isExecutableFile(atPath: wine.path), let engine = engineStamp(wine) else { return }
         let dir = support.appendingPathComponent(folderName, isDirectory: true)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)

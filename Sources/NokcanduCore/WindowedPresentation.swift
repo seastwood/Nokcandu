@@ -58,9 +58,103 @@ public enum WindowedPresentation {
     static func engineVersion(host h: URL) -> EngineVersion? {
         (try? String(contentsOf: h.appendingPathComponent("SharedSupport/wine/version"), encoding: .utf8)).flatMap(EngineVersion.init(versionString:))
     }
-    /// The driver for this engine (nil when Nokcandu has none for its Wine version).
+    /// The driver for this engine (nil when Nokcandu has none for its Wine version, or when the engine's Wine
+    /// server numbers its requests differently from the Wine source the driver was built from).
     static func bundled(host h: URL) -> URL? {
-        engineVersion(host: h).flatMap { bundledDrivers["\($0.major).\($0.minor)"] }
+        guard let d = engineVersion(host: h).flatMap({ bundledDrivers["\($0.major).\($0.minor)"] }) else { return nil }
+        return serverRequestsMatch(driver: d, host: h) ? d : nil
+    }
+
+    // MARK: Wine server requests
+
+    /// The driver asks Wine's server for a few things (a window's position, where to send Mac events) by request
+    /// number, and the numbers come from the request's position in Wine's list. An engine whose wineserver has an
+    /// extra or missing request before one of those (Sikarugir's Wine 11 adds one) would answer the wrong
+    /// question: the game would get no mouse or keyboard input at all. So the driver ships the numbers it uses
+    /// (server-requests) and goes only into engines whose wineserver has those requests at those numbers.
+    static func serverRequestsMatch(driver d: URL, host h: URL) -> Bool {
+        guard let text = try? String(contentsOf: d.appendingPathComponent("server-requests"), encoding: .utf8) else {
+            return driversForTesting != nil     // test drivers have no list; a real one always does
+        }
+        let want = text.split(separator: "\n").compactMap { line -> (String, Int)? in
+            let p = line.split(separator: " ")
+            guard p.count == 2, let n = Int(p[1]) else { return nil }
+            return (String(p[0]), n)
+        }
+        guard !want.isEmpty, let table = serverRequestTable(h.appendingPathComponent("SharedSupport/wine/bin/wineserver")) else { return false }
+        return want.allSatisfy { table.count > $0.1 && table[$0.1] == $0.0 }
+    }
+
+    nonisolated(unsafe) private static var requestCache: [String: [String]] = [:]
+    private static let requestLock = NSLock()
+
+    /// The request names in a wineserver, in order (its debug name table), or nil when they can't be found.
+    static func serverRequestTable(_ server: URL) -> [String]? {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: server.path)
+        let key = server.path + "|" + String(describing: attrs?[.size] ?? "") + "|" + String(describing: attrs?[.modificationDate] ?? "")
+        requestLock.lock(); defer { requestLock.unlock() }
+        if let c = requestCache[key] { return c }
+        guard let data = try? Data(contentsOf: server, options: .alwaysMapped), let t = requestNames(inMachO: data) else { return nil }
+        requestCache[key] = t
+        return t
+    }
+
+    /// Finds the table of pointers to request names ("new_process", "get_new_process_info", …) in an x86-64
+    /// Mach-O (or the x86-64 part of a universal one). Pointers there are stored as chained fixups whose low 36
+    /// bits are the target's offset in the image; names live in __TEXT, where that equals the file offset.
+    static func requestNames(inMachO all: Data) -> [String]? {
+        var data = all
+        if all.count > 8, all.prefix(4) == Data([0xca, 0xfe, 0xba, 0xbe]) {
+            func be32(_ o: Int) -> Int { all[o..<o + 4].reduce(0) { $0 << 8 | Int($1) } }
+            var found: Data?
+            for i in 0..<be32(4) {
+                let e = 8 + i * 20
+                if be32(e) == 0x0100_0007 { found = all.subdata(in: be32(e + 8)..<be32(e + 8) + be32(e + 12)) }
+            }
+            guard let f = found else { return nil }
+            data = f
+        }
+        return data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> [String]? in
+            let n = raw.count
+            guard n > 64, let base = raw.baseAddress else { return nil }
+            func cstring(_ o: Int) -> String? {
+                guard o >= 0, o < n else { return nil }
+                var e = o
+                while e < n, e - o < 80, raw[e] != 0 {
+                    let c = raw[e]
+                    guard (c >= 0x61 && c <= 0x7a) || (c >= 0x30 && c <= 0x39) || c == 0x5f else { return nil }
+                    e += 1
+                }
+                guard e < n, raw[e] == 0, e > o else { return nil }
+                return String(decoding: UnsafeRawBufferPointer(start: base + o, count: e - o), as: UTF8.self)
+            }
+            let needle = Array("\0new_process\0".utf8)
+            var first = -1
+            var i = 0
+            while i + needle.count <= n {
+                if raw[i] == 0, raw[i + 1] == needle[1], memcmp(base + i, needle, needle.count) == 0 { first = i + 1; break }
+                i += 1
+            }
+            guard first > 0 else { return nil }
+            func target(_ v: UInt64) -> Int { Int(v & 0xF_FFFF_FFFF) }
+            var p = 0
+            while p + 8 <= n {
+                let v = raw.loadUnaligned(fromByteOffset: p, as: UInt64.self)
+                if target(v) == first || v == 0x1_0000_0000 + UInt64(first) {
+                    var names: [String] = []
+                    var q = p
+                    while q + 8 <= n {
+                        let w = raw.loadUnaligned(fromByteOffset: q, as: UInt64.self)
+                        let t = w >= 0x1_0000_0000 && w < 0x1_0000_0000 + UInt64(n) ? Int(w - 0x1_0000_0000) : target(w)
+                        guard w != 0, let s = cstring(t) else { break }
+                        names.append(s); q += 8
+                    }
+                    if names.count > 100 { return names }
+                }
+                p += 8
+            }
+            return nil
+        }
     }
     /// Whether this copy of Nokcandu carries any driver at all.
     public static var bundled: URL? { bundledDrivers.values.first }
@@ -84,9 +178,10 @@ public enum WindowedPresentation {
                     ? .nokcandu : .outdated
             }
         }
-        if isOurs(l.appendingPathComponent(files[0])) { return .outdated }
+        // Ours, but this engine can't take the driver Nokcandu carries now (its server numbers requests differently).
+        if isOurs(l.appendingPathComponent(files[0])) { return bundled(host: h) == nil ? .unsupported : .outdated }
         // The engine's own driver, from a Sikarugir revision of a Wine version the driver is built for.
-        if let v = engineVersion(host: h), supports(v) { return .stock }
+        if bundled(host: h) != nil { return .stock }
         return .unsupported
     }
 
@@ -154,6 +249,9 @@ public enum WindowedPresentation {
         switch engineState(host: h) {
         case .unsupported:
             let v = engineVersion(host: h).map { "Wine \($0.major).\($0.minor)" } ?? "This game's engine"
+            if let e = engineVersion(host: h), supports(e) {
+                return "This revision of \(v) is built differently from the one the resizable window was made for, so it would leave the game without mouse and keyboard. The game plays on the Mac's screen until Nokcandu is updated for it."
+            }
             return "\(v) isn't supported by the resizable window yet (it's built for Wine \(supportedWine.joined(separator: ", "))). Roll back the engine in Updates to use it; the game plays on the Mac's screen meanwhile."
         case .missing: return "This game's Wine engine has no Mac driver."
         default: return nil
@@ -207,6 +305,13 @@ public enum WindowedPresentation {
         guard g.native == nil, let h = WineTools.hostContents(for: g) else { return }
         let want = setting(for: g)
         if await WineTools.environmentIsRunning(for: g) { applyLive(want, for: g); return }
+        // Our driver is in an engine it doesn't fit (an engine update in place, or a driver from an older Nokcandu):
+        // put the engine's own driver back so the game starts with working input, on the Mac's screen.
+        if bundled(host: h) == nil, isOurs(lib(h).appendingPathComponent(files[0])) {
+            try apply(nil, host: h)
+            if want != nil { throw NokError(unavailable(for: g) ?? "The resizable window doesn't fit this game's engine.") }
+            return
+        }
         if want == applied(host: h), want == nil || engineState(host: h) == .nokcandu { return }
         try apply(want, host: h)
     }
@@ -310,7 +415,7 @@ public enum WindowedPresentation {
     /// Puts the engine's own driver back (no-op if it never had ours).
     static func restore(host h: URL) throws {
         let fm = FileManager.default, l = lib(h), bk = backup(h)
-        guard engineState(host: h) == .nokcandu || engineState(host: h) == .outdated else { return }
+        guard isOurs(l.appendingPathComponent(files[0])) else { return }
         guard backupIsOriginal(h) else {
             throw NokError("The engine's original Mac driver is missing from its backup.")
         }

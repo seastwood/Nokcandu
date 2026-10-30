@@ -44,8 +44,14 @@ final class WindowedPresentationTests: XCTestCase {
             try Data("something else".utf8).write(to: u)
         }
         XCTAssertEqual(WindowedPresentation.engineState(host: h), .unsupported)
-        // An older build of Nokcandu's own driver is recognised (to be updated), not refused.
+        // Nokcandu's own driver in an engine no bundled driver fits (unknown Wine version): taken out at launch.
         try Data("abc%s/.nokcandu-virtual-display\0xyz".utf8).write(to: lib.appendingPathComponent(WindowedPresentation.files[0]))
+        XCTAssertEqual(WindowedPresentation.engineState(host: h), .unsupported)
+        // An older build of it in an engine a bundled driver fits is recognised (to be updated), not refused.
+        try Data("wine sikarugir 10.0 (revision 8)\n".utf8).write(to: h.appendingPathComponent("SharedSupport/wine/version"))
+        let driver = FileManager.default.temporaryDirectory.appendingPathComponent("nok-wp-drv-\(UUID().uuidString)")
+        WindowedPresentation.driversForTesting = ["10.0": driver]
+        defer { WindowedPresentation.driversForTesting = nil }
         XCTAssertEqual(WindowedPresentation.engineState(host: h), .outdated)
     }
 
