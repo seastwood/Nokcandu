@@ -302,7 +302,7 @@ static void bonjour_bridge_init(void)
     pthread_t t;
     const char *name = getprogname();
     if (getenv("NOKCANDU_NO_BONJOUR")) return;
-    // Not in Wine's server or the loader (it replaces itself); any of the game's processes will do.
-    if (name && (!strcmp(name, "wineserver") || !strncmp(name, "wine", 4))) return;
+    // Not in Wine's server; any of the game's processes will do.
+    if (name && !strcmp(name, "wineserver")) return;
     if (pthread_create(&t, NULL, listen_loop, NULL) == 0) pthread_detach(t);
 }
