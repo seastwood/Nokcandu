@@ -1,0 +1,46 @@
+From b5ab3b155a58823595a6a7bdbefb5b4e98736957 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?R=C3=A9mi=20Bernon?= <rbernon@codeweavers.com>
+Date: Wed, 25 Feb 2026 16:43:38 +0100
+Subject: [PATCH] winemac: Call client_surface_present when OpenGL surface gets
+ presented.
+
+Making sure the surface client cocoa frame is associated as the
+current client frame for the window.
+---
+ dlls/winemac.drv/opengl.c | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/winemac.drv/opengl.c b/dlls/winemac.drv/opengl.c
+index e60fc04a82e..7040bbd5a8d 100644
+--- a/dlls/winemac.drv/opengl.c
++++ b/dlls/winemac.drv/opengl.c
+@@ -2020,6 +2020,11 @@ static void macdrv_surface_flush(struct opengl_drawable *base, UINT flags)
+     if (!context) return;
+     if (flags & GL_FLUSH_INTERVAL) set_swap_interval(context, base->interval);
+     if (flags & GL_FLUSH_UPDATED) make_context_current(context, context->read_view == client->cocoa_view);
++    if (flags & GL_FLUSH_PRESENT)
++    {
++        macdrv_flush_opengl_context(context->context);
++        client_surface_present(base->client);
++    }
+ }
+ 
+ 
+@@ -2760,7 +2765,13 @@ static BOOL macdrv_surface_swap(struct opengl_drawable *base)
+     TRACE("%s context %p/%p/%p\n", debugstr_opengl_drawable(base), context, (context ? context->context : NULL),
+           (context ? context->cglcontext : NULL));
+ 
+-    macdrv_flush_opengl_context(context->context);
++    if (context)
++    {
++        struct macdrv_client_surface *client = impl_from_client_surface(base->client);
++        make_context_current(context, context->read_view == client->cocoa_view);
++        macdrv_flush_opengl_context(context->context);
++    }
++    client_surface_present(base->client);
+     return TRUE;
+ }
+ 
+-- 
+GitLab
+

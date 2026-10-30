@@ -1,0 +1,294 @@
+From: Nokcandu compatibility integration
+Subject: winemac: Restore Metal client-surface presentation notifications on Wine 11.
+
+Port of CodeWeavers CrossOver 26.3.0's LGPL-2.1-or-later CW HACK 22435
+(d3dmetal_objc.m/.h, event handling and backing-layer selection), with
+Nokcandu integration for the scaled inner layer, explicit queued-event
+surface ownership, and the ExtEscape surface association.
+Source: https://media.codeweavers.com/pub/crossover/source/crossover-sources-26.3.0.tar.gz
+SHA256: ac99c8ca4b3848f3e81784135f023df266b61c2345726ea55a50b3e030dd6872
+Original CodeWeavers copyright and LGPL notices retained in new files.
+
+diff --git a/dlls/winemac.drv/Makefile.in b/dlls/winemac.drv/Makefile.in
+--- a/dlls/winemac.drv/Makefile.in
++++ b/dlls/winemac.drv/Makefile.in
+@@ -26,6 +26,7 @@
+ 	cocoa_status_item.m \
+ 	cocoa_window.m \
+ 	d3dmetal.c \
++	d3dmetal_objc.m \
+ 	display.c \
+ 	dllmain.c \
+ 	event.c \
+diff --git a/dlls/winemac.drv/cocoa_window.m b/dlls/winemac.drv/cocoa_window.m
+--- a/dlls/winemac.drv/cocoa_window.m
++++ b/dlls/winemac.drv/cocoa_window.m
+@@ -27,6 +27,7 @@
+ #include <dlfcn.h>
+ 
+ #import "cocoa_window.h"
++#import "d3dmetal_objc.h"
+ 
+ #include "macdrv_cocoa.h"
+ #import "cocoa_app.h"
+@@ -1085,7 +1086,7 @@
+ /* Presenting: the root Metal layer of a game's Metal view. Some renderers configure the view's own layer
+    (D3DMetal sets colour space, EDR and display sync there) but present into the layer the driver hands out (the
+    inner one); those settings are passed on, or the picture's colours are interpreted wrongly (too dark). */
+-@interface NokcanduHostMetalLayer : CAMetalLayer
++@interface NokcanduHostMetalLayer : WineMetalLayer
+ @property (assign, nonatomic) CAMetalLayer* inner;
+ @end
+ 
+@@ -1132,7 +1133,8 @@
+                 host.magnificationFilter = kCAFilterLinear;
+                 host.minificationFilter = kCAFilterLinear;
+                 host.backgroundColor = CGColorGetConstantColor(kCGColorBlack);
+-                _presentLayer = [[CAMetalLayer layer] retain];
++                _presentLayer = [[WineMetalLayer layer] retain];
++                _presentLayer.delegate = self;
+                 _presentLayer.device = _device;
+                 _presentLayer.framebufferOnly = YES;
+                 /* Opaque, as Metal layers are by default: a game's alpha channel must not blend it with what's
+@@ -1231,7 +1233,7 @@
+ 
+     - (CALayer*) makeBackingLayer
+     {
+-        CAMetalLayer *layer = [CAMetalLayer layer];
++        CAMetalLayer *layer = [WineMetalLayer layer];
+         layer.device = _device;
+         layer.framebufferOnly = YES;
+         layer.magnificationFilter = (present_on && win_per_mac() != 1) ? kCAFilterLinear : kCAFilterNearest;
+diff --git a/dlls/winemac.drv/macdrv_cocoa.h b/dlls/winemac.drv/macdrv_cocoa.h
+--- a/dlls/winemac.drv/macdrv_cocoa.h
++++ b/dlls/winemac.drv/macdrv_cocoa.h
+@@ -284,6 +284,8 @@
+ extern void macdrv_set_mouse_capture_window(macdrv_window window);
+ extern void macdrv_set_cocoa_retina_mode(bool new_mode);
+ void macdrv_set_view_d3dmetal_client_surface(macdrv_view v, void *client_surface);
++extern void macdrv_retain_client_surface(void *surface);
++extern void macdrv_release_client_surface(void *surface);
+ void *macdrv_get_view_d3dmetal_client_surface(macdrv_view v);
+ extern void macdrv_present_start(int width, int height);
+ extern void macdrv_present_set_desktop_size(int width, int height);
+@@ -393,6 +395,7 @@
+     WINDOW_MINIMIZE_REQUESTED,
+     WINDOW_RESIZE_ENDED,
+     WINDOW_RESTORE_REQUESTED,
++    CLIENT_SURFACE_PRESENTED,
+     NUM_EVENT_TYPES
+ };
+ 
+@@ -414,6 +417,7 @@
+         struct {
+             int reason;
+         }                                           app_quit_requested;
++        struct { void *client_surface; } client_surface_presented;
+         struct {
+             bool activating;
+         }                                           displays_changed;
+diff --git a/dlls/winemac.drv/macdrv.h b/dlls/winemac.drv/macdrv.h
+--- a/dlls/winemac.drv/macdrv.h
++++ b/dlls/winemac.drv/macdrv.h
+@@ -172,6 +172,7 @@
+ extern INT macdrv_GetKeyNameText(LONG lparam, LPWSTR buffer, INT size);
+ extern void macdrv_NotifyIMEStatus(HWND hwnd, UINT status);
+ extern BOOL macdrv_SetIMECompositionRect(HWND hwnd, RECT rect);
++extern void macdrv_client_surface_presented(const macdrv_event *event);
+ extern BOOL macdrv_SystemParametersInfo(UINT action, UINT int_param, void *ptr_param,
+                                         UINT flags);
+ extern BOOL macdrv_ProcessEvents(DWORD mask);
+diff --git a/dlls/winemac.drv/event.c b/dlls/winemac.drv/event.c
+--- a/dlls/winemac.drv/event.c
++++ b/dlls/winemac.drv/event.c
+@@ -76,6 +76,7 @@
+         "WINDOW_MINIMIZE_REQUESTED",
+         "WINDOW_RESIZE_ENDED",
+         "WINDOW_RESTORE_REQUESTED",
++        "CLIENT_SURFACE_PRESENTED",
+     };
+     C_ASSERT(ARRAYSIZE(event_names) == NUM_EVENT_TYPES);
+ 
+@@ -120,6 +121,7 @@
+         event_mask |= event_mask_for_type(APP_ACTIVATED);
+         event_mask |= event_mask_for_type(APP_DEACTIVATED);
+         event_mask |= event_mask_for_type(APP_QUIT_REQUESTED);
++        event_mask |= event_mask_for_type(CLIENT_SURFACE_PRESENTED);
+         event_mask |= event_mask_for_type(DISPLAYS_CHANGED);
+         event_mask |= event_mask_for_type(IM_SET_TEXT);
+         event_mask |= event_mask_for_type(LOST_PASTEBOARD_OWNERSHIP);
+@@ -385,6 +387,9 @@
+ 
+     switch (event->type)
+     {
++    case CLIENT_SURFACE_PRESENTED:
++        macdrv_client_surface_presented(event);
++        break;
+     case APP_ACTIVATED:
+         macdrv_app_activated();
+         break;
+diff --git a/dlls/winemac.drv/d3dmetal.c b/dlls/winemac.drv/d3dmetal.c
+--- a/dlls/winemac.drv/d3dmetal.c
++++ b/dlls/winemac.drv/d3dmetal.c
+@@ -417,6 +417,13 @@
+ 
+ #endif
+ 
++void macdrv_client_surface_presented(const macdrv_event *event)
++{
++    client_surface_present(event->client_surface_presented.client_surface);
++}
++void macdrv_retain_client_surface(void *surface) { client_surface_add_ref(surface); }
++void macdrv_release_client_surface(void *surface) { client_surface_release(surface); }
++
+ static void cf_client_surface_release(CFAllocatorRef allocator, const void *client_surface)
+ {
+     client_surface_release((struct client_surface *)client_surface);
+diff --git a/dlls/winemac.drv/gdi.c b/dlls/winemac.drv/gdi.c
+--- a/dlls/winemac.drv/gdi.c
++++ b/dlls/winemac.drv/gdi.c
+@@ -269,6 +269,7 @@
+             return FALSE;
+         }
+ 
++        macdrv_set_view_d3dmetal_client_surface(surface->cocoa_view, &surface->client);
+         data->surface = (UINT_PTR)surface;
+         data->layer = (UINT_PTR)macdrv_swapchain_get_layer(surface->metal_swapchain);
+         return TRUE;
+diff --git a/dlls/winemac.drv/cocoa_event.m b/dlls/winemac.drv/cocoa_event.m
+--- a/dlls/winemac.drv/cocoa_event.m
++++ b/dlls/winemac.drv/cocoa_event.m
+@@ -666,6 +666,9 @@
+     {
+         switch (event->type)
+         {
++            case CLIENT_SURFACE_PRESENTED:
++                macdrv_release_client_surface(event->client_surface_presented.client_surface);
++                break;
+             case IM_SET_TEXT:
+                 if (event->im_set_text.text)
+                     CFRelease(event->im_set_text.text);
+diff --git a/dlls/winemac.drv/window.c b/dlls/winemac.drv/window.c
+--- a/dlls/winemac.drv/window.c
++++ b/dlls/winemac.drv/window.c
+@@ -1089,6 +1089,7 @@
+     {
+         struct macdrv_win_data *data;
+ 
++        macdrv_set_view_d3dmetal_client_surface(surface->cocoa_view, NULL);
+         if ((data = get_win_data(client->hwnd)))
+         {
+             if (data->client_view == surface->cocoa_view)
+diff --git a/dlls/winemac.drv/d3dmetal_objc.m b/dlls/winemac.drv/d3dmetal_objc.m
+--- /dev/null
++++ b/dlls/winemac.drv/d3dmetal_objc.m
+@@ -0,0 +1,76 @@
++/*
++ * Mac graphics driver hooks used by D3DMetal (part of the Apple Game Porting Toolkit)
++ *
++ * Copyright 2025 Brendan Shanks for CodeWeavers, Inc.
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#if defined(__x86_64__)
++
++#include "config.h"
++
++#import <AppKit/AppKit.h>
++#import <QuartzCore/QuartzCore.h>
++#import <objc/runtime.h>
++
++#include "macdrv_cocoa.h"
++#import "cocoa_app.h"
++#import "cocoa_event.h"
++#import "cocoa_window.h"
++#import "d3dmetal_objc.h"
++
++#pragma GCC diagnostic ignored "-Wdeclaration-after-statement"
++
++
++@implementation WineMetalLayer
++
++    /* Extend [CAMetalLayer nextDrawable] so client_surface_present() can be
++     * called for the corresponding client_surface.
++     */
++    - (id<CAMetalDrawable>) nextDrawable
++    {
++        /* CAMetalLayer's delegate is the WineMetalView that contains it (seems like that's always true
++         * for an NSView backing layer).
++         * That WineMetalView's parent is the client_surface->cocoa_view WineContentView, it has the
++         * client_surface set on it as an associated object.
++         */
++        if ([self.delegate isKindOfClass:NSClassFromString(@"WineMetalView")])
++        {
++            NSView* view = (NSView *)self.delegate;
++            if ([view.superview isKindOfClass:NSClassFromString(@"WineContentView")] &&
++                [view.window    isKindOfClass:NSClassFromString(@"WineWindow")])
++            {
++                void *client_surface = macdrv_get_view_d3dmetal_client_surface((macdrv_view)view.superview);
++                if (client_surface)
++                {
++                    macdrv_event* event;
++                    event = macdrv_create_event(CLIENT_SURFACE_PRESENTED, (WineWindow*)view.window);
++                    macdrv_retain_client_surface(client_surface);
++                    event->client_surface_presented.client_surface = client_surface;
++
++                    WineEventQueue *queue = [(WineWindow*)view.window queue];
++                    [queue postEvent:event];
++                    macdrv_release_event(event);
++                }
++            }
++        }
++
++        return [super nextDrawable];
++    }
++
++@end
++
++#endif
+diff --git a/dlls/winemac.drv/d3dmetal_objc.h b/dlls/winemac.drv/d3dmetal_objc.h
+--- /dev/null
++++ b/dlls/winemac.drv/d3dmetal_objc.h
+@@ -0,0 +1,29 @@
++/*
++ * Mac graphics driver hooks used by D3DMetal (part of the Apple Game Porting Toolkit)
++ *
++ * Copyright 2025 Brendan Shanks for CodeWeavers, Inc.
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#if defined(__x86_64__)
++
++#import <QuartzCore/QuartzCore.h>
++
++@interface WineMetalLayer : CAMetalLayer
++
++@end
++
++#endif

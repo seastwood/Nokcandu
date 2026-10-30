@@ -1,6 +1,6 @@
 # Engineering learnings
 
-Last reviewed: October 29, 2026. These findings come from Nokcandu development and troubleshooting on an Apple Silicon MacBook Air M4. A successful local test is evidence for that tested setup, not a promise that every game or launcher works.
+Last reviewed: October 30, 2026. These findings come from Nokcandu development and troubleshooting on an Apple Silicon MacBook Air M4. A successful local test is evidence for that tested setup, not a promise that every game or launcher works.
 
 Detailed implementation notes live in [compatibility-fixes.md](compatibility-fixes.md). Dated investigations retain the failed trials and configuration snapshots; this document summarizes the current conclusions.
 
@@ -29,6 +29,26 @@ Apply and Restart now relaunches the selected game's standard launcher after a s
 ### Follow-up: choose graphics from the engine, not just the main executable
 
 Chrono Trigger's normal launch needed Compatibility as well as the media path fix. Its default Older 3D games mode failed to create the movie presentation surface; the direct diagnostic had not selected that renderer. The user confirmed the corrected normal Steam launch works. The OpenGL import resides in `libcocos2d.dll`, which the main executable imports. Shared detection now follows bounded, same-directory imported engine dependencies; install defaults and Recommended Settings use that evidence, while preserving saved choices and confirmed working modes. Unrelated DLLs, outside-directory symlinks and wrong-architecture dependencies cannot choose the mode. See the [follow-up evidence](investigations/chrono-trigger-media-2026-10-29.md#follow-up-normal-launch-black-screen-and-engine-detection).
+
+## Wine 11 launcher surfaces — October 30, 2026
+
+Foreign top-level swapchain support does not imply foreign child-window support. Modern browser
+workers need both the Metal-surface API and a correctly positioned remote layer in the window-owning
+process. The new Wine 11 driver supplies that path and frame-presentation notifications. A separate
+process targeting a child HWND failed before the port and presented successfully after it.
+
+A working launcher also depends on its browser renderer. Steam's software path stayed black; its
+GPU browser rendered with DXMT isolated to browser workers while games retained Older 3D graphics.
+Export cross-process capability before Windows process creation; changing Unix getenv in a native
+constructor cannot retroactively change the inherited Windows environment block. Wine 10 retains
+its prior defaults. Steam also persists its own GPU preference; launch flags alone do not override
+an older saved off value. Synchronize that preference to Nokcandu's effective choice before startup.
+The user confirmed the installed app renders after this alignment. Remote hosted layers also need
+explicit participation in virtual-screen relayout: they are not NSView children. Fixed remote pixel
+bounds plus transformed host targets corrected the stale resize/fullscreen picture; the user
+confirmed both behaviors in installed Steam and EA. An already-running EA process needed its driver
+refresh and restart before receiving the correction. Explicit GPU/software choices
+are saved, and effective browser policy enters the restart identity. See the [dated trial record, provenance, migration and limits](investigations/wine11-launcher-surfaces-2026-10-30.md).
 
 ## Launcher-specific findings
 

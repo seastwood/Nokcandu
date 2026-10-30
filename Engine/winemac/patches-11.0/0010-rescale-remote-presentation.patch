@@ -1,0 +1,152 @@
+From: Nokcandu presentation integration
+Subject: winemac: Relayout remote Metal children with the virtual-screen scale.
+
+Remote CAContext layers do not participate in NSView relayout. Export their
+content in Windows pixels and rescale the host targets during the existing
+presentation relayout, including native fullscreen transitions. Non-presented
+windows keep the upstream point/retina geometry.
+
+diff --git a/dlls/winemac.drv/cocoa_window.m b/dlls/winemac.drv/cocoa_window.m
+--- a/dlls/winemac.drv/cocoa_window.m
++++ b/dlls/winemac.drv/cocoa_window.m
+@@ -417,6 +417,7 @@
+     - (void) removeCALayerHostView:(CAContextID)contextId;
+     - (void) placeCALayerHost:(CALayerHost*)host contextId:(CAContextID)contextId frame:(CGRect)frame;
+     - (void) getCALayerHostPlacement:(CAContextID)contextId scale:(double[2])scale content:(CGSize*)content;
++    - (void) presentRescaleCALayerHostsBy:(double)ratio;
+ 
+ @end
+ 
+@@ -887,7 +888,7 @@
+          * frames at scale 1920 x 907 before this floor was added. Below it, do what the code did
+          * before: place at identity and let the background show. */
+         if (content.width < 8.0 || content.height < 8.0 ||
+-            (fabs(frame.size.width  - content.width)  <= px &&
++            (!present_on && fabs(frame.size.width - content.width) <= px &&
+              fabs(frame.size.height - content.height) <= px))
+             content = frame.size;
+ 
+@@ -916,8 +917,9 @@
+ 
+         CALayerHost* host = [CALayerHost layer];
+         [host setContextId:contextId];
+-        host.magnificationFilter = kCAFilterNearest;
+-        host.contentsScale = retina_on ? 2.0 : 1.0;
++        host.magnificationFilter = present_on ? kCAFilterLinear : kCAFilterNearest;
++        host.minificationFilter = host.magnificationFilter;
++        host.contentsScale = present_on ? 1.0 : (retina_on ? 2.0 : 1.0);
+         frame = snap_host_frame_to_view_edges(frame, self.layer.bounds);
+         /* A host given a real child rect is positioned and clipped to it, so siblings on one
+          * window stop occluding one another. Three cases, not two: CGRectIsEmpty cannot tell "no
+@@ -926,8 +928,18 @@
+         if (CGRectIsNull(frame))
+         {
+             /* no child rect supplied at all -- the root-window case */
+-            host.frame = self.layer.bounds;
+-            host.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
++            if (present_on)
++            {
++                CGRect target = self.layer.bounds;
++                CGSize pixels = CGSizeMake(target.size.width * win_per_mac(), target.size.height * win_per_mac());
++                [_caLayerHostContentSizes setObject:[NSValue valueWithSize:pixels] forKey:@(contextId)];
++                [self placeCALayerHost:host contextId:contextId frame:target];
++            }
++            else
++            {
++                host.frame = self.layer.bounds;
++                host.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
++            }
+         }
+         else if (CGRectIsEmpty(frame))
+         {
+@@ -941,8 +953,11 @@
+             /* The creation rect IS this host's content size for its whole life: the remote content
+              * only changes size through a recreate, and a recreate arrives as a new context id
+              * with a new host, the old one retired at CREATE. */
+-            [_caLayerHostContentSizes setObject:[NSValue valueWithSize:frame.size]
+-                                         forKey:@(contextId)];
++            /* The producer's presentation scale belongs to another process and cannot track
++             * this Mac window's resizes. Its exported layer uses raw Windows pixels instead. */
++            CGSize content = frame.size;
++            if (present_on) content = CGSizeMake(content.width * win_per_mac(), content.height * win_per_mac());
++            [_caLayerHostContentSizes setObject:[NSValue valueWithSize:content] forKey:@(contextId)];
+             [self placeCALayerHost:host contextId:contextId frame:frame];
+         }
+ 
+@@ -955,6 +970,7 @@
+     - (void) updateCALayerHostFrame:(CAContextID)contextId frame:(CGRect)frame
+     {
+         CALayerHost* host = [_caLayerHosts objectForKey:@(contextId)];
++        if (present_on && CGRectIsNull(frame)) frame = self.layer.bounds;
+         frame = snap_host_frame_to_view_edges(frame, self.layer.bounds);
+         if (host && CGRectIsEmpty(frame) && !CGRectIsNull(frame))
+         {
+@@ -980,6 +996,26 @@
+             if (host.hidden) host.hidden = NO;
+             [CATransaction commit];
+         }
++    }
++
++    /* Virtual-screen resizing changes Cocoa scale without changing Windows geometry. Remote
++     * layers are not NSView subviews, so the existing view/Metal relayout cannot resize them.
++     * Keep the remote content's pixel bounds and transform every hosted child to its new target. */
++    - (void) presentRescaleCALayerHostsBy:(double)ratio
++    {
++        if (!present_on || ratio <= 0 || fabs(ratio - 1.0) < 1e-9) return;
++        [CATransaction begin];
++        [CATransaction setDisableActions:YES];
++        for (NSNumber* key in _caLayerHosts)
++        {
++            NSValue* stored = [_caLayerHostTargetFrames objectForKey:key];
++            if (!stored) continue;
++            CGRect frame = stored.rectValue;
++            frame.origin.x *= ratio; frame.origin.y *= ratio;
++            frame.size.width *= ratio; frame.size.height *= ratio;
++            [self placeCALayerHost:[_caLayerHosts objectForKey:key] contextId:key.unsignedIntValue frame:frame];
++        }
++        [CATransaction commit];
+     }
+ 
+     /* What a host ended up at, for the caller's TRACE. Reads the layer rather than recomputing, so
+@@ -1062,13 +1098,16 @@
+         [self setLayerRetinaProperties:mode];
+ 
+         for (CALayerHost* host in [_caLayerHosts allValues])
+-            host.contentsScale = mode ? 2.0 : 1.0;
++            host.contentsScale = present_on ? 1.0 : (mode ? 2.0 : 1.0);
+         /* Both are in points and every surviving host's scale has just flipped, so a stored value
+          * is 2x off in one direction or the other. Dropped rather than converted: the next reframe
+          * stores the current rect, and until then a host is placed at identity -- which is exactly
+          * what it did before any of this. */
+-        [_caLayerHostContentSizes removeAllObjects];
+-        [_caLayerHostTargetFrames removeAllObjects];
++        if (!present_on)
++        {
++            [_caLayerHostContentSizes removeAllObjects];
++            [_caLayerHostTargetFrames removeAllObjects];
++        }
+ 
+         [super setRetinaMode:mode];
+     }
+@@ -2947,6 +2986,8 @@
+ 
+     - (void) presentRescaleViewsIn:(NSView*)view by:(double)ratio
+     {
++        if ([view isKindOfClass:[WineContentView class]])
++            [(WineContentView*)view presentRescaleCALayerHostsBy:ratio];
+         for (NSView* subview in [view subviews])
+         {
+             if ([subview isKindOfClass:[WineContentView class]])
+@@ -5018,8 +5059,10 @@
+     offscreen_layer.framebufferOnly = YES;
+     offscreen_layer.magnificationFilter = kCAFilterNearest;
+     offscreen_layer.backgroundColor = CGColorGetConstantColor(kCGColorBlack);
+-    offscreen_layer.contentsScale = retina_on ? 2.0 : 1.0;
+-    [offscreen_layer setBounds:cgrect_mac_from_win(bounds)];
++    offscreen_layer.contentsScale = present_on ? 1.0 : (retina_on ? 2.0 : 1.0);
++    /* A remote renderer cannot observe the host process's presentation scale. Export pixels
++     * at a fixed origin; the owning window scales/positions its CALayerHost on every resize. */
++    [offscreen_layer setBounds:present_on ? (CGRect){ CGPointZero, bounds.size } : cgrect_mac_from_win(bounds)];
+     [offscreen_layer setAnchorPoint:CGPointMake(0, 0)];
+ 
+     /* Export the CAMetalLayer from the rendering process, then have the

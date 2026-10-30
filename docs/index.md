@@ -7,9 +7,10 @@ The project README introduces the app. This folder keeps the implementation know
 | [Engineering learnings](engineering-learnings.md) | Confirmed lessons, the scope of each fix, evidence, unresolved issues, and rules for future changes. Start here. |
 | [Compatibility fixes](compatibility-fixes.md) | Component IDs, implementation details, sources, ownership/Undo, migrations, and game/launcher-specific findings. |
 | [EA gameplay audio investigation](investigations/ea-gameplay-audio-2026-10-28.md) | The complete dated trial-and-error record for BC2/DAO audio, failed comparisons, restored settings, and remaining questions. |
+| [Wine 11 launcher surfaces](investigations/wine11-launcher-surfaces-2026-10-30.md) | Metal surface/presentation and foreign-child hosting fixes; Steam browser-only rendering policy, failed controls and verification limits. |
 | [Chrono Trigger media investigation](investigations/chrono-trigger-media-2026-10-29.md) | Confirmed shared GStreamer library-path correction, startup evidence, migration and selected-game restart behavior. |
 | [Resizable game-window implementation plan](resizable-game-window-plan.md) | Milestones, architecture, input/scaling, renderer coverage, profiles, launchers, rollback and release gates. Planned work. |
-| [Resizable fullscreen-window feasibility](investigations/windowed-fullscreen-feasibility-2026-10-29.md) | Why Wine’s virtual desktop is disabled on the Mac driver, and the requirements for a shared scaling/input backend. Research only. |
+| [Resizable fullscreen-window feasibility](investigations/windowed-fullscreen-feasibility-2026-10-29.md) | Why Wine’s virtual desktop is disabled on the Mac driver, and the requirements for a shared scaling/input backend. Historical research; the driver backend was subsequently implemented. |
 | [Development](DEVELOPMENT.md) | Build/release instructions and the historical implementation milestones. |
 | [Gaming roadmap](gaming-roadmap.md) | Dated proposals to evaluate; these are not a list of verified fixes or a guarantee of current implementation status. |
 | [Release notes](../release-notes/) | User-facing changes grouped by released version. |

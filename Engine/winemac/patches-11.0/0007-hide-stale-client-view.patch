@@ -1,0 +1,55 @@
+From 1a1d1f3f382083c8afc8311762137582e028d6fc Mon Sep 17 00:00:00 2001
+From: Zhiyi Zhang <zzhang@codeweavers.com>
+Date: Tue, 4 Aug 2026 11:20:42 +0800
+Subject: [PATCH] winemac.drv: Hide client_view when flushing window surfaces.
+
+Fix Elite Dangerous (SteamID: 359320) launcher hang on macOS.
+
+The hang is a visual effect. It's caused by a regression from
+"b5ab3b15 winemac: Call client_surface_present when OpenGL surface gets presented.",
+which calls client_surface_present() in macdrv_surface_swap().
+client_surface_present() eventually calls macdrv_set_view_hidden()
+to make surface->cocoa_view visible. The game launcher first uses
+D3D9 to show a loading animation. Then it tears down the D3D9
+pipeline and uses GDI to draw buttons on the same window. Without
+this fix, client_view with the old D3D rendered content is shown
+in front of the window contentView, creating a freeze effect.
+---
+ dlls/winemac.drv/surface.c | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/dlls/winemac.drv/surface.c b/dlls/winemac.drv/surface.c
+index a849918dfa7..39481149121 100644
+--- a/dlls/winemac.drv/surface.c
++++ b/dlls/winemac.drv/surface.c
+@@ -85,6 +85,7 @@ static BOOL macdrv_surface_flush(struct window_surface *window_surface, const RE
+     CGImageAlphaInfo alpha_info = (window_surface->alpha_mask ? kCGImageAlphaPremultipliedFirst : kCGImageAlphaNoneSkipFirst);
+     CGColorSpaceRef colorspace;
+     CGImageRef image;
++    struct macdrv_win_data *data;
+ 
+     colorspace = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+     image = CGImageCreate(color_info->bmiHeader.biWidth, abs(color_info->bmiHeader.biHeight), 8, 32,
+@@ -120,6 +121,19 @@ static BOOL macdrv_surface_flush(struct window_surface *window_surface, const RE
+         }
+     }
+ 
++    /* The window may have been previously drawn with client_surface, for example, when the window
++     * had been a target for a D3D swapchain. Hide the client_view so that it doesn't occlude the
++     * content in the window_surface */
++    if ((data = get_win_data(window_surface->hwnd)))
++    {
++        if (data->client_view)
++        {
++            macdrv_set_view_hidden(data->client_view, TRUE);
++            data->client_view = NULL;
++        }
++        release_win_data(data);
++    }
++
+     return TRUE;
+ }
+ 
+-- 
+GitLab
+

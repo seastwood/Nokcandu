@@ -82,6 +82,20 @@ public enum SharedSteam {
         STEAM_DIR="$WINEPREFIX/drive_c/Program Files (x86)/Steam"
         STATE="$SUPPORT/nokcandu"
         LOG_DIR="$SUPPORT/Logs"
+        # Wine 11's browser needs cross-process Metal child surfaces. The native helper selects
+        # DXMT only for steamwebhelper.exe, so changing game graphics cannot break Steam's pages.
+        STEAM_METAL_BROWSER=0
+        if [ -f "$SUPPORT/nokcandu/nokcandu-rawmouse.dylib" ] &&
+           [ -f "$SUPPORT/renderer/dxmt/wine/x86_64-windows/d3d11.dll" ] &&
+           /usr/bin/grep -Eq '(^|[^0-9])11[.]0([^0-9]|$)' "$SUPPORT/wine/version" 2>/dev/null; then
+         STEAM_METAL_BROWSER=1
+         export NOKCANDU_BROWSER_DXMT_ROOT="$SUPPORT/renderer/dxmt/wine"
+         export DXMT_ALLOW_CROSS_PROCESS_SWAPCHAIN=1
+        else
+         unset NOKCANDU_BROWSER_DXMT_ROOT
+        fi
+        STEAM_GPU=0
+        if [ -f "$STATE/steam-gpu" ] || { [ "$STEAM_METAL_BROWSER" = 1 ] && [ ! -f "$STATE/steam-software" ]; }; then STEAM_GPU=1; fi
         MODE="$(cat "$STATE/default-mode" 2>/dev/null || echo dx9)"
         APP=""; URL=""; CHECK=0; RESTART=0; SHUTDOWN=0; STATUS=0; NORESTART=0; EXTRA=()
         while [ $# -gt 0 ]; do
@@ -157,7 +171,7 @@ public enum SharedSteam {
         # A game started later restarts Steam (after asking) when any of it changed since.
         config_id() {
          # (Files that don't exist are simply left out — a missing one must never stop Steam from starting.)
-         { echo "$MODE"; echo "$DYLD_FALLBACK_LIBRARY_PATH"; cat "$STATE/perf.env" "$STATE/raw-mouse-debug" 2>/dev/null || true; if [ -f "$STATE/steam-gpu" ]; then echo gpu; fi
+         { echo "$MODE"; echo "$DYLD_FALLBACK_LIBRARY_PATH"; cat "$STATE/perf.env" "$STATE/raw-mouse-debug" 2>/dev/null || true; echo "browser=$STEAM_METAL_BROWSER gpu=$STEAM_GPU"
            /sbin/md5 -q "$STATE/nokcandu-rawmouse.dylib" 2>/dev/null || true; } | /sbin/md5 -q
         }
         # --status: what starting this game would do (Nokcandu asks about restarting in its own window).
@@ -218,13 +232,24 @@ public enum SharedSteam {
         if [ -n "$APP" ]; then touch "$STATE/started-for-game"; else rm -f "$STATE/started-for-game"; fi
         [ -f "$LOG_DIR/steam.log" ] && [ "$(stat -f %z "$LOG_DIR/steam.log")" -gt 5000000 ] && mv -f "$LOG_DIR/steam.log" "$LOG_DIR/steam.previous.log"
         echo "== $(date) mode=$MODE app=${APP:-none}" >>"$LOG_DIR/steam.log"
+        # Steam also remembers GPU drawing in its own registry. Launch flags alone do not
+        # override a saved GPUAccelWebViewsV3=0, so align it with Nokcandu before Steam starts.
+        # Leave Wine 10's internal preference alone unless Nokcandu has an explicit choice.
+        if [ "$STEAM_METAL_BROWSER" = 1 ] || [ -f "$STATE/steam-gpu" ] || [ -f "$STATE/steam-software" ]; then
+         if ! "$WINE" reg add 'HKCU\\Software\\Valve\\Steam' /v GPUAccelWebViewsV3 /t REG_DWORD /d "$STEAM_GPU" /f >>"$LOG_DIR/steam.log" 2>&1; then
+          rmdir "$LOCK" 2>/dev/null || true
+          echo "Couldn't apply Steam's browser drawing setting. See Steam diagnostics." >&2
+          exit 1
+         fi
+        fi
         cd "$STEAM_DIR"
         # (Not via /usr/bin/nohup: macOS strips DYLD_* variables when running system binaries, and Wine needs them.)
         trap '' HUP
-        # Steam's browser draws in software unless GPU drawing was switched on in Nokcandu (Steam's page).
+        # Wine 10 keeps its software default. Wine 11 uses its tested browser renderer by default;
+        # an explicitly saved software choice is retained and can be changed on Steam's page.
         STEAM_FLAGS=(\(CustomGames.steamWineFlags))
-        if [ -f "$STATE/steam-gpu" ]; then STEAM_FLAGS=(-no-cef-sandbox); fi
-        echo "nokcandu: Steam window drawing: $([ -f "$STATE/steam-gpu" ] && echo GPU || echo software)" >>"$LOG_DIR/steam.log"
+        if [ "$STEAM_GPU" = 1 ]; then STEAM_FLAGS=(-no-cef-sandbox); fi
+        echo "nokcandu: Steam window drawing: $([ "$STEAM_GPU" = 1 ] && echo GPU || echo software)" >>"$LOG_DIR/steam.log"
         "$WINE" "$STEAM_EXE" "${STEAM_FLAGS[@]}" ${PASS[@]+"${PASS[@]}"} > >(\(CustomGames.logFilter) >>"$LOG_DIR/steam.log") 2>&1 </dev/null &
         echo $! > "$LOCK/pid"
         disown $! 2>/dev/null || true
@@ -591,13 +616,27 @@ public enum SharedSteam {
         }
     }
 
-    /// "Smoother Steam windows": Steam's built-in browser draws with the GPU instead of in software.
-    /// Smoother window moves and scrolling, but Steam then shares the GPU with the game. Off by default.
+    /// Wine 11.0 needs GPU browser drawing; Wine 10 retains its software default.
+    /// Keep an explicit software choice separately so updates/engine switches do not erase it.
+    static func defaultGPUDrawing(contents h: URL) -> Bool {
+        guard let v = WindowedPresentation.engineVersion(host: h), v.major == 11, v.minor == 0 else { return false }
+        return FileManager.default.fileExists(atPath: h.appendingPathComponent("SharedSupport/renderer/dxmt/wine/x86_64-windows/d3d11.dll").path)
+            && FileManager.default.fileExists(atPath: h.appendingPathComponent("SharedSupport/nokcandu/nokcandu-rawmouse.dylib").path)
+    }
+    static func gpuDrawing(contents h: URL) -> Bool {
+        let fm = FileManager.default, state = h.appendingPathComponent("SharedSupport/nokcandu")
+        if fm.fileExists(atPath: state.appendingPathComponent("steam-gpu").path) { return true }
+        if fm.fileExists(atPath: state.appendingPathComponent("steam-software").path) { return false }
+        return defaultGPUDrawing(contents: h)
+    }
     public static var gpuDrawing: Bool {
-        get { FileManager.default.fileExists(atPath: contents.appendingPathComponent("SharedSupport/nokcandu/steam-gpu").path) }
+        get { gpuDrawing(contents: contents) }
         set {
-            let f = contents.appendingPathComponent("SharedSupport/nokcandu/steam-gpu")
-            if newValue { FileManager.default.createFile(atPath: f.path, contents: Data()) } else { try? FileManager.default.removeItem(at: f) }
+            let state = contents.appendingPathComponent("SharedSupport/nokcandu"), fm = FileManager.default
+            try? NokPaths.ensure(state)
+            let on = state.appendingPathComponent("steam-gpu"), off = state.appendingPathComponent("steam-software")
+            if newValue { try? Data().write(to: on, options: .atomic); try? fm.removeItem(at: off) }
+            else { try? Data().write(to: off, options: .atomic); try? fm.removeItem(at: on) }
         }
     }
 
@@ -779,7 +818,7 @@ public enum SharedSteam {
                    pinnedHashes: ["SharedSupport/wine/bin/wine": RecipeCatalog.wine10SHA],
                    knownLauncherHashes: [Hashing.sha256(data: Data(hostLauncherScript().utf8)): "Nokcandu Steam launcher"],
                    verification: [VerificationItem(title: "Steam inside Wine", state: .notVerified,
-                                                   note: "Uses Steam's usual Windows flags for Wine (\(CustomGames.steamWineFlags)).")],
+                                                   note: "Steam uses its own browser drawing settings; games keep their selected graphics mode.")],
                    hasInstaller: false,
                    notes: ["Every Steam game added from the Steam library starts through this Steam.",
                            "Graphics are set when Steam starts; switching to a game with a different mode restarts Steam (Nokcandu asks first)."])

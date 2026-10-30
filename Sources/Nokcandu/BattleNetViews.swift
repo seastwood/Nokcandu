@@ -111,7 +111,7 @@ struct SteamGamesSection: View {
                     }
                 }
                 SettingToggle(title: "Smoother Steam windows (GPU drawing)",
-                              info: "Steam's windows, scrolling and friends list move more smoothly, but Steam then uses the graphics chip alongside the game, which can add a little delay in games. If Steam's windows turn black, switch it off. Takes effect when Steam next starts.",
+                              info: "Uses the graphics chip to draw Steam's windows. Recommended on Wine 11 to prevent blank pages; Wine 10 defaults to software drawing. Your games keep their own graphics modes. Takes effect when Steam next starts.",
                               isOn: Binding(get: { gpu }, set: { gpu = $0; SharedSteam.gpuDrawing = $0
                                   model.say("Takes effect when Steam next starts.") }))
                 SettingToggle(title: "Close Steam when its game quits",

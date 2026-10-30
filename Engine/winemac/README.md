@@ -1,7 +1,7 @@
 # Nokcandu's Wine Mac driver
 
 Wine's Mac display driver (`winemac.so` and `winemac.drv`), built from Wine's own source with a small,
-reviewable patch series. It drops into the Sikarugir Wine 10.0 engine that Nokcandu uses today, and is the
+reviewable patch series. It drops into the matching supported Sikarugir Wine 10.0 or 11.0 engine, and is the
 place for display features that can't be done from outside Wine, starting with fullscreen games in a
 resizable Mac window (one real window, so Mission Control, Spaces and focus behave).
 
@@ -27,3 +27,22 @@ command line tools. Output includes `SHA256SUMS`.
 
 Wine and these patches are LGPL-2.1-or-later. Distributed builds include this source (Wine's tarball + the
 patches) and the build script, so the binaries can be rebuilt and replaced.
+
+## Wine 11 launcher presentation
+
+`patches-11.0/0005` ports Wine MR 11058's Metal surface ExtEscape interface. `0006` and `0007` port
+upstream OpenGL presentation/stale client-view corrections. `0008` ports the LGPL WineMetalLayer
+presentation event from CodeWeavers' public 26.3.0 Wine sources, including Nokcandu's scaled inner
+layer and retained event ownership. `0009` adds foreign child-window layer hosting, ported from the
+LGPL source linked in its header, with Wine 11.0 capture/destruction adaptations. Original notices
+are retained. Source archive checksum and the exact scope of testing are recorded in
+[the investigation](../../docs/investigations/wine11-launcher-surfaces-2026-10-30.md).
+
+Build with `WINE_VERSION=11.0 Engine/winemac/build.sh`. This changes neither the Wine 10 patch series
+nor a game's renderer settings. The separate-process surface regression probe is under
+`Tools/presentation-probe/`; launcher pages also need visible testing in their normal launch path.
+
+`0010` integrates remote child-layer hosts into virtual-screen relayout. Remote producers export
+fixed Windows-pixel bounds; the owning window transforms hosted targets on resize/fullscreen,
+independently of the rendering process's scale. The user verified live resizing and fullscreen in
+installed Steam without minimize/restore.

@@ -170,3 +170,30 @@ After an Apply and Restart edit succeeds, `WineTools.applySettings` opens the se
 ### Shared engine graphics detection (October 29, 2026)
 
 The earlier Chrono Trigger direct-launch success did not verify its normal saved DXVK mode. A later normal launch reached media presentation but failed Vulkan surface creation. The user confirmed normal Steam startup after saving Compatibility. Main-program-only detection had missed OpenGL in the imported local Cocos2d engine. `PEFile.inspectWithLoadedDLLs` now walks actual local import dependencies (64 entries, 64 MiB per file, 256 MiB total), checks architecture and resolved directory, handles cycles and rejects ambiguous names. Executable graphics imports/runtime names retain precedence. General/Steam installation, hosted defaults and Recommended Settings share this evidence. Saved choices remain intact; OpenGL-only recommendations respect a mode marked as working. This is a detection improvement, not an automatic global renderer replacement. The media-library-path correction remains necessary and independent. Detailed evidence and limitations are in the [Chrono investigation follow-up](investigations/chrono-trigger-media-2026-10-29.md#follow-up-normal-launch-black-screen-and-engine-detection).
+
+## Wine 11 virtual-screen launcher rendering — October 30, 2026
+
+The shared Wine 11.0 driver now implements the Metal ExtEscape surface API, OpenGL/Metal presentation
+notifications and remote child-window layer hosting. The original Wine 11 server-request compatibility
+check and per-engine driver backup/restore remain in force. Wine 10 driver sources are unchanged.
+
+Steam additionally selects DXMT only inside `steamwebhelper.exe` and defaults to GPU browser drawing
+on the tested Wine 11.0 engine. Game renderer choices remain independent. The launcher supplies
+cross-process capability before Windows environment creation; the native helper selects the browser
+DLL search path before DLL loading. Explicit software/GPU choices persist; Wine 10 keeps its previous
+software default. Fresh and refreshed generated Steam helpers receive the same policy. No Steam binary
+patch is involved. Startup also aligns Steam's internal `GPUAccelWebViewsV3` preference with the
+Nokcandu choice; an older saved off value otherwise kept the installed copy black despite the correct
+launch environment. Both the integrated clean test and the installed Steam app rendered after this
+synchronization. EA's Wine 11 page was also confirmed working, with resize/fullscreen verified after its shared driver
+refresh and restart. Battle.net/Ubisoft Wine 11 pages still require separate verification; this fix does not
+switch their selected engine versions.
+
+See [the full investigation](investigations/wine11-launcher-surfaces-2026-10-30.md) for failed controls,
+source/license attribution, the automated before/after probe, migration behavior and Undo.
+
+Follow-up: remote browser layer hosts now participate in virtual-screen scale changes. Their exported
+content uses fixed Windows-pixel bounds, while the owning Mac window updates host transforms during
+live resize/fullscreen. This fixed Steam requiring minimize/restore to stretch and staying small in
+fullscreen. The user confirmed both behaviors in installed Steam and EA. The correction is shared driver
+presentation logic, not a Steam game profile.

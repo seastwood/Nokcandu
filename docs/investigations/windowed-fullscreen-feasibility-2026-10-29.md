@@ -1,6 +1,11 @@
 # Fullscreen games inside a resizable window — October 29, 2026
 
-Status: feasibility investigation; no new presentation backend or user-facing mode implemented.
+Historical status on October 29: feasibility investigation; no new presentation backend or user-facing mode implemented.
+
+Update on October 30: Nokcandu subsequently implemented a Wine Mac-driver presentation backend.
+See the [Wine 11 launcher investigation](wine11-launcher-surfaces-2026-10-30.md) for current shared-driver
+rendering, resize/fullscreen corrections and verification limits. The original research below records
+why enabling Wine's existing virtual-desktop checkbox alone was insufficient.
 
 ## Requested behavior
 

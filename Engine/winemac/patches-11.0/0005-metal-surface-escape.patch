@@ -1,0 +1,196 @@
+From 59df4cc328920c00f0f59c2846bfb88cac04ff57 Mon Sep 17 00:00:00 2001
+From: Marc-Aurel Zent <mzent@codeweavers.com>
+Date: Thu, 21 May 2026 14:03:01 +0200
+Subject: [PATCH 1/2] winemac: Implement ExtEscape queries for Metal layer
+ creation and release.
+
+---
+ dlls/winemac.drv/gdi.c    | 60 +++++++++++++++++++++++++++++++++++++++
+ dlls/winemac.drv/macdrv.h | 14 +++++++++
+ 2 files changed, 74 insertions(+)
+
+diff --git a/dlls/winemac.drv/gdi.c b/dlls/winemac.drv/gdi.c
+index a0f314234b9..a7d9b4b1294 100644
+--- a/dlls/winemac.drv/gdi.c
++++ b/dlls/winemac.drv/gdi.c
+@@ -231,11 +231,71 @@ static INT macdrv_GetDeviceCaps(PHYSDEV dev, INT cap)
+ }
+ 
+ 
++/***********************************************************************
++ *              ExtEscape (MACDRV.@)
++ */
++static INT macdrv_ExtEscape(PHYSDEV dev, INT escape, INT in_count, LPCVOID in_data,
++                            INT out_count, LPVOID out_data)
++{
++    switch (escape)
++    {
++    case QUERYESCSUPPORT:
++        if (in_data && in_count >= sizeof(DWORD))
++        {
++            switch (*(const INT *)in_data)
++            {
++            case MACDRV_ESCAPE_GET_SURFACE:
++            case MACDRV_ESCAPE_RELEASE_SURFACE:
++                return TRUE;
++            }
++        }
++        break;
++
++    case MACDRV_ESCAPE_GET_SURFACE:
++    {
++        struct macdrv_escape_surface *data = out_data;
++        struct macdrv_client_surface *surface;
++        HWND hwnd = NtUserWindowFromDC(dev->hdc);
++
++        if (out_count < sizeof(*data)) return FALSE;
++
++        if (!hwnd || !(surface = macdrv_client_surface_create(hwnd))) return FALSE;
++
++        if (!macdrv_client_surface_acquire_metal_swapchain(surface))
++        {
++            client_surface_release(&surface->client);
++            return FALSE;
++        }
++
++        data->surface = (UINT_PTR)surface;
++        data->layer = (UINT_PTR)macdrv_swapchain_get_layer(surface->metal_swapchain);
++        return TRUE;
++    }
++    case MACDRV_ESCAPE_RELEASE_SURFACE:
++    {
++        const struct macdrv_escape_surface *data = in_data;
++        struct macdrv_client_surface *surface;
++
++        if (in_count < sizeof(*data)) return FALSE;
++
++        if (!data) return FALSE;
++
++        surface = (struct macdrv_client_surface *)(UINT_PTR)data->surface;
++        if (surface) client_surface_release(&surface->client);
++        return TRUE;
++    }
++    }
++
++    return FALSE;
++}
++
++
+ static const struct user_driver_funcs macdrv_funcs =
+ {
+     .dc_funcs.pCreateCompatibleDC = macdrv_CreateCompatibleDC,
+     .dc_funcs.pCreateDC = macdrv_CreateDC,
+     .dc_funcs.pDeleteDC = macdrv_DeleteDC,
++    .dc_funcs.pExtEscape = macdrv_ExtEscape,
+     .dc_funcs.pGetDeviceCaps = macdrv_GetDeviceCaps,
+     .dc_funcs.pGetDeviceGammaRamp = macdrv_GetDeviceGammaRamp,
+     .dc_funcs.pSetDeviceGammaRamp = macdrv_SetDeviceGammaRamp,
+diff --git a/dlls/winemac.drv/macdrv.h b/dlls/winemac.drv/macdrv.h
+index 4f7107baf68..46d6a990a78 100644
+--- a/dlls/winemac.drv/macdrv.h
++++ b/dlls/winemac.drv/macdrv.h
+@@ -347,4 +347,18 @@ static inline UINT asciiz_to_unicode(WCHAR *dst, const char *src)
+     return (p - dst) * sizeof(WCHAR);
+ }
+ 
++/* ExtEscape definitions */
++
++enum macdrv_escape_codes
++{
++    MACDRV_ESCAPE_GET_SURFACE = 6790,
++    MACDRV_ESCAPE_RELEASE_SURFACE,
++};
++
++struct macdrv_escape_surface
++{
++    UINT64 surface;
++    UINT64 layer;
++};
++
+ #endif  /* __WINE_MACDRV_H */
+-- 
+GitLab
+
+
+From 07bb09bd2d3974ec035ec0e49fa5bc7e85a3ab41 Mon Sep 17 00:00:00 2001
+From: Marc-Aurel Zent <mzent@codeweavers.com>
+Date: Tue, 16 Jun 2026 16:36:25 +0200
+Subject: [PATCH 2/2] winemac: Use MACDRV_ESCAPE_*_SURFACE in
+ macdrv_vulkan_surface_create.
+
+---
+ dlls/winemac.drv/vulkan.c | 33 +++++++++++++++++++--------------
+ 1 file changed, 19 insertions(+), 14 deletions(-)
+
+diff --git a/dlls/winemac.drv/vulkan.c b/dlls/winemac.drv/vulkan.c
+index f1643e3e5c4..5a7c78ab010 100644
+--- a/dlls/winemac.drv/vulkan.c
++++ b/dlls/winemac.drv/vulkan.c
+@@ -44,13 +44,16 @@ static VkResult macdrv_vulkan_surface_create(HWND hwnd, const struct vulkan_inst
+                                              struct client_surface **client)
+ {
+     VkResult res;
+-    struct macdrv_client_surface *surface;
++    struct macdrv_escape_surface surface_info = { 0 };
++    HDC hdc = NtUserGetDC(hwnd);
+ 
+     TRACE("%p %p %p %p\n", hwnd, instance, handle, client);
+ 
+-    if (!(surface = macdrv_client_surface_create(hwnd))) return VK_ERROR_OUT_OF_HOST_MEMORY;
+-
+-    if (!macdrv_client_surface_acquire_metal_swapchain(surface)) goto err;
++    if (!NtGdiExtEscape(hdc, NULL, 0, MACDRV_ESCAPE_GET_SURFACE, 0, NULL, sizeof(surface_info), (char *)&surface_info))
++    {
++        NtUserReleaseDC(hwnd, hdc);
++        return VK_ERROR_INCOMPATIBLE_DRIVER;
++    }
+ 
+     if (instance->p_vkCreateMetalSurfaceEXT)
+     {
+@@ -58,7 +61,7 @@ static VkResult macdrv_vulkan_surface_create(HWND hwnd, const struct vulkan_inst
+         create_info_host.sType = VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT;
+         create_info_host.pNext = NULL;
+         create_info_host.flags = 0; /* reserved */
+-        create_info_host.pLayer = macdrv_swapchain_get_layer(surface->metal_swapchain);
++        create_info_host.pLayer = (const CAMetalLayer *)surface_info.layer;
+ 
+         res = instance->p_vkCreateMetalSurfaceEXT(instance->host.instance, &create_info_host, NULL /* allocator */, handle);
+     }
+@@ -68,23 +71,25 @@ static VkResult macdrv_vulkan_surface_create(HWND hwnd, const struct vulkan_inst
+         create_info_host.sType = VK_STRUCTURE_TYPE_MACOS_SURFACE_CREATE_INFO_MVK;
+         create_info_host.pNext = NULL;
+         create_info_host.flags = 0; /* reserved */
+-        create_info_host.pView = macdrv_swapchain_get_layer(surface->metal_swapchain);
++        create_info_host.pView = (const void *)surface_info.layer;
+ 
+         res = instance->p_vkCreateMacOSSurfaceMVK(instance->host.instance, &create_info_host, NULL /* allocator */, handle);
+     }
+     if (res != VK_SUCCESS)
+     {
+         ERR("Failed to create MoltenVK surface, res=%d\n", res);
+-        goto err;
++        NtGdiExtEscape(hdc, NULL, 0, MACDRV_ESCAPE_RELEASE_SURFACE, sizeof(surface_info), (const char *)&surface_info, 0, NULL);
++        res = VK_ERROR_INCOMPATIBLE_DRIVER;
++    }
++    else
++    {
++        struct macdrv_client_surface *surface = (struct macdrv_client_surface *)surface_info.surface;
++        *client = &surface->client;
++        TRACE("Created surface=0x%s, client=%p\n", wine_dbgstr_longlong(*handle), *client);
+     }
+ 
+-    *client = &surface->client;
+-    TRACE("Created surface=0x%s, client=%p\n", wine_dbgstr_longlong(*handle), *client);
+-    return VK_SUCCESS;
+-
+-err:
+-    client_surface_release(&surface->client);
+-    return VK_ERROR_INCOMPATIBLE_DRIVER;
++    NtUserReleaseDC(hwnd, hdc);
++    return res;
+ }
+ 
+ static VkBool32 macdrv_get_physical_device_presentation_support(struct vulkan_physical_device *physical_device,
+-- 
+GitLab
+
