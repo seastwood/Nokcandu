@@ -17,6 +17,7 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdarg.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -81,6 +82,14 @@ static void no_sigpipe(int fd)
     setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on));
 }
 
+// Every socket here stays in this process: a program this process starts must not inherit them (an inherited
+// listening socket would hold the port with nobody answering, and games would wait forever).
+static int cloexec(int fd)
+{
+    if (fd >= 0) fcntl(fd, F_SETFD, FD_CLOEXEC);
+    return fd;
+}
+
 struct pipe_args { int from, to, owns; };
 
 // Copies one direction until either side closes. A result relay owns its two sockets and closes them.
@@ -115,7 +124,7 @@ static int start_pump(int from, int to, int owns, pthread_t *joinable)
 static int connect_daemon(void)
 {
     struct sockaddr_un sa = { .sun_family = AF_UNIX };
-    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    int fd = cloexec(socket(AF_UNIX, SOCK_STREAM, 0));
     if (fd < 0) return -1;
     strlcpy(sa.sun_path, DAEMON_PATH, sizeof(sa.sun_path));
     if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) { close(fd); return -1; }
@@ -126,7 +135,7 @@ static int connect_daemon(void)
 static int connect_loopback(uint16_t port_be)
 {
     struct sockaddr_in sa = { .sin_len = sizeof(sa), .sin_family = AF_INET, .sin_port = port_be };
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    int fd = cloexec(socket(AF_INET, SOCK_STREAM, 0));
     if (fd < 0) return -1;
     sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) { close(fd); return -1; }
@@ -223,6 +232,8 @@ static void *serve_client(void *arg)
             msg[HDR_SIZE] = 0;
             put32(msg + 4, newlen);
             if (socketpair(AF_UNIX, SOCK_STREAM, 0, sp) < 0) break;
+            cloexec(sp[0]);
+            cloexec(sp[1]);
             no_sigpipe(sp[0]);
             if (send_with_fd(daemon, msg, HDR_SIZE + newlen, sp[1])) { close(sp[0]); close(sp[1]); break; }
             close(sp[1]);
@@ -250,7 +261,7 @@ static void *listen_loop(void *unused)
     for (;;)
     {
         struct sockaddr_in sa = { .sin_len = sizeof(sa), .sin_family = AF_INET, .sin_port = htons(BRIDGE_PORT) };
-        int fd = socket(AF_INET, SOCK_STREAM, 0), on = 1;
+        int fd = cloexec(socket(AF_INET, SOCK_STREAM, 0)), on = 1;
 
         sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         if (fd >= 0)
@@ -261,7 +272,7 @@ static void *listen_loop(void *unused)
                 bb_log("relaying Windows Bonjour (127.0.0.1:%d) to the Mac's Bonjour", BRIDGE_PORT);
                 for (;;)
                 {
-                    int c = accept(fd, NULL, NULL);
+                    int c = cloexec(accept(fd, NULL, NULL));
                     if (c < 0)
                     {
                         if (errno == EINTR || errno == ECONNABORTED) continue;
@@ -289,6 +300,9 @@ __attribute__((constructor))
 static void bonjour_bridge_init(void)
 {
     pthread_t t;
+    const char *name = getprogname();
     if (getenv("NOKCANDU_NO_BONJOUR")) return;
+    // Not in Wine's server or the loader (it replaces itself); any of the game's processes will do.
+    if (name && (!strcmp(name, "wineserver") || !strncmp(name, "wine", 4))) return;
     if (pthread_create(&t, NULL, listen_loop, NULL) == 0) pthread_detach(t);
 }
