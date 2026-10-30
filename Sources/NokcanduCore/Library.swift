@@ -145,9 +145,50 @@ public enum GameLauncher {
             return .notRunning
         }
         let pidFile = game.logs.appendingPathComponent("game.lock/pid")
-        guard let s = try? String(contentsOf: pidFile, encoding: .utf8),
-              let pid = Int32(s.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 0 else { return .notRunning }
-        return kill(pid, 0) == 0 ? .launcherRunning(pid: pid) : .notRunning
+        if let s = try? String(contentsOf: pidFile, encoding: .utf8),
+           let pid = Int32(s.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 0, kill(pid, 0) == 0 {
+            return .launcherRunning(pid: pid)
+        }
+        // Games started by their launcher (Battle.net, EA app): the game's app hands the game over and exits, so
+        // look for the game's own program in the launcher's environment. Also right after Nokcandu restarts.
+        if let pid = launchedGameProcess(game) { return .launcherRunning(pid: pid) }
+        return .notRunning
+    }
+
+    /// The running Windows program of a game a launcher started, if any.
+    static func launchedGameProcess(_ game: InstalledGame) -> Int32? {
+        var match: ((String) -> Bool)?
+        if let b = game.battleNet {
+            let uid = "-uid \(b.uid.lowercased())"
+            match = { c in c.hasSuffix(uid) || c.contains(uid + " ") }
+        } else if let exe = game.hosted?.exe, !exe.isEmpty {
+            let name = exe.replacingOccurrences(of: "\\", with: "/").split(separator: "/").last.map { String($0).lowercased() } ?? ""
+            if !name.isEmpty { match = { c in c.contains("\\" + name) } }
+        }
+        guard let match, let host = WineTools.hostContents(for: game) else { return nil }
+        for (pid, command) in processSnapshot() where match(command.lowercased()) {
+            if WineTools.owns(pid: pid, contents: host) { return pid }
+        }
+        return nil
+    }
+
+    private static let snapshotLock = NSLock()
+    private nonisolated(unsafe) static var snapshot: (time: Date, rows: [(Int32, String)]) = (.distantPast, [])
+
+    /// All processes with their command lines, refreshed at most once a second (the library checks often).
+    static func processSnapshot() -> [(Int32, String)] {
+        snapshotLock.lock(); defer { snapshotLock.unlock() }
+        if Date().timeIntervalSince(snapshot.time) < 1 { return snapshot.rows }
+        var rows: [(Int32, String)] = []
+        if let r = try? Shell.run("/bin/ps", ["-axww", "-o", "pid=,command="], timeout: 5), r.ok {
+            for line in r.stdout.split(separator: "\n") {
+                let t = line.drop(while: { $0 == " " })
+                guard let sp = t.firstIndex(of: " "), let pid = Int32(t[..<sp]) else { continue }
+                rows.append((pid, String(t[t.index(after: sp)...])))
+            }
+        }
+        snapshot = (Date(), rows)
+        return rows
     }
 
     /// Opens the game's own app through LaunchServices so it behaves exactly like a Finder double-click.
