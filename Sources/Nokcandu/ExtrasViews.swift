@@ -142,6 +142,13 @@ struct PerformanceSection: View {
                     }.labelsHidden().frame(width: settingControlWidth)
                 }
             }
+            if GameMicrophone.supported(game) {
+                SettingToggle(title: "Microphone",
+                              info: "Lets the game use your Mac's microphone (for voice chat). When off, the game sees no microphone at all, so macOS never asks you for permission for it. Takes effect the next time the game starts.",
+                              isOn: Binding(get: { GameMicrophone.isOn(game) }, set: { on in
+                                  model.changeSetting(for: game, title: "Microphone", edit: { current in try GameMicrophone.set(on, for: current) })
+                              }))
+            }
         }
         .onAppear { s = Performance.settings(for: game); buffer = game.hosted == nil ? AudioBuffer.current(for: game) : nil; loaded = true }
     }
@@ -327,6 +334,10 @@ struct GameResolutionSection: View {
     var gameSelection: String { BF1942DisplayFix.resolution(for: game).map { "\($0[0])x\($0[1])" } ?? "current" }
     var body: some View {
         SettingsSection(title: "Display") {
+                if game.native == nil, WineTools.hostContents(for: game) != nil {
+                    ResizableWindowSection(game: game, embedded: true).id("resizable-\(game.id)")
+                    Divider()
+                }
                 SettingRow(title: "Mac screen resolution",
                            info: "Changes your Mac's display while the game runs and restores it afterward. Desktop keeps your current screen resolution. Nokcandu doesn't edit the game's own settings, but many games (like Counter-Strike 2) only offer resolutions that fit the screen, so pick the size here first, then choose it in the game.\(game.usesSharedSteam ? " Changing it needs Steam closed." : "")") {
                     Picker("Mac screen resolution", selection: Binding(get: { selection }, set: choose)) {
@@ -835,6 +846,8 @@ struct SettingsBackupsView: View {
 struct ResizableWindowSection: View {
     @EnvironmentObject var model: AppModel
     let game: InstalledGame
+    /// Shown inside a game's Display section (its rows only), rather than as a section of its own.
+    var embedded = false
     @State private var size: [Int]?
     @State private var working = false
     @State private var status = ""
@@ -843,8 +856,11 @@ struct ResizableWindowSection: View {
     var shared: Bool { game.usesSharedSteam || game.battleNet != nil || game.hosted != nil || game.isSteamHost || BattleNet.isHost(game) || PCLaunchers.kind(of: game) != nil }
 
     var body: some View {
+        if embedded { rows } else { SettingsSection(title: "Display") { rows } }
+    }
+
+    @ViewBuilder var rows: some View {
         let reason = WindowedPresentation.unavailable(for: game)
-        SettingsSection(title: "Resizable Window") {
             SettingToggle(title: "Play in a resizable window",
                           info: "Runs the game on a virtual screen shown in a normal Mac window you can move, resize, minimize or make full screen. Your Mac's display isn't changed.\n\nWorks best with the game set to full screen in its own settings: it then fills the virtual screen exactly. A game set to its own windowed mode still works, shown as its own window.\n\nAutomatic starts like your Mac's screen (or at the game's last resolution) and follows the resolution the game picks; a fixed size suits games that use the desktop resolution.\n\nCtrl-Cmd-C frees the mouse from the game or gives it back (Shift-Cmd-Esc always frees it). Ctrl-Cmd-F switches full screen.\n\nChanging the resolution while the game runs switches it right away, like changing a monitor's mode. Only the game's picture goes in the window; launcher windows (like Steam's) stay separate. Turning the window on or off while the game or its launcher runs needs a restart, which Nokcandu offers when you play.",
                           isOn: Binding(get: { size != nil }, set: { on in set(on ? (size ?? WindowedPresentation.lastChoice(for: game)) : nil) }))
@@ -865,8 +881,7 @@ struct ResizableWindowSection: View {
             if let reason { SettingNote(reason) }
             if working { ProgressView().controlSize(.small) }
             if !status.isEmpty { SettingNote(status) }
-        }
-        .onAppear { size = WindowedPresentation.setting(for: game) }
+            Color.clear.frame(height: 0).onAppear { size = WindowedPresentation.setting(for: game) }
     }
 
     func set(_ new: [Int]?) {
