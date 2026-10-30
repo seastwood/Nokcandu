@@ -847,7 +847,7 @@ struct ResizableWindowSection: View {
         let reason = WindowedPresentation.unavailable(for: game)
         SettingsSection(title: "Resizable Window") {
             SettingToggle(title: "Play in a resizable window",
-                          info: "Runs the game on a virtual screen shown in a normal Mac window you can move, resize, minimize or make full screen. Your Mac's display isn't changed.\n\nAutomatic starts like your Mac's screen (or at the game's last resolution) and follows the resolution the game picks; a fixed size suits games that use the desktop resolution.\n\nCtrl-Cmd-C frees the mouse from the game or gives it back (Shift-Cmd-Esc always frees it). Ctrl-Cmd-F switches full screen.\n\nOnly the game's picture goes in the window; launcher windows (like Steam's) stay separate. If the launcher is already running with a different choice, Nokcandu offers to restart it when you play.",
+                          info: "Runs the game on a virtual screen shown in a normal Mac window you can move, resize, minimize or make full screen. Your Mac's display isn't changed.\n\nAutomatic starts like your Mac's screen (or at the game's last resolution) and follows the resolution the game picks; a fixed size suits games that use the desktop resolution.\n\nCtrl-Cmd-C frees the mouse from the game or gives it back (Shift-Cmd-Esc always frees it). Ctrl-Cmd-F switches full screen.\n\nChanging the resolution while the game runs switches it right away, like changing a monitor's mode. Only the game's picture goes in the window; launcher windows (like Steam's) stay separate. Turning the window on or off while the game or its launcher runs needs a restart, which Nokcandu offers when you play.",
                           isOn: Binding(get: { size != nil }, set: { on in set(on ? (size ?? WindowedPresentation.lastChoice(for: game)) : nil) }))
                 .disabled(working || (reason != nil && size == nil))
             if size != nil {
@@ -875,8 +875,10 @@ struct ResizableWindowSection: View {
         let g = game
         Task {
             do {
-                try await WindowedPresentation.save(new, for: g)
-                status = new == nil ? "Off — the game uses the Mac's screen." : "On — takes effect the next time the game starts."
+                let live = try await WindowedPresentation.save(new, for: g)
+                if live { status = new == WindowedPresentation.automatic ? "Automatic — the running game keeps its resolution until it picks another." : "Switched the running game to \(WindowedPresentation.title(new!))." }
+                else if await WineTools.environmentIsRunning(for: g) { status = "Takes effect the next time the game starts." }
+                else { status = "" }
                 model.refresh()
             } catch {
                 size = old

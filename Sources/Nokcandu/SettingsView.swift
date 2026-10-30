@@ -18,6 +18,7 @@ struct SettingsView: View {
                 .tabItem { Label(model.updateCount > 0 ? "Updates (\(model.updateCount))" : "Updates", systemImage: "arrow.down.circle") }
                 .tag("updates")
             AdvancedSettings().tabItem { Label("Advanced", systemImage: "wrench.and.screwdriver") }.tag("advanced")
+            CreditsSettings().tabItem { Label("Credits", systemImage: "heart") }.tag("credits")
         }
         .frame(width: 780, height: 640)
     }

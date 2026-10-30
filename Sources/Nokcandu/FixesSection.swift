@@ -32,6 +32,7 @@ struct FixesSection: View {
                 SettingNote("This game looks like it plays videos through DirectShow, so it may need this.", warning: true)
             }
             ComponentFixesView(game: game)
+            PhysXRuntimeRow(game: game).id("physx-\(game.id)")
             if !log.isEmpty {
                 Text(log.suffix(6).joined(separator: "\n")).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
             }

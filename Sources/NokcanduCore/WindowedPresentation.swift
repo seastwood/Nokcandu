@@ -140,18 +140,38 @@ public enum WindowedPresentation {
     }
 
     /// Saves the game's choice. Applied now if its Windows environment is closed, otherwise at the next start.
-    public static func save(_ size: [Int]?, for g: InstalledGame) async throws {
+    /// Returns whether the change reached a running game right away (false: it applies when the game next starts).
+    @discardableResult
+    public static func save(_ size: [Int]?, for g: InstalledGame) async throws -> Bool {
         if size != nil, let r = unavailable(for: g) { throw NokError(r) }
         try saveSetting(size, for: g)
-        if !(await WineTools.environmentIsRunning(for: g)) { try await prepareForLaunch(GameLibrary.inspect(g.appURL) ?? g) }
+        if !(await WineTools.environmentIsRunning(for: g)) {
+            try await prepareForLaunch(GameLibrary.inspect(g.appURL) ?? g)
+            return false
+        }
+        return applyLive(size, for: g)
+    }
+
+    /// The environment is running with a resizable window and the game still wants one: change the virtual
+    /// screen's resolution right away. The driver in every one of the game's processes watches this file; the
+    /// game is told the screen changed, like a monitor switching modes. (The registry follows when it next starts.)
+    /// Returns false when a restart is needed instead (turning the window on or off).
+    @discardableResult
+    public static func applyLive(_ size: [Int]?, for g: InstalledGame) -> Bool {
+        guard g.native == nil, let h = WineTools.hostContents(for: g), let s = size, applied(host: h) != nil,
+              engineState(host: h) == .nokcandu else { return false }
+        guard s != automatic else { return true }     // Automatic: keep the current mode; the game picks its own
+        let mode = h.appendingPathComponent("SharedSupport/prefix/.nokcandu-virtual-display")
+        try? Data("\(s[0])x\(s[1])\n".utf8).write(to: mode, options: .atomic)
+        return true
     }
 
     /// Before starting a game whose environment is closed: make the environment match the game's choice.
     public static func prepareForLaunch(_ g: InstalledGame) async throws {
         guard g.native == nil, let h = WineTools.hostContents(for: g) else { return }
         let want = setting(for: g)
+        if await WineTools.environmentIsRunning(for: g) { applyLive(want, for: g); return }
         if want == applied(host: h), want == nil || engineState(host: h) == .nokcandu { return }
-        if await WineTools.environmentIsRunning(for: g) { return }
         try apply(want, host: h)
     }
 
@@ -159,8 +179,11 @@ public enum WindowedPresentation {
     public static func restartReason(for g: InstalledGame) async -> String? {
         guard g.native == nil, let h = WineTools.hostContents(for: g) else { return nil }
         let want = setting(for: g)
-        guard want != applied(host: h), await WineTools.environmentIsRunning(for: g) else { return nil }
+        let now = applied(host: h)
+        guard want != now, await WineTools.environmentIsRunning(for: g) else { return nil }
         if want == nil && engineState(host: h) != .nokcandu { return nil }
+        // Only the resolution differs: changed on the fly, no restart.
+        if want != nil, now != nil, engineState(host: h) == .nokcandu { return nil }
         let host = GameLibrary.inspect(h.deletingLastPathComponent())?.name ?? "its launcher"
         return want.map { "\(g.name) is set to play in a resizable window (\(title($0))), but \(host) is running with a different setting." }
             ?? "\(g.name) is set to use the Mac's screen, but \(host) is running with a resizable window."

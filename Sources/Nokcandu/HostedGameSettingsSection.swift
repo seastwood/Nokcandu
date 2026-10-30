@@ -67,24 +67,19 @@ struct HostedGameSettingsSection: View {
     }
 }
 
-struct PhysXRuntimeSection: View {
+/// NVIDIA PhysX runtime: a row in the game's Fixes.
+struct PhysXRuntimeRow: View {
     @EnvironmentObject var model: AppModel
     let game: InstalledGame
     @State private var installed = false
     @State private var busy = false
     var body: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("NVIDIA PhysX runtime")
-                    Spacer()
-                    if installed { Label("Installed", systemImage: "checkmark.circle").foregroundStyle(.green) }
-                    else if busy { ProgressView().controlSize(.small); Text("Installing…") }
-                    else { Button("Install") { install() } }
-                }
-                Text("For games reporting missing PhysXLoader or NxCharacter libraries. Installed in this game's Windows environment; games sharing that environment share this runtime.").font(.caption).foregroundStyle(.secondary)
-            }.padding(6)
-        } label: { Text("Windows Runtime").font(.headline) }
+        SettingRow(title: "NVIDIA PhysX runtime",
+                   info: "For games reporting missing PhysXLoader or NxCharacter libraries. Installed in this game's Windows environment; games sharing that environment share it.") {
+            if installed { InstalledBadge() }
+            else if busy { ProgressView().controlSize(.small) }
+            else { Button("Install") { install() } }
+        }
         .onAppear { reload() }
     }
     func reload() { installed = WineTools.hostContents(for: game).map { PhysXRuntime.installed(contents: $0) } ?? false }

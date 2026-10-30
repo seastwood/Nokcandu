@@ -123,10 +123,12 @@ struct GameDetailView: View {
                 if game.custom != nil {
                     GameSettingsSection(game: game).id(game.custom)
                 }
-                if WineTools.hostContents(for: game) != nil { PhysXRuntimeSection(game: game).id("physx-\(game.id)") }
                 checkSection
                 if !WineTools.places(for: game).isEmpty { FilesToolsSection(game: game) }
                 if WineTools.hostContents(for: game) != nil, game.hosted == nil { FixesSection(game: game).id("\(game.id)-\(fixVersion)") }
+                else if WineTools.hostContents(for: game) != nil {
+                    SettingsSection(title: "Fixes") { PhysXRuntimeRow(game: game).id("physx-\(game.id)") }
+                }
                 if RestorePoints.hostApp(for: game) != nil { RestorePointsSection(game: game).id("restore-\(game.id)-\(fixVersion)-\(model.games.count)") }
                 if game.custom != nil || game.battleNet != nil || game.hosted?.exe != nil { ProfilesSection(game: game).id("profiles-\(game.id)") }
                 if game.isManaged { NotesSection(game: game).id(game.id) }
