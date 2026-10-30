@@ -783,7 +783,7 @@ index 1d7b310..2be9486 100644
  
  @end
 diff --git a/dlls/winemac.drv/cocoa_window.m b/dlls/winemac.drv/cocoa_window.m
-index ce8b571..960a7a8 100644
+index ce8b571..dda622f 100644
 --- a/dlls/winemac.drv/cocoa_window.m
 +++ b/dlls/winemac.drv/cocoa_window.m
 @@ -372,6 +372,9 @@ @interface WineContentView : WineBaseView <NSTextInputClient, NSViewLayerContent
@@ -1681,37 +1681,48 @@ index ce8b571..960a7a8 100644
          event = macdrv_create_event(WINDOW_DID_MINIMIZE, self);
          [queue postEvent:event];
          macdrv_release_event(event);
-@@ -3064,11 +3678,42 @@ - (BOOL)windowShouldClose:(id)sender
-         macdrv_event* event = macdrv_create_event(WINDOW_CLOSE_REQUESTED, self);
+@@ -3061,7 +3675,39 @@ - (void)windowDidResize:(NSNotification *)notification
+ 
+     - (BOOL)windowShouldClose:(id)sender
+     {
+-        macdrv_event* event = macdrv_create_event(WINDOW_CLOSE_REQUESTED, self);
++        macdrv_event* event;
++
++        /* Nokcandu: the game's picture or its own window. Always ask first: many games ignore a close request
++           (full-screen games often have no close command at all), and a stray click on the close button
++           shouldn't end a game. Quit asks the game to close, and ends it if it's still running shortly after. */
++        if (present_on && [self presentScales])
++        {
++            NSAlert* alert;
++            NSString* name;
++
++            if (presentCloseAsking) return NO;
++            presentCloseAsking = TRUE;
++            name = [[NSRunningApplication currentApplication] localizedName] ?: @"the game";
++            macdrv_present_release_mouse();
++            alert = [[[NSAlert alloc] init] autorelease];
++            alert.messageText = [NSString stringWithFormat:@"Quit %@?", name];
++            alert.informativeText = @"Progress you haven't saved will be lost.";
++            [alert addButtonWithTitle:@"Quit"];
++            [alert addButtonWithTitle:@"Cancel"];
++            alert.buttons[0].hasDestructiveAction = YES;
++            [alert beginSheetModalForWindow:self completionHandler:^(NSModalResponse r){
++                presentCloseAsking = FALSE;
++                if (r != NSAlertFirstButtonReturn) return;
++                macdrv_event* close = macdrv_create_event(WINDOW_CLOSE_REQUESTED, self);
++                [queue postEvent:close];
++                macdrv_release_event(close);
++                /* Games that close on request are gone well before this; the rest are ended. */
++                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ _exit(0); });
++            }];
++            return NO;
++        }
++
++        event = macdrv_create_event(WINDOW_CLOSE_REQUESTED, self);
          [queue postEvent:event];
          macdrv_release_event(event);
-+
-+        /* Nokcandu: the game's picture or its own window. Many games ignore a close request (full-screen games
-+           often have no close command at all), which left the window impossible to close. Ask the game first;
-+           if it's still here a moment later, offer to quit it. */
-+        if (present_on && [self presentScales] && !presentCloseAsking)
-+        {
-+            presentCloseAsking = TRUE;
-+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-+                NSAlert* alert;
-+                NSString* name = [[NSRunningApplication currentApplication] localizedName] ?: @"the game";
-+
-+                if (![self isVisible] || [self isMiniaturized]) { presentCloseAsking = FALSE; return; }
-+                macdrv_present_release_mouse();
-+                alert = [[[NSAlert alloc] init] autorelease];
-+                alert.messageText = [NSString stringWithFormat:@"Quit %@?", name];
-+                alert.informativeText = @"The game didn't close when asked. Quitting ends it now; progress you haven't saved is lost.";
-+                [alert addButtonWithTitle:@"Quit"];
-+                [alert addButtonWithTitle:@"Cancel"];
-+                alert.buttons[0].hasDestructiveAction = YES;
-+                [alert beginSheetModalForWindow:self completionHandler:^(NSModalResponse r){
-+                    presentCloseAsking = FALSE;
-+                    if (r == NSAlertFirstButtonReturn) _exit(0);
-+                }];
-+            });
-+        }
          return NO;
-     }
+@@ -3069,6 +3715,12 @@ - (BOOL)windowShouldClose:(id)sender
  
      - (BOOL) windowShouldZoom:(NSWindow*)window toFrame:(NSRect)newFrame
      {
@@ -1724,7 +1735,7 @@ index ce8b571..960a7a8 100644
          if (maximized)
          {
              macdrv_event* event = macdrv_create_event(WINDOW_RESTORE_REQUESTED, self);
-@@ -3120,13 +3765,17 @@ - (void) windowWillExitFullScreen:(NSNotification*)notification
+@@ -3120,13 +3772,17 @@ - (void) windowWillExitFullScreen:(NSNotification*)notification
  
      - (void)windowWillMiniaturize:(NSNotification *)notification
      {
@@ -1743,7 +1754,7 @@ index ce8b571..960a7a8 100644
          {
              if (maximized)
                  return self.wine_fractionalFrame.size;
-@@ -3146,13 +3795,13 @@ - (NSSize) windowWillResize:(NSWindow*)sender toSize:(NSSize)frameSize
+@@ -3146,13 +3802,13 @@ - (NSSize) windowWillResize:(NSWindow*)sender toSize:(NSSize)frameSize
              query = macdrv_create_query();
              query->type = QUERY_RESIZE_SIZE;
              query->window = (macdrv_window)[self retain];
@@ -1759,7 +1770,7 @@ index ce8b571..960a7a8 100644
                  rect = [self frameRectForContentRect:rect];
                  frameSize = rect.size;
              }
-@@ -3167,7 +3816,9 @@ - (void) windowWillStartLiveResize:(NSNotification *)notification
+@@ -3167,7 +3823,9 @@ - (void) windowWillStartLiveResize:(NSNotification *)notification
      {
          [self endWindowDragging];
  
@@ -1770,7 +1781,7 @@ index ce8b571..960a7a8 100644
          {
              macdrv_event* event;
              NSRect frame = [self contentRectForFrameRect:self.frame];
-@@ -3176,7 +3827,7 @@ - (void) windowWillStartLiveResize:(NSNotification *)notification
+@@ -3176,7 +3834,7 @@ - (void) windowWillStartLiveResize:(NSNotification *)notification
  
              event = macdrv_create_event(WINDOW_RESTORE_REQUESTED, self);
              event->window_restore_requested.keep_frame = TRUE;
@@ -1779,7 +1790,7 @@ index ce8b571..960a7a8 100644
              [queue postEvent:event];
              macdrv_release_event(event);
          }
-@@ -3193,6 +3844,19 @@ - (NSRect) windowWillUseStandardFrame:(NSWindow*)window defaultFrame:(NSRect)pro
+@@ -3193,6 +3851,19 @@ - (NSRect) windowWillUseStandardFrame:(NSWindow*)window defaultFrame:(NSRect)pro
          NSRect currentContentRect, proposedContentRect, newContentRect, screenRect;
          NSSize maxSize;
  
@@ -1799,7 +1810,7 @@ index ce8b571..960a7a8 100644
          query = macdrv_create_query();
          query->type = QUERY_MIN_MAX_INFO;
          query->window = (macdrv_window)[self retain];
-@@ -3286,7 +3950,7 @@ - (NSDragOperation) draggingUpdated:(id <NSDraggingInfo>)sender
+@@ -3286,7 +3957,7 @@ - (NSDragOperation) draggingUpdated:(id <NSDraggingInfo>)sender
      {
          NSDragOperation ret;
          NSPoint pt = [[self contentView] convertPoint:[sender draggingLocation] fromView:nil];
@@ -1808,7 +1819,7 @@ index ce8b571..960a7a8 100644
  
          macdrv_query* query = macdrv_create_query();
          query->type = QUERY_DRAG_DROP_DRAG;
-@@ -3306,7 +3970,7 @@ - (BOOL) performDragOperation:(id <NSDraggingInfo>)sender
+@@ -3306,7 +3977,7 @@ - (BOOL) performDragOperation:(id <NSDraggingInfo>)sender
      {
          BOOL ret;
          NSPoint pt = [[self contentView] convertPoint:[sender draggingLocation] fromView:nil];
@@ -1817,7 +1828,7 @@ index ce8b571..960a7a8 100644
  
          macdrv_query* query = macdrv_create_query();
          query->type = QUERY_DRAG_DROP_DROP;
-@@ -3343,9 +4007,10 @@ macdrv_window macdrv_create_cocoa_window(const struct macdrv_window_features* wf
+@@ -3343,9 +4014,10 @@ macdrv_window macdrv_create_cocoa_window(const struct macdrv_window_features* wf
  
      OnMainThread(^{
          window = [[WineWindow createWindowWithFeatures:wf
@@ -1829,7 +1840,7 @@ index ce8b571..960a7a8 100644
      });
  
      return (macdrv_window)window;
-@@ -3488,7 +4153,7 @@ void macdrv_set_cocoa_window_frame(macdrv_window w, const CGRect* new_frame)
+@@ -3488,7 +4160,7 @@ void macdrv_set_cocoa_window_frame(macdrv_window w, const CGRect* new_frame)
      WineWindow* window = (WineWindow*)w;
  
      OnMainThread(^{
@@ -1838,7 +1849,7 @@ index ce8b571..960a7a8 100644
      });
  }
  
-@@ -3506,7 +4171,7 @@ void macdrv_get_cocoa_window_frame(macdrv_window w, CGRect* out_frame)
+@@ -3506,7 +4178,7 @@ void macdrv_get_cocoa_window_frame(macdrv_window w, CGRect* out_frame)
  
          frame = [window contentRectForFrameRect:[window wine_fractionalFrame]];
          [[WineApplicationController sharedController] flipRect:&frame];
@@ -1847,7 +1858,7 @@ index ce8b571..960a7a8 100644
      });
  }
  
-@@ -3687,6 +4352,7 @@ macdrv_view macdrv_create_view(CGRect rect)
+@@ -3687,6 +4359,7 @@ macdrv_view macdrv_create_view(CGRect rect)
          NSNotificationCenter* nc = [NSNotificationCenter defaultCenter];
  
          view = [[WineContentView alloc] initWithFrame:NSRectFromCGRect(cgrect_mac_from_win(rect))];
@@ -1855,7 +1866,7 @@ index ce8b571..960a7a8 100644
          [view setAutoresizingMask:NSViewNotSizable];
          [view setHidden:YES];
          [view setWantsBestResolutionOpenGLSurface:retina_on];
-@@ -3747,6 +4413,15 @@ void macdrv_set_view_frame(macdrv_view v, CGRect rect)
+@@ -3747,6 +4420,15 @@ void macdrv_set_view_frame(macdrv_view v, CGRect rect)
          NSRect newFrame = NSRectFromCGRect(cgrect_mac_from_win(rect));
          NSRect oldFrame = [view frame];
  
@@ -1871,7 +1882,7 @@ index ce8b571..960a7a8 100644
          if (!NSEqualRects(oldFrame, newFrame))
          {
              [[view superview] setNeedsDisplayInRect:oldFrame];
-@@ -3758,7 +4433,7 @@ void macdrv_set_view_frame(macdrv_view v, CGRect rect)
+@@ -3758,7 +4440,7 @@ void macdrv_set_view_frame(macdrv_view v, CGRect rect)
                  [view setFrame:newFrame];
              [view setNeedsDisplay:YES];
  
@@ -1880,7 +1891,7 @@ index ce8b571..960a7a8 100644
              {
                  int backing_size[2] = { 0 };
                  [view wine_setBackingSize:backing_size];
-@@ -3919,7 +4594,7 @@ macdrv_metal_layer macdrv_view_get_metal_layer(macdrv_metal_view v)
+@@ -3919,7 +4601,7 @@ macdrv_metal_layer macdrv_view_get_metal_layer(macdrv_metal_view v)
      __block CAMetalLayer* layer;
  
      OnMainThread(^{
@@ -1889,7 +1900,7 @@ index ce8b571..960a7a8 100644
      });
  
      return (macdrv_metal_layer)layer;
-@@ -4057,3 +4732,23 @@ void macdrv_clear_ime_text(void)
+@@ -4057,3 +4739,23 @@ void macdrv_clear_ime_text(void)
              [[window contentView] clearMarkedText];
      });
  }
