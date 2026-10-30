@@ -63,7 +63,7 @@ jobs:
         if: steps.driver.outputs.cache-hit != 'true'
         run: |
           /usr/sbin/softwareupdate --install-rosetta --agree-to-license >/dev/null 2>&1 || true
-          Engine/winemac/build.sh
+          bash Engine/winemac/build.sh
       - name: Check the driver
         run: |
           test -f build/winemac/x86_64-unix/winemac.so

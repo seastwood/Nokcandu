@@ -39,7 +39,7 @@ jobs:
         run: |
           /usr/sbin/softwareupdate --install-rosetta --agree-to-license >/dev/null 2>&1 || true
           set -o pipefail
-          WINE_VERSION='${{ steps.v.outputs.wine }}' WINEMAC_TRY=1 Engine/winemac/build.sh "$RUNNER_TEMP/winemac" 2>&1 | tee "$RUNNER_TEMP/try.log"
+          WINE_VERSION='${{ steps.v.outputs.wine }}' WINEMAC_TRY=1 bash Engine/winemac/build.sh "$RUNNER_TEMP/winemac" 2>&1 | tee "$RUNNER_TEMP/try.log"
       - name: Report
         if: steps.v.outputs.new == 'true' && steps.seen.outputs.open == '0'
         env: { GH_TOKEN: '${{ github.token }}' }
