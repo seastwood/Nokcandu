@@ -107,6 +107,7 @@ struct GameDetailView: View {
                 if game.custom?.disc != nil { GameDiscsSection(game: game).id("discs-\(game.id)-\(Discs.all(game.custom!).count)") }
                 if game.battleNet != nil { BattleNetGameInfo(game: game) }
                 if game.isSteamHost { SteamGamesSection().id("steamgames-\(model.games.count)") }
+                EngineNotice(game: game).id("engine-\(game.id)")
                 if game.isSteamHost || game.usesSharedSteam { SteamTipsSection() }
                 if BattleNet.isHost(game) { BlizzardGamesSection(host: game).id("bnet-\(game.id)-\(model.games.count)") }
                 if let k = PCLaunchers.kind(of: game) { LauncherGamesSection(host: game, kind: k).id("pcl-\(game.id)-\(model.games.count)") }

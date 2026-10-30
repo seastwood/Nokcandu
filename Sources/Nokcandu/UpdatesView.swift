@@ -112,6 +112,9 @@ struct UpdatesView: View {
                             Text("Newest: \(e.description) with graphics/wrapper \(newestTemplate.description)").font(.body.bold())
                             Text("Nokcandu's tested setup: \(EngineVersion.tested.description) with \(TemplateVersion.tested.description). Newer engines often fix games but can also break one that worked — that's why each app tries it separately and can roll back.")
                                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            if busy == "download" {
+                                Text(log.last ?? "Downloading and testing…").font(.caption).foregroundStyle(.tint).lineLimit(1)
+                            }
                         }
                         Spacer()
                         if failedTest {
@@ -153,8 +156,13 @@ struct UpdatesView: View {
             Image(nsImage: g.icon).resizable().frame(width: 26, height: 26)
             VStack(alignment: .leading, spacing: 1) {
                 Text(g.isSteamHost ? "Steam (all Steam games)" : g.name)
-                Text((cur?.description ?? g.wineVersion ?? "unknown engine") + (st?.status == .trying ? " · trying — was \(EngineVersion(versionString: st!.previousEngine)?.description ?? st!.previousEngine)" : ""))
+                if busy == g.id {
+                    // What's happening right now, instead of a version label that changes only at the end.
+                    Text(log.last ?? "Working…").font(.caption).foregroundStyle(.tint).lineLimit(1)
+                } else {
+                Text((cur?.description ?? g.wineVersion ?? "unknown engine") + (st?.status == .trying ? " · trying it — was \(EngineVersion(versionString: st!.previousEngine)?.description ?? st!.previousEngine). Play, then Keep or Roll Back." : ""))
                     .font(.caption).foregroundStyle(st?.status == .trying ? .orange : .secondary)
+                }
             }
             Spacer()
             if busy == g.id { ProgressView().controlSize(.small) }
