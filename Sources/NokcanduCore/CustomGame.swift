@@ -44,10 +44,10 @@ public enum GraphicsPreset: String, Codable, CaseIterable, Identifiable, Sendabl
     public var id: String { rawValue }
     public var title: String {
         switch self {
-        case .classic3D: "Older 3D games (DXVK)"
-        case .modern3D: "Newer 3D games (DXVK)"
-        case .appleMetal: "Apple Metal (D3DMetal)"
-        case .dxmt: "Metal for DirectX 10–11 (DXMT)"
+        case .classic3D: "Older 3D games, DirectX 8–9 (D9VK)"
+        case .modern3D: "Newer 3D games, DirectX 10–11 (DXVK)"
+        case .appleMetal: "Apple Metal, DirectX 11–12 (D3DMetal)"
+        case .dxmt: "Metal, DirectX 10–11 (DXMT)"
         case .classic2D: "Classic 2D games (cnc-ddraw)"
         case .compatible: "Compatibility (WineD3D)"
         }
