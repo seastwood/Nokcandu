@@ -1,6 +1,6 @@
 # Nokcandu
 
-![Nokcandu: your game library on the left, a game's page with Play, screen, mouse and health tools on the right](docs/screenshot.png)
+![Nokcandu: your game library on the left, a game's page with Play, screen, mouse and health tools on the right](docs/Screenshot2.png)
 
 **Play the Windows games you own on an Apple silicon Mac.** Nokcandu turns each game into its own
 Mac app, built on [Wine](https://www.winehq.org) via the open-source [Sikarugir](https://github.com/Sikarugir-App) engines,
