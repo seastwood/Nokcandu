@@ -538,6 +538,7 @@ public enum CustomGames {
         \(c.microphone == true ? "" : "export NOKCANDU_NO_MICROPHONE=1")
         \(c.borderless == true && c.macFullScreen == true ? "export NOKCANDU_MAC_FULLSCREEN=1" : "")
         \(c.borderless == true ? #"export NOKCANDU_BORDERLESS_TARGET="$GAME_EXE"; export NOKCANDU_BORDERLESS_DLL='C:\nokcandu\borderless\window.dll'; GAME_EXE='C:\nokcandu\borderless\launcher.exe'"# : "")
+        \(exeName.lowercased() == "battle.net launcher.exe" || exeName.lowercased() == "battle.net.exe" ? BrowserRenderer.launcherBlock(exes: BrowserRenderer.battleNetExes) : "")
         "$SUPPORT/wine/bin/wine" "$GAME_EXE"\(args.isEmpty ? "" : " " + args)\(storeArgs) || STATUS=$?
         echo "nokcandu: game exited with status $STATUS after ${SECONDS}s"
         exit $STATUS

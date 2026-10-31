@@ -1037,7 +1037,7 @@ static void run_from_game_app_as(bool background) {
 __attribute__((constructor)) static void start(void) {
     int argc = *_NSGetArgc(); char **argv = *_NSGetArgv();
     if (argc > 1 && nokcandu_configure_browser_renderer(argv[1]))
-        fprintf(stderr, "nokcandu: Steam browser uses its own Metal renderer\n");
+        fprintf(stderr, "nokcandu: launcher browser uses its own Metal renderer\n");
     if (argc > 1 && nokcandu_background_program(argv[1])) {
         helper_enabled = false;
         if (responsible_for_itself()) run_from_game_app_as(true);

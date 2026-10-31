@@ -179,6 +179,7 @@ public enum BattleNet {
         export WINEDEBUG=-all
         export WINEMSYNC=1
         export PATH="$SUPPORT/wine/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        \(BrowserRenderer.launcherBlock(exes: BrowserRenderer.battleNetExes))
         BNET='C:\\Program Files (x86)\\Battle.net\\Battle.net.exe'
         running() {
          local p; p=$(cat "$SUPPORT/Logs/game.lock/pid" 2>/dev/null || true)

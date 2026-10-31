@@ -15,7 +15,16 @@ static bool nokcandu_configure_browser_renderer(const char *path) {
     if (!path || !*path) return false;
     const char *name = path;
     for (const char *p = path; *p; ++p) if (*p == '/' || *p == '\\') name = p + 1;
-    if (strcasecmp(name, "steamwebhelper.exe")) return false;
+    // NOKCANDU_BROWSER_EXES: ';'-separated program names the launcher opted in (default: Steam's worker).
+    const char *list = getenv("NOKCANDU_BROWSER_EXES");
+    if (!list || !*list) list = "steamwebhelper.exe";
+    bool match = false;
+    for (const char *s = list; *s && !match; ) {
+        const char *e = strchr(s, ';'); size_t n = e ? (size_t)(e - s) : strlen(s);
+        if (n == strlen(name) && !strncasecmp(s, name, n)) match = true;
+        s = e ? e + 1 : s + n;
+    }
+    if (!match) return false;
     const char *root = getenv("NOKCANDU_BROWSER_DXMT_ROOT");
     if (!root || !*root || access(root, R_OK | X_OK)) return false;
     const char *old = getenv("WINEDLLOVERRIDES");
