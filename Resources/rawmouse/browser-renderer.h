@@ -39,4 +39,36 @@ static bool nokcandu_configure_browser_renderer(const char *path) {
     // creates the process. Changing Unix getenv here alone cannot update that inherited block.
     return true;
 }
+
+// Battle.net games inherit Battle.net's renderer. program-renderers.tsv (in the Battle.net app's state folder,
+// beside this library) maps a game's program to its own renderer: "<Program.exe>\tKEY=VALUE\t…". The
+// renderer search paths are reset first so only the chosen renderer remains.
+__attribute__((unused)) static bool nokcandu_configure_program_renderer(const char *path, const char *state_dir) {
+    if (!path || !*path || !state_dir || !*state_dir) return false;
+    const char *name = path;
+    for (const char *p = path; *p; ++p) if (*p == '/' || *p == '\\') name = p + 1;
+    char file[4096];
+    snprintf(file, sizeof file, "%s/program-renderers.tsv", state_dir);
+    FILE *f = fopen(file, "r");
+    if (!f) return false;
+    char line[8192];
+    bool done = false;
+    while (!done && fgets(line, sizeof line, f)) {
+        line[strcspn(line, "\r\n")] = 0;
+        char *save = NULL, *field = strtok_r(line, "\t", &save);
+        if (!field || strcasecmp(field, name)) continue;
+        static const char *renderers[] = { "WINEDLLPATH_D9VK", "WINEDLLPATH_DXVK", "WINEDLLPATH_D3DMETAL", "WINEDLLPATH_DXMT", "WINEDLLPATH_CNCD" };
+        for (size_t i = 0; i < sizeof renderers / sizeof *renderers; i++) unsetenv(renderers[i]);
+        unsetenv("WINEDLLOVERRIDES");
+        while ((field = strtok_r(NULL, "\t", &save))) {
+            char *eq = strchr(field, '=');
+            if (!eq || eq == field) continue;
+            *eq = 0;
+            setenv(field, eq + 1, 1);
+        }
+        done = true;
+    }
+    fclose(f);
+    return done;
+}
 #endif

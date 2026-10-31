@@ -1038,6 +1038,14 @@ __attribute__((constructor)) static void start(void) {
     int argc = *_NSGetArgc(); char **argv = *_NSGetArgv();
     if (argc > 1 && nokcandu_configure_browser_renderer(argv[1]))
         fprintf(stderr, "nokcandu: launcher browser uses its own Metal renderer\n");
+    else if (argc > 1) {
+        Dl_info me_info;
+        if (dladdr((const void *)start, &me_info) && me_info.dli_fname) {
+            char me[PATH_MAX]; strlcpy(me, me_info.dli_fname, sizeof me);
+            if (nokcandu_configure_program_renderer(argv[1], dirname(me)))
+                fprintf(stderr, "nokcandu: %s uses its own graphics mode\n", argv[1]);
+        }
+    }
     if (argc > 1 && nokcandu_background_program(argv[1])) {
         helper_enabled = false;
         if (responsible_for_itself()) run_from_game_app_as(true);

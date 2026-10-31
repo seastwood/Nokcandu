@@ -62,7 +62,7 @@ struct BattleNetGameInfo: View {
         GroupBox {
             HStack(alignment: .top) {
                 Image(systemName: "link").foregroundStyle(.secondary)
-                Text("Starts through Battle.net (launch code \(game.battleNet?.code ?? "?")). If Battle.net isn't open it opens it first and waits until you're signed in. Graphics, performance and raw-mouse settings come from the Battle.net app.")
+                Text("Starts through Battle.net (launch code \(game.battleNet?.code ?? "?")). If Battle.net isn't open it opens it first and waits until you're signed in. Performance and raw-mouse settings come from the Battle.net app; graphics can be set per game below.")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Spacer()
                 if let h = model.games.first(where: { $0.appURL.path == game.battleNet?.hostApp }) {
@@ -71,6 +71,19 @@ struct BattleNetGameInfo: View {
             }
             .padding(6)
         } label: { Text("Battle.net").font(.headline) }
+        if let h = BattleNetGraphics.host(of: game, in: model.games) {
+            SettingsSection(title: "Graphics") {
+                SettingRow(title: "Graphics",
+                           info: "Battle.net starts its games itself, so they normally use the Battle.net app's graphics mode. Choose one here to give this game its own (Battle.net's own window keeps its setting). Takes effect the next time the game starts; Battle.net can stay open.") {
+                    Picker("Graphics", selection: Binding(get: { BattleNetGraphics.choice(game) }, set: { p in
+                        do { try BattleNetGraphics.set(p, for: game, games: model.games); model.refresh() } catch { model.fail(error) }
+                    })) {
+                        Text("Same as Battle.net (\(h.custom?.graphics.title ?? "its setting"))").tag(GraphicsPreset?.none)
+                        ForEach(GraphicsPreset.allCases) { Text($0.title).tag(Optional($0)) }
+                    }.labelsHidden().frame(width: settingControlWidth)
+                }
+            }
+        }
     }
 }
 
