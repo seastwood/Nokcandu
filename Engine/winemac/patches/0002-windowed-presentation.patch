@@ -784,7 +784,7 @@ index 1d7b310..d8dfe61 100644
  
  @end
 diff --git a/dlls/winemac.drv/cocoa_window.m b/dlls/winemac.drv/cocoa_window.m
-index ce8b571..5ef11a8 100644
+index ce8b571..0d6574c 100644
 --- a/dlls/winemac.drv/cocoa_window.m
 +++ b/dlls/winemac.drv/cocoa_window.m
 @@ -372,6 +372,9 @@ @interface WineContentView : WineBaseView <NSTextInputClient, NSViewLayerContent
@@ -1696,7 +1696,7 @@ index ce8b571..5ef11a8 100644
          event = macdrv_create_event(WINDOW_DID_MINIMIZE, self);
          [queue postEvent:event];
          macdrv_release_event(event);
-@@ -3061,7 +3689,39 @@ - (void)windowDidResize:(NSNotification *)notification
+@@ -3061,7 +3689,60 @@ - (void)windowDidResize:(NSNotification *)notification
  
      - (BOOL)windowShouldClose:(id)sender
      {
@@ -1724,6 +1724,27 @@ index ce8b571..5ef11a8 100644
 +            [alert beginSheetModalForWindow:self completionHandler:^(NSModalResponse r){
 +                presentCloseAsking = FALSE;
 +                if (r != NSAlertFirstButtonReturn) return;
++                /* Steam's window belongs to its browser helper, which Steam restarts if it ends: quitting
++                   that window has to quit Steam itself (steam.exe -shutdown closes all of it cleanly). */
++                {
++                    NSArray<NSString*>* args = [[NSProcessInfo processInfo] arguments];
++                    NSString* prog = args.count > 1 ? args[1] : @"";
++                    NSRange cef = [prog rangeOfString:@"\\bin\\cef\\" options:NSCaseInsensitiveSearch];
++                    NSRange slash = [prog rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@"\\/"] options:NSBackwardsSearch];
++                    NSString* base = slash.location == NSNotFound ? prog : [prog substringFromIndex:slash.location + 1];
++                    if (cef.location != NSNotFound && [base caseInsensitiveCompare:@"steamwebhelper.exe"] == NSOrderedSame)
++                    {
++                        NSString* steam = [[prog substringToIndex:cef.location] stringByAppendingString:@"\\steam.exe"];
++                        NSTask* task = [[[NSTask alloc] init] autorelease];
++                        task.executableURL = [NSURL fileURLWithPath:args[0]];
++                        task.arguments = @[steam, @"-shutdown"];
++                        if ([task launchAndReturnError:NULL])
++                        {
++                            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ _exit(0); });
++                            return;
++                        }
++                    }
++                }
 +                macdrv_event* close = macdrv_create_event(WINDOW_CLOSE_REQUESTED, self);
 +                [queue postEvent:close];
 +                macdrv_release_event(close);
@@ -1737,7 +1758,7 @@ index ce8b571..5ef11a8 100644
          [queue postEvent:event];
          macdrv_release_event(event);
          return NO;
-@@ -3069,6 +3729,12 @@ - (BOOL)windowShouldClose:(id)sender
+@@ -3069,6 +3750,12 @@ - (BOOL)windowShouldClose:(id)sender
  
      - (BOOL) windowShouldZoom:(NSWindow*)window toFrame:(NSRect)newFrame
      {
@@ -1750,7 +1771,7 @@ index ce8b571..5ef11a8 100644
          if (maximized)
          {
              macdrv_event* event = macdrv_create_event(WINDOW_RESTORE_REQUESTED, self);
-@@ -3120,13 +3786,17 @@ - (void) windowWillExitFullScreen:(NSNotification*)notification
+@@ -3120,13 +3807,17 @@ - (void) windowWillExitFullScreen:(NSNotification*)notification
  
      - (void)windowWillMiniaturize:(NSNotification *)notification
      {
@@ -1769,7 +1790,7 @@ index ce8b571..5ef11a8 100644
          {
              if (maximized)
                  return self.wine_fractionalFrame.size;
-@@ -3146,13 +3816,13 @@ - (NSSize) windowWillResize:(NSWindow*)sender toSize:(NSSize)frameSize
+@@ -3146,13 +3837,13 @@ - (NSSize) windowWillResize:(NSWindow*)sender toSize:(NSSize)frameSize
              query = macdrv_create_query();
              query->type = QUERY_RESIZE_SIZE;
              query->window = (macdrv_window)[self retain];
@@ -1785,7 +1806,7 @@ index ce8b571..5ef11a8 100644
                  rect = [self frameRectForContentRect:rect];
                  frameSize = rect.size;
              }
-@@ -3167,7 +3837,9 @@ - (void) windowWillStartLiveResize:(NSNotification *)notification
+@@ -3167,7 +3858,9 @@ - (void) windowWillStartLiveResize:(NSNotification *)notification
      {
          [self endWindowDragging];
  
@@ -1796,7 +1817,7 @@ index ce8b571..5ef11a8 100644
          {
              macdrv_event* event;
              NSRect frame = [self contentRectForFrameRect:self.frame];
-@@ -3176,7 +3848,7 @@ - (void) windowWillStartLiveResize:(NSNotification *)notification
+@@ -3176,7 +3869,7 @@ - (void) windowWillStartLiveResize:(NSNotification *)notification
  
              event = macdrv_create_event(WINDOW_RESTORE_REQUESTED, self);
              event->window_restore_requested.keep_frame = TRUE;
@@ -1805,7 +1826,7 @@ index ce8b571..5ef11a8 100644
              [queue postEvent:event];
              macdrv_release_event(event);
          }
-@@ -3193,6 +3865,19 @@ - (NSRect) windowWillUseStandardFrame:(NSWindow*)window defaultFrame:(NSRect)pro
+@@ -3193,6 +3886,19 @@ - (NSRect) windowWillUseStandardFrame:(NSWindow*)window defaultFrame:(NSRect)pro
          NSRect currentContentRect, proposedContentRect, newContentRect, screenRect;
          NSSize maxSize;
  
@@ -1825,7 +1846,7 @@ index ce8b571..5ef11a8 100644
          query = macdrv_create_query();
          query->type = QUERY_MIN_MAX_INFO;
          query->window = (macdrv_window)[self retain];
-@@ -3286,7 +3971,7 @@ - (NSDragOperation) draggingUpdated:(id <NSDraggingInfo>)sender
+@@ -3286,7 +3992,7 @@ - (NSDragOperation) draggingUpdated:(id <NSDraggingInfo>)sender
      {
          NSDragOperation ret;
          NSPoint pt = [[self contentView] convertPoint:[sender draggingLocation] fromView:nil];
@@ -1834,7 +1855,7 @@ index ce8b571..5ef11a8 100644
  
          macdrv_query* query = macdrv_create_query();
          query->type = QUERY_DRAG_DROP_DRAG;
-@@ -3306,7 +3991,7 @@ - (BOOL) performDragOperation:(id <NSDraggingInfo>)sender
+@@ -3306,7 +4012,7 @@ - (BOOL) performDragOperation:(id <NSDraggingInfo>)sender
      {
          BOOL ret;
          NSPoint pt = [[self contentView] convertPoint:[sender draggingLocation] fromView:nil];
@@ -1843,7 +1864,7 @@ index ce8b571..5ef11a8 100644
  
          macdrv_query* query = macdrv_create_query();
          query->type = QUERY_DRAG_DROP_DROP;
-@@ -3343,9 +4028,10 @@ macdrv_window macdrv_create_cocoa_window(const struct macdrv_window_features* wf
+@@ -3343,9 +4049,10 @@ macdrv_window macdrv_create_cocoa_window(const struct macdrv_window_features* wf
  
      OnMainThread(^{
          window = [[WineWindow createWindowWithFeatures:wf
@@ -1855,7 +1876,7 @@ index ce8b571..5ef11a8 100644
      });
  
      return (macdrv_window)window;
-@@ -3488,7 +4174,7 @@ void macdrv_set_cocoa_window_frame(macdrv_window w, const CGRect* new_frame)
+@@ -3488,7 +4195,7 @@ void macdrv_set_cocoa_window_frame(macdrv_window w, const CGRect* new_frame)
      WineWindow* window = (WineWindow*)w;
  
      OnMainThread(^{
@@ -1864,7 +1885,7 @@ index ce8b571..5ef11a8 100644
      });
  }
  
-@@ -3506,7 +4192,7 @@ void macdrv_get_cocoa_window_frame(macdrv_window w, CGRect* out_frame)
+@@ -3506,7 +4213,7 @@ void macdrv_get_cocoa_window_frame(macdrv_window w, CGRect* out_frame)
  
          frame = [window contentRectForFrameRect:[window wine_fractionalFrame]];
          [[WineApplicationController sharedController] flipRect:&frame];
@@ -1873,7 +1894,7 @@ index ce8b571..5ef11a8 100644
      });
  }
  
-@@ -3687,6 +4373,7 @@ macdrv_view macdrv_create_view(CGRect rect)
+@@ -3687,6 +4394,7 @@ macdrv_view macdrv_create_view(CGRect rect)
          NSNotificationCenter* nc = [NSNotificationCenter defaultCenter];
  
          view = [[WineContentView alloc] initWithFrame:NSRectFromCGRect(cgrect_mac_from_win(rect))];
@@ -1881,7 +1902,7 @@ index ce8b571..5ef11a8 100644
          [view setAutoresizingMask:NSViewNotSizable];
          [view setHidden:YES];
          [view setWantsBestResolutionOpenGLSurface:retina_on];
-@@ -3747,6 +4434,15 @@ void macdrv_set_view_frame(macdrv_view v, CGRect rect)
+@@ -3747,6 +4455,15 @@ void macdrv_set_view_frame(macdrv_view v, CGRect rect)
          NSRect newFrame = NSRectFromCGRect(cgrect_mac_from_win(rect));
          NSRect oldFrame = [view frame];
  
@@ -1897,7 +1918,7 @@ index ce8b571..5ef11a8 100644
          if (!NSEqualRects(oldFrame, newFrame))
          {
              [[view superview] setNeedsDisplayInRect:oldFrame];
-@@ -3758,7 +4454,7 @@ void macdrv_set_view_frame(macdrv_view v, CGRect rect)
+@@ -3758,7 +4475,7 @@ void macdrv_set_view_frame(macdrv_view v, CGRect rect)
                  [view setFrame:newFrame];
              [view setNeedsDisplay:YES];
  
@@ -1906,7 +1927,7 @@ index ce8b571..5ef11a8 100644
              {
                  int backing_size[2] = { 0 };
                  [view wine_setBackingSize:backing_size];
-@@ -3919,7 +4615,7 @@ macdrv_metal_layer macdrv_view_get_metal_layer(macdrv_metal_view v)
+@@ -3919,7 +4636,7 @@ macdrv_metal_layer macdrv_view_get_metal_layer(macdrv_metal_view v)
      __block CAMetalLayer* layer;
  
      OnMainThread(^{
@@ -1915,7 +1936,7 @@ index ce8b571..5ef11a8 100644
      });
  
      return (macdrv_metal_layer)layer;
-@@ -4057,3 +4753,23 @@ void macdrv_clear_ime_text(void)
+@@ -4057,3 +4774,23 @@ void macdrv_clear_ime_text(void)
              [[window contentView] clearMarkedText];
      });
  }

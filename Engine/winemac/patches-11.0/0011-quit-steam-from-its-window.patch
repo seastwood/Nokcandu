@@ -1,0 +1,31 @@
+diff -ru /tmp/s11/series-winemac/cocoa_window.m dlls/winemac.drv/cocoa_window.m
+--- a/dlls/winemac.drv/cocoa_window.m	2026-10-30 19:13:03
++++ b/dlls/winemac.drv/cocoa_window.m	2026-10-30 19:13:38
+@@ -4041,6 +4041,27 @@
+             [alert beginSheetModalForWindow:self completionHandler:^(NSModalResponse r){
+                 presentCloseAsking = FALSE;
+                 if (r != NSAlertFirstButtonReturn) return;
++                /* Steam's window belongs to its browser helper, which Steam restarts if it ends: quitting
++                   that window has to quit Steam itself (steam.exe -shutdown closes all of it cleanly). */
++                {
++                    NSArray<NSString*>* args = [[NSProcessInfo processInfo] arguments];
++                    NSString* prog = args.count > 1 ? args[1] : @"";
++                    NSRange cef = [prog rangeOfString:@"\\bin\\cef\\" options:NSCaseInsensitiveSearch];
++                    NSRange slash = [prog rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@"\\/"] options:NSBackwardsSearch];
++                    NSString* base = slash.location == NSNotFound ? prog : [prog substringFromIndex:slash.location + 1];
++                    if (cef.location != NSNotFound && [base caseInsensitiveCompare:@"steamwebhelper.exe"] == NSOrderedSame)
++                    {
++                        NSString* steam = [[prog substringToIndex:cef.location] stringByAppendingString:@"\\steam.exe"];
++                        NSTask* task = [[[NSTask alloc] init] autorelease];
++                        task.executableURL = [NSURL fileURLWithPath:args[0]];
++                        task.arguments = @[steam, @"-shutdown"];
++                        if ([task launchAndReturnError:NULL])
++                        {
++                            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ _exit(0); });
++                            return;
++                        }
++                    }
++                }
+                 macdrv_event* close = macdrv_create_event(WINDOW_CLOSE_REQUESTED, self);
+                 [queue postEvent:close];
+                 macdrv_release_event(close);
