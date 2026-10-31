@@ -1034,6 +1034,51 @@ static void run_from_game_app_as(bool background) {
 
 #include "browser-renderer.h"
 
+// Wine 11: ntdll re-execs the engine's real loader (…/lib/wine/x86_64-unix/wine). Send that exec to the game's
+// wrapper, whose Contents/MacOS/<Name> is a copy of the real loader (GameApp.swift), so the game runs from an app
+// bundle: its own name in the Dock, its icon, and Game Mode.
+static const char *wine11_wrapper_for(const char *path, char *const argv[], char *out, size_t outsize) {
+    if (!getenv("SikarugirAppWine11") || getenv("NOKCANDU_NO_GAME_APP") || !path || !argv || !argv[0] || !argv[1]) return NULL;
+    if (!strstr(path, "/x86_64-unix/wine") || strstr(path, "/GameApp/")) return NULL;
+    const char *slash = strrchr(path, '/');
+    if (!slash || strcmp(slash + 1, "wine")) return NULL;
+    if (argv[1][0] == '-' || nokcandu_background_program(argv[1])) return NULL;
+    const char *prog = argv[1];
+    for (const char *q = argv[1]; *q; q++) if (*q == '\\' || *q == '/') prog = q + 1;
+    Dl_info info;
+    if (!dladdr((const void *)wine11_wrapper_for, &info) || !info.dli_fname) return NULL;
+    char me[PATH_MAX], dir[PATH_MAX], list[PATH_MAX], line[1024], wrapper[NAME_MAX + 1] = "", fallback[NAME_MAX + 1] = "";
+    strlcpy(me, info.dli_fname, sizeof me);
+    snprintf(dir, sizeof dir, "%s/../GameApp", dirname(me));
+    snprintf(list, sizeof list, "%s/programs.tsv", dir);
+    FILE *f = fopen(list, "r");
+    if (!f) return NULL;
+    while (fgets(line, sizeof line, f)) {
+        line[strcspn(line, "\r\n")] = 0;
+        char *tab = strchr(line, '\t');
+        if (!tab || !tab[1]) continue;
+        *tab = 0;
+        if (strcmp(line, "*") == 0) strlcpy(fallback, tab + 1, sizeof fallback);
+        else if (line[0] != '#' && strcasecmp(line, prog) == 0) strlcpy(wrapper, tab + 1, sizeof wrapper);
+    }
+    fclose(f);
+    if (!wrapper[0]) strlcpy(wrapper, fallback, sizeof wrapper);
+    if (!wrapper[0] || strchr(wrapper, '/')) return NULL;
+    snprintf(out, outsize, "%s/%s/Contents/MacOS/wine", dir, wrapper);
+    if (access(out, X_OK) != 0) return NULL;
+    return out;
+}
+static int my_execv(const char *path, char *const argv[]) {
+    char target[PATH_MAX];
+    const char *t = wine11_wrapper_for(path, argv, target, sizeof target);
+    if (t) {
+        execv(t, argv);                       // only returns on failure: carry on with the engine's loader
+    }
+    return execv(path, argv);
+}
+__attribute__((used)) static const struct { const void *replacement, *original; } wine11_exec_interpose[]
+    __attribute__((section("__DATA,__interpose"))) = { { (const void *)my_execv, (const void *)execv } };
+
 __attribute__((constructor)) static void start(void) {
     int argc = *_NSGetArgc(); char **argv = *_NSGetArgv();
     if (argc > 1 && nokcandu_configure_browser_renderer(argv[1]))

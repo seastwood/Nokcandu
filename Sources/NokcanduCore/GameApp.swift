@@ -91,14 +91,18 @@ public enum GameApp {
         guard enabled else { removeAll(host: h); return }
         // Wine 11 engines can't start from a wrapper while the helper library is loaded (Windows' shared user
         // data can't be mapped and the game quits at once), so those games run as plain wine.
-        if let v = WindowedPresentation.engineVersion(host: h), v.major >= 11 { removeAll(host: h); return }
+        // Wine 11: ntdll re-execs the engine's real loader (lib/wine/x86_64-unix/wine), so that's the program macOS
+        // sees. The wrapper holds a copy of it instead (with ntdll.so beside it), and the helper library sends that
+        // re-exec to the wrapper's copy — the game then runs from inside an app bundle (name, icon, Game Mode).
+        let modern = (WindowedPresentation.engineVersion(host: h)?.major ?? 10) >= 11
+        let loaderSource = modern ? support.appendingPathComponent("wine/lib/wine/x86_64-unix/wine") : wine
         guard fm.isExecutableFile(atPath: wine.path), let engine = engineStamp(wine) else { return }
         let dir = support.appendingPathComponent(folderName, isDirectory: true)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         var seen = Set<String>(), keep = Set<String>()
         for w in wrappers where seen.insert(safeName(w.name)).inserted {
             keep.insert(safeName(w.name) + ".app")
-            ensureOne(dir: dir, wine: wine, name: w.name, iconFrom: w.iconFrom, isGame: w.isGame)
+            ensureOne(dir: dir, wine: loaderSource, name: w.name, iconFrom: w.iconFrom, isGame: w.isGame, realLoader: modern)
         }
         for u in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
             where u.pathExtension == "app" && !keep.contains(u.lastPathComponent) { remove(u) }
@@ -110,7 +114,7 @@ public enum GameApp {
         if (try? String(contentsOf: list, encoding: .utf8)) != text { try? Data(text.utf8).write(to: list, options: .atomic) }
     }
 
-    static func ensureOne(dir: URL, wine: URL, name: String, iconFrom: URL?, isGame: Bool) {
+    static func ensureOne(dir: URL, wine: URL, name: String, iconFrom: URL?, isGame: Bool, realLoader: Bool = false) {
         let fm = FileManager.default
         let app = dir.appendingPathComponent(safeName(name) + ".app", isDirectory: true)
         let c = app.appendingPathComponent("Contents", isDirectory: true)
@@ -136,12 +140,14 @@ public enum GameApp {
         }
         // A loader left over from an earlier name of this wrapper.
         for f in (try? fm.contentsOfDirectory(atPath: c.appendingPathComponent("MacOS").path)) ?? []
-            where ![exeName, "wine", "wineserver"].contains(f) {
+            where ![exeName, "wine", "wineserver", "ntdll.so"].contains(f) {
             try? fm.removeItem(at: c.appendingPathComponent("MacOS/\(f)")); changed = true
         }
         // Paths Wine looks for next to its loader (the server, its libraries and data).
-        let links = [("MacOS/wineserver", "../../../../wine/bin/wineserver"), ("lib", "../../../wine/lib"),
+        var links = [("MacOS/wineserver", "../../../../wine/bin/wineserver"), ("lib", "../../../wine/lib"),
                      ("share", "../../../wine/share"), ("bin", "MacOS")]
+        // The real loader loads ntdll.so from its own folder.
+        if realLoader { links.append(("MacOS/ntdll.so", "../../../../wine/lib/wine/x86_64-unix/ntdll.so")) }
         for (path, target) in links {
             let u = c.appendingPathComponent(path)
             if (try? fm.destinationOfSymbolicLink(atPath: u.path)) != target {
