@@ -179,7 +179,10 @@ public enum SharedSteam {
          if ! running; then echo stopped
          else
           CURRENT="$(cat "$STATE/running-mode" 2>/dev/null || true)"
-          if [ "$CURRENT" != "$MODE" ]; then echo "mode $CURRENT"
+          # Each game's own graphics mode is applied as Steam starts it (program-renderers.tsv), so a different
+          # mode doesn't need a restart when the helper library is there.
+          if [ "$CURRENT" != "$MODE" ] && [ -f "$STATE/nokcandu-rawmouse.dylib" ]; then echo same
+          elif [ "$CURRENT" != "$MODE" ]; then echo "mode $CURRENT"
           elif [ "$(cat "$STATE/running-config" 2>/dev/null || true)" != "$(config_id)" ]; then echo changed
           else echo same; fi
          fi
@@ -197,7 +200,7 @@ public enum SharedSteam {
          fi
          # Opening Steam itself while it runs for a game: you're using Steam now, so it stays open.
          [ -z "$APP" ] && [ -z "$URL" ] && rm -f "$STATE/started-for-game"
-         if [ "$CURRENT" = "$MODE" ] || [ -z "$APP" ]; then
+         if [ "$CURRENT" = "$MODE" ] || [ -z "$APP" ] || { [ "$CURRENT" != changed ] && [ -f "$STATE/nokcandu-rawmouse.dylib" ]; }; then
           # Hand the request to the Steam that's already running.
           # (with no request this just brings the running Steam's window forward)
           "$WINE" "$STEAM_EXE" ${PASS[@]+"${PASS[@]}"} >/dev/null 2>&1 &

@@ -40,9 +40,27 @@ static bool nokcandu_configure_browser_renderer(const char *path) {
     return true;
 }
 
-// Battle.net games inherit Battle.net's renderer. program-renderers.tsv (in the Battle.net app's state folder,
-// beside this library) maps a game's program to its own renderer: "<Program.exe>\tKEY=VALUE\t…". The
-// renderer search paths are reset first so only the chosen renderer remains.
+// Games started by a launcher (Battle.net, Steam) inherit the launcher's renderer. program-renderers.tsv (in the
+// launcher app's state folder, beside this library) maps a game to its own settings: "<Program.exe>\tKEY=VALUE…"
+// or "steam:<app id>\t…" (Steam sets SteamAppId for its games). The renderer search paths are reset first so
+// only the chosen renderer remains. NOKCANDU_VIRTUAL_SCREEN=WxH switches the shared virtual screen to the
+// game's size, the same way a live resolution change from Nokcandu does.
+__attribute__((unused)) static void nokcandu_set_virtual_screen(const char *size) {
+    const char *prefix = getenv("WINEPREFIX");
+    int w = 0, h = 0;
+    if (!prefix || sscanf(size, "%dx%d", &w, &h) != 2 || w < 320 || h < 200) return;
+    char lock[4096], path[4096], tmp[4200];
+    snprintf(path, sizeof path, "%s/.nokcandu-virtual-display", prefix);
+    snprintf(lock, sizeof lock, "%s.lock", path);
+    if (access(lock, F_OK)) return;                  // the virtual screen isn't used in this prefix
+    snprintf(tmp, sizeof tmp, "%s.%d", path, (int)getpid());
+    FILE *f = fopen(tmp, "w");
+    if (!f) return;
+    fprintf(f, "%dx%d\n", w, h);
+    fclose(f);
+    rename(tmp, path);
+}
+
 __attribute__((unused)) static bool nokcandu_configure_program_renderer(const char *path, const char *state_dir) {
     if (!path || !*path || !state_dir || !*state_dir) return false;
     const char *name = path;
@@ -56,7 +74,11 @@ __attribute__((unused)) static bool nokcandu_configure_program_renderer(const ch
     while (!done && fgets(line, sizeof line, f)) {
         line[strcspn(line, "\r\n")] = 0;
         char *save = NULL, *field = strtok_r(line, "\t", &save);
-        if (!field || strcasecmp(field, name)) continue;
+        if (!field) continue;
+        if (!strncmp(field, "steam:", 6)) {
+            const char *id = getenv("SteamAppId");
+            if (!id || strcmp(id, field + 6)) continue;
+        } else if (strcasecmp(field, name)) continue;
         static const char *renderers[] = { "WINEDLLPATH_D9VK", "WINEDLLPATH_DXVK", "WINEDLLPATH_D3DMETAL", "WINEDLLPATH_DXMT", "WINEDLLPATH_CNCD" };
         for (size_t i = 0; i < sizeof renderers / sizeof *renderers; i++) unsetenv(renderers[i]);
         unsetenv("WINEDLLOVERRIDES");
@@ -64,7 +86,8 @@ __attribute__((unused)) static bool nokcandu_configure_program_renderer(const ch
             char *eq = strchr(field, '=');
             if (!eq || eq == field) continue;
             *eq = 0;
-            setenv(field, eq + 1, 1);
+            if (!strcmp(field, "NOKCANDU_VIRTUAL_SCREEN")) nokcandu_set_virtual_screen(eq + 1);
+            else setenv(field, eq + 1, 1);
         }
         done = true;
     }

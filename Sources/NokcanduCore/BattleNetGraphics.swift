@@ -33,18 +33,45 @@ public enum BattleNetGraphics {
         return name.flatMap { $0.split(separator: ",").first.map(String.init) }     // "D2R.exe,0" icon index
     }
 
-    /// Rewrites the Battle.net app's program → renderer list from its games' choices.
+    /// Rewrites the Battle.net app's program list from its games' choices (graphics and virtual screen size).
     public static func writeMap(host h: InstalledGame, games: [InstalledGame]) throws {
-        let support = h.contents.appendingPathComponent("SharedSupport").path, contents = h.contents.path
-        var lines: [String] = []
         for g in games where g.battleNet?.hostApp == h.appURL.path {
-            guard let p = choice(g), let exe = program(g, host: h) else { continue }
-            let env = p.programEnvironment(support: support, contents: contents)
-            lines.append(([exe] + env.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }).joined(separator: "\t"))
+            guard let exe = program(g, host: h) else { continue }
+            try ProgramSettings.update(launcher: h.contents, key: exe, graphics: choice(g), game: g)
         }
-        let f = h.contents.appendingPathComponent("SharedSupport/nokcandu/\(mapName)")
+    }
+}
+
+/// program-renderers.tsv in a launcher app (Battle.net, Steam): each game's own graphics mode and virtual screen
+/// size, applied by the helper library as the launcher starts the game — no launcher restart to switch games.
+public enum ProgramSettings {
+    static func file(_ launcher: URL) -> URL { launcher.appendingPathComponent("SharedSupport/nokcandu/program-renderers.tsv") }
+
+    public static func update(launcher: URL, key: String, graphics: GraphicsPreset?, game: InstalledGame) throws {
+        let support = launcher.appendingPathComponent("SharedSupport").path
+        var fields: [String] = []
+        if let p = graphics {
+            fields += p.programEnvironment(support: support, contents: launcher.path).sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }
+        }
+        if let size = WindowedPresentation.setting(for: game), size != WindowedPresentation.automatic, size.count == 2 {
+            fields.append("NOKCANDU_VIRTUAL_SCREEN=\(size[0])x\(size[1])")
+        }
+        let f = file(launcher)
+        var lines = ((try? String(contentsOf: f, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
+            .filter { $0.split(separator: "\t").first.map(String.init)?.lowercased() != key.lowercased() }
+        if !fields.isEmpty { lines.append(([key] + fields).joined(separator: "\t")) }
         if lines.isEmpty { try? FileManager.default.removeItem(at: f); return }
+        try FileManager.default.createDirectory(at: f.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: f, options: .atomic)
+    }
+
+    /// Before a game starts (or its settings change): its line in its launcher's list.
+    public static func refresh(_ g: InstalledGame, games: [InstalledGame]) {
+        if g.battleNet != nil, let h = BattleNetGraphics.host(of: g, in: games) {
+            try? BattleNetGraphics.writeMap(host: h, games: games)
+        } else if g.usesSharedSteam, let c = g.custom, let id = c.steamAppID {
+            try? update(launcher: SharedSteam.appURL.appendingPathComponent("Contents"), key: "steam:\(id)", graphics: c.graphics, game: g)
+        }
     }
 }
 

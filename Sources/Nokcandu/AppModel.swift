@@ -292,6 +292,7 @@ final class AppModel: ObservableObject {
                 // A Steam game added before its download finished: pick its graphics mode now.
                 if SharedSteam.refreshDetection(g) { await MainActor.run { self.refresh() } }
                 if DisplayController.supports(g) { DisplayController.prepareForLaunch(g) }
+                ProgramSettings.refresh(g, games: await MainActor.run { self.games })
                 do { try await WindowedPresentation.prepareForLaunch(g) }
                 catch {
                     // Never in the way of playing: the game starts on the Mac's screen, and says why.

@@ -891,6 +891,7 @@ struct ResizableWindowSection: View {
         Task {
             do {
                 let live = try await WindowedPresentation.save(new, for: g)
+                ProgramSettings.refresh(GameLibrary.inspect(g.appURL) ?? g, games: model.games)
                 if live { status = new == WindowedPresentation.automatic ? "Automatic — the running game keeps its resolution until it picks another." : "Switched the running game to \(WindowedPresentation.title(new!))." }
                 else if await WineTools.environmentIsRunning(for: g) { status = "Takes effect the next time the game starts." }
                 else { status = "" }
