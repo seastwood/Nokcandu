@@ -91,6 +91,15 @@ jobs:
           NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
           NOKCANDU_REQUIRE_WINEMAC: '1'
         run: ./make-dmg.sh
+      - name: Upload test DMG
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nokcandu-test-build
+          path: |
+            build/*.dmg
+            build/*.dmg.sha256
+          if-no-files-found: error
       - name: Publish release
         if: github.event_name == 'push'
         env:
