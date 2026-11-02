@@ -1,0 +1,11 @@
+--- a/scripts/profiles.py
++++ b/scripts/profiles.py
+@@ -16,7 +16,7 @@
+ SOURCES = {"steam", "battlenet", "installer", "disc", "folder"}
+ GRAPHICS = {"dx9", "dx11", "d3dmetal", "dxmt", "ddraw", "wined3d"}
+ RATINGS = {"works", "playable", "broken"}
+-FIXES = {"cinematic", "d3d8to9", "directx9-extras", "borderless", "cursor-visibility", "openua-display", "bundled-vc-runtime", "cross-process-windows", "shader-compiler-47"}
++FIXES = {"borderless", "bundled-vc-runtime", "cinematic", "cross-process-windows", "cursor-visibility", "d3d8to9", "directx9-extras", "ipx-networking", "openua-display", "shader-compiler-47", "ubisoft-browser"}
+ BANNED = {"PATH", "HOME", "SHELL", "TMPDIR", "WINEPREFIX", "WINESERVER", "WINELOADER", "WINEARCH", "VK_DRIVER_FILES"}
+ BANNED_PARTS = ["DYLD_", "LD_", "NOKCANDU", "WINEDLLPATH", "PRELOAD", "ICD", "VK_LAYER", "VK_ADD_"]
+ APP = "{app}"

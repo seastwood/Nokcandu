@@ -30,14 +30,20 @@ public enum NokPaths {
     public static var downloads: URL { support.appendingPathComponent("Downloads", isDirectory: true) }
 
     /// Helper files shipped inside Nokcandu.app/Contents/Resources (python helpers, screen-size tool).
-    public static func bundledResource(_ name: String) -> URL? {
+    public static func bundledResource(_ name: String, executable: Bool = false) -> URL? {
         let candidates = [
             Bundle.main.resourceURL?.appendingPathComponent(name),
             Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent(name),
             // `swift run` during development: Resources/ next to the package.
             URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("Resources/\(name)"),
         ].compactMap { $0 }
-        return candidates.first { FileManager.default.fileExists(atPath: $0.path) }
+        let developmentTool = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("build/Nokcandu.app/Contents/Resources/\(name)")
+        return (candidates + (executable ? [developmentTool] : [])).first {
+            var directory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: $0.path, isDirectory: &directory) else { return false }
+            return !executable || (!directory.boolValue && FileManager.default.isExecutableFile(atPath: $0.path))
+        }
     }
 
     public static func ensure(_ url: URL) throws {

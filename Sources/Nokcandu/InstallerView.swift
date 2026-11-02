@@ -129,6 +129,18 @@ final class InstallerModel: ObservableObject {
 
     func cancel() { cancelling = true; task?.cancel() }
 
+    func clearFinishedSession() {
+        guard !running, executor?.isComplete == true else { return }
+        resetSession()
+    }
+
+    /// Used only after completion or explicit removal, never on a running window close.
+    func resetSession() {
+        guard !running else { return }
+        executor = nil; task = nil; exeCandidates = []; log = ""; workProgress = nil
+        saved = Self.unfinished()
+    }
+
     func setInput(_ k: String, _ v: String) { executor?.setInput(k, v); tick += 1 }
 }
 
@@ -141,7 +153,7 @@ struct InstallerView: View {
     }
     @EnvironmentObject var app: AppModel
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var m = InstallerModel()
+    @ObservedObject var m: InstallerModel
     @State private var steamUser = ""
     @State private var steamAppID = ""
     @State private var newName = ""
@@ -155,6 +167,8 @@ struct InstallerView: View {
             HStack {
                 Text(m.executor == nil ? "Add a Game" : "Install \(m.executor!.displayName)").font(.title2.bold())
                 Spacer()
+                Text("Use your library while this window is open.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Text("Preview").font(.caption.bold()).padding(.horizontal, 8).padding(.vertical, 3)
                     .background(.orange.opacity(0.2), in: Capsule())
             }
@@ -173,7 +187,10 @@ struct InstallerView: View {
             }
         } message: { Text("Moves the half-built app (only if this install created it) to the Trash and forgets its progress. Other games aren't touched.") }
         .onAppear {
-            if app.installerStartsSteamHost && m.executor == nil { m.startSteamHost(library: app.games) }
+            if app.installerStartsSteamHost && m.executor == nil {
+                app.installerStartsSteamHost = false
+                m.startSteamHost(library: app.games)
+            }
             if let p = app.pendingLauncherSetup, m.executor == nil {
                 app.pendingLauncherSetup = nil
                 if let k = p { m.startLauncher(k, library: app.games) } else { m.startBattleNet(library: app.games) }
@@ -183,6 +200,12 @@ struct InstallerView: View {
                 m.startCustom(name: p.name, source: .store, library: app.games, folder: p.folder, inputs: p.inputs)
                 if m.executor != nil { m.continueInstall() }
             }
+        }
+        .onDisappear {
+            // The app retains unfinished work, including tasks still downloading/copying.
+            // Only a completed session returns to the chooser on the next opening.
+            app.refresh()
+            m.clearFinishedSession()
         }
     }
 
@@ -470,6 +493,10 @@ struct InstallerView: View {
                 }
             }
         case (true, "acquire"):
+            if let directory = InstallerDestination.preferredDirectory(in: ex.ctx) {
+                Text("Install to \(directory) to put the files directly on your chosen drive. A different folder may need an extra move afterward.")
+                    .font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+            }
             customAcquire(ex)
         case (true, "exe"):
             exePicker(ex)
@@ -608,7 +635,8 @@ struct InstallerView: View {
                     .disabled(m.running || ex.isComplete)
                     .confirmationDialog("Remove this unfinished install?", isPresented: $confirmRemove) {
                         Button("Move to Trash", role: .destructive) {
-                            m.append(ex.removeUnfinishedInstall())
+                            app.say(ex.removeUnfinishedInstall())
+                            m.resetSession()
                             app.refresh()
                         }
                     } message: { Text("Moves the new app (only if this install created it) to the Trash and undoes its setting changes. Existing games aren't touched.") }
@@ -620,7 +648,10 @@ struct InstallerView: View {
             } else if let ex = m.executor, !ex.isComplete {
                 Button("Continue") { m.continueInstall() }.keyboardShortcut(.defaultAction)
             }
-            Button("Close") { app.refresh(); dismiss() }.disabled(m.running)
+            Button(m.executor != nil && m.executor?.isComplete != true ? "Back to Library" : "Close") {
+                app.refresh(); dismiss()
+            }
+            .help("You can use other games while installation continues. Return using Installation in the library.")
         }
         .padding()
     }
@@ -674,6 +705,9 @@ struct GraphicsPicker: View {
     let game: InstalledGame
     var onChange: () -> Void = {}
     @State private var current: GraphicsPreset
+    @State private var detected: GraphicsPreset?
+    @State private var detectionNote: String?
+    @State private var detecting = false
 
     init(game: InstalledGame, onChange: @escaping () -> Void = {}) {
         self.game = game
@@ -694,6 +728,16 @@ struct GraphicsPicker: View {
                 }
                 .labelsHidden().frame(width: settingControlWidth)
             }
+            if !isGameLauncher {
+                HStack {
+                    Button(detecting ? "Checking…" : "Check graphics requirements") { checkGraphics() }
+                        .disabled(detecting)
+                    if let detected, detected != current {
+                        Button("Use \(detected.title)") { apply(detected) }
+                    }
+                }
+                if let detectionNote { Text(detectionNote).font(.caption).foregroundStyle(.secondary) }
+            }
             if current == .appleMetal, game.custom?.is64Bit == false, !isGameLauncher {
                 SettingNote("This game is 32-bit; Apple Metal only works with 64-bit games.", warning: true)
             }
@@ -704,6 +748,30 @@ struct GraphicsPicker: View {
     var isGameLauncher: Bool {
         let exe = (game.custom?.exe ?? "").lowercased()
         return ["battle.net", "ubisoft", "upc.exe", "eadesktop", "origin.exe", "epicgameslauncher", "galaxyclient"].contains { exe.contains($0) }
+    }
+
+    /// Review-only migration for older installs: no historical flag distinguishes an automatic
+    /// choice from a player's choice. Apply only through the normal journaled settings path.
+    func checkGraphics() {
+        detecting = true
+        let g = game
+        Task {
+            let pe = await Task.detached(priority: .utility) { () -> PEInfo? in
+                if g.usesSharedSteam, let id = g.custom?.steamAppID,
+                   let lib = SharedSteam.installedGames().first(where: { $0.appID == id }),
+                   let folder = lib.folder, let exe = SharedSteam.mainExecutable(in: folder, gameName: lib.name) {
+                    return PEFile.inspectForGraphics(exe)
+                }
+                guard let path = g.custom?.exe, let rel = CustomGames.driveCRelative(windowsPath: path) else { return nil }
+                return PEFile.inspectForGraphics(g.prefix.appendingPathComponent("drive_c/" + rel))
+            }.value
+            let apis = (pe?.imports ?? []).filter {
+                ["d3d8.dll", "d3d9.dll", "d3d10.dll", "d3d10_1.dll", "d3d11.dll", "d3d12.dll", "dxgi.dll", "ddraw.dll", "opengl32.dll"].contains($0.lowercased())
+            }
+            detected = apis.isEmpty ? nil : GraphicsPreset.suggest(for: pe)
+            detectionNote = apis.isEmpty ? "No graphics API detected. Keep your tested mode or choose one to try." : "Detected in the program or local game files: " + Set(apis).sorted().joined(separator: ", ") + ". Your setting stays unchanged until you choose a mode."
+            detecting = false
+        }
     }
 
     func apply(_ p: GraphicsPreset) {
@@ -825,5 +893,21 @@ enum GameFolderLabel {
         let filesOnly = GameFolders.holdsApps(f) ? "" : " (game files only)"
         if f.path.hasPrefix("/Volumes/") { return "\(GameFolders.volumeName(f)): \(f.lastPathComponent)\(filesOnly)" }
         return path + filesOnly
+    }
+}
+
+
+/// Observes the session directly so the library gets a return path as soon as setup starts.
+struct InstallationShortcut: View {
+    @ObservedObject var m: InstallerModel
+    var open: () -> Void
+    var body: some View {
+        if let ex = m.executor {
+            Button(action: open) {
+                Label("Installation: \(ex.displayName)…", systemImage: "arrow.down.circle")
+                    .lineLimit(2)
+            }
+            .help(m.running ? "Installation is continuing. Open its progress window." : "Return to the installation's next step.")
+        }
     }
 }

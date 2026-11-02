@@ -84,12 +84,20 @@ jobs:
           for V in $(cat Engine/winemac/SUPPORTED_WINE); do
             strings build/winemac-$V/x86_64-unix/winemac.so | grep -q nokcandu-virtual-display
           done
+      - name: Build native IPX packet module
+        run: |
+          # Source tools are prepared by the driver build; a restored driver cache may omit them.
+          WINE_VERSION=11.0 bash Engine/winemac/build.sh
+          WINE_VERSION=11.0 bash Engine/wpcap/build.sh
+          python3 Tools/native-ipx/check-patches.py 11.0
+          bash Engine/wpcap/package-source.sh
       - name: Build, test and package
         env:
           NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
           NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
           NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
           NOKCANDU_REQUIRE_WINEMAC: '1'
+          NOKCANDU_REQUIRE_NATIVE_IPX: '1'
         run: ./make-dmg.sh
       - name: Upload test DMG
         if: github.event_name == 'workflow_dispatch'
@@ -99,6 +107,8 @@ jobs:
           path: |
             build/*.dmg
             build/*.dmg.sha256
+            build/Nokcandu-native-ipx-source-*.tar.gz
+            build/Nokcandu-native-ipx-source-*.tar.gz.sha256
           if-no-files-found: error
       - name: Publish release
         if: github.event_name == 'push'
@@ -108,5 +118,5 @@ jobs:
           V="$(tr -d '[:space:]' < VERSION)"
           NOTES="release-notes/v$V.md"
           [ -f "$NOTES" ] || NOTES=/dev/null
-          gh release create "${GITHUB_REF_NAME}" "build/Nokcandu-$V.dmg" "build/Nokcandu-$V.dmg.sha256" \
+          gh release create "${GITHUB_REF_NAME}" "build/Nokcandu-$V.dmg" "build/Nokcandu-$V.dmg.sha256" "build/Nokcandu-native-ipx-source-$V.tar.gz" "build/Nokcandu-native-ipx-source-$V.tar.gz.sha256" \
             --title "Nokcandu $V" --notes-file "$NOTES" --verify-tag

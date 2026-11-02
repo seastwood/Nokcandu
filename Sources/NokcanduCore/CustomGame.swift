@@ -128,14 +128,15 @@ public enum GraphicsPreset: String, Codable, CaseIterable, Identifiable, Sendabl
 
     /// Suggest a mode from what the game's .exe imports.
     public static func suggest(for info: PEInfo?) -> GraphicsPreset {
-        guard let info else { return .classic3D }
+        guard let info else { return .compatible }
         let i = Set(info.imports.map { $0.lowercased() })
         if i.contains("d3d12.dll") { return info.is64Bit ? .appleMetal : .modern3D }
         if i.contains("d3d11.dll") || i.contains("d3d10.dll") || i.contains("d3d10_1.dll") || i.contains("dxgi.dll") { return .modern3D }
         if i.contains("d3d9.dll") || i.contains("d3d8.dll") { return .classic3D }
         if i.contains("ddraw.dll") { return .classic2D }
         if i.contains("opengl32.dll") { return .compatible }
-        return .classic3D
+        // Absence of evidence does not identify an older DirectX game.
+        return .compatible
     }
 }
 
@@ -439,6 +440,7 @@ public enum CustomGames {
                 s += "export \(k)=\(shellQuote(value))\n"
             }
         }
+        if c.environment?[NativeIPXNetworking.flag] == "1" { s += NativeIPXNetworking.launcherExports }
         s += EAAppInstaller.gameRendererExports(c)
         s += """
         GAME_DIR="$WINEPREFIX/drive_c/"\(shellQuote(dirRel))
@@ -519,7 +521,7 @@ public enum CustomGames {
             s += "export NOKCANDU_BORDERLESS_RESTART_TARGET=\(shellQuote(restart))\n"
             s += #"[ -f "$GAME_DIR/BF1942-Nokcandu.exe" ] || { echo 'Nokcandu: BF1942 display copy is missing. Undo or reapply its display fix.'; exit 1; }"# + "\n"
             s += #"BF_SOURCE_SHA=$(/usr/bin/shasum -a 256 "$GAME_DIR/BF1942.exe" | /usr/bin/awk '{print $1}')"# + "\n"
-            s += #"case "$BF_SOURCE_SHA" in \#(BF1942DisplayFix.originalSHA)|\#(BF1942DisplayFix.previousCorrectedSHA)|\#(BF1942DisplayFix.correctedSHA)) ;; *) echo 'Nokcandu: BF1942 changed since the menu fix. Undo its display settings before using this version.'; exit 1 ;; esac"# + "\n"
+            s += #"case "$BF_SOURCE_SHA" in \#(BF1942DisplayFix.originalSHA)|\#(BF1942DisplayFix.previousCorrectedSHA)|\#(BF1942DisplayFix.menuOnlySHA)|\#(BF1942DisplayFix.partialMasterSHA)|\#(BF1942DisplayFix.correctedSHA)) ;; *) echo 'Nokcandu: BF1942 changed since the menu fix. Undo its display settings before using this version.'; exit 1 ;; esac"# + "\n"
             s += #"BF_COPY_SHA=$(/usr/bin/shasum -a 256 "$GAME_DIR/BF1942-Nokcandu.exe" | /usr/bin/awk '{print $1}')"# + "\n"
             s += #"[ "$BF_COPY_SHA" = \#(shellQuote(BF1942DisplayFix.correctedSHA)) ] || { echo 'Nokcandu: BF1942 display copy changed. Restore it before launching.'; exit 1; }"# + "\n"
             s += #"BF_RESTART_SHA=$(/usr/bin/shasum -a 256 "$GAME_DIR/BF194N.exe" | /usr/bin/awk '{print $1}')"# + "\n"
@@ -532,6 +534,7 @@ public enum CustomGames {
         [ -x "$SUPPORT/wine/bin/wine" ]
         [ -f "$GAME_DIR/"\(shellQuote(exeName)) ]
         if [ "$CHECK_ONLY" = 1 ]; then printf 'Launcher check passed: game and engine are ready.\\n'; exit 0; fi
+        \(c.environment?[NativeIPXNetworking.flag] == "1" ? NativeIPXNetworking.launcherAccess : "")
         \(GameDisplay.launcherLines(c.displayPixels, tool: #""$SUPPORT/nokcandu/screen-size""#, log: #""$LOG_DIR/display.log""#,
                                      pattern: GameDisplay.watchPattern(exeName: c.bf1942MenuCopy == true ? BF1942DisplayFix.copyName : exeName)))cd "$GAME_DIR"
         STATUS=0
@@ -540,6 +543,7 @@ public enum CustomGames {
         \(c.borderless == true ? #"export NOKCANDU_BORDERLESS_TARGET="$GAME_EXE"; export NOKCANDU_BORDERLESS_DLL='C:\nokcandu\borderless\window.dll'; GAME_EXE='C:\nokcandu\borderless\launcher.exe'"# : "")
         \(exeName.lowercased() == "battle.net launcher.exe" || exeName.lowercased() == "battle.net.exe" ? BrowserRenderer.launcherBlock(exes: BrowserRenderer.battleNetExes) : "")
         "$SUPPORT/wine/bin/wine" "$GAME_EXE"\(args.isEmpty ? "" : " " + args)\(storeArgs) || STATUS=$?
+        \(c.environment?[NativeIPXNetworking.flag] == "1" ? #""$IPX_HELPER" --unregister "$IPX_SESSION_TOKEN" || true"# : "")
         echo "nokcandu: game exited with status $STATUS after ${SECONDS}s"
         exit $STATUS
 
@@ -555,6 +559,7 @@ public enum CustomGames {
         for g in games {
             guard let c = g.custom, let l = g.launcherURL, let sha = try? Hashing.sha256(file: l), sha == c.launcherSHA else { continue }
             if case .launcherRunning = GameLauncher.runState(of: g) { continue }
+            do { try BF1942DisplayFix.refreshMenuCopies(g) } catch { continue }
             if Hashing.sha256(data: Data(launcherScript(for: c).utf8)) != sha { try? save(c, to: g) }
         }
     }

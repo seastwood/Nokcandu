@@ -51,6 +51,8 @@ final class CustomGameTests: XCTestCase {
     }
 
     func testGraphicsSuggestion() {
+        XCTAssertEqual(GraphicsPreset.suggest(for: nil), .compatible)
+        XCTAssertEqual(GraphicsPreset.suggest(for: PEInfo(is64Bit: true, imports: ["kernel32.dll"])), .compatible)
         XCTAssertEqual(GraphicsPreset.suggest(for: PEInfo(is64Bit: false, imports: ["KERNEL32.dll", "d3d9.dll"])), .classic3D)
         XCTAssertEqual(GraphicsPreset.suggest(for: PEInfo(is64Bit: true, imports: ["D3D12.dll"])), .appleMetal)
         XCTAssertEqual(GraphicsPreset.suggest(for: PEInfo(is64Bit: false, imports: ["d3d11.dll"])), .modern3D)

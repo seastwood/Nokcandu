@@ -260,7 +260,9 @@ public enum CustomInstall {
             // This is a user handoff, not a wait for every program setup opens. Some installers
             // keep their launcher running indefinitely. Continue checks for installed programs;
             // choosing the actual program and the later self-check still validate the result.
-            let r = try await ctx.runWine(["start", "/unix", p], cwd: url.deletingLastPathComponent(), timeout: 60)
+            let args = InstallerDestination.arguments(for: url, in: ctx)
+            if args.count > 3 { ctx.log("The installer's destination is set to the prepared game folder on your chosen drive. You can review it in setup.") }
+            let r = try await ctx.runWine(args, cwd: url.deletingLastPathComponent(), timeout: 60)
             guard r.ok else {
                 ctx.state.inputs["acquire.opened"] = "0"
                 try ctx.saveState()
@@ -447,7 +449,7 @@ public enum CustomInstall {
             } else if let exe = ctx.input("exe"), let rel = CustomGames.driveCRelative(windowsPath: exe) {
                 probe = ctx.prefix.appendingPathComponent("drive_c/\(rel)")
             }
-            let pe = probe.flatMap(PEFile.inspectWithLoadedDLLs)
+            let pe = probe.flatMap(PEFile.inspectForGraphics)
             let preset: GraphicsPreset = ctx.input("launcherKind") == PCLauncher.ubisoft.rawValue ? .dxmt : GraphicsPreset.suggest(for: pe)
             ctx.state.inputs["graphics"] = preset.rawValue
             if let pe {
@@ -456,6 +458,9 @@ public enum CustomInstall {
                     .filter { ["d3d8.dll", "d3d9.dll", "d3d10.dll", "d3d11.dll", "d3d12.dll", "dxgi.dll", "ddraw.dll", "opengl32.dll", "vulkan-1.dll", "steam_api.dll", "steam_api64.dll"].contains($0) }
                     .joined(separator: ",")
                 if let probe { ctx.state.inputs["iconSource"] = probe.path }
+                if (ctx.state.inputs["apis"] ?? "").isEmpty {
+                    ctx.log("No graphics API detected. This is a provisional graphics mode; use Recommended setup or choose a mode after testing.")
+                }
                 ctx.log("\(probe?.lastPathComponent ?? "game"): \(pe.is64Bit ? "64" : "32")-bit; uses \(ctx.state.inputs["apis"] ?? "-") → \(preset.title)")
             }
             try ctx.saveState()

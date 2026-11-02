@@ -1,13 +1,17 @@
 import Foundation
 
 /// A built-in display recipe, never code or patch data supplied by a community profile.
-/// The original EXE is read-only. Only two independently observed full-file fingerprints are accepted.
+/// The original EXE is read-only. Accept only allowlisted source and generated-copy fingerprints.
 public enum BF1942DisplayFix {
     public static let copyName = "BF1942-Nokcandu.exe"
     static let restartCopyName = "BF194N.exe"
     static let previousCorrectedSHA = "3b8033a58197ee844f4c4238b0bb873d1fcc6ba0a0f918b4fb247c9ac1ee01f2"
     static let originalSHA = "3a3eab9af4ad711f9faf6a17d8e31a3bacbbace99fe8356a700e1071c143cd7f"
-    static let correctedSHA = "e3b58cc22cd5d638b3d915cf3527b2af700f98dc97e2d6b6373601f4c3204801"
+    static let menuOnlySHA = "e3b58cc22cd5d638b3d915cf3527b2af700f98dc97e2d6b6373601f4c3204801"
+    static let partialMasterSHA = "d6d283cd4982abfdd6b52950afae40b5bcaf1f287b81fe59d0cb11124082f975"
+    static let correctedSHA = "6496982e7a2b693bb6f0cce53cadbcabf6d362c6762448d03dd9b27282c6b51f"
+    static let supportedSourceSHAs = [originalSHA, previousCorrectedSHA, menuOnlySHA, partialMasterSHA, correctedSHA]
+    static let ownedCopySHAs = [previousCorrectedSHA, menuOnlySHA, partialMasterSHA, correctedSHA]
     public static let resolutions = [[800, 600], [1024, 768], [1280, 800], [1280, 960], [1440, 900], [1600, 900], [1920, 1080], [1920, 1200]]
     struct State: Codable {
         var width: Int
@@ -50,7 +54,7 @@ public enum BF1942DisplayFix {
     public static func menuUnavailable(for g: InstalledGame) -> String? {
         guard let root = folder(g) else { return "Choose a standalone BF1942 installation first." }
         let sha = try? Hashing.sha256(file: root.appendingPathComponent("BF1942.exe"))
-        guard sha == originalSHA || sha == previousCorrectedSHA || sha == correctedSHA else {
+        guard supportedSourceSHAs.contains(sha ?? "") else {
             return "This BF1942 executable isn't a verified version. Game resolution can still be changed; the menu correction is unavailable."
         }
         return nil
@@ -58,12 +62,34 @@ public enum BF1942DisplayFix {
     static func checkedMenuCopy(_ data: Data) throws -> Data {
         let sha = Hashing.sha256(data: data)
         if sha == correctedSHA { return data }
-        guard sha == originalSHA || sha == previousCorrectedSHA else { throw NokError("This BF1942 executable doesn't match a verified version. It was left untouched.") }
-        let menu = sha == previousCorrectedSHA ? data : try replacingMenuDimensions(data)
-        let result = try replacingRestartName(menu)
-        guard Hashing.sha256(data: result) == correctedSHA else { throw NokError("The menu correction didn't match the expected result.") }
+        guard supportedSourceSHAs.contains(sha) else { throw NokError("This BF1942 executable doesn't match a verified version. It was left untouched.") }
+        let menu = sha == originalSHA ? try replacingMenuDimensions(data) : data
+        let restart = [menuOnlySHA, partialMasterSHA].contains(sha) ? menu : try replacingRestartName(menu)
+        let result = try replacingMasterServer(restart)
+        guard Hashing.sha256(data: result) == correctedSHA else { throw NokError("The BF1942 correction didn't match the expected result.") }
         return result
     }
+    /// The verified executable has a null-padded hostname slot. Keep its length and all
+    /// surrounding bytes intact; do not replace binaries or touch authentication/CD-key code.
+    static func replacingMasterServer(_ input: Data) throws -> Data {
+        let offsets = [0x557c30, 0x557df8]
+        let old = Data("master.bf1942.sk\0\0".utf8)
+        let replacement = Data("master.bf1942.org\0".utf8)
+        guard input.count == 5_648_384, old.count == replacement.count else {
+            throw NokError("The BF1942 hostname layout wasn't verified. Its executable was left untouched.")
+        }
+        // Both the registration and browser slots must be checked before changing either.
+        for offset in offsets {
+            let slot = input.subdata(in: offset..<(offset + old.count))
+            guard slot == old || slot == replacement else {
+                throw NokError("The expected BF1942 master-server names weren't found. Its executable was left untouched.")
+            }
+        }
+        var result = input
+        for offset in offsets { result.replaceSubrange(offset..<(offset + old.count), with: replacement) }
+        return result
+    }
+
     // BF1942 hard-codes its original filename for mod activation. Keep its working directory,
     // restart arguments and original EXE, but route that restart to the verified display copy.
     // The replacement is exactly the same byte length; no sections or other strings are changed.
@@ -80,6 +106,10 @@ public enum BF1942DisplayFix {
     /// Upgrade only the owned display copies, leaving the user's chosen resolution and settings alone.
     static func refreshMenuCopies(_ g: InstalledGame) throws {
         guard g.custom?.bf1942MenuCopy == true, state(g)?.recommended == true, let root = folder(g) else { return }
+        guard let launcher = g.launcherURL, let expected = g.custom?.launcherSHA,
+              (try? Hashing.sha256(file: launcher)) == expected else {
+            throw NokError("The launcher was edited outside Nokcandu. Its BF1942 copies were left untouched.")
+        }
         let target = try checkedURL(root.appendingPathComponent(copyName), root: root)
         let alias = try checkedURL(root.appendingPathComponent(restartCopyName), root: root)
         let current = try Hashing.sha256(file: target)
@@ -89,10 +119,10 @@ public enum BF1942DisplayFix {
         try validateJournal(g)
         let ledger = journal(g)
         guard ledger.entries.contains(where: { $0.path == target.path }),
-              current == previousCorrectedSHA || current == correctedSHA else {
+              ownedCopySHAs.contains(current) else {
             throw NokError("BF1942's menu copy changed. It was left untouched.")
         }
-        if FileManager.default.fileExists(atPath: alias.path), (try? Hashing.sha256(file: alias)) != correctedSHA {
+        if FileManager.default.fileExists(atPath: alias.path), !ownedCopySHAs.contains((try? Hashing.sha256(file: alias)) ?? "") {
             throw NokError("BF194N.exe is already in use. It was left untouched.")
         }
         let data = try checkedMenuCopy(Data(contentsOf: root.appendingPathComponent("BF1942.exe")))
@@ -254,9 +284,9 @@ public enum BF1942DisplayFix {
             let copy = try checkedMenuCopy(Data(contentsOf: original))
             let target = try checkedURL(root.appendingPathComponent(copyName), root: root)
             if FileManager.default.fileExists(atPath: target.path),
-               ![correctedSHA, previousCorrectedSHA].contains((try? Hashing.sha256(file: target)) ?? "") { throw NokError("The display-copy filename is already in use. That file was left untouched.") }
+               !ownedCopySHAs.contains((try? Hashing.sha256(file: target)) ?? "") { throw NokError("The display-copy filename is already in use. That file was left untouched.") }
             let alias = try checkedURL(root.appendingPathComponent(restartCopyName), root: root)
-            if FileManager.default.fileExists(atPath: alias.path), (try? Hashing.sha256(file: alias)) != correctedSHA {
+            if FileManager.default.fileExists(atPath: alias.path), !ownedCopySHAs.contains((try? Hashing.sha256(file: alias)) ?? "") {
                 throw NokError("BF194N.exe is already in use. That file was left untouched.")
             }
             files[target] = copy

@@ -105,6 +105,9 @@ private struct ComponentFixesView: View {
     @State private var working: CompatibilityFix?
     @State private var installed: Set<String> = []
     @State private var status = ""
+    @State private var nativeIPXFrame = 3
+    @State private var nativeIPXAdapter = ""
+    @State private var nativeIPXAdapters: [NativeIPXNetworking.NetworkAdapter] = []
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(CompatibilityFix.allCases.filter { CompatibilityFixes.visible($0, for: game) }) { fix in
@@ -114,9 +117,31 @@ private struct ComponentFixesView: View {
                     if working == fix { ProgressView().controlSize(.small) }
                     else {
                         if on { InstalledBadge() }
+                        if on, CompatibilityFixes.needsUpdate(fix, for: game) {
+                            Button("Update") { run(fix, update: true) }.disabled(working != nil)
+                        }
                         Button(on ? "Undo" : (fix == .openUA ? "Apply" : "Install")) { run(fix) }
                             .disabled(working != nil || reason != nil)
                     }
+                }
+                if fix == .nativeIPXNetworking, on {
+                    SettingRow(title: "IPX LAN connection", info: "Choose this Mac’s connection to the other IPX computers. This choice stays on this Mac; shared profiles choose their own local adapter.") {
+                        Picker("LAN connection", selection: Binding(get: { nativeIPXAdapter }, set: { setNativeAdapter($0) })) {
+                            ForEach(nativeIPXAdapters) { adapter in Text(adapter.title).tag(adapter.id) }
+                        }.labelsHidden().disabled(working != nil)
+                    }
+                    SettingRow(title: "IPX frame type", info: "Match the original computers on your LAN. Windows 98 commonly uses 802.2. This choice is saved in profiles; the local network adapter is not.") {
+                        Picker("Frame type", selection: Binding(get: { nativeIPXFrame }, set: { setNativeFrame($0) })) {
+                            Text("802.2 (Windows 98)").tag(3)
+                            Text("802.3").tag(2)
+                            Text("Ethernet II").tag(1)
+                        }.labelsHidden().disabled(working != nil)
+                    }
+                }
+                if fix == .ipxNetworking, on {
+                    Button("IPX Network Settings…") {
+                        do { try IPXNetworking.configure(game) } catch { model.fail(error) }
+                    }.disabled(working != nil)
                 }
             }
             Link("Microsoft DirectX download and license information", destination: URL(string: "https://www.microsoft.com/en-us/download/details.aspx?id=8109")!).font(.caption)
@@ -125,10 +150,27 @@ private struct ComponentFixesView: View {
         .onAppear { reload() }
         .onChange(of: game) { reload() }
     }
-    func reload() { installed = Set(CompatibilityFixes.installedIDs(for: game)) }
-    func run(_ fix: CompatibilityFix) {
+    func reload() {
+        installed = Set(CompatibilityFixes.installedIDs(for: game))
+        nativeIPXFrame = NativeIPXNetworking.frame(for: game) ?? 3
+        nativeIPXAdapter = game.custom?.environment?["NOKCANDU_NATIVE_IPX_INTERFACE"] ?? ""
+        nativeIPXAdapters = installed.contains(CompatibilityFix.nativeIPXNetworking.id) ? NativeIPXNetworking.availableAdapters() : []
+    }
+    func setNativeAdapter(_ name: String) {
+        working = .nativeIPXNetworking
+        model.changeSetting(for: game, title: "IPX LAN connection", success: "Native IPX connection updated.", edit: { current in
+            try NativeIPXNetworking.setAdapter(name, for: current)
+        }, completion: { _ in reload(); working = nil })
+    }
+    func setNativeFrame(_ frame: Int) {
+        working = .nativeIPXNetworking
+        model.changeSetting(for: game, title: "IPX frame type", success: "Native IPX frame updated.", edit: { current in
+            try NativeIPXNetworking.setFrame(frame, for: current)
+        }, completion: { _ in reload(); working = nil })
+    }
+    func run(_ fix: CompatibilityFix, update: Bool = false) {
         working = fix; status = ""
-        let undo = installed.contains(fix.id), g = game
+        let undo = installed.contains(fix.id) && !update, g = game
         let logger: @Sendable (String) -> Void = { line in Task { @MainActor in status = line } }
         model.changeSetting(for: g, title: fix.title, success: undo ? "Removed \(fix.title)." : "Installed \(fix.title).", edit: { current in
             if undo { try CompatibilityFixes.undo(fix, for: current, log: logger) }

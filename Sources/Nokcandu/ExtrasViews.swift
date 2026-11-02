@@ -378,11 +378,12 @@ struct GameResolutionSection: View {
                             }
                         }.labelsHidden().frame(width: 280)
                     }
+                    Text("The recommended menu correction also restores the Internet server browser through master.bf1942.org. The original executable is kept; Undo BF1942 Display Settings removes the correction.").font(.caption).foregroundStyle(.secondary)
                     Text("Updates BF1942's gameplay resolution in its video profiles, with a backup for Undo. The game's menu resolution is handled separately below.")
                         .font(.caption).foregroundStyle(.secondary)
                     Button("Apply Recommended BF1942 Setup…") { confirmBFSetup = true }
                         .disabled(BF1942DisplayFix.menuUnavailable(for: game) != nil)
-                    Text("Includes Older 3D graphics, DirectX 8 compatibility, Microsoft shader libraries, the menu and mod-restart correction, and Fullscreen (Borderless). Keeps your saved game resolution; new setups start at 1280 × 800. Saved and shared profiles include these fixes.")
+                    Text("Includes Older 3D graphics, DirectX 8 compatibility, Microsoft shader libraries, the menu and mod-restart correction, the community Internet server list, and Fullscreen (Borderless). Keeps your saved game resolution; new setups start at 1280 × 800. Saved and shared profiles include these fixes.")
                         .font(.caption).foregroundStyle(.secondary)
                     HStack {
                         Button(BF1942DisplayFix.isRecommended(for: game) ? "Reapply Recommended BF1942 Display Settings" : "Apply Recommended BF1942 Display Settings") {

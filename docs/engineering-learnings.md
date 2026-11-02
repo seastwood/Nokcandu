@@ -94,3 +94,95 @@ For each new issue, follow the [recording checklist](index.md#recording-new-find
 ## Fullscreen containment is a presentation capability, not a window-style flag
 
 Wine 10 explicitly disables virtual desktop configuration for the native Mac driver. The existing borderless helper changes frame styles and geometry; it does not emulate a display or scale/remap game input. A general resizable fullscreen-in-a-window feature needs a verified presentation backend and renderer/input support, then shared settings/profile integration. Do not enable an ineffective checkbox or claim universal support. The [dated feasibility record](investigations/windowed-fullscreen-feasibility-2026-10-29.md) includes primary-source evidence, the proposed prototype boundary and release acceptance tests. No new mode is implemented or tested yet.
+
+## Shared graphics inference (2026-11-01)
+
+No recognized graphics API is an unknown result, not evidence of DirectX 8–9. Shared PE inspection now includes delay imports and bounded, agreeing sibling-game evidence for generic bootstrap launchers. New automatic selections use Compatibility when detection remains unknown. Existing settings are preserved: use **Check graphics requirements** in Graphics to review and apply a journaled correction; manual launchers retain hash protection and confirmed modes are not silently replaced. The installed Rocket League regression detects DirectX 11 behind `Launcher.exe`; gameplay is not verified. See [investigation, scope, migration and Undo](investigations/graphics-detection-2026-11-01.md).
+
+## LAN discovery is separate from direct joining (2026-11-01, resolved on Windows host)
+
+The user disabled the Windows host’s virtual Ethernet adapter and confirmed that the Mac now sees its Battlefield 1942 LAN game. This establishes virtual-adapter involvement, not the exact socket binding/routing mechanism. No shared Wine broadcast patch or Mac firewall change was required. Do not automatically disable adapters for other users or games; inspect physical/virtual interface bindings first. Undo is re-enabling the same host adapter (the discovery failure may return). See [evidence, scope and Undo](investigations/lan-discovery-2026-11-01.md). The reusable read-only query tool has two passing local UDP tests; post-change joining/gameplay and other games were not retested.
+
+## BF1942 Internet directory is separate from LAN discovery (2026-11-01)
+
+Confirmed: the verified installed executable points to non-resolving `master.bf1942.sk`; the community master `master.bf1942.org` answers TCP 28900. The built-in BF1942 menu/mod-restart copy generator now replaces both verified padded hostname slots, preserving the original executable. Existing journal-owned copies migrate only with an unedited managed launcher and while the game is closed; explicit settings remain intact. Combined recipe Undo is available in Display. The old five-byte-only description below/above is historical: the current generated copy additionally changes six hostname bytes across two slots. Full suite: 203 tests, 6 skipped, zero failures. The user confirmed LAN browsing after disabling the Windows host’s virtual adapter. The first Internet correction failed because it changed only one of two hostname slots; after the two-slot revision, the user confirmed that Internet servers appear. Browser population is verified; public joining/gameplay has not been retested. See [hashes, evidence, migration and Undo](investigations/bf1942-internet-browser-2026-11-01.md).
+
+BF1942 follow-up: the first installed Internet correction was incomplete because there are two identical old-hostname strings. Runtime tracing confirmed the browser still used the second. The revision updates both verified slots and asserts that no obsolete hostname remains, with a new full-file output hash and migration from the first attempt. The revised 203-test suite passed before installation; the user then confirmed that Internet servers appear in the installed game. Windows reportedly works with the same game folder, but its resolver/hosts settings and launch target were not compared. See the dated investigation for the failed first comparison; do not reinterpret this game-specific endpoint correction as a universal Wine networking patch.
+
+Final verification (2026-11-01): user confirmed both LAN discovery (Windows virtual adapter disabled) and Internet server-list population (two-slot BF1942 master correction). Preserve the distinction between host-wide adapter configuration and a game-specific directory endpoint correction. Do not extend the BF1942 hostname patch to unrelated games; apply shared diagnostic and migration protections wherever relevant. Public-match joining/gameplay and other games were not retested.
+
+## Shared legacy networking and profile completeness (2026-11-01)
+
+The optional `ipx-networking` component installs checksum-pinned IPXWrapper 0.7.2 through the common protected installer for eligible private 32-bit games. It is not tied to ROM2’s name. Existing differing files/links are refused, native DLL rules are private to the game, and normal Undo preserves unrelated settings. ROM2’s engine returned Winsock 10047 without it; local IPX send/receive and legacy DirectPlay initialization passed with it. Basic TCP/IP passed with and without the wrapper. The user subsequently confirmed ROM2 hosting and cross-machine TCP/IP joining. Native-IPX discovery against the unchanged Windows 98 VM remains unresolved; see the native-IPX investigation below.
+
+Saved/shared profiles include this trusted component ID automatically; the separate live service allowlist was also updated and checked against all 11 current fix IDs. New fixes must pass both app round-trip tests and service allowlist/normalization checks (`Tools/profile-check/`); do not silently lose a fix during sharing or publish DLL bytes/adapter identifiers in profiles. See [evidence, scope, installer protections, profile service change and Undo](investigations/ipx-rom2-networking-2026-11-01.md).
+
+
+### Legacy DirectPlay IPX hosting requires more than provider initialization
+
+IPXWrapper 0.7.2 exposes legacy send callbacks; Wine 11's builtin DirectPlay can
+call an unset extended group-send callback on host player creation. The corrected
+shared IPX component supplies checksum-pinned Microsoft legacy `dplayx.dll` and its matching provider/session helper in the private 32-bit system directory,
+with an owned-file/settings migration, unchanged profile ID and normal Undo.
+Always test Open/CreatePlayer, not only DirectPlayCreate or AF_IPX socket loopback.
+See [the ROM2 investigation](investigations/ipx-rom2-networking-2026-11-01.md).
+
+
+### Installation progress must not own the whole library
+
+A modal installer sheet blocked unrelated games even while setup ran as a separate
+Windows process. Installation now has its own window and an app-owned model, so
+closing/reopening progress retains the executor, log and in-flight work. Only
+completion or explicit removal clears the session. Keep every setup entry point
+on this shared path; test library interaction with progress open, plus close/reopen.
+See [the investigation](investigations/nonblocking-installation-2026-11-01.md).
+
+
+### Preparing a destination is insufficient unless setup uses it
+
+An external-drive link at `C:\Games\<name>` did not influence GOG's default
+`C:\GOG Games\<title>`, causing a second full transfer. Recognized Inno installers
+now receive their documented `/DIR=` argument for the verified prepared folder.
+Unknown formats keep interactive setup and an explicit destination instruction;
+retain safe relocation for paths the installer/user still chooses differently.
+See [the destination investigation](investigations/installer-destination-2026-11-01.md).
+
+
+### Native Ethernet IPX: gameplay verified; shared optional component
+
+The user confirmed native IPX discovery, joining and gameplay from unchanged
+Windows 98 into Mac-hosted ROM2, with the Mac on Wi-Fi and the Windows host on
+Ethernet. A cable is not required for that tested setup. Wine needed its omitted
+wpcap module, Darwin immediate/nonblocking capture translation and a real
+`pcap_getevent` implementation. Capture alone was insufficient: IPXWrapper’s
+DirectPlay provider uses a different discovery protocol from the original Microsoft
+provider. The optional shared `native-ipx-networking` component uses the compatible
+private Microsoft provider plus the matching capture module. Normal UDP IPX remains
+available. Runtime enablement is private 32-bit Wine 11 only; SPX is unsupported.
+
+The new component has guarded file/registry ownership, base-component dependency,
+local LAN-adapter and portable frame choices, generated-launcher integration and
+normal Undo. User-launch-only packet authorization is session-bound: access remains
+available until the last native-IPX game closes, with no fixed match timeout.
+Profiles do not grant packet access. Profiles include the native ID and schema-2
+`nativeIPXFrame`, never MAC/interface/permission state. The shared validator supports
+both and all 12 fix IDs; native frame round trips and invalid inputs were checked.
+
+The signed 0.12.2 development update and guarded ROM2 migration are installed.
+The complete pre-adapter suite passed 212 tests with seven optional skips; all ten
+focused native tests passed after the adapter correction, including official-package
+installation and migration/Undo. macOS can redact a Foundation-launched ifconfig
+MAC to 02:00:00:00:00:00, so the shared code now reads the actual adapter identity
+through a fingerprinted Wine adapter reader. Only unchanged owned placeholder
+settings migrate; original Undo values, manual edits, frames, saves and content
+are preserved.
+
+The user confirmed normal permission approval opens ROM2. After game closure,
+the session manager exited, removed its state and restored BPF ownership to
+root:wheel 0600. The final discovery failure was traced to a VM snapshot restoring
+NAT mode. With the VM bridged again, the user confirmed discovery and joining in
+both hosting directions. Earlier Mac-hosted gameplay also passed. No VM game or
+system DLL changes were required. Record bridge mode when diagnosing snapshot
+regressions; local capture tests alone do not prove peer connectivity. Other games
+use the same optional infrastructure but still need their own interoperability test.
+See [confirmed evidence, failed comparisons, migration and Undo](investigations/native-ipx-mac-2026-11-01.md).

@@ -1,14 +1,17 @@
 import Foundation
 
 /// Optional, app-owned components. Community profiles can reference these IDs, never supply code,
-/// downloads or patch bytes. DLLs are private to the selected executable's folder; Wine's system DLLs
-/// and registry are untouched. File undo uses the same conflict-aware journal as other Nokcandu edits.
+/// downloads or patch bytes. Components own only documented private game/prefix destinations;
+/// file and registry Undo preserve later user changes. Global engines are untouched.
 public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable, Sendable {
     case shaderCompiler47 = "shader-compiler-47", ubisoftBrowser = "ubisoft-browser"
     case directx9Extras = "directx9-extras", d3d8to9, borderless, cursorVisibility = "cursor-visibility", openUA = "openua-display", bundledVC = "bundled-vc-runtime", crossProcessWindows = "cross-process-windows"
+    case ipxNetworking = "ipx-networking", nativeIPXNetworking = "native-ipx-networking"
     public var id: String { rawValue }
     public var title: String {
         switch self {
+        case .ipxNetworking: "IPX networking (legacy games)"
+        case .nativeIPXNetworking: "Native IPX for original LAN games"
         case .ubisoftBrowser: "Ubisoft Connect browser display"
         case .shaderCompiler47: "Microsoft shader compiler"
         case .bundledVC: "Use bundled Visual C++ libraries"
@@ -22,6 +25,8 @@ public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable, Senda
     }
     public var detail: String {
         switch self {
+        case .nativeIPXNetworking: "Connects to original IPX computers, including Windows 98, using your Mac’s LAN adapter. Requires the legacy IPX component and Wine 11; they are checked before installation. Uses 802.2 frames by default. macOS asks for packet access when you launch. Access lasts while IPX games are active, with no match timer, and ends after the last IPX game closes. The game stays unprivileged. Saved/shared profiles include this requirement; adapter choices and permissions stay on this Mac. SPX is not supported. Undo returns to the previous IPX transport."
+        case .ipxNetworking: "Adds IPX-over-LAN support with IPXWrapper 0.7.2 and Microsoft's legacy DirectPlay library for 32-bit legacy Winsock/DirectPlay games. Other computers need compatible IPXWrapper support too. Choose IPX inside the game. Network Settings lets you select a physical adapter if virtual adapters interfere. Preserves TCP/IP support; does not enable real Ethernet IPX frames. Restart after installing or Undo. Saved and shared profiles include this fix."
         case .ubisoftBrowser: "Fixes Ubisoft Connect’s blank browser with DXMT. Enables its GPU launch switch in an exactly verified browser file; keeps the original for Undo. Only for Ubisoft Connect. Restart afterward."
         case .shaderCompiler47: "Downloads Microsoft’s d3dcompiler_47 library for shaders Wine cannot compile, which can cause missing icons, blank browser content, or effects. Restart afterward."
         case .bundledVC: "Uses the Microsoft Visual C++ libraries already beside this program, instead of Wine’s replacements. Try this when an app waits before opening a window. Downloads nothing; restart afterward."
@@ -47,6 +52,8 @@ public enum CompatibilityFixes {
         activeApps.remove(g.id)
     }
     struct State: Codable {
+        var nativeIPXRevision: Int? = nil
+        var registryChanges: [NativeIPXNetworking.RegistryChange]? = nil
         var executable: String
         var previousOverrides: [String: String]
         var appliedOverrides: [String: String]
@@ -69,6 +76,9 @@ public enum CompatibilityFixes {
     public static func isInstalled(_ fix: CompatibilityFix, for g: InstalledGame) -> Bool { state(fix, g) != nil }
     public static func installedIDs(for g: InstalledGame) -> [String] {
         CompatibilityFix.allCases.filter { isInstalled($0, for: g) }.map(\.rawValue)
+    }
+    public static func needsUpdate(_ fix: CompatibilityFix, for g: InstalledGame) -> Bool {
+        switch fix { case .ipxNetworking: IPXNetworking.needsUpdate(g); case .nativeIPXNetworking: NativeIPXNetworking.needsUpdate(g); default: false }
     }
     static func fresh(_ g: InstalledGame) -> InstalledGame { GameLibrary.inspect(g.appURL) ?? g }
     static func program(_ g: InstalledGame) -> URL? {
@@ -103,6 +113,7 @@ public enum CompatibilityFixes {
     /// routing before these can safely be offered there.
     public static func visible(_ fix: CompatibilityFix, for g:InstalledGame) -> Bool {
         if isInstalled(fix,for:g) { return true }
+        if fix == .ipxNetworking || fix == .nativeIPXNetworking { return IPXNetworking.supports(g) }
         if fix == .openUA { return OpenUASettings.supports(g) }
         if fix == .ubisoftBrowser { return UbisoftBrowser.supports(g) }
         return true
@@ -113,6 +124,8 @@ public enum CompatibilityFixes {
         guard let exe = managedProgram(g), PEFile.inspect(exe) != nil else {
             return "The selected program is missing or outside this game's C: folders. Choose it under Settings → Program."
         }
+        if fix == .nativeIPXNetworking, !NativeIPXNetworking.supports(g) { return "Requires Wine 11 and Nokcandu’s native packet module for a private 32-bit game." }
+        if fix == .ipxNetworking, !IPXNetworking.supports(g) { return "Requires a 32-bit legacy Winsock/DirectPlay game in its own Windows environment." }
         if fix == .ubisoftBrowser {
             guard UbisoftBrowser.supports(g) else { return "Only available for Ubisoft Connect." }
             guard g.custom?.graphics == .dxmt else { return "Choose Metal for DirectX 10–11 (DXMT) first." }
@@ -181,7 +194,7 @@ public enum CompatibilityFixes {
         let source = try await verifiedDownload("shader47-\(package.cab).cab",
             url: "https://download.microsoft.com/download/B/0/C/B0C80BA3-8AD6-4958-810B-6882485230B5/standalonesdk/Installers/\(package.cab).cab",
             sha: package.sha256, log: log)
-        guard let cab = NokPaths.bundledResource("cabextract") else { throw NokError("Nokcandu's installer reader is missing. Update Nokcandu first.") }
+        guard let cab = NokPaths.bundledResource("cabextract", executable: true) else { throw NokError("Nokcandu's installer reader is missing. Update Nokcandu first.") }
         let r = try await Shell.runAsync(cab.path, ["-q", "-L", "-F", package.member, "-d", work.path, source.path], timeout: 120)
         let file = work.appendingPathComponent(package.member)
         guard r.ok, PEFile.inspect(file)?.is64Bit == arch else { throw NokError("Microsoft's shader library could not be extracted or has the wrong architecture.") }
@@ -193,7 +206,7 @@ public enum CompatibilityFixes {
         let redist = try await verifiedDownload("directx_Jun2010_redist.exe",
             url: "https://download.microsoft.com/download/8/4/A/84A35BF1-DAFE-4AE8-82AF-AD2AE20B6B14/directx_Jun2010_redist.exe",
             sha: "053f76dcbb28802e23341b6a787e3b0791c0fa5c8d4d011b1044172dbf89c73b", log: log)
-        guard let cab = NokPaths.bundledResource("cabextract") else { throw NokError("Nokcandu is missing cabextract. Rebuild or update Nokcandu first.") }
+        guard let cab = NokPaths.bundledResource("cabextract", executable: true) else { throw NokError("Nokcandu is missing cabextract. Rebuild or update Nokcandu first.") }
         let arch = program(g).flatMap(PEFile.inspect)?.is64Bit == true ? "x64" : "x86"
         var files: [String: Data] = [:]
         for name in ["d3dx9_43", "d3dcompiler_43"] {
@@ -228,6 +241,13 @@ public enum CompatibilityFixes {
         return c
     }
     public static func install(_ fix: CompatibilityFix, for game: InstalledGame, log: @escaping @Sendable (String) -> Void) async throws {
+        if fix == .nativeIPXNetworking {
+            let current = fresh(game)
+            if let reason = unavailable(fix, for: current) { throw NokError(reason) }
+            if !isInstalled(.ipxNetworking, for: current) || IPXNetworking.needsUpdate(current) {
+                try await install(.ipxNetworking, for: current, log: log)
+            }
+        }
         RestorePoints.before(game, "Before \(fix.title)", log: log)
         let g = fresh(game)
         try begin(g); defer { end(g) }
@@ -235,13 +255,33 @@ public enum CompatibilityFixes {
     }
     static func installReserved(_ fix: CompatibilityFix, for g: InstalledGame, log: @escaping @Sendable (String) -> Void) async throws {
         try requireClosed(g)
-        if isInstalled(fix, for: g) { throw NokError("This fix already has an installation record. Undo it before installing again.") }
+        let upgrading = needsUpdate(fix, for: g)
+        if isInstalled(fix, for: g) && !upgrading { throw NokError("This fix already has an installation record. Undo it before installing again.") }
         if let reason = unavailable(fix, for: g) { throw NokError(reason) }
         guard var c = g.custom, let exe = program(g) else { throw NokError("Choose the game's program first.") }
+        let oldState = upgrading ? state(fix, g) : nil
+        if let oldState {
+            guard oldState.executable == c.exe else { throw NokError("The program changed. Undo the old IPX fix first.") }
+            try journal(fix, g).validateForUndo()
+            let current = overrides(c.environment?["WINEDLLOVERRIDES"])
+            guard oldState.appliedOverrides.allSatisfy({ current[$0.key] == $0.value }),
+                  (oldState.appliedEnvironment ?? [:]).allSatisfy({ c.environment?[$0.key] == $0.value }),
+                  let launcher = g.launcherURL, let sha = c.launcherSHA,
+                  (try? Hashing.sha256(file: launcher)) == sha else {
+                throw NokError("IPX settings or the launcher changed. They were left untouched; restore them before updating.")
+            }
+        }
         let work = NokPaths.support.appendingPathComponent("Work/fix-\(UUID().uuidString)")
         try NokPaths.ensure(work); defer { try? FileManager.default.removeItem(at: work) }
         var files: [URL: Data] = [:], applied: [String: String] = [:], appliedEnv: [String: String] = [:]
         switch fix {
+        case .nativeIPXNetworking:
+            files = try NativeIPXNetworking.plannedFiles(for: g)
+            applied = ["wpcap": "b"]
+            appliedEnv = [NativeIPXNetworking.flag: "1"]
+        case .ipxNetworking:
+            files = try await IPXNetworking.download(for: g, work: work, log: log)
+            applied = IPXNetworking.overrides
         case .ubisoftBrowser:
             files = try UbisoftBrowser.plannedFiles(g)
             appliedEnv = ["DXMT_ALLOW_CROSS_PROCESS_SWAPCHAIN":"1"]
@@ -272,12 +312,27 @@ public enum CompatibilityFixes {
         // Downloads happen before mutation; recheck because the user could have started the game.
         try requireClosed(fresh(g))
         guard CustomGameConfig.load(contents: g.contents) == g.custom else { throw NokError("Game settings changed during download. Try again.") }
-        let previous = overrides(c.environment?["WINEDLLOVERRIDES"])
-        let st = State(executable: c.exe, previousOverrides: previous, appliedOverrides: applied,
+        if fix == .ipxNetworking {
+            try IPXNetworking.validateDestinations(files, for: g)
+        }
+        let currentRules = overrides(c.environment?["WINEDLLOVERRIDES"])
+        var previous = currentRules
+        if let oldState {
+            // Keep the original Undo values for old keys, and today's value for
+            // newly managed keys. Unrelated rules added since install stay intact.
+            for key in oldState.appliedOverrides.keys { previous[key] = oldState.previousOverrides[key] }
+        }
+        let nativePlan = fix == .nativeIPXNetworking && !upgrading ? try NativeIPXNetworking.registryPlan(for: g) : nil
+        let registryChanges = oldState?.registryChanges ?? nativePlan?.changes
+        if let nativePlan { appliedEnv[NativeIPXNetworking.interfaceFlag] = nativePlan.interface }
+        if fix == .nativeIPXNetworking, let oldState { appliedEnv = oldState.appliedEnvironment ?? appliedEnv }
+        var previousEnv = c.environment?.filter { appliedEnv[$0.key] != nil } ?? [:]
+        if let oldState { for key in (oldState.appliedEnvironment ?? [:]).keys { previousEnv[key] = oldState.previousEnvironment?[key] } }
+        let st = State(nativeIPXRevision: fix == .nativeIPXNetworking ? NativeIPXNetworking.revision : nil, registryChanges: registryChanges, executable: c.exe, previousOverrides: previous, appliedOverrides: applied,
                        previousLegacy: c.legacyD3D9, previousBorderless: c.borderless,
                        previousArguments: fix == .ubisoftBrowser ? c.arguments : nil,
                        appliedArguments: fix == .ubisoftBrowser ? UbisoftBrowser.arguments(c.arguments) : nil,
-                       previousEnvironment: c.environment?.filter { appliedEnv[$0.key] != nil }, appliedEnvironment: appliedEnv)
+                       previousEnvironment: previousEnv, appliedEnvironment: appliedEnv)
         let record = marker(fix, g)
         try NokPaths.ensure(record.deletingLastPathComponent())
         try JSONEncoder().encode(st).write(to: record, options: .atomic) // retain recovery if interrupted
@@ -287,7 +342,9 @@ public enum CompatibilityFixes {
                 if fix == .openUA { try j.writeSettings(data, to: url, keys: ["gfx.vbo", "menu.windowed", "gfx.custommodes"], reason: fix.title) }
                 else { try j.write(data, to: url, reason: fix.title) }
             }
-            var rules = previous; for (dll, order) in applied { rules[dll] = order }
+            if fix == .nativeIPXNetworking { try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: NativeIPXNetworking.directory(g).appendingPathComponent(NativeIPXNetworking.helperName).path) }
+            if let registryChanges { try NativeIPXNetworking.apply(registryChanges, for: g) }
+            var rules = currentRules; for (dll, order) in applied { rules[dll] = order }
             if !applied.isEmpty { setOverrides(rules, in: &c) }
             for (key, value) in appliedEnv {
                 if c.environment == nil { c.environment = [:] }; c.environment?[key] = value
@@ -297,8 +354,9 @@ public enum CompatibilityFixes {
             if fix == .borderless { c.borderless = true }
             try CustomGames.save(c, to: g)
         } catch {
-            let report = j.revertAll()
-            log("Installation did not finish. \(report.summary) Use Undo to clear the recovery record.")
+            if let registryChanges { try? NativeIPXNetworking.restore(registryChanges, for: g) }
+            let report = upgrading ? nil : j.revertAll()
+            log("Installation did not finish. \(report?.summary ?? "The update recovery record was retained.") Use Undo to clear the recovery record.")
             throw error
         }
         log("Installed \(fix.title). Undo is available in Fixes.")
@@ -306,6 +364,8 @@ public enum CompatibilityFixes {
     /// Refresh only app-owned bundled helper files, independently of game settings or downloads.
     /// This keeps improvements to the shared window helper available to existing installations.
     static func refreshBundledHelpers(_ g: InstalledGame) {
+        NativeIPXNetworking.refreshHelper(g)
+        NativeIPXNetworking.refreshAdapter(g)
         guard let st = state(.borderless, g), st.executable == g.custom?.exe,
               (try? requireClosed(g)) != nil, (try? begin(g)) != nil else { return }
         defer { end(g) }
@@ -358,6 +418,7 @@ public enum CompatibilityFixes {
     }
     static func undoReserved(_ fix: CompatibilityFix, for g: InstalledGame, log: @escaping @Sendable (String) -> Void) throws {
         try requireClosed(g)
+        if fix == .ipxNetworking, isInstalled(.nativeIPXNetworking, for: g) { throw NokError("Undo Native IPX first; it uses the legacy networking component.") }
         guard let st = state(fix, g), var c = g.custom else { throw NokError("No installation record for this fix.") }
         // Restore only settings still owned by this fix; preserve later manual edits and other fixes.
         var rules = overrides(c.environment?["WINEDLLOVERRIDES"])
@@ -384,6 +445,7 @@ public enum CompatibilityFixes {
             }
         }
         try j.validateForUndo()
+        if let changes = st.registryChanges { try NativeIPXNetworking.restore(changes, for: g) }
         try CustomGames.save(c, to: g)
         let report = j.revertAll(); log(report.summary)
         guard report.skipped.isEmpty else { throw NokError(report.summary) }

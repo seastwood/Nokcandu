@@ -61,10 +61,14 @@ public enum Recommendations {
             guard ((try? d.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) < 80 << 20, let info = PEFile.inspect(d) else { continue }
             for i in info.imports { by[i.lowercased()] = by[i.lowercased()] ?? d.lastPathComponent }
         }
+        let graphics = PEFile.inspectForGraphics(exe) ?? pe
+        for i in graphics.imports where by[i.lowercased()] == nil {
+            by[i.lowercased()] = "\(name) or its local game programs"
+        }
         return Evidence(program: name, is64Bit: pe.is64Bit, importedBy: by,
                         shipped: Set(dlls.map { $0.lastPathComponent.lowercased() }),
                         programImports: Set(pe.imports.map { $0.lowercased() }),
-                        graphicsImports: Set((PEFile.inspectWithLoadedDLLs(exe) ?? pe).imports.map { $0.lowercased() }))
+                        graphicsImports: Set(graphics.imports.map { $0.lowercased() }))
     }
 
     /// The rules, kept free of file access so they can be tested.

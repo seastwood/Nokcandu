@@ -26,6 +26,8 @@ final class AppModel: ObservableObject {
     /// Game waiting for Quit to be confirmed.
     @Published var quitting: InstalledGame?
     @Published var banner: Banner?
+    /// The app owns the session so closing its window cannot discard a running task.
+    let installer = InstallerModel()
     @Published var showInstaller = false
     @Published var showSteamLibrary = false
     @Published var showStores = false

@@ -682,7 +682,7 @@ public enum SharedSteam {
         // chosen by hand, Play must never change it again.
         guard g.usesSharedSteam, var c = g.custom, c.is64Bit == nil, c.detectedAPIs.isEmpty, c.confirmedGraphics == nil, let id = c.steamAppID,
               let lib = installedGames().first(where: { $0.appID == id && $0.installed }), let folder = lib.folder,
-              let exe = mainExecutable(in: folder, gameName: lib.name), let pe = PEFile.inspectWithLoadedDLLs(exe) else { return false }
+              let exe = mainExecutable(in: folder, gameName: lib.name), let pe = PEFile.inspectForGraphics(exe) else { return false }
         c.is64Bit = pe.is64Bit
         c.detectedAPIs = pe.imports.map { $0.lowercased() }.filter { $0.hasPrefix("d3d") || $0 == "dxgi.dll" || $0 == "ddraw.dll" || $0 == "opengl32.dll" }
         guard !c.detectedAPIs.isEmpty else { return false }      // nothing to go on: leave the player's choice
@@ -702,7 +702,7 @@ public enum SharedSteam {
         guard isSetUp else { throw NokError("Set up Steam first.") }
         let fm = FileManager.default
         let probe = game.folder.flatMap { mainExecutable(in: $0, gameName: game.name) }
-        let pe = probe.flatMap(PEFile.inspectWithLoadedDLLs)
+        let pe = probe.flatMap(PEFile.inspectForGraphics)
         let name = CustomGames.safeFolderName(game.name)
         let target = try CustomGames.freeAppURL(name)
         let c = target.appendingPathComponent("Contents")

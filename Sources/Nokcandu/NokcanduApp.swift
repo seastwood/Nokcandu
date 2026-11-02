@@ -34,6 +34,12 @@ struct NokcanduApp: App {
         Settings {
             SettingsView().environmentObject(model)
         }
+        Window("Game Installation", id: "installer") {
+            InstallerView(m: model.installer).environmentObject(model)
+                .handlesExternalEvents(preferring: [], allowing: [])
+        }
+        .handlesExternalEvents(matching: [])
+        .windowResizability(.contentSize)
         Window("Game Stores", id: "stores") {
             StoreLibraryView().environmentObject(model)
                 .handlesExternalEvents(preferring: [], allowing: [])
@@ -144,6 +150,7 @@ struct LibraryView: View {
                     Button { model.openStores() } label: {
                         Label("Game Stores…", systemImage: "bag")
                     }
+                    InstallationShortcut(m: model.installer) { model.showInstaller = true }
                     Button { model.showInstaller = true } label: {
                         Label("Add a Game…", systemImage: "plus.circle")
                     }
@@ -168,8 +175,8 @@ struct LibraryView: View {
                 Button { model.refresh() } label: { Label("Refresh", systemImage: "arrow.clockwise") }
             }
         }
-        .sheet(isPresented: $model.showInstaller, onDismiss: { model.installerStartsSteamHost = false }) {
-            InstallerView().environmentObject(model)
+        .onChange(of: model.showInstaller) {
+            if model.showInstaller { openWindow(id: "installer"); model.showInstaller = false }
         }
         .sheet(item: $model.renaming) { g in RenameGameSheet(game: g).environmentObject(model) }
         .alert("Quit \(model.quitting?.name ?? "the game")?", isPresented: Binding(get: { model.quitting != nil }, set: { if !$0 { model.quitting = nil } }),

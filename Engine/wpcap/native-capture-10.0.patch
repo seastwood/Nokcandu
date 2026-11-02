@@ -1,0 +1,245 @@
+--- a/dlls/wpcap/unixlib.c
++++ b/dlls/wpcap/unixlib.c
+@@ -30,6 +30,9 @@
+ #include <stdarg.h>
+ #include <stdlib.h>
+ #include <limits.h>
++#include <poll.h>
++#include <errno.h>
++#include <stdio.h>
+ #include "ntstatus.h"
+ #define WIN32_NO_STATUS
+ #include "windef.h"
+@@ -195,7 +198,15 @@
+     {
+         int len_name = strlen( src->name ) + 1, len_description = src->description ? strlen( src->description ) + 1 : 0;
+         int len = sizeof(*dst) + len_name + len_description;
+-
++        const char *selected = getenv( "NOKCANDU_NATIVE_IPX_INTERFACE" );
++
++        /* The optional per-game native-IPX component selects one local LAN
++         * adapter. Other WinPcap clients keep the complete enumeration. */
++        if (selected && selected[0] && strcmp( selected, src->name ))
++        {
++            src = src->next;
++            continue;
++        }
+         if (*params->buflen >= len_total + len)
+         {
+             dst->name_offset = sizeof(*dst);
+@@ -343,8 +354,34 @@
+ static NTSTATUS wrap_open_live( void *args )
+ {
+     const struct open_live_params *params = args;
+-    if (!(*params->handle = (ULONG_PTR)pcap_open_live( params->source, params->snaplen, params->promisc,
+-                                                       params->timeout, params->errbuf ))) return STATUS_NO_MEMORY;
++    pcap_t *handle;
++
++    /* WinPcap applications use a negative timeout for immediate delivery.
++     * Darwin rejects that value in BIOCSRTIMEOUT. Configure immediate mode
++     * before activation instead of passing a negative timeval to libpcap. */
++    if (params->timeout < 0)
++    {
++        int ret;
++        if (!(handle = pcap_create( params->source, params->errbuf ))) return STATUS_NO_MEMORY;
++        if ((ret = pcap_set_snaplen( handle, params->snaplen )) ||
++            (ret = pcap_set_promisc( handle, params->promisc )) ||
++            (ret = pcap_set_timeout( handle, 0 )) ||
++            (ret = pcap_set_immediate_mode( handle, 1 )) ||
++            (ret = pcap_activate( handle )) < 0)
++        {
++            snprintf( params->errbuf, PCAP_ERRBUF_SIZE, "%s", pcap_geterr( handle ) );
++            pcap_close( handle );
++            return STATUS_NO_MEMORY;
++        }
++    }
++    else if (!(handle = pcap_open_live( params->source, params->snaplen, params->promisc,
++                                        params->timeout, params->errbuf ))) return STATUS_NO_MEMORY;
++    if (params->timeout < 0 && pcap_setnonblock( handle, 1, params->errbuf ) < 0)
++    {
++        pcap_close( handle );
++        return STATUS_NO_MEMORY;
++    }
++    *params->handle = (ULONG_PTR)handle;
+     return STATUS_SUCCESS;
+ }
+ 
+@@ -475,6 +512,18 @@
+     }
+     strcpy( params->buf, str );
+     return STATUS_SUCCESS;
++}
++
++static NTSTATUS wrap_wait_packet( void *args )
++{
++    const UINT64 *handle = args;
++    struct pollfd fd = { pcap_get_selectable_fd( (pcap_t *)(ULONG_PTR)*handle ), POLLIN, 0 };
++    int ret;
++    if (fd.fd < 0) return -1;
++    ret = poll( &fd, 1, 100 );
++    if (ret < 0 && errno == EINTR) return 0;
++    if (ret <= 0) return ret;
++    return (fd.revents & POLLIN) ? 1 : -1;
+ }
+ 
+ const unixlib_entry_t __wine_unix_call_funcs[] =
+@@ -522,6 +571,7 @@
+     wrap_tstamp_type_name_to_val,
+     wrap_tstamp_type_val_to_description,
+     wrap_tstamp_type_val_to_name,
++    wrap_wait_packet,
+ };
+ 
+ C_ASSERT( ARRAYSIZE(__wine_unix_call_funcs) == unix_funcs_count );
+@@ -987,6 +1037,7 @@
+     wow64_tstamp_type_name_to_val,
+     wow64_tstamp_type_val_to_description,
+     wow64_tstamp_type_val_to_name,
++    wrap_wait_packet,
+ };
+ 
+ C_ASSERT( ARRAYSIZE(__wine_unix_call_wow64_funcs) == unix_funcs_count );
+--- a/dlls/wpcap/unixlib.h
++++ b/dlls/wpcap/unixlib.h
+@@ -379,5 +379,6 @@
+     unix_tstamp_type_name_to_val,
+     unix_tstamp_type_val_to_description,
+     unix_tstamp_type_val_to_name,
++    unix_wait_packet,
+     unix_funcs_count
+ };
+--- a/dlls/wpcap/wpcap.c
++++ b/dlls/wpcap/wpcap.c
+@@ -63,6 +63,8 @@
+ struct pcap
+ {
+     UINT64 handle;
++    HANDLE packet_event, packet_ack, packet_stop, packet_thread;
++    HMODULE packet_module;
+     struct pcap_pkthdr_win32 hdr;
+     char errbuf[PCAP_ERRBUF_SIZE];
+ };
+@@ -130,16 +132,81 @@
+     return PCAP_CALL( can_set_rfmon, &params );
+ }
+ 
+-void CDECL pcap_close( struct pcap *pcap )
++/* WinPcap notification handles are owned by the capture object. The worker
++ * only waits for descriptor readability; packet buffers remain owned by libpcap. */
++static void close_capture( struct pcap *pcap );
++
++static DWORD WINAPI packet_event_worker( void *arg )
++{
++    struct pcap *pcap = arg;
++    HANDLE waits[2] = { pcap->packet_stop, pcap->packet_ack };
++    while (WaitForSingleObject( pcap->packet_stop, 0 ) == WAIT_TIMEOUT)
++    {
++        int ret = PCAP_CALL( wait_packet, &pcap->handle );
++        if (ret < 0)
++        {
++            /* A failed poll must not free a capture still owned by its caller. */
++            SetEvent( pcap->packet_event );
++            WaitForSingleObject( pcap->packet_stop, INFINITE );
++            break;
++        }
++        if (!ret) continue;
++        SetEvent( pcap->packet_event );
++        if (WaitForMultipleObjects( 2, waits, FALSE, INFINITE ) != WAIT_OBJECT_0 + 1) break;
++    }
++    /* close() can be called during DLL_PROCESS_DETACH. Joining a Windows
++     * thread there deadlocks on the loader lock. The pinned worker owns the
++     * final cleanup and releases its module atomically when it exits. */
++    {
++        HMODULE module = pcap->packet_module;
++        CloseHandle( pcap->packet_thread );
++        CloseHandle( pcap->packet_event );
++        CloseHandle( pcap->packet_ack );
++        CloseHandle( pcap->packet_stop );
++        close_capture( pcap );
++        FreeLibraryAndExitThread( module, 0 );
++    }
++    return 0;
++}
++
++HANDLE CDECL pcap_getevent( struct pcap *pcap )
++{
++    if (!pcap) return NULL;
++    if (pcap->packet_thread) return pcap->packet_event;
++    pcap->packet_event = CreateEventW( NULL, TRUE, FALSE, NULL );
++    pcap->packet_ack = CreateEventW( NULL, FALSE, FALSE, NULL );
++    pcap->packet_stop = CreateEventW( NULL, TRUE, FALSE, NULL );
++    if (pcap->packet_event && pcap->packet_ack && pcap->packet_stop &&
++        GetModuleHandleExW( GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (const WCHAR *)pcap_getevent,
++                            &pcap->packet_module ))
++        pcap->packet_thread = CreateThread( NULL, 0, packet_event_worker, pcap, CREATE_SUSPENDED, NULL );
++    if (!pcap->packet_thread)
++    {
++        if (pcap->packet_event) CloseHandle( pcap->packet_event );
++        if (pcap->packet_ack) CloseHandle( pcap->packet_ack );
++        if (pcap->packet_stop) CloseHandle( pcap->packet_stop );
++        pcap->packet_event = pcap->packet_ack = pcap->packet_stop = NULL;
++        if (pcap->packet_module) FreeLibrary( pcap->packet_module );
++        pcap->packet_module = NULL;
++    }
++    else ResumeThread( pcap->packet_thread );
++    return pcap->packet_event;
++}
++
++static void close_capture( struct pcap *pcap )
+ {
+     struct close_params params;
+-
+-    TRACE( "%p\n", pcap );
+-
+-    if (!pcap) return;
+     params.handle = pcap->handle;
+     PCAP_CALL( close, &params );
+     free( pcap );
++}
++
++void CDECL pcap_close( struct pcap *pcap )
++{
++    TRACE( "%p\n", pcap );
++    if (!pcap) return;
++    if (pcap->packet_thread) SetEvent( pcap->packet_stop );
++    else close_capture( pcap );
+ }
+ 
+ int CDECL pcap_compile( struct pcap *pcap, struct bpf_program *program, const char *str, int optimize, unsigned int mask )
+@@ -946,6 +1013,11 @@
+     params.hdr    = &pcap->hdr;
+     params.data   = data;
+     if ((ret = PCAP_CALL( next_ex, &params )) == 1) *hdr = &pcap->hdr;
++    if (pcap->packet_thread && ret != 1)
++    {
++        ResetEvent( pcap->packet_event );
++        SetEvent( pcap->packet_ack );
++    }
+     return ret;
+ }
+ 
+@@ -1082,10 +1154,12 @@
+ }
+ 
+ #define PCAP_OPENFLAG_PROMISCUOUS 1
++#define PCAP_OPENFLAG_MAX_RESPONSIVENESS 16
+ struct pcap * CDECL pcap_open( const char *source, int snaplen, int flags, int timeout, void *auth, char *errbuf )
+ {
+     FIXME( "%s, %d, %d, %d, %p, %p: partial stub\n", debugstr_a(source), snaplen, flags, timeout, auth, errbuf );
+-    return open_live( source, snaplen, flags & PCAP_OPENFLAG_PROMISCUOUS, timeout, errbuf );
++    return open_live( source, snaplen, flags & PCAP_OPENFLAG_PROMISCUOUS,
++                      flags & PCAP_OPENFLAG_MAX_RESPONSIVENESS ? -1 : timeout, errbuf );
+ }
+ 
+ struct pcap * CDECL pcap_open_live( const char *source, int snaplen, int promisc, int to_ms, char *errbuf )
+--- a/dlls/wpcap/wpcap.spec
++++ b/dlls/wpcap/wpcap.spec
+@@ -41,7 +41,7 @@
+ @ cdecl pcap_get_airpcap_handle(ptr)
+ @ cdecl pcap_get_tstamp_precision(ptr)
+ @ cdecl pcap_geterr(ptr)
+-@ stub pcap_getevent
++@ cdecl pcap_getevent(ptr)
+ @ cdecl pcap_getnonblock(ptr ptr)
+ @ stub pcap_hopen_offline
+ @ stub pcap_hopen_offline_with_tstamp_precision

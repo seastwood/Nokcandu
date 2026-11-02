@@ -64,6 +64,18 @@ public enum PEFile {
                 o += 20
             }
         }
+        // Delay-import descriptors are a separate PE directory (13). Modern games often
+        // load their renderer only after startup, so the ordinary table is insufficient.
+        if p.dirs.count > 13, p.dirs[13].rva != 0, var o = p.offset(rva: p.dirs[13].rva) {
+            for _ in 0..<min(512, Int(p.dirs[13].size) / 32) {
+                guard let attributes = p.u32(o), let nameRVA = p.u32(o + 4), nameRVA != 0 else { break }
+                // RVA descriptors only; old VA descriptors need image-base conversion.
+                if attributes & 1 != 0, let no = p.offset(rva: nameRVA), let n = p.cString(at: no) {
+                    imports.append(n)
+                }
+                o += 32
+            }
+        }
         return PEInfo(is64Bit: p.is64, imports: imports)
     }
 
@@ -107,6 +119,35 @@ public enum PEFile {
             pending += dependency.imports.filter { local[$0.lowercased()] != nil }
         }
         info.imports += found.sorted()
+        return info
+    }
+
+    /// A bootstrap launcher may not render the game itself. Only inspect sibling programs
+    /// for known bootstrap names, and accept a result only when the evidence agrees.
+    /// Never change the launch target (including anti-cheat entry points).
+    public static func inspectForGraphics(_ url: URL) -> PEInfo? {
+        guard var info = inspectWithLoadedDLLs(url) else { return nil }
+        guard !info.imports.contains(where: { graphicsDLLs.contains($0.lowercased()) }),
+              ["launcher", "start", "bootstrap", "launchgame"].contains(url.deletingPathExtension().lastPathComponent.lowercased()) else { return info }
+        let root = url.deletingLastPathComponent().resolvingSymlinksInPath()
+        let siblings = ((try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.fileSizeKey])) ?? [])
+            .filter { $0.pathExtension.lowercased() == "exe" && $0.resolvingSymlinksInPath() != url.resolvingSymlinksInPath() }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        guard siblings.count <= 32 else { return info }
+        var evidence: [PEInfo] = []
+        for file in siblings {
+            let name = file.lastPathComponent.lowercased()
+            guard !["setup", "unins", "crash", "report", "server", "editor", "redist"].contains(where: { name.contains($0) }),
+                  file.resolvingSymlinksInPath().deletingLastPathComponent() == root,
+                  let size = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 256 * 1024 * 1024,
+                  let pe = inspectWithLoadedDLLs(file), pe.is64Bit == info.is64Bit,
+                  pe.imports.contains(where: { graphicsDLLs.contains($0.lowercased()) }) else { continue }
+            evidence.append(pe)
+        }
+        let modes = Set(evidence.map { GraphicsPreset.suggest(for: $0) })
+        if modes.count == 1 {
+            info.imports += Set(evidence.flatMap(\.imports).filter { graphicsDLLs.contains($0.lowercased()) }).sorted()
+        }
         return info
     }
 

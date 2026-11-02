@@ -77,6 +77,22 @@ for V in $(cat Engine/winemac/SUPPORTED_WINE); do
     echo "Note: no Wine Mac driver for Wine $V here (the resizable window won't be offered on those engines)."
   fi
 done
+# Native IPX is opt-in. Bundle only the engine version verified at runtime.
+mkdir -p "$APP/Contents/Resources/native-ipx"
+cp Resources/native-ipx/COPYING.LIB Resources/native-ipx/SOURCE.txt "$APP/Contents/Resources/native-ipx/"
+xcrun clang -arch arm64 -arch x86_64 -mmacosx-version-min=11.0 -O2 -Wall -Wextra -Werror Resources/native-ipx/access.c -o "$APP/Contents/Resources/native-ipx/native-ipx-access"
+if [ -f build/wpcap-11.0/SHA256SUMS ]; then
+  (cd build/wpcap-11.0 && shasum -a 256 -c SHA256SUMS)
+  mkdir -p "$APP/Contents/Resources/native-ipx/11.0"
+  cp -R build/wpcap-11.0/i386-windows build/wpcap-11.0/x86_64-windows build/wpcap-11.0/x86_64-unix "$APP/Contents/Resources/native-ipx/11.0/"
+  cp build/wpcap-11.0/adapter-info.exe "$APP/Contents/Resources/native-ipx/11.0/"
+  cp build/wpcap-11.0/wine-version build/wpcap-11.0/wine-source.sha256 build/wpcap-11.0/nokcandu-patch.sha256 "$APP/Contents/Resources/native-ipx/11.0/"
+  cp Engine/wpcap/README.md Engine/wpcap/native-capture-11.0.patch Engine/wpcap/build.sh "$APP/Contents/Resources/native-ipx/"
+elif [ "${NOKCANDU_REQUIRE_NATIVE_IPX:-0}" = 1 ]; then
+  echo 'Native IPX module is missing. Build Engine/wpcap/build.sh for Wine 11 first.'; exit 1
+else
+  echo 'Note: native IPX will be unavailable without its Wine 11 module.'
+fi
 # Signing identity: a stable one keeps macOS permissions (Input Monitoring, drives, folders) across builds.
 # NOKCANDU_SIGN_IDENTITY, else the "Nokcandu Signing" identity from scripts/make-signing-identity.sh, else ad-hoc.
 SIGN_ID="${NOKCANDU_SIGN_IDENTITY:-}"
@@ -101,7 +117,13 @@ for SO in "$APP"/Contents/Resources/winemac/*/x86_64-unix/winemac.so; do
   [ -f "$SO" ] && codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$SO"
 done
 
+if [ -f "$APP/Contents/Resources/native-ipx/11.0/x86_64-unix/wpcap.so" ]; then
+  codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/native-ipx/11.0/x86_64-unix/wpcap.so"
+  (cd "$APP/Contents/Resources/native-ipx/11.0" && shasum -a 256 i386-windows/wpcap.dll x86_64-windows/wpcap.dll x86_64-unix/wpcap.so adapter-info.exe > SHA256SUMS)
+fi
+
 codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/cabextract"
+codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/native-ipx/native-ipx-access"
 
 # App icon (original artwork in Resources/AppIcon.png)
 ICONSET="$(mktemp -d)/AppIcon.iconset"

@@ -1,0 +1,11 @@
+The native packet-capture module is built from Wine 11.0 under LGPL-2.1-or-later.
+COPYING.LIB contains its license. Existing copyright notices are retained.
+
+Release builds distribute matching source, patches and build scripts as the
+Nokcandu-native-ipx-source-<Nokcandu version>.tar.gz release asset:
+https://github.com/seastwood/Nokcandu/releases
+
+For development builds the matching archive is retained in build/ in the workspace.
+Development source and reproducible build instructions:
+https://github.com/seastwood/Nokcandu/tree/main/Engine/wpcap
+Upstream Wine source: https://dl.winehq.org/wine/source/11.0/wine-11.0.tar.xz

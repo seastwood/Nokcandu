@@ -4,6 +4,13 @@ The project README introduces the app. This folder keeps the implementation know
 
 | Document | What belongs there |
 | --- | --- |
+| [Installer destination mismatch](investigations/installer-destination-2026-11-01.md) | Why GOG setup bypassed the prepared external folder; shared Inno destination handoff and copy fallback. |
+| [Nonblocking installation](investigations/nonblocking-installation-2026-11-01.md) | Separate installation window, retained session, library access and existing Windows-setup preservation. |
+| [Graphics detection investigation](investigations/graphics-detection-2026-11-01.md) | Bootstrap launchers, delay imports, unknown API defaults, installed Rocket League regression and review-only migration. |
+| [LAN discovery investigation](investigations/lan-discovery-2026-11-01.md) | Battlefield/GameSpy query evidence and reusable diagnostic; LAN browsing restored after the user disabled the Windows host’s virtual Ethernet adapter. |
+| [BF1942 Internet browser](investigations/bf1942-internet-browser-2026-11-01.md) | Verified obsolete master hostname, fingerprinted managed-copy correction, safe migration and combined Undo; user confirmed Internet servers appear after the two-slot correction. |
+| [Mac native IPX investigation](investigations/native-ipx-mac-2026-11-01.md) | User-confirmed Wi-Fi native IPX discovery/join/gameplay; optional shared component, profiles, registry/file Undo, packet lease and pending final managed migration. | — final managed ROM2 discovery/joining confirmed in both directions; session-based permissions, adapter-redaction migration, and VM snapshot/NAT troubleshooting.
+| [Shared IPX and ROM2 investigation](investigations/ipx-rom2-networking-2026-11-01.md) | Optional shared IPX component, native engine/probe evidence, TCP/IP comparison, profile service parity and later multiplayer test. |
 | [Engineering learnings](engineering-learnings.md) | Confirmed lessons, the scope of each fix, evidence, unresolved issues, and rules for future changes. Start here. |
 | [Compatibility fixes](compatibility-fixes.md) | Component IDs, implementation details, sources, ownership/Undo, migrations, and game/launcher-specific findings. |
 | [EA gameplay audio investigation](investigations/ea-gameplay-audio-2026-10-28.md) | The complete dated trial-and-error record for BC2/DAO audio, failed comparisons, restored settings, and remaining questions. |

@@ -67,6 +67,8 @@ public struct GameProfile: Codable, Hashable {
         }
     }
     public var gameDisplay: GameDisplay? = nil
+    /// Native Ethernet frame only; never local adapter identities or packet permissions.
+    public var nativeIPXFrame: Int? = nil
     /// Audio buffer chunk size in ms (10, 20 or 40) for the game's Wine engine.
     public var audioBuffer: Int? = nil
     /// Game resolution: screen pixels while the game runs ([width, height]); nil = desktop (don't switch).
@@ -104,7 +106,8 @@ public struct GameProfile: Codable, Hashable {
         let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
         if t.isEmpty || t.count > 100 { p.append("title must be 1–100 characters") }
         if ![1, 2].contains(schema) { p.append("unknown schema \(schema)") }
-        if (gameDisplay != nil || rawMouseFrameSync != nil), schema != 2 { p.append("these settings require profile schema 2") }
+        if (gameDisplay != nil || rawMouseFrameSync != nil || nativeIPXFrame != nil), schema != 2 { p.append("these settings require profile schema 2") }
+        if let frame = nativeIPXFrame, !(1...3).contains(frame) || fixes?.contains("native-ipx-networking") != true { p.append("native IPX frame requires the native IPX component and frame 1, 2 or 3") }
         if let d = gameDisplay {
             if d.recipe == "bf1942" {
                 if !BF1942DisplayFix.resolutions.contains(d.resolution) { p.append("unsupported BF1942 game resolution") }
@@ -376,6 +379,7 @@ public enum Profiles {
         }
         if hosted?.borderless == true { p.fixes = (p.fixes ?? []) + ["borderless"] }
         if let size = BC2DisplaySettings.resolution(g), BC2DisplaySettings.supports(g) { p.gameDisplay = .init(recipe: size == BC2DisplaySettings.desktop ? "bfbc2-desktop" : "bfbc2", resolution: size, menuCorrection: false) }
+        p.nativeIPXFrame = NativeIPXNetworking.frame(for: g)
         p.schema = 2
         p.audioBuffer = hosted == nil ? AudioBuffer.current(for: g) : nil
         if g.battleNet == nil { p.displayPixels = c?.displayPixels }
@@ -536,12 +540,17 @@ public enum Profiles {
             if CinematicFix.isPresent(for: g) { plan.gameSettings.append("Cinematic fix (LAV Filters): already installed") }
             else { plan.needsCinematicFix = true }
         }
+        if let frame = p.nativeIPXFrame {
+            if NativeIPXNetworking.supports(g) || CompatibilityFixes.isInstalled(.nativeIPXNetworking, for: g) {
+                plan.gameSettings.append("Native IPX frame: \(frame == 3 ? "802.2" : frame == 2 ? "802.3" : "Ethernet II"); local adapter and session permission chosen on this Mac")
+            } else { plan.skipped.append("Native IPX frame: requires the supported native-IPX component") }
+        }
         for fix in CompatibilityFix.allCases where p.fixes?.contains(fix.rawValue) == true {
             if g.hosted != nil, fix == .borderless { plan.gameSettings.append("Fullscreen (Borderless)"); continue }
             // The profile's graphics choice is applied before component installation.
             var planned = g
             if let gr = p.graphics, var c = planned.custom { c.graphics = gr; planned.custom = c }
-            if CompatibilityFixes.isInstalled(fix, for: g) { plan.gameSettings.append("\(fix.title): already installed") }
+            if CompatibilityFixes.isInstalled(fix, for: g) && !CompatibilityFixes.needsUpdate(fix, for: g) { plan.gameSettings.append("\(fix.title): already installed") }
             else if let reason = CompatibilityFixes.unavailable(fix, for: planned) { plan.skipped.append("\(fix.title): \(reason)") }
             else { plan.componentFixes.append(fix) }
         }
@@ -562,6 +571,8 @@ public enum Profiles {
         let raw: RawMouse.Settings
         let perf: Performance.Settings
         var buffer: Int? = nil
+        var nativeIPXFrame: Int? = nil
+        var appliedNativeIPXFrame: Int? = nil
         var displayCheckpoint: BF1942DisplayFix.Checkpoint? = nil
         var hosted: HostedSettings.Settings? = nil
         var bc2Display: BC2DisplaySettings.Checkpoint? = nil
@@ -574,6 +585,10 @@ public enum Profiles {
 
     /// Puts back the settings from before `apply`.
     public static func undo(_ s: Snapshot) throws {
+        if let frame = s.nativeIPXFrame, let expected = s.appliedNativeIPXFrame {
+            guard NativeIPXNetworking.frame(for: s.game) == expected else { throw NokError("The native IPX frame changed after applying the profile. Your setting was kept.") }
+            try NativeIPXNetworking.setFrame(frame, for: s.game)
+        }
         if let r = s.resizable { try WindowedPresentation.saveSetting(r, for: s.game) }
         try s.displayCheckpoint?.restore()
         try s.bc2Display?.restore()
@@ -596,6 +611,8 @@ public enum Profiles {
         let target = g.battleNet.flatMap { GameLibrary.inspect(URL(fileURLWithPath: $0.hostApp)) } ?? g
         var snapshot = Snapshot(target: target, config: target.custom, game: g, raw: RawMouse.settings(for: g), perf: Performance.settings(for: g),
                                 buffer: g.hosted == nil ? AudioBuffer.current(for: g) : nil)
+        snapshot.nativeIPXFrame = NativeIPXNetworking.frame(for: g)
+        snapshot.appliedNativeIPXFrame = p.nativeIPXFrame
         if let r = p.resizableWindow, WindowedPresentation.unavailable(for: g) == nil, r != WindowedPresentation.setting(for: g) {
             snapshot.resizable = .some(WindowedPresentation.setting(for: g))
             try WindowedPresentation.saveSetting(r, for: g)     // applied when the game next starts
@@ -670,6 +687,10 @@ public enum Profiles {
     /// when a display operation fails part way; component Undo remains in Fixes as before.
     public static func applyGameDisplay(_ p: GameProfile, to game: InstalledGame, snapshot: Snapshot,
                                         log: @escaping @Sendable (String) -> Void) async throws {
+        if let frame = p.nativeIPXFrame, CompatibilityFixes.isInstalled(.nativeIPXNetworking, for: game) {
+            try NativeIPXNetworking.setFrame(frame, for: game)
+            log("Native IPX frame type \(frame) applied; adapter and permissions stay local.")
+        }
         if let d = p.gameDisplay, ["bfbc2", "bfbc2-desktop"].contains(d.recipe), let checkpoint = snapshot.bc2Display {
             checkpoint.started = true
             try BC2DisplaySettings.apply(game, resolution: d.resolution)

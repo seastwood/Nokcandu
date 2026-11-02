@@ -16,6 +16,10 @@ final class BF1942DisplayTests: XCTestCase {
         try Data("run Profiles/Custom/Video.con\r\n".utf8).write(to: folder.appendingPathComponent("Mods/bf1942/Settings/Video.con"))
         try Data("game.setGameDisplayMode 2560 1440 16 120\r\nrem keep this\r\n".utf8).write(to: folder.appendingPathComponent("Mods/bf1942/Settings/Profiles/Custom/Video.con"))
         try Data("renderer.setFullScreen 1\nrenderer.fieldOfView 1\n".utf8).write(to: folder.appendingPathComponent("Mods/bf1942/Settings/VideoDefault.con"))
+        let launcher = Data("managed test launcher".utf8)
+        g.executableName = CustomGames.launcherName
+        try launcher.write(to: g.launcherURL!)
+        c.launcherSHA = Hashing.sha256(data: launcher); g.custom = c
         try c.encoded().write(to: CustomGameConfig.url(in: g.contents))
         return g
     }
@@ -28,6 +32,61 @@ final class BF1942DisplayTests: XCTestCase {
         g.custom?.source = .steamLibrary
         XCTAssertFalse(BF1942DisplayFix.supports(g))
     }
+    func testMasterHostnameUsesOnlyItsVerifiedPaddedSlot() throws {
+        var input = Data(repeating: 0xaa, count: 5_648_384)
+        let offset = 0x557c30, old = Data("master.bf1942.sk\0\0".utf8)
+        for slot in [offset, 0x557df8] { input.replaceSubrange(slot..<(slot + old.count), with: old) }
+        let result = try BF1942DisplayFix.replacingMasterServer(input)
+        XCTAssertEqual(result.count, input.count)
+        XCTAssertEqual(result.subdata(in: offset..<(offset + old.count)), Data("master.bf1942.org\0".utf8))
+        XCTAssertEqual(zip(input, result).enumerated().compactMap { $0.element.0 != $0.element.1 ? $0.offset : nil }, [offset + 14, offset + 15, offset + 16, 0x557df8 + 14, 0x557df8 + 15, 0x557df8 + 16])
+        XCTAssertThrowsError(try BF1942DisplayFix.checkedMenuCopy(input), "a matching slot alone must not bypass fingerprint verification")
+        input[offset + old.count - 1] = 0xaa
+        XCTAssertThrowsError(try BF1942DisplayFix.replacingMasterServer(input), "the added character must fit verified null padding")
+        XCTAssertThrowsError(try BF1942DisplayFix.replacingMasterServer(Data()))
+    }
+
+    func testInstalledMasterCorrectionAndOwnedCopyMigrationWhenAvailable() throws {
+        let installed = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications/Sikarugir/bf1942-test.app/Contents/SharedSupport/prefix/drive_c/Games/bf1942-test")
+        guard let original = try? Data(contentsOf: installed.appendingPathComponent("BF1942.exe")),
+              let old = try? Data(contentsOf: installed.appendingPathComponent(BF1942DisplayFix.copyName)),
+              BF1942DisplayFix.ownedCopySHAs.contains(Hashing.sha256(data: old)) else { throw XCTSkip("verified pre-migration BF1942 files not available") }
+        let corrected = try BF1942DisplayFix.checkedMenuCopy(original)
+        XCTAssertEqual(Hashing.sha256(data: corrected), BF1942DisplayFix.correctedSHA)
+        XCTAssertEqual(try BF1942DisplayFix.checkedMenuCopy(old), corrected)
+        XCTAssertEqual(try BF1942DisplayFix.checkedMenuCopy(corrected), corrected)
+        XCTAssertNil(corrected.range(of: Data("master.bf1942.sk".utf8)), "no active obsolete master reference may remain")
+        var g = try fixture(); defer { try? FileManager.default.removeItem(at: g.appURL) }
+        let root = try XCTUnwrap(BF1942DisplayFix.folder(g))
+        try original.write(to: root.appendingPathComponent("BF1942.exe"))
+        let ledger = BF1942DisplayFix.journal(g)
+        for name in [BF1942DisplayFix.copyName, BF1942DisplayFix.restartCopyName] {
+            try ledger.write(old, to: root.appendingPathComponent(name), reason: "Previous managed menu copy")
+        }
+        var c = try XCTUnwrap(g.custom); c.bf1942MenuCopy = true
+        let launcher = g.contents.appendingPathComponent("MacOS/" + CustomGames.launcherName)
+        let script = Data("managed launcher".utf8)
+        try script.write(to: launcher); c.launcherSHA = Hashing.sha256(data: script)
+        try c.encoded().write(to: CustomGameConfig.url(in: g.contents)); g.custom = c
+        try BF1942DisplayFix.save(.init(width: 1280, height: 800, previousProgram: c.exe, appliedProgram: c.exe, previousMenuCopy: nil, previousDisplay: nil, recommended: true), g)
+        try BF1942DisplayFix.refreshMenuCopies(g)
+        for name in [BF1942DisplayFix.copyName, BF1942DisplayFix.restartCopyName] {
+            XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(name)), corrected)
+        }
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("BF1942.exe")), original)
+        XCTAssertEqual(BF1942DisplayFix.resolution(for: g), [1280, 800])
+        XCTAssertEqual(CustomGameConfig.load(contents: g.contents), c)
+        XCTAssertEqual(try Data(contentsOf: launcher), script)
+        XCTAssertEqual(BF1942DisplayFix.journal(g).revertAll().skipped.count, 0)
+        // A manually edited launcher must block migration before either owned copy changes.
+        for name in [BF1942DisplayFix.copyName, BF1942DisplayFix.restartCopyName] {
+            try BF1942DisplayFix.journal(g).write(old, to: root.appendingPathComponent(name), reason: "Previous managed menu copy")
+        }
+        try Data("manual launcher".utf8).write(to: launcher)
+        XCTAssertThrowsError(try BF1942DisplayFix.refreshMenuCopies(g))
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(BF1942DisplayFix.copyName)), old)
+    }
+
     func testCommandEditingPreservesCommentsAndLineEndings() {
         let text = "rem game.setGameDisplayMode 1 2 3 4\r\n\tgame.setGameDisplayMode 800 600 16 120\r\nother.keep 9\r\ngame.setGameDisplayMode 1 2 3 4\r\n"
         let edited = BF1942DisplayFix.setting("game.setGameDisplayMode", value: "1280 800 32 60", in: text)
@@ -154,7 +213,7 @@ final class BF1942DisplayTests: XCTestCase {
         XCTAssertEqual(try BF1942DisplayFix.checkedMenuCopy(previous), changed)
         XCTAssertEqual(try BF1942DisplayFix.checkedMenuCopy(changed), changed)
         XCTAssertEqual(changed.subdata(in: 0x4d369c..<0x4d36a7), Data("BF194N.exe\0".utf8))
-        let allowed = Set([0x631ef, 0x631f0, 0x631f7, 0x631f8, 0x4d36a1])
+        let allowed = Set([0x631ef, 0x631f0, 0x631f7, 0x631f8, 0x4d36a1, 0x557c3e, 0x557c3f, 0x557c40, 0x557e06, 0x557e07, 0x557e08])
         for (offset, pair) in zip(original, changed).enumerated() where pair.0 != pair.1 {
             XCTAssertTrue(allowed.contains(offset), "unexpected byte change at \(offset)")
         }

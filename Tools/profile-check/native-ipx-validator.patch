@@ -1,0 +1,33 @@
+--- a/scripts/profiles.py
++++ b/scripts/profiles.py
+@@ -16,7 +16,7 @@
+ SOURCES = {"steam", "battlenet", "installer", "disc", "folder"}
+ GRAPHICS = {"dx9", "dx11", "d3dmetal", "dxmt", "ddraw", "wined3d"}
+ RATINGS = {"works", "playable", "broken"}
+-FIXES = {"borderless", "bundled-vc-runtime", "cinematic", "cross-process-windows", "cursor-visibility", "d3d8to9", "directx9-extras", "ipx-networking", "openua-display", "shader-compiler-47", "ubisoft-browser"}
++FIXES = {"borderless", "bundled-vc-runtime", "cinematic", "cross-process-windows", "cursor-visibility", "d3d8to9", "directx9-extras", "ipx-networking", "native-ipx-networking", "openua-display", "shader-compiler-47", "ubisoft-browser"}
+ BANNED = {"PATH", "HOME", "SHELL", "TMPDIR", "WINEPREFIX", "WINESERVER", "WINELOADER", "WINEARCH", "VK_DRIVER_FILES"}
+ BANNED_PARTS = ["DYLD_", "LD_", "NOKCANDU", "WINEDLLPATH", "PRELOAD", "ICD", "VK_LAYER", "VK_ADD_"]
+ APP = "{app}"
+@@ -61,7 +61,7 @@
+     out = {"schema": p.get("schema", 1)}
+     if type(out["schema"]) is not int or out["schema"] not in (1, 2):
+         probs.append("unknown schema")
+-    if (p.get("gameDisplay") is not None or p.get("rawMouseFrameSync") is not None) and out["schema"] != 2:
++    if (p.get("gameDisplay") is not None or p.get("rawMouseFrameSync") is not None or p.get("nativeIPXFrame") is not None) and out["schema"] != 2:
+         probs.append("these settings require profile schema 2")
+     title = p.get("title")
+     if not isinstance(title, str) or not (1 <= len(title.strip()) <= 100):
+@@ -136,6 +136,12 @@
+             if "openua-display" in fx and str(m.get("exeName", "")).lower() != "ua_source.exe":
+                 probs.append("OpenUA display settings require the UA_source.exe game match")
+         else: probs.append("unknown fix")
++    frame = p.get("nativeIPXFrame")
++    if frame is not None:
++        if type(frame) is int and frame in (1, 2, 3) and "native-ipx-networking" in out.get("fixes", []):
++            out["nativeIPXFrame"] = frame
++        else:
++            probs.append("native IPX frame requires the native IPX component and frame 1, 2 or 3")
+     prog = p.get("program")
+     if prog is not None:
+         if isinstance(prog, str) and re.fullmatch(r'[A-Za-z]:\\[^\n:*?"<>|]{1,250}\.exe', prog, re.I) and ".." not in prog: out["program"] = prog
