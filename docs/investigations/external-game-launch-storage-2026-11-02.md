@@ -85,7 +85,7 @@ status receipts, manual-change guards, Undo and cloned-runtime/link accounting.
 Startup tests cover failure, stale receipts, pending authorization, store handoff,
 window confirmation and managed executable names. The subsequent full suite passed
 226 tests with seven optional skips; final packaging and UI verification are
-recorded below when complete. Actual Battlefield normal launch is user-confirmed;
+recorded below. Actual Battlefield normal launch is user-confirmed;
 this is not a claim that every Windows game's own startup bugs can be prevented.
 
 

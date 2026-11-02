@@ -28,8 +28,7 @@ unchanged. CI also syntax-checks the newly added shell build/diagnostic scripts.
 
 The fifteen focused native-IPX/entry/startup tests passed locally with one optional
 runtime test skipped. A fresh source copy, without build/, .build/ or engine caches,
-is running the same test-then-ad-hoc-build sequence as CI; its result and the new
-GitHub run are recorded below after completion. The earlier failure is not marked
+passed the same test-then-ad-hoc-build sequence as CI; see the result below. The earlier failure is not marked
 resolved solely because the cached developer tree passes.
 
 This is test isolation, not a game-state migration. Undo is reverting the test and
@@ -42,4 +41,4 @@ A separate source-only tree, with no build/, .build/ or engine caches, passed al
 226 tests with eleven optional skips. Its subsequent `build-app.sh` completed with
 ad-hoc signing and no packet module, matching the normal CI build order and optional
 asset configuration. No production native-IPX checks were relaxed to obtain this
-result. The final pushed GitHub run still needs to be checked independently.
+result. Remote verification is tracked in [CI run 41490271011](https://github.com/seastwood/Nokcandu/actions/runs/41490271011); check the remote result independently of the developer tree.
