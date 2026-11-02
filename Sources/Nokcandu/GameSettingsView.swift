@@ -318,3 +318,81 @@ struct ProgramPicker: View {
         else { model.fail(NokError("Choose a program inside this game's C: drive.")) }
     }
 }
+
+/// Recipes supply defaults; players can override them without losing specialized launch preparation.
+struct RecipeSettingsSection: View {
+    @EnvironmentObject var model: AppModel
+    let game: InstalledGame
+    @State private var draft: RecipeSettings.Settings
+    @State private var rows: [GameSettingsSection.EnvRow]
+    @State private var saving = false
+
+    init(game: InstalledGame) {
+        self.game = game
+        let value = RecipeSettings.load(game)
+        _draft = State(initialValue: value)
+        _rows = State(initialValue: value.environment.sorted { $0.key < $1.key }.map { .init(key: $0.key, value: $0.value) })
+    }
+    var edited: RecipeSettings.Settings {
+        var value = draft
+        value.environment = Dictionary(rows.filter { !$0.key.isEmpty }.map { ($0.key, $0.value) }, uniquingKeysWith: { _, b in b })
+        return value
+    }
+    var body: some View {
+        SettingsSection(title: "Recipe Settings") {
+            Text("The recipe is a tested starting point. You can change these settings and return to the defaults at any time. Changes take effect after closing the game.")
+                .font(.caption).foregroundStyle(.secondary)
+            SettingRow(title: "Graphics") {
+                Picker("Graphics", selection: $draft.graphics) {
+                    Text("Recipe default").tag(nil as GraphicsPreset?)
+                    ForEach(GraphicsPreset.allCases) { Text($0.title).tag(Optional($0)) }
+                }.labelsHidden().frame(width: settingControlWidth)
+            }
+            SettingRow(title: "Program") {
+                HStack {
+                    Button(draft.program.isEmpty ? "Recipe launch method" : (draft.program as NSString).lastPathComponent) { chooseProgram() }
+                    if !draft.program.isEmpty { Button("Use Recipe") { draft.program = "" } }
+                }
+            }
+            if !draft.program.isEmpty {
+                Text(draft.program).font(.caption.monospaced()).textSelection(.enabled)
+                Text("A different program can bypass the recipe's required launcher. Use Recipe restores the tested launch method.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            SettingRow(title: "Launch options") { TextField("Additional game options", text: $draft.arguments).font(.body.monospaced()) }
+            DisclosureGroup("Advanced environment variables") {
+                ForEach($rows) { $row in
+                    HStack {
+                        TextField("NAME", text: $row.key).frame(width: 180)
+                        TextField("value", text: $row.value)
+                        Button { rows.removeAll { $0.id == row.id } } label: { Image(systemName: "minus.circle") }.buttonStyle(.plain)
+                    }.font(.body.monospaced())
+                }
+                HStack { Button("Add Variable") { rows.append(.init(key: "", value: "")) }; Spacer() }
+                Text("These override the recipe's variables. Microphone access remains controlled by the Microphone switch.").font(.caption).foregroundStyle(.secondary)
+            }
+            HStack {
+                Button("Save Changes") { save() }.buttonStyle(.borderedProminent)
+                    .disabled(saving || edited == RecipeSettings.load(game) || rows.contains { !$0.key.isEmpty && !CustomGames.isValidEnvName($0.key) })
+                Button("Recipe Defaults") { draft = .init(); rows = [] }.disabled(saving)
+            }
+        }
+    }
+    func chooseProgram() {
+        let panel = NSOpenPanel()
+        panel.directoryURL = game.prefix.appendingPathComponent("drive_c")
+        panel.allowedContentTypes = [UTType(filenameExtension: "exe")].compactMap { $0 }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if let path = CustomGames.windowsPath(forUnix: url, prefix: game.prefix) { draft.program = path }
+        else { model.fail(NokError("Choose a program inside this game's Windows environment.")) }
+    }
+    func save() {
+        saving = true
+        let value = edited
+        model.changeSetting(for: game, title: "Recipe Settings", success: "Recipe settings saved.", edit: { fresh in
+            var updated = value
+            updated.microphone = GameMicrophone.isOn(fresh)
+            try RecipeSettings.save(updated, for: fresh)
+        }, completion: { _ in saving = false })
+    }
+}

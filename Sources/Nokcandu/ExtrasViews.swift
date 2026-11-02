@@ -78,7 +78,7 @@ struct PerformanceSection: View {
     @State private var buffer: Int?
 
     var steam: Bool { game.usesSharedSteam || game.isSteamHost }
-    var graphics: GraphicsPreset? { game.hosted != nil ? HostedSettings.graphics(game) : game.custom?.graphics }
+    var graphics: GraphicsPreset? { game.hosted != nil ? HostedSettings.graphics(game) : RecipeSettings.supports(game) ? RecipeSettings.graphics(game) : game.custom?.graphics }
     var metal: Bool { graphics == .appleMetal || graphics == .dxmt }
     var d3dmetal: Bool { graphics == .appleMetal }
     var dxmt: Bool { graphics == .dxmt }
@@ -786,7 +786,7 @@ struct GameStorageSummary: View {
             }
         }
         .help("Allocated-size estimate, including separately stored game files and known settings folders. APFS copies can share disk blocks, so removing a game may free less than this estimate. Shared Steam/Battle.net runtime space is counted with its launcher.")
-        .task(id: "\(game.id)-\(measurement)") {
+        .task(id: "\(game.id)-\(GameMover.externalFiles(game)?.path ?? "local")-\(measurement)") {
             let g = game
             usage = nil
             let result = await Task.detached(priority: .utility) { Storage.usage(for: g) }.value

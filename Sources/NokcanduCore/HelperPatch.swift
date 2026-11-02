@@ -35,7 +35,7 @@ public enum HelperPatch {
         result = result.components(separatedBy: "\n").map { line in
             let body = line.drop(while: { $0 == " " || $0 == "\t" })
             let command = body.hasPrefix("exec ") ? body.dropFirst(5) : body
-            guard command.hasPrefix(#""$SUPPORT/wine/bin/wine" "#) || command.hasPrefix(#""$WINE" "#) else { return line }
+            guard command.hasPrefix(#""$SUPPORT/wine/bin/wine" "#) || command.hasPrefix(#""$WINE" "#) || command.hasPrefix(RecipeSettings.invocation) else { return line }
             return String(line.prefix(line.count - body.count)) + scopedPrefix + body
         }.joined(separator: "\n")
         // Wine's child-process registry still needs the helper path. This is a non-exported
@@ -45,13 +45,14 @@ public enum HelperPatch {
     }
 
     /// Adds or upgrades the recognised helper block. Already-current launchers are unchanged.
-    public static func add(to text: String) -> String? {
+    public static func add(to text: String, recipe: Bool = false) -> String? {
         let original = strip(text)
         guard !original.contains(marker) else { return nil }
         var lines = original.components(separatedBy: "\n")
         guard let i = lines.firstIndex(where: { $0.hasPrefix("export PATH=") }) else { return nil }
         lines.insert(contentsOf: block.components(separatedBy: "\n").dropLast(), at: i + 1)
-        let patched = scopeWineLibrary(lines.joined(separator: "\n"))
+        let base = lines.joined(separator: "\n")
+        let patched = scopeWineLibrary(recipe ? RecipeSettings.patch(base) : base)
         return patched == text ? nil : patched
     }
 
@@ -59,13 +60,14 @@ public enum HelperPatch {
     public static func strip(_ text: String) -> String {
         let text = WineEnvironment.originalExports(text)
         if text.contains(block) {
-            return text.replacingOccurrences(of: block, with: "").components(separatedBy: "\n").map { line in
+            let normalized = text.replacingOccurrences(of: block, with: "").components(separatedBy: "\n").map { line in
                 let body = line.drop(while: { $0 == " " || $0 == "\t" })
                 guard body.hasPrefix(scopedPrefix) else { return line }
                 return String(line.prefix(line.count - body.count)) + body.dropFirst(scopedPrefix.count)
             }.joined(separator: "\n")
+            return RecipeSettings.strip(normalized)
         }
-        return text.replacingOccurrences(of: legacyBlock, with: "")
+        return RecipeSettings.strip(text.replacingOccurrences(of: legacyBlock, with: ""))
     }
 
     /// Upgrade recognised recipe launchers and hash-verified generated launchers. Native tools
@@ -89,7 +91,7 @@ public enum HelperPatch {
             case .original, .nokcanduPatched: break
             default: continue
             }
-            guard let patched = add(to: text) else { continue }
+            guard let patched = add(to: text, recipe: true) else { continue }
             do {
                 try ChangeJournal(scope: g.journalScope).write(Data(patched.utf8), to: url, reason: "Launcher loads Nokcandu's helper library")
                 try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)

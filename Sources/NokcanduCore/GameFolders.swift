@@ -155,7 +155,16 @@ public enum GameMover {
 
     /// The game's own install folder inside drive_c (e.g. drive_c/Games/Battlefield 1942), from its program path.
     public static func gameFilesFolder(_ g: InstalledGame) -> URL? {
-        g.custom.flatMap { gameFilesFolder(exe: $0.exe, prefix: g.prefix) }
+        if let c = g.custom { return gameFilesFolder(exe: c.exe, prefix: g.prefix) }
+        guard let recipe = g.recipe, RecipeCatalog.recipe(id: recipe.id) != nil else { return nil }
+        let relative = recipe.gameDirectory
+        let parts = relative.split(separator: "/").map(String.init)
+        // Shipped recipes declare a dedicated content folder, never an entire prefix/runtime.
+        guard !relative.hasPrefix("/"), !parts.contains(".."),
+              parts.count >= 2, parts.first == "SharedSupport",
+              !["wine", "renderer", "nokcandu", "Logs"].contains(parts[1]),
+              parts[1] != "prefix" || (parts.count >= 5 && parts[2] == "drive_c") else { return nil }
+        return g.contents.appendingPathComponent(relative, isDirectory: true)
     }
     public static func gameFilesFolder(exe: String, prefix: URL) -> URL? {
         guard let rel = CustomGames.driveCRelative(windowsPath: exe) else { return nil }
@@ -250,21 +259,28 @@ public enum GameMover {
         guard let inPrefix = gameFilesFolder(g) else { throw NokError("Unknown game folder.") }
         if folder == nil, externalFiles(g) == nil { throw NokError("\(g.name)'s files are already on this Mac.") }
         if let m = missingDrive(g) { throw NokError(m) }
-        return try relocate(inPrefix, to: folder, progress: progress)
+        return try relocate(inPrefix, to: folder,
+                            name: g.custom == nil ? CustomGames.safeFolderName(g.name) : nil, progress: progress)
     }
 
     /// `inPrefix` is the game's folder in drive_c (a real folder, or a link to where the files are).
     @discardableResult
-    public static func relocate(_ inPrefix: URL, to folder: URL?, progress: @escaping @Sendable (String) -> Void = { _ in }) throws -> URL {
+    public static func relocate(_ inPrefix: URL, to folder: URL?, name: String? = nil, progress: @escaping @Sendable (String) -> Void = { _ in }) throws -> URL {
         let fm = FileManager.default
-        let linked = (try? fm.destinationOfSymbolicLink(atPath: inPrefix.path)).map { URL(fileURLWithPath: $0, isDirectory: true) }
+        let linked = (try? fm.destinationOfSymbolicLink(atPath: inPrefix.path)).map {
+            $0.hasPrefix("/") ? URL(fileURLWithPath: $0, isDirectory: true)
+                : inPrefix.deletingLastPathComponent().appendingPathComponent($0).standardizedFileURL
+        }
         let current = linked ?? inPrefix
         guard fm.fileExists(atPath: current.path) else { throw NokError("The game's files are missing (\(current.path)).") }
         let need = Storage.allocatedSize(current)
         let dest: URL
         if let folder {
             if let p = GameFolders.problem(with: folder) { throw NokError(p) }
-            dest = folder.appendingPathComponent(inPrefix.lastPathComponent, isDirectory: true)
+            dest = folder.appendingPathComponent(name ?? inPrefix.lastPathComponent, isDirectory: true)
+            let resolved = current.resolvingSymlinksInPath().standardizedFileURL.path
+            let destination = dest.resolvingSymlinksInPath().standardizedFileURL.path
+            guard destination != resolved, !destination.hasPrefix(resolved + "/") else { throw NokError("Choose a destination outside the game's current folder.") }
             guard dest.standardizedFileURL != current.standardizedFileURL else { throw NokError("They're already there.") }
             guard !fm.fileExists(atPath: dest.path) else { throw NokError("\(folder.path)/\(inPrefix.lastPathComponent) already exists. Rename or remove it first.") }
         } else {
@@ -280,8 +296,11 @@ public enum GameMover {
         do { try copyPlain(current, staging) } catch { try? fm.removeItem(at: staging); throw error }
         // Swap: the old link (or folder) goes, the new folder (or link) takes its place.
         if folder == nil {
-            try fm.removeItem(at: inPrefix)                          // the link
-            try fm.moveItem(at: staging, to: inPrefix)
+            let backup = inPrefix.deletingLastPathComponent().appendingPathComponent(".nokcandu-link-" + UUID().uuidString)
+            try fm.moveItem(at: inPrefix, to: backup)
+            do { try fm.moveItem(at: staging, to: inPrefix) }
+            catch { try? fm.moveItem(at: backup, to: inPrefix); throw error }
+            try? fm.removeItem(at: backup)
             progress("Removing the copy on the drive…")
             try? fm.removeItem(at: current)
         } else {

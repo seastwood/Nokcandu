@@ -42,3 +42,9 @@ A separate source-only tree, with no build/, .build/ or engine caches, passed al
 ad-hoc signing and no packet module, matching the normal CI build order and optional
 asset configuration. No production native-IPX checks were relaxed to obtain this
 result. Remote verification is tracked in [CI run 41490271011](https://github.com/seastwood/Nokcandu/actions/runs/41490271011); check the remote result independently of the developer tree.
+
+### Microphone fixture portability follow-up
+
+Run 41504935547 (6c4986f) failed the shell microphone-propagation fixture before its fake Wine command recorded any call. That fixture created a dummy non-library helper file and left the real DYLD injection variable in the executable shell path. The shell-only test now substitutes a harmless test variable for injection and supplies its own temporary directory; it still asserts microphone policy before setup and game calls in both states. The separate compiled audio-boundary test continues to exercise the real guard. Failure output now includes the launcher log. The exact platform-specific early failure was not visible in the original CI output; remote success must be verified rather than inferred from this change.
+
+A fresh source-only copy passed the 19 affected microphone, recipe, helper and move tests with no generated app/runtime assets. This test correction changes no production microphone permissions or enforcement.

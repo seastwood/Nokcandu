@@ -337,3 +337,7 @@ policies also enforce off when a child drops the inherited environment; a separa
 output-only probe passed with the environment flag removed. TCC capability checks
 can still occur during output-only use and do not establish input capture. The full
 suite passed 233 tests with seven optional skips. See [scope, evidence, migration and Undo](investigations/microphone-off-enforcement-2026-11-02.md).
+
+## Recipe storage and settings overrides (2026-11-02)
+
+Both shipped standalone recipes now expose user launch overrides and shared performance/microphone settings. Recipe defaults retain the tested launch method; alternate programs/renderers are user experiments and may need different dependencies. Zero Hour game files can move to ExFAT without moving its Wine prefix: preserve the existing relative `C:\Games\Zero Hour` link and replace its dedicated `SharedSupport/GameFiles` directory with the external-content link. Worms uses its declared C-drive game directory. Fresh installs and recognized closed existing launchers receive the same support; manual launcher edits are preserved. Profiles carry portable settings, not proprietary dependencies or OS permission grants. [Evidence, migration and Undo](investigations/recipe-storage-settings-2026-11-02.md).

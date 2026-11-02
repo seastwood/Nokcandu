@@ -328,6 +328,7 @@ public enum Profiles {
     /// Everything that makes this game work, as a shareable profile.
     public static func make(from g: InstalledGame, rating: GameProfile.Rating, notes: String?, install: String?) -> GameProfile {
         let c = g.custom
+        let recipe = RecipeSettings.supports(g) ? RecipeSettings.load(g) : nil
         let host = settingsApp(g)
         let hc = host.custom
         let hosted = g.hosted != nil ? HostedSettings.load(g) : nil
@@ -340,8 +341,12 @@ public enum Profiles {
             source = c.source == .disc ? "disc" : c.source == .folder ? "folder" : "installer"
             match.exeName = c.exe.split(separator: "\\").last.map(String.init)
         }
+        if let r = g.recipe, recipe != nil { match.exeName = r.primaryExecutable }
         var env: [String: String] = [:]
-        for (k, v) in hosted?.environment ?? hc?.environment ?? [:] {
+        let recipeEnvironment = recipe.map { overrides in
+            (g.recipe?.environment ?? [:]).merging(overrides.environment) { _, value in value }
+        }
+        for (k, v) in recipeEnvironment ?? hosted?.environment ?? hc?.environment ?? [:] {
             let pv = portable(v, contents: host.contents)
             if GameProfile.envNameAllowed(k) && GameProfile.envValueAllowed(pv) { env[k] = pv }
         }
@@ -356,8 +361,8 @@ public enum Profiles {
             for d in Drives.list(for: g) where !d.builtIn && lib.standardizedFileURL.path.hasPrefix(URL(fileURLWithPath: d.target).standardizedFileURL.path) { drives.insert(d.letter) }
         }
         var p = GameProfile(title: g.battleNet?.name ?? c?.name ?? g.name, match: match, source: source, install: install,
-                            graphics: hosted != nil ? HostedSettings.graphics(g) : hc?.graphics,
-                            arguments: hosted?.arguments ?? (g.battleNet == nil ? c?.arguments : nil),
+                            graphics: recipe != nil ? RecipeSettings.graphics(g) : (hosted != nil ? HostedSettings.graphics(g) : hc?.graphics),
+                            arguments: recipe?.arguments ?? hosted?.arguments ?? (g.battleNet == nil ? c?.arguments : nil),
                             environment: env.isEmpty ? nil : env,
                             rawMouse: raw.enabled ? raw.scale : 0,
                             performance: Performance.settings(for: g),
@@ -370,8 +375,9 @@ public enum Profiles {
         if !g.usesSharedSteam, g.battleNet == nil, let exe = c?.exe { p.program = exe }
         if g.battleNet != nil, let a = hc?.arguments, !a.isEmpty { p.hostArguments = a }
         if !drives.isEmpty { p.drives = drives.sorted() }
-        if c?.disc != nil { p.disc = true }
+        if c?.disc != nil || (recipe != nil && g.recipe?.disc != nil) { p.disc = true }
         if raw.enabled { p.rawMouseSmooth = raw.smooth }
+        if let program = recipe?.program, !program.isEmpty, CustomGames.driveCRelative(windowsPath: program) != nil { p.program = program }
         p.rawMouseFrameSync = raw.frameSync
         if let size = BF1942DisplayFix.resolution(for: g), BF1942DisplayFix.supports(g) {
             p.gameDisplay = GameProfile.GameDisplay(resolution: size, menuCorrection: BF1942DisplayFix.isRecommended(for: g))
@@ -462,7 +468,7 @@ public enum Profiles {
         var plan = Plan()
         let host = settingsApp(g)
         let shared = g.usesSharedSteam ? " (all Steam games)" : g.battleNet != nil ? " (all Battle.net games)" : g.hosted != nil ? " (shared launcher environment; kept unchanged)" : ""
-        if let prog = p.program, g.custom != nil, !g.usesSharedSteam, g.battleNet == nil {
+        if let prog = p.program, (g.custom != nil || RecipeSettings.supports(g)), !g.usesSharedSteam, g.battleNet == nil {
             if prog != g.custom?.exe, (!CompatibilityFixes.installedIDs(for: g).isEmpty || BF1942DisplayFix.hasChanges(for: g) || p.gameDisplay != nil) {
                 plan.skipped.append("Program \(prog) — Undo installed game fixes before changing the program")
             } else if BattleNet.unixPath(prog, prefix: g.prefix).map({ FileManager.default.fileExists(atPath: $0.path) }) == true {
@@ -479,7 +485,7 @@ public enum Profiles {
         let a = p.arguments ?? ""
         if g.battleNet != nil {
             if !a.isEmpty { plan.skipped.append("Launch options \(a) (Battle.net games take launch options in Battle.net's game settings)") }
-        } else if let mine = g.custom?.arguments, a != mine {
+        } else if let mine = g.custom?.arguments ?? (RecipeSettings.supports(g) ? RecipeSettings.load(g).arguments : nil), a != mine {
             plan.gameSettings.append(a.isEmpty ? "Launch options: none (removes \(mine))" : "Launch options: \(a)" + (mine.isEmpty ? "" : " (instead of \(mine))"))
         } else if !a.isEmpty {
             plan.gameSettings.append("Launch options: \(a) (same as now)")
@@ -490,7 +496,7 @@ public enum Profiles {
         if g.usesSharedSteam {
             if !env.isEmpty { plan.skipped.append("Extra settings \(text) (Steam games share Steam's environment — add them to a non-Steam copy if needed)") }
         } else {
-            let removed = (host.custom?.environment ?? [:]).filter { env[$0.key] == nil && replaceable($0.key, $0.value, host) }.keys.sorted()
+            let removed = (RecipeSettings.supports(host) ? RecipeSettings.load(host).environment : host.custom?.environment ?? [:]).filter { env[$0.key] == nil && replaceable($0.key, $0.value, host) }.keys.sorted()
             if !env.isEmpty || !removed.isEmpty {
                 plan.gameSettings.append("Extra settings: " + (env.isEmpty ? "none" : text) + (removed.isEmpty ? "" : " (removes \(removed.joined(separator: ", ")))") + (g.battleNet != nil ? shared : ""))
             }
@@ -575,13 +581,14 @@ public enum Profiles {
         var appliedNativeIPXFrame: Int? = nil
         var displayCheckpoint: BF1942DisplayFix.Checkpoint? = nil
         var hosted: HostedSettings.Settings? = nil
+        var recipe: RecipeSettings.Settings? = nil
         var bc2Display: BC2DisplaySettings.Checkpoint? = nil
         var resizable: [Int]?? = nil
         public var gameName: String { game.name }
     }
 
     /// Games a profile can be tried on: anything with settings Nokcandu manages.
-    public static func canTry(_ g: InstalledGame) -> Bool { g.custom != nil || g.battleNet != nil || g.hosted?.exe != nil }
+    public static func canTry(_ g: InstalledGame) -> Bool { g.custom != nil || g.battleNet != nil || g.hosted?.exe != nil || RecipeSettings.supports(g) }
 
     /// Puts back the settings from before `apply`.
     public static func undo(_ s: Snapshot) throws {
@@ -596,6 +603,7 @@ public enum Profiles {
             let current = GameLibrary.inspect(s.target.appURL) ?? s.target
             try CustomGames.saveAll(CompatibilityFixes.preservingInstalledSettings(c, for: current), to: current)
         }
+        if let recipe = s.recipe { try RecipeSettings.save(recipe, for: s.game) }
         if let hosted = s.hosted { try HostedSettings.save(hosted, for: GameLibrary.inspect(s.game.appURL) ?? s.game) }
         try RawMouse.apply(s.raw, for: s.game)
         try Performance.apply(s.perf, for: s.game)
@@ -637,6 +645,19 @@ public enum Profiles {
         }
         if let d = p.gameDisplay, d.recipe == "bf1942", displayUnavailable(d, for: target) == nil {
             snapshot.displayCheckpoint = try BF1942DisplayFix.checkpoint(for: CompatibilityFixes.fresh(target), size: d.resolution, menuCorrection: d.menuCorrection)
+        }
+        if RecipeSettings.supports(target) {
+            snapshot.recipe = RecipeSettings.load(target)
+            var value = snapshot.recipe!
+            value.graphics = p.graphics
+            value.arguments = p.arguments ?? ""
+            if let program = p.program,
+               BattleNet.unixPath(program, prefix: target.prefix).map({ FileManager.default.fileExists(atPath: $0.path) }) == true { value.program = program }
+            value.environment = value.environment.filter { !replaceable($0.key, $0.value, target) }
+            for (key, valueFromProfile) in p.environment ?? [:] where GameProfile.envNameAllowed(key) && GameProfile.envValueAllowed(valueFromProfile) {
+                value.environment[key] = expand(valueFromProfile, contents: target.contents)
+            }
+            try RecipeSettings.save(value, for: target)
         }
         if var c = target.custom {
             if let gr = p.graphics, c.legacyD3D9 != true { c.graphics = gr }

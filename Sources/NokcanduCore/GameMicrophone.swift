@@ -4,13 +4,14 @@ import Foundation
 /// library answers "no input streams"), so it never opens one and macOS never asks for microphone permission.
 public enum GameMicrophone {
     /// Games whose launcher Nokcandu writes (its own games and EA/Ubisoft games added to Nokcandu).
-    public static func supported(_ g: InstalledGame) -> Bool { g.native == nil && (g.custom != nil || g.hosted?.exe != nil || g.battleNet != nil || g.isSteamHost) }
+    public static func supported(_ g: InstalledGame) -> Bool { g.native == nil && (g.custom != nil || g.hosted?.exe != nil || g.battleNet != nil || g.isSteamHost || RecipeSettings.supports(g)) }
 
     static let sharedChoice = "microphone-enabled"
     public static func isOn(_ g: InstalledGame) -> Bool {
         if g.isSteamHost || g.battleNet != nil { return FileManager.default.fileExists(atPath: g.nokcanduState.appendingPathComponent(sharedChoice).path) }
         if let c = g.custom { return c.microphone == true }
         if g.hosted != nil { return HostedSettings.load(g).microphone == true }
+        if RecipeSettings.supports(g) { return RecipeSettings.load(g).microphone }
         return true
     }
 
@@ -22,6 +23,8 @@ public enum GameMicrophone {
         } else if SharedSteam.isHost(contents: contents) {
             let flag = contents.appendingPathComponent("SharedSupport/nokcandu/" + sharedChoice)
             env[variable] = FileManager.default.fileExists(atPath: flag.path) ? "0" : "1"
+        } else if let game = GameLibrary.inspect(contents.deletingLastPathComponent()), RecipeSettings.supports(game) {
+            env[variable] = RecipeSettings.load(game).microphone ? "0" : "1"
         }
         // Wine setup/tool processes need the same input guard as normal Play.
         if env[variable] != nil {
@@ -105,6 +108,10 @@ public enum GameMicrophone {
             var s = HostedSettings.load(g)
             s.microphone = on ? true : nil
             try HostedSettings.save(s, for: g)
+        } else if RecipeSettings.supports(g) {
+            var settings = RecipeSettings.load(g)
+            settings.microphone = on
+            try RecipeSettings.save(settings, for: g)
         }
     }
 }

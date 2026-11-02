@@ -235,3 +235,7 @@ policies also enforce off when a child drops the inherited environment; a separa
 output-only probe passed with the environment flag removed. TCC capability checks
 can still occur during output-only use and do not establish input capture. The full
 suite passed 233 tests with seven optional skips. See [scope, evidence, migration and Undo](investigations/microphone-off-enforcement-2026-11-02.md).
+
+### Shipped recipes are editable defaults, not a settings lock (2026-11-02)
+
+Recipe installations lack `CustomGameConfig`; do not use its presence as a proxy for movable content or configurable Wine settings. Resolve the recipe's dedicated content folder centrally and retain specialized launch methods when layering user overrides. In particular, Zero Hour must keep the tested .NET `Launcher.dll` path by default. Marked additions must normalize back to the recognized launcher for migration, display and repair checks. Preserve manual edits. Test ExFAT content relocation with the existing C-drive link, return moves, literal shell arguments, performance reads, and profile Undo. See [the confirmed investigation](investigations/recipe-storage-settings-2026-11-02.md).

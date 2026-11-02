@@ -365,7 +365,9 @@ public enum ZeroHourInstall {
                   let screen = NokPaths.bundledResource("screen-size") else { throw NokError("Launcher template missing from Nokcandu.app") }
             let launcher = ctx.contents.appendingPathComponent("MacOS/generals-launcher")
             try? fm.removeItem(at: launcher)
-            try Data(WineEnvironment.upgradeExports(String(contentsOf:template,encoding:.utf8)).utf8).write(to:launcher,options:.atomic)
+            let original = try String(contentsOf: template, encoding: .utf8)
+            let script = HelperPatch.add(to: original, recipe: true) ?? WineEnvironment.upgradeExports(original)
+            try Data(script.utf8).write(to: launcher, options: .atomic)
             try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: launcher.path)
             let screenDst = ctx.contents.appendingPathComponent("Resources/screen-size")
             try? fm.removeItem(at: screenDst)
@@ -401,6 +403,7 @@ public enum ZeroHourInstall {
             ]
             let data = try PropertyListSerialization.data(fromPropertyList: info.merging(AppPrivacy.keys) { a, _ in a }, format: .xml, options: 0)
             try data.write(to: ctx.contents.appendingPathComponent("Info.plist"))
+            if let game = GameLibrary.inspect(ctx.targetApp) { RawMouse.refreshLibraries([game]) }
             _ = try? Shell.run("/usr/bin/touch", [ctx.targetApp.path])
         }
     }

@@ -41,3 +41,4 @@ Keep credentials, account identifiers, raw session logs, copyrighted game/runtim
 - [Clean-runner CI test dependencies](investigations/ci-clean-tests-2026-11-02.md) — remove accidental prebuilt-runtime dependencies from adapter and native-entry unit tests.
 
 - [Microphone-off enforcement](investigations/microphone-off-enforcement-2026-11-02.md) — shared bootstrap policy, capture boundary, launcher separation and tests without recording audio.
+- [Recipe storage and user settings](investigations/recipe-storage-settings-2026-11-02.md) — recipe content moves, editable defaults, launcher preservation, profiles and Undo.

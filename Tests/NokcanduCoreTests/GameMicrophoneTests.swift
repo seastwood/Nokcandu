@@ -18,13 +18,19 @@ final class GameMicrophoneTests: XCTestCase {
             try? FileManager.default.removeItem(at: game.nokcanduState.appendingPathComponent("registry-env"))
             var config = game.custom!; config.microphone = allowed
             config.environment = [GameMicrophone.variable: allowed ? "1" : "0"]
+            // This test executes a shell fixture, not Wine. Do not ask dyld to load the
+            // deliberately non-library helper marker into its Bash interpreter. The native
+            // audio boundary is exercised independently in the compiled guard test below.
             let script = HelperPatch.scopeWineLibrary(CustomGames.launcherScript(for: config))
+                .replacingOccurrences(of: "DYLD_INSERT_LIBRARIES", with: "NOK_TEST_INJECTION")
             let file = game.contents.appendingPathComponent("MacOS/game-launcher")
             try script.write(to: file, atomically: true, encoding: .utf8)
             var inherited = ProcessInfo.processInfo.environment
             inherited[GameMicrophone.variable] = allowed ? "1" : "0"
+            inherited["TMPDIR"] = FileManager.default.temporaryDirectory.path
             let result = try Shell.run("/bin/bash", [file.path], env: inherited, timeout: 10)
-            XCTAssertTrue(result.ok, result.combined)
+            let launchLog = (try? String(contentsOf: game.support.appendingPathComponent("Logs/launch.log"), encoding: .utf8)) ?? ""
+            XCTAssertTrue(result.ok, result.combined + launchLog)
             let calls = try String(contentsOf: trace, encoding: .utf8).split(separator: "\n").map(String.init)
             XCTAssertTrue(calls.contains(where: { $0.hasPrefix("regedit|") }), calls.description)
             XCTAssertGreaterThanOrEqual(calls.count, 2)
