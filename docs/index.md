@@ -35,3 +35,7 @@ Update these docs in the same change as the implementation:
 7. Update the current status when new evidence supersedes a result. Keep detailed dated investigations as historical snapshots.
 
 Keep credentials, account identifiers, raw session logs, copyrighted game/runtime binaries, and machine-specific backup files out of the repository. Use portable paths and record checked hashes instead. A temporary log filename is evidence provenance, not a durable backup.
+
+- [External game launch and storage accounting](investigations/external-game-launch-storage-2026-11-02.md) — native app privacy identity, visible startup errors, external-drive runtime accounting and safe migration/Undo.
+
+- [Clean-runner CI test dependencies](investigations/ci-clean-tests-2026-11-02.md) — remove accidental prebuilt-runtime dependencies from adapter and native-entry unit tests.

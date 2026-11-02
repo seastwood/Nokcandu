@@ -204,7 +204,9 @@ struct LibraryView: View {
         }
         .overlay(alignment: .bottom) {
             if let b = model.banner {
-                BannerView(banner: b) { model.banner = nil }
+                BannerView(banner: b) {
+                    if model.banner?.id == b.id { model.banner = nil }
+                }
                     .padding()
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -300,7 +302,12 @@ struct BannerView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
         .shadow(radius: 4)
         .task(id: banner.id) {
-            try? await Task.sleep(nanoseconds: banner.isError ? 12_000_000_000 : 5_000_000_000)
+            // An old progress task is cancelled when an error replaces it.
+            // Cancellation must never dismiss the new banner; errors stay put.
+            guard !banner.isError else { return }
+            do { try await Task.sleep(nanoseconds: 5_000_000_000) }
+            catch { return }
+            guard !Task.isCancelled else { return }
             dismiss()
         }
     }

@@ -550,6 +550,7 @@ public enum CustomInstall {
                 ctx.state.inputs["ubisoft.client-configured"]="1"
                 try ctx.saveState()
             }
+            if let game = GameLibrary.inspect(ctx.targetApp) { try LauncherEntry.ensure(game) }
             _ = try? Shell.run("/usr/bin/touch", [ctx.targetApp.path])
         }
     }

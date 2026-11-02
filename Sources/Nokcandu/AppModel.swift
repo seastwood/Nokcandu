@@ -219,6 +219,7 @@ final class AppModel: ObservableObject {
 
     /// After the user confirmed: quits the game or launcher.
     func quit(_ g: InstalledGame) {
+        startupObservers.removeValue(forKey: g.id)
         say("Quitting \(g.name)…")
         Task {
             if g.native != nil {
@@ -319,12 +320,40 @@ final class AppModel: ObservableObject {
                         await MainActor.run { self.say("Downloaded \(g.name)'s newer cloud save. Starting…") }
                     }
                 }
-                return Result { try GameLauncher.launch(g, arguments: launchArgs) }
+                let started = Date()
+                do {
+                    try GameLauncher.launch(g, arguments: launchArgs)
+                    if g.native == nil { await MainActor.run { self.observeStartup(g, since: started) } }
+                    return .success(())
+                } catch { return .failure(error) }
             }.value
             if case .failure(let e) = r { fail(e) }
             if sortMode == .recent { reorganize() }
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             refreshRunStates()
+        }
+    }
+
+    private var startupObservers: [String: UUID] = [:]
+    private func observeStartup(_ game: InstalledGame, since: Date) {
+        let token = UUID(); startupObservers[game.id] = token
+        Task {
+            var warned = false
+            defer { if startupObservers[game.id] == token { startupObservers.removeValue(forKey: game.id) } }
+            while startupObservers[game.id] == token {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard startupObservers[game.id] == token else { return }
+                let elapsed = Date().timeIntervalSince(since)
+                let observation = await Task.detached(priority: .utility) {
+                    StartupMonitor.observe(game, since: since, elapsed: elapsed)
+                }.value
+                switch observation {
+                case .opened: return
+                case .failed(let message): fail(NokError(message)); refreshRunStates(); return
+                case .waiting(let message): if !warned { say(message); warned = true }
+                case .pending: break
+                }
+            }
         }
     }
 
@@ -410,7 +439,7 @@ final class AppModel: ObservableObject {
             moving.remove(g.id)
             switch r {
             case .success(let dest):
-                say(folder == nil ? "\(g.name)'s files are back on this Mac." : "\(g.name)'s files are now on \(GameFolders.volumeName(dest)). The app stays here; keep the drive connected to play.")
+                say(folder == nil ? "\(g.name)'s files are back on this Mac." : "\(g.name)'s files are now on \(GameFolders.volumeName(dest)). The app and Wine runtime stay on this Mac; keep the drive connected to play.")
             case .failure(let e): fail(e)
             }
             refresh()

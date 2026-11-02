@@ -40,6 +40,9 @@ public enum StuckGames {
         if let exe = g.custom?.exe, g.custom?.source != .steamLibrary {
             out.insert(String(exe.split(whereSeparator: { $0 == "\\" || $0 == "/" }).last ?? Substring(exe)).lowercased())
         }
+        if g.custom?.bf1942MenuCopy == true {
+            out.formUnion([BF1942DisplayFix.copyName.lowercased(), BF1942DisplayFix.restartCopyName.lowercased()])
+        }
         if let h = WineTools.hostContents(for: g),
            let text = try? String(contentsOf: h.appendingPathComponent("SharedSupport/nokcandu/app-names.tsv"), encoding: .utf8) {
             let name = g.battleNet?.name ?? g.name

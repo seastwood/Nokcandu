@@ -49,6 +49,7 @@ cp "$BIN/Nokcandu" "$APP/Contents/MacOS/Nokcandu"
 cp "$BIN/nokcandu-screen-size" "$APP/Contents/Resources/screen-size"
 cp Resources/bonjour/nokcandu-bonjour-service.exe Resources/refresh-generals-launcher.py Resources/build-icu-adapter.py Resources/generals-launcher "$APP/Contents/Resources/"
 chmod 755 "$APP/Contents/Resources/generals-launcher" "$APP/Contents/Resources/screen-size"
+xcrun clang -arch arm64 -arch x86_64 -mmacosx-version-min=11.0 -O2 -Wall -Wextra -Werror -framework CoreFoundation Resources/launcher-entry/main.c -o "$APP/Contents/Resources/nokcandu-launcher"
 ./Resources/borderless/build.sh "$(pwd)/$APP/Contents/Resources"
 ./Resources/cabextract/build.sh "$(pwd)/$APP/Contents/Resources"
 # Nokcandu's helper library loaded into Wine: raw mouse, hot corners, game names, sound that follows the Mac's
@@ -122,6 +123,7 @@ if [ -f "$APP/Contents/Resources/native-ipx/11.0/x86_64-unix/wpcap.so" ]; then
   (cd "$APP/Contents/Resources/native-ipx/11.0" && shasum -a 256 i386-windows/wpcap.dll x86_64-windows/wpcap.dll x86_64-unix/wpcap.so adapter-info.exe > SHA256SUMS)
 fi
 
+codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/nokcandu-launcher"
 codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/cabextract"
 codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/native-ipx/native-ipx-access"
 

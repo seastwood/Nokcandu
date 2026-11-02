@@ -186,3 +186,34 @@ system DLL changes were required. Record bridge mode when diagnosing snapshot
 regressions; local capture tests alone do not prove peer connectivity. Other games
 use the same optional infrastructure but still need their own interoperability test.
 See [confirmed evidence, failed comparisons, migration and Undo](investigations/native-ipx-mac-2026-11-01.md).
+
+
+### External game folders: native entry identity and honest runtime sizing
+
+A moved Battlefield 1942 failed because macOS attributed its script-only app to
+/bin/bash and denied removable-volume access to shasum without a prompt. The shared
+native entry retains the game's identity, preserves the script and lets macOS ask
+normally. After approval, the user confirmed Battlefield opened. Closed owned
+custom/recognized recipe launchers migrate safely; edited scripts/helpers/plists
+are preserved, and the private record supports guarded Undo. Fresh general installs
+and Steam shortcuts use the same entry. Startup receipts and a shared observer
+turn early launcher failures into visible errors with bounded log detail; pending
+permission/sign-in dialogs remain waits, not failed launches.
+
+Move To on game-files-only filesystems keeps Wine and the private Windows setup
+locally. The old UI showed private APFS blocks as allocated size (Battlefield about
+17 MB instead of 1.94 GB), obscuring this runtime. Usage and move-capacity estimates
+now count allocated blocks without following external links; deletion savings keep
+private-block semantics. Shared APFS clones can make removal savings smaller than
+allocated app totals. Game files were verified on Elements (Battlefield 4.82 GB);
+no runtime/content deletion or reformat is required. See the
+[confirmed launch, storage, migration and Undo investigation](investigations/external-game-launch-storage-2026-11-02.md).
+
+
+### Verify clean packaging inputs, not only a prepared developer tree
+
+CI's three native-adapter unit failures on `4cf2429` depended on a prebuilt adapter
+reader available only on the developer Mac. Fake-Wine tests now supply explicit
+packet-package fixtures; native entry tests build their helper from source. Real
+package interoperability remains opt-in. Verify the test-before-build order in a
+fresh tree and the GitHub result. See [the CI investigation](investigations/ci-clean-tests-2026-11-02.md).

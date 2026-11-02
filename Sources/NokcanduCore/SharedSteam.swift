@@ -730,6 +730,7 @@ public enum SharedSteam {
             "NokcanduRecipe": "steam-library",
         ]
         try PropertyListSerialization.data(fromPropertyList: plist.merging(AppPrivacy.keys) { a, _ in a }, format: .xml, options: 0).write(to: c.appendingPathComponent("Info.plist"))
+        if let game = GameLibrary.inspect(target) { try LauncherEntry.ensure(game) }
         _ = try? Shell.run("/usr/bin/touch", [target.path])
         return target
     }

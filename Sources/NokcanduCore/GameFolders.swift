@@ -77,7 +77,7 @@ public enum GameFolders {
     }
 
     /// Whole game apps can live here. Drives formatted ExFAT/FAT (common on USB drives) can't hold the app —
-    /// Wine's setup needs symbolic links — so there Nokcandu keeps the small app on the Mac and stores
+    /// Wine's setup needs symbolic links — so there Nokcandu keeps the app and Wine runtime on the Mac and stores
     /// only the game's own files on the drive, which works fine.
     public static func holdsApps(_ u: URL) -> Bool {
         var probe = u
@@ -260,7 +260,7 @@ public enum GameMover {
         let linked = (try? fm.destinationOfSymbolicLink(atPath: inPrefix.path)).map { URL(fileURLWithPath: $0, isDirectory: true) }
         let current = linked ?? inPrefix
         guard fm.fileExists(atPath: current.path) else { throw NokError("The game's files are missing (\(current.path)).") }
-        let need = Storage.size(current)
+        let need = Storage.allocatedSize(current)
         let dest: URL
         if let folder {
             if let p = GameFolders.problem(with: folder) { throw NokError(p) }
@@ -321,7 +321,7 @@ public enum GameMover {
             progress("Moving…")
             try fm.moveItem(at: g.appURL, to: target)
         } else {
-            let need = Storage.size(g.appURL)
+            let need = Storage.allocatedSize(g.appURL)
             if let free = GameFolders.freeSpace(dest), free < need + 500_000_000 {
                 throw NokError("Not enough space on \(GameFolders.volumeName(dest)): \(g.name) needs \(Storage.format(need)), \(Storage.format(free)) is free.")
             }

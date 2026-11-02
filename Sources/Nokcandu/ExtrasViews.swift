@@ -679,7 +679,7 @@ struct GameLocationSection: View {
                     if let b = GameMover.blocker(game), b != "Quit the game first.", GameMover.filesBlocker(game).map({ $0 != "Quit the game first." }) ?? false {
                         Text(b).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     } else {
-                        Text("Move it to another folder or drive to free up space. On APFS or Mac OS Extended drives the whole app moves; on ExFAT drives (most USB drives) only the game's files move and the small app stays here. Keep the drive connected to play.")
+                        Text("Move it to another folder or drive to free up space. On APFS or Mac OS Extended drives the whole app moves; on ExFAT drives (most USB drives) only the game's files move and the app, Wine runtime and private Windows setup stay on this Mac. Keep the drive connected to play.")
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -747,7 +747,7 @@ struct GameFoldersBox: View {
                 }
                 if let error { Text(error).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true) }
                 HStack {
-                    Text("Steam, Battle.net and their games stay in the standard folder (pick a drive in their own settings instead). Other games can live anywhere — move one from its page or by right-clicking it. On ExFAT drives only the game's files are stored; the small app stays on this Mac.")
+                    Text("Steam, Battle.net and their games stay in the standard folder (pick a drive in their own settings instead). Other games can live anywhere — move one from its page or by right-clicking it. On ExFAT drives only the game's files are stored; the app, Wine runtime and private Windows setup stay on this Mac.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     Spacer()
                     Button("Add Folder…", action: add)

@@ -62,7 +62,7 @@ public enum GameLibrary {
         let bnet = BattleNetLink.load(contents: contents)
         let hosted = HostedGameLink.load(contents: contents)
         guard hasPrefix || bnet != nil || hosted != nil || FileManager.default.fileExists(atPath: CustomGameConfig.url(in: contents).path) else { return nil }
-        let exe = info["CFBundleExecutable"] as? String
+        let exe = (info[LauncherEntry.key] as? String) ?? (info["CFBundleExecutable"] as? String)
         let name = (info["CFBundleName"] as? String) ?? app.deletingPathExtension().lastPathComponent
         var recipe = RecipeCatalog.all.first { r in
             exe == r.launcherExecutable || app.lastPathComponent == r.appBundleName
@@ -216,6 +216,7 @@ public enum GameLauncher {
     public static func launch(_ game: InstalledGame, arguments: [String] = []) throws {
         if game.hosted != nil { PCLaunchers.refreshLaunchers([game]) }
         HelperPatch.refresh([game])
+        try LauncherEntry.ensure(game)
         if game.isSteamHost || game.usesSharedSteam { SharedSteam.refreshHostScriptsIfNeeded() }
         var args = [game.appURL.path]
         if !arguments.isEmpty { args += ["--args"] + arguments }

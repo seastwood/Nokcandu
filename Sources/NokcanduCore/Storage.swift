@@ -22,12 +22,20 @@ public enum Storage {
     /// Wine engine is a clone of the same files, so counting it in full overstated every game by ~1.4 GB);
     /// elsewhere (ExFAT…) the allocated size. Links aren't followed. `excluding` folders are skipped.
     public static func size(_ url: URL, excluding: [URL] = []) -> Int64 {
+        measure(url, excluding: excluding, privateOnly: true)
+    }
+    /// Allocated file blocks, including blocks shared with APFS clones. This
+    /// describes an app's contents and copy capacity, rather than deletion savings.
+    public static func allocatedSize(_ url: URL, excluding: [URL] = []) -> Int64 {
+        measure(url, excluding: excluding, privateOnly: false)
+    }
+    private static func measure(_ url: URL, excluding: [URL], privateOnly: Bool) -> Int64 {
         let fm = FileManager.default
         var isDir: ObjCBool = false
         guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { return 0 }
         let keys: [URLResourceKey] = [.isRegularFileKey, .totalFileAllocatedSizeKey]
         func one(_ u: URL) -> Int64 {
-            if let p = privateSize(u) { return p }
+            if privateOnly, let p = privateSize(u) { return p }
             return Int64((try? u.resourceValues(forKeys: Set(keys)))?.totalFileAllocatedSize ?? 0)
         }
         if !isDir.boolValue { return one(url) }
@@ -92,8 +100,8 @@ public enum Storage {
         // Launchers: games installed in the launcher's own library are listed separately, not as its size.
         let hosted = launcherGames(in: g).filter { $0.1.path.hasPrefix(app.path + "/") }
         if !hosted.isEmpty {
-            var parts = [GameUsage.Part(title: g.isSteamHost ? "Steam" : "Launcher", url: app, bytes: size(app, excluding: hosted.map(\.1)), drive: driveName(app))]
-            parts += hosted.map { name, url in GameUsage.Part(title: name, url: url, bytes: FileManager.default.fileExists(atPath: url.path) ? size(url) : nil, drive: driveName(url)) }
+            var parts = [GameUsage.Part(title: g.isSteamHost ? "Steam" : "Launcher", url: app, bytes: allocatedSize(app, excluding: hosted.map(\.1)), drive: driveName(app))]
+            parts += hosted.map { name, url in GameUsage.Part(title: name, url: url, bytes: FileManager.default.fileExists(atPath: url.path) ? allocatedSize(url) : nil, drive: driveName(url)) }
             return GameUsage(parts: parts)
         }
         var roots: [(String, URL)] = [("App", app)]
@@ -109,7 +117,7 @@ public enum Storage {
             }
         }
         return GameUsage(parts: roots.map { title, url in
-            GameUsage.Part(title: title, url: url, bytes: FileManager.default.fileExists(atPath: url.path) ? size(url) : nil, drive: driveName(url))
+            GameUsage.Part(title: title, url: url, bytes: FileManager.default.fileExists(atPath: url.path) ? allocatedSize(url) : nil, drive: driveName(url))
         }, appOnly: g.native != nil && g.native?.installFolder == nil)
     }
 
@@ -127,13 +135,13 @@ public enum Storage {
 
     public static func games(_ games: [InstalledGame]) -> [Item] {
         games.map { g in
-            let logs = size(g.logs)
+            let logs = allocatedSize(g.logs)
             var detail: [String] = []
             let folder = g.appURL.deletingLastPathComponent()
             if folder.path.hasPrefix("/Volumes/") { detail.append("on \(folder.pathComponents.count > 2 ? folder.pathComponents[2] : "another drive")") }
-            var bytes = size(g.appURL)
+            var bytes = allocatedSize(g.appURL)
             if let ext = GameMover.externalFiles(g) {
-                let b = size(ext)
+                let b = allocatedSize(ext)
                 detail.append("game files on \(ext.path.hasPrefix("/Volumes/") ? ext.pathComponents[2] : "another drive") (\(format(b)))")
                 bytes += b
             }

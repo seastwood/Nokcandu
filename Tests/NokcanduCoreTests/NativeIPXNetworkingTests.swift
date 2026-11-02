@@ -32,6 +32,25 @@ final class NativeIPXNetworkingTests: XCTestCase {
         g = CompatibilityFixes.fresh(g)
         return g
     }
+    // Adapter tests use a fake Wine executable; supply matching package bytes
+    // explicitly instead of depending on a developer's prebuilt app/runtime.
+    func adapterResourceFixture() throws -> URL {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("native-adapter-package-" + UUID().uuidString)
+        try NokPaths.ensure(root)
+        try Data("fixture access helper".utf8).write(to: root.appendingPathComponent(NativeIPXNetworking.helperName))
+        let module = root.appendingPathComponent("11.0")
+        var manifest: [String] = []
+        for member in NativeIPXNetworking.moduleFiles + ["adapter-info.exe"] {
+            let target = module.appendingPathComponent(member)
+            try NokPaths.ensure(target.deletingLastPathComponent())
+            let data = Data(("fixture " + member).utf8)
+            try data.write(to: target)
+            manifest.append(Hashing.sha256(data: data) + "  " + member)
+        }
+        try (manifest.joined(separator: "\n") + "\n").write(to: module.appendingPathComponent("SHA256SUMS"), atomically: true, encoding: .utf8)
+        NativeIPXNetworking.resourceForTesting = root
+        return root
+    }
     func installRegistryRecord(_ g: InstalledGame) throws -> InstalledGame {
         let change = NativeIPXNetworking.RegistryChange(key: NativeIPXNetworking.registryRoot, name: "frame_type", previous: nil, applied: .dword(3))
         try NativeIPXNetworking.apply([change], for: g)
@@ -83,6 +102,9 @@ final class NativeIPXNetworkingTests: XCTestCase {
         p.nativeIPXFrame = 3; p.fixes = []; XCTAssertFalse(p.problems.isEmpty)
     }
     func testRedactedAdapterMigrationPreservesUndoAndManualChanges() throws {
+        let resources = try adapterResourceFixture()
+        defer { NativeIPXNetworking.resourceForTesting = nil; try? FileManager.default.removeItem(at: resources) }
+
         var g = try fixture(); defer { try? FileManager.default.removeItem(at: g.appURL) }
         g = try installRegistryRecord(g)
         var state = CompatibilityFixes.state(.nativeIPXNetworking, g)!
@@ -104,6 +126,9 @@ final class NativeIPXNetworkingTests: XCTestCase {
         XCTAssertEqual(try NativeIPXNetworking.read(primary.key, primary.name, for: g), .binary("ffffffffffff"))
     }
     func testWineAdapterIdentityRejectsRedactionAndKeepsCaptureIdentity() throws {
+        let resources = try adapterResourceFixture()
+        defer { NativeIPXNetworking.resourceForTesting = nil; try? FileManager.default.removeItem(at: resources) }
+
         let parsed = NativeIPXNetworking.wineAdapters("en0|{a}|5e:cd:64:63:1c:b8|192.168.1.2\r\nen1|{b}|02:00:00:00:00:00|192.168.1.3\nawdl0|{c}|12:34:56:78:90:ab|192.168.1.4\nen2|{d}|00:00:00:00:00:00|192.168.1.5")
         XCTAssertEqual(parsed, [.init(name: "en0", mac: "5E:CD:64:63:1C:B8", hasAddress: true)])
         var g = try fixture(); defer { try? FileManager.default.removeItem(at: g.appURL) }
@@ -198,9 +223,12 @@ final class NativeIPXNetworkingTests: XCTestCase {
         XCTAssertTrue(run.stdout.contains("Two-game session lifetime"))
     }
     func testAdapterSelectionIsLocalAndUndoKeepsPreviousSettings() throws {
+        let resources = try adapterResourceFixture()
+        defer { NativeIPXNetworking.resourceForTesting = nil; try? FileManager.default.removeItem(at: resources) }
+
         var g = try fixture(); defer { try? FileManager.default.removeItem(at: g.appURL) }
         g = try installRegistryRecord(g)
-        guard let adapter = NativeIPXNetworking.availableAdapters().first else { throw XCTSkip("Requires a connected local LAN interface") }
+        let adapter = NativeIPXNetworking.NetworkAdapter(id: "en0", title: "Fixture LAN")
         try NativeIPXNetworking.setAdapter(adapter.id, for: g)
         g = CompatibilityFixes.fresh(g)
         XCTAssertEqual(g.custom?.environment?[NativeIPXNetworking.interfaceFlag], adapter.id)

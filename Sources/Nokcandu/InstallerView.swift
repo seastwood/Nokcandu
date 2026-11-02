@@ -862,7 +862,7 @@ struct InstallFolderPicker: View {
             } else {
                 let free = GameFolders.freeSpace(folder).map { Storage.format($0) + " free" } ?? ""
                 Text("\(GameFolders.volumeName(folder)) · \(free)"
-                     + (GameFolders.holdsApps(folder) ? "" : " · \(GameFolders.formatName(folder)) drive: the game's files go here, its small app stays on this Mac"))
+                     + (GameFolders.holdsApps(folder) ? "" : " · \(GameFolders.formatName(folder)) drive: the game's files go here, its app and Wine runtime stay on this Mac"))
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }
