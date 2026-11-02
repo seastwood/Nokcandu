@@ -63,6 +63,8 @@ public enum SharedSteam {
         CONTENTS="$(cd "$(dirname "$0")/.." && pwd)"
         SUPPORT="$CONTENTS/SharedSupport"
         export WINEPREFIX="$SUPPORT/prefix"
+        \(GameMicrophone.launcherExports(allowed: false))
+        if [ -f "$SUPPORT/nokcandu/\(GameMicrophone.sharedChoice)" ]; then \(GameMicrophone.launcherExports(allowed: true)); fi
         \(WineEnvironment.exportLine("CONTENTS"))
         export WINEDEBUG=-all
         export WINEMSYNC=1

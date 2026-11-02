@@ -36,7 +36,12 @@ public enum StartupMonitor {
         let receipt = (try? Data(contentsOf: g.logs.appendingPathComponent("launcher-status.json")))
             .flatMap { try? JSONDecoder().decode(Receipt.self, from: $0) }
         let host = WineTools.hostContents(for: g)
-        let runtime = StuckGames.running(g).filter { process in host.map { WineTools.owns(pid: process.pid, contents: $0) } ?? false }
+        var runtime = StuckGames.running(g).filter { process in host.map { WineTools.owns(pid: process.pid, contents: $0) } ?? false }
+        if GameLauncher.hasPrivateGamePrefix(g), let host {
+            for (pid, command) in GameLauncher.processSnapshot() where GameLauncher.privateGameCommand(command) && WineTools.owns(pid: pid, contents: host) {
+                if !runtime.contains(where: { $0.pid == pid }) { runtime.append(.init(pid: pid, program: command, seconds: 0)) }
+            }
+        }
         let windows = StuckGames.pidsWithWindows()
         // A Wine virtual desktop may own the Mac window on behalf of the game.
         let window = !runtime.isEmpty && (runtime.contains { windows.contains($0.pid) } ||

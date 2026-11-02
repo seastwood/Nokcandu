@@ -181,7 +181,25 @@ public enum GameLauncher {
         for (pid, command) in processSnapshot() where match(command.lowercased()) {
             if WineTools.owns(pid: pid, contents: host) { return pid }
         }
+        // A private game may hand off from its configured launcher to another
+        // executable. Keep tracking that game's own environment, never another
+        // game's similarly named process or a shared store client.
+        if hasPrivateGamePrefix(game) {
+            for (pid, command) in processSnapshot() where privateGameCommand(command) {
+                if WineTools.owns(pid: pid, contents: host) { return pid }
+            }
+        }
         return nil
+    }
+
+    static func hasPrivateGamePrefix(_ game: InstalledGame) -> Bool {
+        game.native == nil && !game.usesSharedSteam && game.battleNet == nil && game.hosted == nil &&
+        !game.isSteamHost && PCLaunchers.kind(of: game) == nil
+    }
+    static func privateGameCommand(_ command: String) -> Bool {
+        let text = command.lowercased().replacingOccurrences(of: "/", with: "\\")
+        guard text.count > 3, text.dropFirst().hasPrefix(":"), text.first?.isLetter == true else { return false }
+        return !text.hasPrefix(#"c:\windows\"#)
     }
 
     /// The last two parts of a Windows program path, lowercased with backslashes ("folder\\game.exe").

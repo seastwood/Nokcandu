@@ -287,6 +287,8 @@ final class AppModel: ObservableObject {
         ActivationHandoff.expect(g)
         Task {
             let r = await Task.detached(priority: .userInitiated) { () -> Result<Void, Error> in
+                do { try GameMicrophone.refreshPolicies(await MainActor.run { self.games }) }
+                catch { return .failure(error) }
                 // A copy of this game left over from an earlier run (no window) blocks the launcher from starting it.
                 let stuck = StuckGames.stuck(g)
                 if StuckGames.end(stuck) > 0 {

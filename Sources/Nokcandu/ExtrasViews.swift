@@ -144,7 +144,7 @@ struct PerformanceSection: View {
             }
             if GameMicrophone.supported(game) {
                 SettingToggle(title: "Microphone",
-                              info: "Lets the game use your Mac's microphone (for voice chat). When off, the game sees no microphone at all, so macOS never asks you for permission for it. Takes effect the next time the game starts.",
+                              info: "Lets this game or launcher use your Mac's microphone for voice chat. Off blocks microphone discovery and capture setup while keeping sound output working. Takes effect after fully closing and reopening it. Shared launchers have their own setting, separate from each game.",
                               isOn: Binding(get: { GameMicrophone.isOn(game) }, set: { on in
                                   model.changeSetting(for: game, title: "Microphone", edit: { current in try GameMicrophone.set(on, for: current) })
                               }))

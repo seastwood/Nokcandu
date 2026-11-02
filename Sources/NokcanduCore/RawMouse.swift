@@ -63,6 +63,7 @@ public enum RawMouse {
     /// engine, keeps it current after Nokcandu updates, and writes each app's program → name list.
     /// Called on refresh, off the main thread (it looks through game folders).
     public static func refreshLibraries(_ games: [InstalledGame]) {
+        try? GameMicrophone.refreshPolicies(games)
         let fm = FileManager.default
         let lib = bundledLibrary
         let want = lib.flatMap { try? Hashing.sha256(file: $0) }
@@ -72,6 +73,9 @@ public enum RawMouse {
         var appNames: [URL: String] = [:]               // host Contents → name of its main GameApp wrapper
         var wrappers: [URL: [GameApp.Wrapper]] = [:]    // host Contents → wrappers (one per program name)
         for g in games {
+            if g.usesSharedSteam, let config = g.custom, let id = config.steamAppID {
+                try? ProgramSettings.update(launcher: SharedSteam.contents, key: "steam:\(id)", graphics: config.graphics, game: g)
+            }
             guard let h = WineTools.hostContents(for: g) else { continue }
             var m = names[h] ?? [:]
             if g.isSteamHost { appNames[h] = "Steam" }

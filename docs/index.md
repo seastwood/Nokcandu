@@ -39,3 +39,5 @@ Keep credentials, account identifiers, raw session logs, copyrighted game/runtim
 - [External game launch and storage accounting](investigations/external-game-launch-storage-2026-11-02.md) — native app privacy identity, visible startup errors, external-drive runtime accounting and safe migration/Undo.
 
 - [Clean-runner CI test dependencies](investigations/ci-clean-tests-2026-11-02.md) — remove accidental prebuilt-runtime dependencies from adapter and native-entry unit tests.
+
+- [Microphone-off enforcement](investigations/microphone-off-enforcement-2026-11-02.md) — shared bootstrap policy, capture boundary, launcher separation and tests without recording audio.

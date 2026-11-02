@@ -20,6 +20,16 @@ final class StartupMonitorTests: XCTestCase {
         XCTAssertEqual(check(exited, running: true), .pending)
         XCTAssertEqual(check(exited), .failed("Game closed before startup was confirmed. Diagnostic detail"))
     }
+    func testPrivateBootstrapChildrenRemainGameProcesses() {
+        XCTAssertTrue(GameLauncher.privateGameCommand(#"C:\Games\Example\realgame.exe -run"#))
+        XCTAssertTrue(GameLauncher.privateGameCommand("c:/Games/Example/child.exe"))
+        XCTAssertFalse(GameLauncher.privateGameCommand(#"C:\windows\system32\services.exe"#))
+        XCTAssertFalse(GameLauncher.privateGameCommand("/engine/bin/wineserver"))
+        var game = InstalledGame(appURL: URL(fileURLWithPath: "/tmp/Example.app"), name: "Example")
+        XCTAssertTrue(GameLauncher.hasPrivateGamePrefix(game))
+        game.hosted = HostedGameLink(hostApp: "/tmp/EA.app", launcher: .ea, id: "test", name: "Example", exe: nil)
+        XCTAssertFalse(GameLauncher.hasPrivateGamePrefix(game))
+    }
     func testKnownDisplayCopiesAreIncludedInGameWindowMatching() throws {
         var game = try IPXNetworkingTests().fixture()
         defer { try? FileManager.default.removeItem(at: game.appURL) }

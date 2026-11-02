@@ -50,6 +50,9 @@ public enum ProgramSettings {
     public static func update(launcher: URL, key: String, graphics: GraphicsPreset?, game: InstalledGame) throws {
         let support = launcher.appendingPathComponent("SharedSupport").path
         var fields: [String] = []
+        if GameMicrophone.supported(game) {
+            fields.append("NOKCANDU_NO_MICROPHONE=\(GameMicrophone.isOn(game) ? "0" : "1")")
+        }
         if let p = graphics {
             fields += p.programEnvironment(support: support, contents: launcher.path).sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }
         }

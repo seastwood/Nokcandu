@@ -68,6 +68,7 @@ public enum HostedSettings {
         \(WineEnvironment.exportLine("HC"))
         export WINEDEBUG=-all WINEMSYNC=1
         export PATH="$SUPPORT/wine/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        \(GameMicrophone.launcherExports(allowed: settings.microphone == true))
         \(HelperPatch.block)
         if [ "${1:-}" = --check ]; then
          \(program.map { "[ -f " + q($0.path) + " ] || { echo 'The selected game program is missing.'; exit 1; }" } ?? ":")
@@ -94,8 +95,8 @@ public enum HostedSettings {
         export DXVK_LOG_PATH="$GAME_LOGS" DXMT_LOG_PATH="$GAME_LOGS"
         \(extraRules.isEmpty ? "" : "export WINEDLLOVERRIDES=" + q(extraRules))
         \(extra)
+        \(GameMicrophone.launcherExports(allowed: settings.microphone == true))
         \(link.launcher == .ea ? EACompatibility.block(watch: false) : "")
-        \(settings.microphone == true ? "" : "export NOKCANDU_NO_MICROPHONE=1")
         \(settings.borderless == true && settings.macFullScreen == true ? "export NOKCANDU_MAC_FULLSCREEN=1" : "")
         \(settings.borderless == true && link.exe != nil ? "export NOKCANDU_BORDERLESS_TARGET=" + q(link.exe!) + "\nexport NOKCANDU_BORDERLESS_DLL=" + q(borderlessPath(link, ext: "dll")) + "\nBORDERLESS_LAUNCHER=" + q(borderlessPath(link, ext: "exe")) : "")
         if [ -f "$GAME_STATE/perf.env" ]; then . "$GAME_STATE/perf.env"; fi

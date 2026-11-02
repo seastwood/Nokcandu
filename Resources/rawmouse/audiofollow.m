@@ -13,6 +13,7 @@
 
 #import <AudioToolbox/AudioToolbox.h>
 #import <CoreAudio/CoreAudio.h>
+#include "microphone-policy.h"
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -61,6 +62,7 @@ static struct followed_unit *find_unit(AudioUnit unit, BOOL create)
 
 static AudioDeviceID default_device(BOOL capture)
 {
+    if (capture && nokcandu_microphone_blocked()) return kAudioObjectUnknown;
     AudioObjectPropertyAddress addr = {
         capture ? kAudioHardwarePropertyDefaultInputDevice : kAudioHardwarePropertyDefaultOutputDevice,
         kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
@@ -122,13 +124,19 @@ static void start_listening(void)
     AudioObjectPropertyAddress out = { kAudioHardwarePropertyDefaultOutputDevice, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
     AudioObjectPropertyAddress in = { kAudioHardwarePropertyDefaultInputDevice, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
     AudioObjectAddPropertyListener(kAudioObjectSystemObject, &out, output_changed, NULL);
-    AudioObjectAddPropertyListener(kAudioObjectSystemObject, &in, input_changed, NULL);
+    if (!nokcandu_microphone_blocked())
+        AudioObjectAddPropertyListener(kAudioObjectSystemObject, &in, input_changed, NULL);
     af_log("following the Mac's default sound devices");
 }
 
 static OSStatus my_AudioUnitSetProperty(AudioUnit unit, AudioUnitPropertyID prop, AudioUnitScope scope,
                                         AudioUnitElement elem, const void *data, UInt32 size)
 {
+    // Block before CoreAudio can request capture permission, including cached
+    // Windows endpoints that bypass device enumeration. Output is unaffected.
+    if (prop == kAudioOutputUnitProperty_EnableIO && scope == kAudioUnitScope_Input && elem == 1 &&
+        data && size == sizeof(UInt32) && *(const UInt32 *)data && nokcandu_microphone_blocked())
+        return kAudioUnitErr_CannotDoInCurrentContext;
     OSStatus sc = AudioUnitSetProperty(unit, prop, scope, elem, data, size);
     if (sc != noErr || !data) return sc;
 
@@ -186,6 +194,7 @@ static OSStatus my_AudioComponentInstanceDispose(AudioComponentInstance unit)
     return AudioComponentInstanceDispose(unit);
 }
 
+#ifndef NOKCANDU_AUDIO_TEST
 __attribute__((used)) static const struct { const void *replacement, *original; } audio_interpose[]
     __attribute__((section("__DATA,__interpose"))) = {
     { (const void *)my_AudioUnitSetProperty, (const void *)AudioUnitSetProperty },
@@ -193,3 +202,5 @@ __attribute__((used)) static const struct { const void *replacement, *original; 
     { (const void *)my_AudioOutputUnitStop, (const void *)AudioOutputUnitStop },
     { (const void *)my_AudioComponentInstanceDispose, (const void *)AudioComponentInstanceDispose },
 };
+
+#endif

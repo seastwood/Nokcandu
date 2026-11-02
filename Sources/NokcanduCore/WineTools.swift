@@ -51,6 +51,7 @@ public enum WineTools {
         let support = c.appendingPathComponent("SharedSupport")
         env["WINEPREFIX"] = support.appendingPathComponent("prefix").path
         WineEnvironment.apply(contents: c, to: &env)
+        GameMicrophone.apply(contents: c, to: &env)
         NativeIPXNetworking.addEnvironment(contents: c, to: &env)
         env["WINEDEBUG"] = "-all"
         env["WINEMSYNC"] = "1"

@@ -319,3 +319,21 @@ reader available only on the developer Mac. Fake-Wine tests now supply explicit
 packet-package fixtures; native entry tests build their helper from source. Real
 package interoperability remains opt-in. Verify the test-before-build order in a
 fresh tree and the GitHub result. See [the CI investigation](investigations/ci-clean-tests-2026-11-02.md).
+
+
+### Microphone off must cover setup and capture, not just enumeration
+
+The microphone flag was exported after an earlier Wine setup call, audio-follow
+registered input listeners regardless of the switch, and cached endpoints could
+reach capture EnableIO. Shared Steam also omitted its per-game microphone choice.
+The shared correction applies explicit policy before Wine calls, propagates it to
+tools/child environments and per-program settings, and blocks input queries,
+listeners and capture setup while preserving output. Steam-client consent is a
+separate opt-in from each game's switch. Existing explicit choices and manually
+edited scripts are preserved; unchanged generated scripts/helpers migrate normally.
+A separate Wine 11 probe reported zero inputs and four outputs with microphone off;
+hardware-free native tests verify both policy states. The user confirmed no microphone prompt on a fresh launch. Saved prefix/program
+policies also enforce off when a child drops the inherited environment; a separate
+output-only probe passed with the environment flag removed. TCC capability checks
+can still occur during output-only use and do not establish input capture. The full
+suite passed 233 tests with seven optional skips. See [scope, evidence, migration and Undo](investigations/microphone-off-enforcement-2026-11-02.md).

@@ -377,7 +377,7 @@ public enum CustomGames {
     static let registryEnvBlock = #"""
     if [ "$CHECK_ONLY" = 0 ] && [ -f "$SUPPORT/nokcandu/nokcandu-rawmouse.dylib" ]; then
      REGENV="$SUPPORT/nokcandu/registry-env"
-     WANT="$(for v in DYLD_INSERT_LIBRARIES NOKCANDU_APP_NAMES NOKCANDU_RAW_MOUSE_SCALE NOKCANDU_RAW_MOUSE_DEBUG NOKCANDU_RAW_MOUSE_SMOOTH; do printf '%s=%s\n' "$v" "${!v:-}"; done)"
+     WANT="$(for v in DYLD_INSERT_LIBRARIES NOKCANDU_APP_NAMES NOKCANDU_RAW_MOUSE_SCALE NOKCANDU_RAW_MOUSE_DEBUG NOKCANDU_RAW_MOUSE_SMOOTH NOKCANDU_NO_MICROPHONE; do printf '%s=%s\n' "$v" "${!v:-}"; done)"
      if [ "$(cat "$REGENV" 2>/dev/null || true)" != "$WANT" ]; then
       REG="$(/usr/bin/mktemp -t nokcandu-env)"
       { printf 'Windows Registry Editor Version 5.00\r\n\r\n[HKEY_CURRENT_USER\\Environment]\r\n'
@@ -441,6 +441,7 @@ public enum CustomGames {
             }
         }
         if c.environment?[NativeIPXNetworking.flag] == "1" { s += NativeIPXNetworking.launcherExports }
+        s += GameMicrophone.launcherExports(allowed: c.microphone == true) + "\n"
         s += EAAppInstaller.gameRendererExports(c)
         s += """
         GAME_DIR="$WINEPREFIX/drive_c/"\(shellQuote(dirRel))
@@ -538,7 +539,6 @@ public enum CustomGames {
         \(GameDisplay.launcherLines(c.displayPixels, tool: #""$SUPPORT/nokcandu/screen-size""#, log: #""$LOG_DIR/display.log""#,
                                      pattern: GameDisplay.watchPattern(exeName: c.bf1942MenuCopy == true ? BF1942DisplayFix.copyName : exeName)))cd "$GAME_DIR"
         STATUS=0
-        \(c.microphone == true ? "" : "export NOKCANDU_NO_MICROPHONE=1")
         \(c.borderless == true && c.macFullScreen == true ? "export NOKCANDU_MAC_FULLSCREEN=1" : "")
         \(c.borderless == true ? #"export NOKCANDU_BORDERLESS_TARGET="$GAME_EXE"; export NOKCANDU_BORDERLESS_DLL='C:\nokcandu\borderless\window.dll'; GAME_EXE='C:\nokcandu\borderless\launcher.exe'"# : "")
         \(exeName.lowercased() == "battle.net launcher.exe" || exeName.lowercased() == "battle.net.exe" ? BrowserRenderer.launcherBlock(exes: BrowserRenderer.battleNetExes) : "")
