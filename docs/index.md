@@ -66,3 +66,5 @@ Keep credentials, account identifiers, raw session logs, copyrighted game/runtim
 - [Nokcandu app-version rollback](investigations/app-version-rollback-2026-11-03.md) — verified local/remote app replacement, independent recovery, preserved user data and failure safety.
 
 - [Release 0.12.3 verification](investigations/release-0.12.3-2026-11-03.md) — release gate evidence, packaged components, migration and recovery scope.
+
+- [Wine 10 → 11 stale-wrapper upgrade failure](investigations/wine-upgrade-stale-wrapper-2026-11-03.md) — reproduced ntdll startup error, shared setup/identity correction and exact rollback coverage.

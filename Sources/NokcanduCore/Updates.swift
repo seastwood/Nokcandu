@@ -338,7 +338,13 @@ public enum EngineUpdate {
         games.filter { !$0.usesSharedSteam && WineTools.hostContents(for: $0) == $0.contents }
     }
 
-    static func wineEnv(_ c: URL) -> [String: String] { WineTools.environment(contents: c) }
+    static func wineEnv(_ c: URL) -> [String: String] {
+        var env = WineTools.environment(contents: c)
+        // Setup must use the just-installed loader, while the game's identity
+        // wrapper still belongs to its previous engine. Keep the audio guard.
+        env["NOKCANDU_NO_GAME_APP"] = "1"
+        return env
+    }
 
     public static func apply(_ g: InstalledGame, runtimeID: String, explicitChoice: Bool = false, log: @escaping @Sendable (String) -> Void) async throws {
         let fm = FileManager.default

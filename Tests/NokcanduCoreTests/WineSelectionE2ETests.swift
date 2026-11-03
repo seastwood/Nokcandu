@@ -58,3 +58,41 @@ extension WineSelectionE2ETests {
         _ = try? await Shell.runAsync(context.support.appendingPathComponent("wine/bin/wineserver").path, ["-k"], env: context.wineEnvironment, timeout: 30)
     }
 }
+
+
+extension WineSelectionE2ETests {
+    func testWine10To11WithExistingGameIdentityWrapperAndExactRollback() async throws {
+        guard ProcessInfo.processInfo.environment["NOKCANDU_E2E"] == "1" else { throw XCTSkip("set NOKCANDU_E2E=1") }
+        let fm = FileManager.default, source = NokPaths.gameAppsFolder.appendingPathComponent("The Falconeer.app")
+        guard fm.fileExists(atPath: source.path) else { throw XCTSkip("no Wine 10 clone source") }
+        let root = fm.temporaryDirectory.appendingPathComponent("nok-wine-upgrade-" + UUID().uuidString)
+        let app = root.appendingPathComponent("Wine Upgrade Test.app")
+        try fm.cloneItem(at: source, to: app)
+        defer { try? fm.removeItem(at: root) }
+        try? fm.removeItem(at: app.appendingPathComponent("Contents/SharedSupport/Logs/game.lock"))
+        var game = try XCTUnwrap(GameLibrary.inspect(app))
+        XCTAssertEqual(EngineUpdate.current(game)?.major, 10)
+        XCTAssertNotNil(GameApp.wrapper(host: game.contents))
+        let originalWine = try Hashing.sha256(file: game.support.appendingPathComponent("wine/bin/wine"))
+        let originalRegistry = try Hashing.sha256(file: game.prefix.appendingPathComponent("system.reg"))
+        let target = try XCTUnwrap(WineSelection.parse("11.0_1"))
+        let id = try await WineSelection.prepare(target) { print($0) }
+        print("Testing Wine 10 to 11 with the existing Wine 10 game wrapper")
+        try await EngineUpdate.apply(game, runtimeID: id, explicitChoice: true) { print($0) }
+        game = try XCTUnwrap(GameLibrary.inspect(app))
+        XCTAssertEqual(EngineUpdate.current(game), target)
+        if let helper = ProcessInfo.processInfo.environment["NOKCANDU_E2E_HELPER"] {
+            try RawMouse.ensureLibrary(contents: game.contents, source: URL(fileURLWithPath: helper))
+            // Deliberately retain the old identity wrapper: ordinary tools must
+            // still use the new engine until normal launch refreshes that wrapper.
+            let result = try await Shell.runAsync(game.support.appendingPathComponent("wine/bin/wine").path,
+                ["cmd", "/c", "ver"], env: WineTools.environment(contents: game.contents), timeout: 120)
+            XCTAssertTrue(result.stdout.contains("Windows"), result.combined)
+            _ = try? await Shell.runAsync(game.support.appendingPathComponent("wine/bin/wineserver").path,
+                ["-w"], env: WineTools.environment(contents: game.contents), timeout: 120)
+        }
+        try await EngineUpdate.rollBack(game) { print($0) }
+        XCTAssertEqual(try Hashing.sha256(file: game.support.appendingPathComponent("wine/bin/wine")), originalWine)
+        XCTAssertEqual(try Hashing.sha256(file: game.prefix.appendingPathComponent("system.reg")), originalRegistry)
+    }
+}

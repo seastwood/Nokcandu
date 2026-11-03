@@ -19,7 +19,14 @@ static bool nokcandu_background_program(const char *path) {
         "steamwebhelper.exe", "QtWebEngineProcess.exe", "CefSharp.BrowserSubprocess.exe",
         "UplayWebCore.exe", "UplayService.exe", "UpcElevationService.exe", "UplayCrashReporter.exe", "UbisoftExtension.exe", NULL
     };
-    for (unsigned i = 0; names[i]; ++i) if (!strcasecmp(name, names[i])) return true;
+    size_t length = strlen(name);
+    for (unsigned i = 0; names[i]; ++i) {
+        if (!strcasecmp(name, names[i])) return true;
+        // Wine utilities are also invoked as `wineboot` or `cmd`, before Wine
+        // resolves the .exe suffix. Those are setup tools, not game programs.
+        if (length + 4 == strlen(names[i]) && !strncasecmp(name, names[i], length) &&
+            !strcasecmp(names[i] + length, ".exe")) return true;
+    }
     return false;
 }
 #endif

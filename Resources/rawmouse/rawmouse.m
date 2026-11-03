@@ -1033,6 +1033,7 @@ static void run_from_game_app_as(bool background) {
 }
 
 #include "browser-renderer.h"
+#include "game-wrapper-stamp.h"
 
 // Wine 11: ntdll re-execs the engine's real loader (…/lib/wine/x86_64-unix/wine). Send that exec to the game's
 // wrapper, whose Contents/MacOS/<Name> is a copy of the real loader (GameApp.swift), so the game runs from an app
@@ -1051,6 +1052,9 @@ static const char *wine11_wrapper_for(const char *path, char *const argv[], char
     strlcpy(me, info.dli_fname, sizeof me);
     snprintf(dir, sizeof dir, "%s/../GameApp", dirname(me));
     snprintf(list, sizeof list, "%s/programs.tsv", dir);
+    char engine_loader[PATH_MAX];
+    snprintf(engine_loader, sizeof engine_loader, "%s/../wine/bin/wine", dir);
+    if (!nokcandu_wrapper_engine_current(list, engine_loader)) return NULL;
     FILE *f = fopen(list, "r");
     if (!f) return NULL;
     while (fgets(line, sizeof line, f)) {

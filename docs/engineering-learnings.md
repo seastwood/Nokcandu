@@ -294,3 +294,7 @@ Persist typed changes separately from applying them. Active/unknown Windows sess
 ## App updates need independent recovery (2026-11-03)
 
 Save a verified Nokcandu app copy before both upgrades and rollbacks. Use one replacement path for local backups, verified published releases and developer installation; never proceed after a wait timeout. A UI-only rollback is insufficient for a release that cannot launch: keep a separate recovery command/helper outside the replaced app. Preserve game/runtime/settings data, refuse stale plans and keep damaged originals for investigation. Signed-resource fingerprints detect resource-only changes as well as executable changes. See [app-version rollback](investigations/app-version-rollback-2026-11-03.md).
+
+## Test engine upgrades with existing identity wrappers (2026-11-03)
+
+A scratch-engine self-test and a historical Wine 10 selection do not cover Wine 10 → 11 with an existing Wine 10 game wrapper. Upgrade preflight must run the new loader directly, retaining privacy policy. Both helper redirection paths must reject stale wrapper engine stamps, and utility classification must accept `wineboot`/`cmd` before `.exe` resolution. The Falconeer clone reproduced the reported ntdll path failure and verified upgrade plus exact engine/registry rollback after correction. See [stale-wrapper investigation](investigations/wine-upgrade-stale-wrapper-2026-11-03.md).

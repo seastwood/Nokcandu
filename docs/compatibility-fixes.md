@@ -390,3 +390,7 @@ Ordinary settings now save independently of session shutdown. Wine/graphics/perf
 ## Nokcandu app-version recovery
 
 Updates → Nokcandu can return to saved app copies or older stable GitHub releases with published checksums. Every managed replacement saves the current app first; games, saves, Wine selections and user settings remain in place. Existing installations gain recovery copies at their next replacement. Backups also contain an independent Restore Nokcandu.command for a broken UI or interrupted app swap. Older app releases may not understand newer settings, so recovery does not erase or downgrade user data. Undo by selecting the saved newer copy. See [implementation, evidence and limits](investigations/app-version-rollback-2026-11-03.md).
+
+## Wine 10 → 11 upgrade startup check
+
+Managed engine replacement now bypasses game identity wrappers for setup while preserving microphone privacy. The Wine 11 helper also rejects stale wrapper stamps and recognizes setup utilities without `.exe`. This prevents the new engine from loading an older wrapper's incompatible loader, which produced an apparent missing ntdll.so error on Falconeer. The fix is shared across applicable Wine environments; pending selections can be retried and normal generation/Repair updates the helper. Existing engine rollback remains the Undo. [Reproduction, direction-specific coverage and migration](investigations/wine-upgrade-stale-wrapper-2026-11-03.md).

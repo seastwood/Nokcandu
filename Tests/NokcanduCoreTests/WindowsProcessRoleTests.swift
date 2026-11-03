@@ -13,10 +13,10 @@ final class WindowsProcessRoleTests: XCTestCase {
         try #"""
         #include "windows-process-role.h"
         int main(void) {
-            const char *background[] = {"nokcandu-ea-compat.exe", "EAGEP.exe", "C:\\Program Files\\EA\\eagep.EXE", "/wine/EALocalHostSvc.exe",
+            const char *background[] = {"wineboot", "WINEBOOT.EXE", "cmd", "C:\\windows\\system32\\cmd", "nokcandu-ea-compat.exe", "EAGEP.exe", "C:\\Program Files\\EA\\eagep.EXE", "/wine/EALocalHostSvc.exe",
                 "EABackgroundService.exe", "services.exe", "steamservice.exe", "QtWebEngineProcess.exe", "C:\\Ubisoft\\UplayWebCore.exe", "uplayservice.EXE", "UpcElevationService.exe", "UplayCrashReporter.exe", "UbisoftExtension.exe", NULL};
             const char *foreground[] = {"EADesktop.exe", "BF1942.exe", "DOSBox.exe", "C:\\Games\\A Game\\game.exe",
-                "upc.exe", "myEAGEP.exe", "", NULL};
+                "upc.exe", "myEAGEP.exe", "cmd-game.exe", "wineboot-game", "", NULL};
             for (unsigned i=0; background[i]; ++i) if (!nokcandu_background_program(background[i])) return 1;
             for (unsigned i=0; foreground[i]; ++i) if (nokcandu_background_program(foreground[i])) return 2;
             return nokcandu_background_program(NULL) ? 3 : 0;
@@ -47,6 +47,42 @@ final class WindowsProcessRoleTests: XCTestCase {
         let result = try Shell.run("/usr/bin/clang", ["-Wall", "-Werror", "-I", header.path, source.path, "-o", exe.path])
         XCTAssertTrue(result.ok, result.combined)
         if result.ok { XCTAssertTrue(try Shell.run(exe.path, [routes.path]).ok) }
+    }
+
+    func testWrapperStampRejectsChangedMissingAndUnrecordedEngine() throws {
+        let fm = FileManager.default, work = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try NokPaths.ensure(work); defer { try? fm.removeItem(at: work) }
+        let source = work.appendingPathComponent("test.c"), exe = work.appendingPathComponent("test")
+        let header = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Resources/rawmouse")
+        try #"""
+        #include "game-wrapper-stamp.h"
+        int main(void) {
+            const char *loader="loader", *list="programs.tsv";
+            FILE *f=fopen(loader,"w"); fputs("old engine",f); fclose(f);
+            struct stat st; stat(loader,&st);
+            f=fopen(list,"w"); fprintf(f,"#engine\t%lld:%lld\n*\tGame.app\n",(long long)st.st_size,(long long)st.st_mtimespec.tv_sec); fclose(f);
+            if(!nokcandu_wrapper_engine_current(list,loader)) return 1;
+            f=fopen(loader,"w"); fputs("a different engine",f); fclose(f);
+            if(nokcandu_wrapper_engine_current(list,loader)) return 2;
+            if(nokcandu_wrapper_engine_current(list,"missing")) return 3;
+            if(nokcandu_wrapper_engine_current("missing",loader)) return 4;
+            f=fopen(list,"w"); fputs("*\tGame.app\n",f); fclose(f);
+            if(nokcandu_wrapper_engine_current(list,loader)) return 5;
+            return 0;
+        }
+        """#.write(to: source, atomically: true, encoding: .utf8)
+        let compiled = try Shell.run("/usr/bin/clang", ["-Wall", "-Werror", "-I", header.path, source.path, "-o", exe.path])
+        XCTAssertTrue(compiled.ok, compiled.combined)
+        if compiled.ok { XCTAssertTrue(try Shell.run(exe.path, [], cwd: work).ok) }
+    }
+    func testEngineUpdateSetupUsesRealLoaderWithoutLosingMicrophoneGuard() throws {
+        let fixture = try LauncherRemovalTests().fixture(); defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let env = EngineUpdate.wineEnv(fixture.host.contents)
+        XCTAssertEqual(env["NOKCANDU_NO_GAME_APP"], "1")
+        XCTAssertEqual(env["WINEPREFIX"], fixture.host.prefix.path)
+        XCTAssertEqual(env["SikarugirAppWine11"], "1")
+        XCTAssertEqual(env["NOKCANDU_NO_MICROPHONE"], "1")
+        XCTAssertNotEqual(WineTools.environment(contents: fixture.host.contents)["NOKCANDU_NO_GAME_APP"], "1")
     }
 
 }
