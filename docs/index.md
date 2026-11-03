@@ -47,3 +47,4 @@ Keep credentials, account identifiers, raw session logs, copyrighted game/runtim
 - [Live microphone control and raw mouse permission explanation](investigations/live-microphone-switch-2026-11-02.md) — capture stop/resume without a Wine restart, cached endpoint discovery, privacy boundaries and migration.
 - [Shared microphone routing, UI polling and helper Repair](investigations/shared-microphone-routing-ui-repair-2026-11-02.md) — Wine argv mutation, frozen status polling, host-level helper restoration and regression coverage.
 - [BF2Hub account connectivity investigation](investigations/bf2hub-account-connectivity-2026-11-02.md) — confirmed TCP reachability and official module checks, failed tracing comparisons, restored startup and unresolved login.
+- [Wine server closed-socket readiness](investigations/wineserver-closed-socket-readiness-2026-11-02.md) — synthetic reproduction, server-only normalization, genuine-error/OOB regression coverage and activation/Undo.

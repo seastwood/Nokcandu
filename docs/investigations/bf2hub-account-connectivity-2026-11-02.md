@@ -30,3 +30,7 @@ The exact pre-diagnostic helper was restored atomically, original app metadata v
 Establish whether the login is for a previously verified BF2Hub multiplayer account or a first account. A successful Windows/website comparison with the same account would help separate service/account failure from Wine-specific behavior. Credentials must stay local to the user. Do not infer authentication success from the tray/client readiness state, TCP establishment or a public server challenge.
 
 There is no fresh-install migration or shared optional fix to distribute yet. The temporary diagnostic has been removed from the installed game; returning to the original helper and restarting the private session restored startup. Preserve that baseline while the account issue remains unresolved.
+
+## Follow-up: account and socket isolation
+
+The user confirmed this is a new account that successfully logs into BF2Hub’s website. A subsequent isolated test reproduced the Wine/macOS closed-socket exception bug. See [the shared readiness correction and independent regression results](wineserver-closed-socket-readiness-2026-11-02.md). The earlier no-confirmed-fix statement above describes the pre-reproduction baseline; game verification remains separate.

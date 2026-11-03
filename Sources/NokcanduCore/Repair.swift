@@ -195,7 +195,7 @@ public enum Repair {
             try GameMicrophone.refreshPolicies(related.contains(where: { $0.id == game.id }) ? related : related + [game])
             try AppPrivacy.prepare(game, games: related)
             return [RepairStep(title: "Audio and input helper", outcome: changed ? .fixed : .ok,
-                detail: changed ? "Restored and verified Nokcandu's current shared helper. Running Windows programs load it after they close and reopen; shared Steam/Battle.net games need their client closed too." : "Matches this Nokcandu build; saved per-game microphone policies refreshed.")]
+                detail: changed ? "Restored and verified Nokcandu's current shared helper. To activate server-level fixes, quit this game through Nokcandu and reopen it. For shared Steam/Battle.net games, quit their launcher through Nokcandu too." : "Matches this Nokcandu build; saved per-game microphone policies refreshed.")]
         } catch { return [RepairStep(title: "Audio and input helper", outcome: .failed, detail: error.localizedDescription)] }
     }
 
