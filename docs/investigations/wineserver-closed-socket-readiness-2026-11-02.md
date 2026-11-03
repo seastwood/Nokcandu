@@ -24,7 +24,7 @@ The author's source fix also changes Wine's server error mapping more broadly. T
 - Hardware-free boundary tests check that game processes, non-sockets, short socket-information responses and unexpected errors are unchanged; errno is preserved.
 - Full suite: 249 tests, ten optional skips, zero failures. The signed development app passed deep/strict signature verification.
 
-Actual BF2Hub login with the corrected helper still requires user verification after a full private-session restart. Do not equate the synthetic socket result with confirmed multiplayer gameplay.
+After activation and a full private-session restart, the user confirmed BF2Hub login completes and multiplayer servers appear: “it works, i got in and i can see games!” This verifies account login and server browsing. Joining a server and sustained multiplayer gameplay have not been verified in this check.
 
 ## Fresh installs, migration, profiles and Undo
 
@@ -35,3 +35,11 @@ A server already mapping the older helper keeps that code until the complete Win
 Profiles require no new game-specific switch or secret: imported/created installations receive the current shared helper, while existing profile settings remain unchanged. No global hosts, DNS, firewall, router or account settings are changed. Restoring the previous app/helper and restarting that private environment undoes this correction. Runtime rollback copies stay local and are not committed.
 
 Portable optional tests are in `Tools/socket-events/`; only source, tests and documentation belong in the repository. The WineHQ patch download was inspected as source, not executed as software.
+
+## Activation
+
+After the user closed BF2, the signed development app was installed atomically with a local rollback copy retained. The private BF2 environment had no remaining owned processes. Normal helper migration installed the tested library; its SHA-256 matched the installed app’s bundled helper before BF2Hub was launched. A before/after checksum confirmed BF2’s saved game.json was unchanged. BF2Hub was started through the original Nokcandu entry for the user’s normal BF2Hub Play/login test. The user subsequently confirmed successful account login and a populated multiplayer/server browser.
+
+## Confirmed result
+
+The installed shared correction resolved the reported BF2Hub account-screen hang without changing the account, BF2Hub modules, game executable, engine choice, renderer, hosts file or firewall. BF2 continued through BF2Hub’s normal Play route. The user confirmed login and visible games; do not extend that result to anti-cheat compatibility or sustained server gameplay without a separate test.

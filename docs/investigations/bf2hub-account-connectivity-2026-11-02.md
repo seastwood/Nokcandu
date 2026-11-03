@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-**Unresolved:** BF2 reaches its menu through BF2Hub, but the user reports indefinite account connection/creation. No network compatibility fix has been confirmed or added. Keep the working engine, renderer, BF2Hub Play route and saved settings intact. The displayed profile was identified by BF2Hub as single-player; whether a verified multiplayer account exists is a separate question from green client/CD-key readiness checks.
+**Resolved for login and server browsing:** the shared wineserver closed-socket readiness correction was installed after the investigation below. The user confirmed successful login and visible multiplayer games. See [the confirmed correction](wineserver-closed-socket-readiness-2026-11-02.md). Joining/gameplay remain unverified. The following records the initial indefinite connection/creation investigation. Keep the working engine, renderer, BF2Hub Play route and saved settings intact. The displayed profile was identified by BF2Hub as single-player; whether a verified multiplayer account exists is a separate question from green client/CD-key readiness checks.
 
 ## Verified checks
 
@@ -29,8 +29,8 @@ The exact pre-diagnostic helper was restored atomically, original app metadata v
 
 Establish whether the login is for a previously verified BF2Hub multiplayer account or a first account. A successful Windows/website comparison with the same account would help separate service/account failure from Wine-specific behavior. Credentials must stay local to the user. Do not infer authentication success from the tray/client readiness state, TCP establishment or a public server challenge.
 
-There is no fresh-install migration or shared optional fix to distribute yet. The temporary diagnostic has been removed from the installed game; returning to the original helper and restarting the private session restored startup. Preserve that baseline while the account issue remains unresolved.
+At this earlier stage there was no confirmed shared fix to distribute; the later shared helper correction and its migration are documented in the linked follow-up. The temporary diagnostic has been removed from the installed game; returning to the original helper and restarting the private session restored startup. Preserve that baseline while the account issue remains unresolved.
 
 ## Follow-up: account and socket isolation
 
-The user confirmed this is a new account that successfully logs into BF2Hub’s website. A subsequent isolated test reproduced the Wine/macOS closed-socket exception bug. See [the shared readiness correction and independent regression results](wineserver-closed-socket-readiness-2026-11-02.md). The earlier no-confirmed-fix statement above describes the pre-reproduction baseline; game verification remains separate.
+The user confirmed this is a new account that successfully logs into BF2Hub’s website. A subsequent isolated test reproduced the Wine/macOS closed-socket exception bug. See [the shared readiness correction and independent regression results](wineserver-closed-socket-readiness-2026-11-02.md). The earlier no-confirmed-fix statement above describes the pre-reproduction baseline; the user subsequently confirmed BF2Hub login and visible multiplayer servers after activation.
