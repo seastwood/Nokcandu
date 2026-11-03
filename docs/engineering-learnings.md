@@ -251,3 +251,5 @@ First-use caveat: macOS caches missing purpose metadata in a session started Off
 ### Preserve program identity before Wine rewrites argv; keep polling off the UI (2026-11-02)
 
 A per-program microphone policy must not repeatedly resolve `_NSGetArgv()[1]`: Wine removes its loader argument and can overwrite the argument strings. Copy the executable identity in an early constructor, then read its mutable policy separately. A private-prefix On capture test does not validate routing under a shared prefix's blocked default. Also, synchronous process scans on a repeating UI timer can make every click beachball; coalesce one background status pass using one shared process snapshot. Repair must restore owned audio/input helpers in the owning host before shared-shortcut early returns and report that loaded processes need reopening. See [evidence, scope, migration and Undo](investigations/shared-microphone-routing-ui-repair-2026-11-02.md).
+
+Installed validation: the user confirmed working CS2 voice input and live microphone switching after the shared identity fix. The full suite passed 248 tests with ten optional skips.

@@ -19,7 +19,7 @@ Wine 11's `dlls/ntdll/unix/env.c:rebuild_argv` removes the loader argument and m
 
 Hardware-free tests mutate the original Wine-style argv pointers and program bytes after constructor initialization and assert the saved identity stays intact. Existing routing/capture tests continue to cover blocked input, output forwarding and live stop/resume. Repair tests cover missing, stale and corrupt helpers, idempotence, linked-file preservation, unchanged settings/manual scripts and selecting the owning shared host instead of a shortcut's helper directory. Process-state, Steam matching and subprocess-output tests cover the status dependencies.
 
-CS2 voice input itself must be checked after the corrected helper is installed and Steam/CS2 reopen; do not equate the policy regression test, OS tray icon or successful setup with audible game voice verification. No TCC database edits, system audio-device changes or global Steam microphone opt-in are part of this fix.
+The user confirmed CS2 voice/input works after Steam and CS2 reopened with the corrected helper, then separately confirmed the microphone switch works mid-game. These are actual game results, beyond the policy regression test, OS tray icon or stream setup. No TCC database edits, system audio-device changes or global Steam microphone opt-in are part of this fix.
 
 ## Fresh installation, migration and Undo
 
@@ -31,4 +31,6 @@ Turn the microphone switch back to restore its previous choice. Revert the appli
 
 The complete suite passed 248 tests with ten optional skips and zero failures. The signed build passed deep/strict signature verification and was installed atomically with a local rollback copy retained. The restarted app could select CS2, open settings and run Repair. Its visible report confirmed “Audio and input helper: Matches this Nokcandu build; saved per-game microphone policies refreshed.” A read-only hash comparison confirmed Steam's helper matched the installed build. The asynchronous microphone switch changed from Off to On without a restart dialog or UI freeze; Steam's separate opt-in remained Off. CS2 was then launched for the user to verify actual voice input. The Mac's default External Microphone was present and matched CS2's saved device override. No global audio settings or OS permission grants were changed.
 
-A post-install two-second app sample showed the main thread servicing the normal AppKit event loop rather than sleeping in the process scan. CS2 reached its new Windows process after Steam started; actual voice confirmation was requested from the user and remains pending.
+A post-install two-second app sample showed the main thread servicing the normal AppKit event loop rather than sleeping in the process scan. CS2 reached its new Windows process after Steam started; the user subsequently confirmed voice/input works and the microphone switch works mid-game.
+
+User confirmation: “Yes, voice/input works” followed by “switch works mid game too.” Verified game scope is CS2; the implementation and automated regression coverage apply to all supported Wine game types. Native Mac games use their own microphone implementation.
