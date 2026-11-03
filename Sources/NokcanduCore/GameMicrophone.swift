@@ -1,7 +1,7 @@
 import Foundation
 
-/// Settings ▸ Microphone: per game. Off (the default) hides audio inputs from the game (Nokcandu's helper
-/// library answers "no input streams"), so it never opens one and macOS never asks for microphone permission.
+/// Per-game input consent. Off blocks capture; live-mode discovery remains available
+/// because Wine caches endpoints. Active input stops without interrupting output.
 public enum GameMicrophone {
     /// Games whose launcher Nokcandu writes (its own games and EA/Ubisoft games added to Nokcandu).
     public static func supported(_ g: InstalledGame) -> Bool { g.native == nil && (g.custom != nil || g.hosted?.exe != nil || g.battleNet != nil || g.isSteamHost || RecipeSettings.supports(g)) }
@@ -78,7 +78,7 @@ public enum GameMicrophone {
         for (host, blocked) in defaults {
             let directory = host.appendingPathComponent("SharedSupport/nokcandu")
             try NokPaths.ensure(directory)
-            let values = [(policyFile, blocked ? "1\n" : "0\n"),
+            let values = [("microphone-live", "1\n"), (policyFile, blocked ? "1\n" : "0\n"),
                           (routeFile, (routes[host] ?? [:]).sorted { $0.key < $1.key }.map { "\($0.key)\tNOKCANDU_NO_MICROPHONE=\($0.value ? "1" : "0")" }.joined(separator: "\n") + "\n")]
             for (name, text) in values {
                 let target = directory.appendingPathComponent(name)
@@ -88,32 +88,32 @@ public enum GameMicrophone {
         }
     }
     public static func set(_ on: Bool, for g: InstalledGame) throws {
+        guard supported(g) else { throw NokError("This game does not support microphone settings.") }
+        // Change only consent, never regenerate a running game's launcher or lose
+        // unknown settings. Its saved launcher hash continues to describe that file.
+        _ = try AppPrivacy.apply(g.appURL, microphone: on)
+        let journal = ChangeJournal(scope: g.journalScope)
         if g.isSteamHost || g.battleNet != nil {
-            guard case .notRunning = GameLauncher.runState(of: g) else { throw NokError("Quit the game or launcher before changing its microphone setting.") }
             let flag = g.nokcanduState.appendingPathComponent(sharedChoice)
             try NokPaths.ensure(g.nokcanduState)
-            if on { try Data("1\n".utf8).write(to: flag, options: .atomic) }
+            if on { try journal.write(Data("1\n".utf8), to: flag, reason: "Microphone input on") }
             else if FileManager.default.fileExists(atPath: flag.path) { try FileManager.default.removeItem(at: flag) }
-        } else if var c = g.custom {
-            c.microphone = on ? true : nil
-            try CustomGames.save(c, to: g)
-            if g.usesSharedSteam, let id = c.steamAppID, let fresh = GameLibrary.inspect(g.appURL) {
-                do { try ProgramSettings.update(launcher: SharedSteam.contents, key: "steam:\(id)", graphics: c.graphics, game: fresh) }
-                catch {
-                    if let previous = g.custom { try? CustomGames.save(previous, to: fresh) }
-                    throw error
-                }
+        } else {
+            let file = g.custom != nil ? CustomGameConfig.url(in: g.contents)
+                : g.hosted != nil ? HostedSettings.url(g.contents) : RecipeSettings.file(g)
+            guard file.resolvingSymlinksInPath() == file else { throw NokError("The microphone settings path is linked. It was preserved.") }
+            var value: [String: Any]
+            if FileManager.default.fileExists(atPath: file.path) {
+                guard let saved = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any] else { throw NokError("The game's settings could not be read. They were preserved.") }
+                value = saved
+            } else if g.hosted != nil {
+                value = try JSONSerialization.jsonObject(with: JSONEncoder().encode(HostedSettings.load(g))) as! [String: Any]
+            } else {
+                value = try JSONSerialization.jsonObject(with: JSONEncoder().encode(RecipeSettings.load(g))) as! [String: Any]
             }
-        } else if g.hosted != nil {
-            var s = HostedSettings.load(g)
-            s.microphone = on ? true : nil
-            try HostedSettings.save(s, for: g)
-        } else if RecipeSettings.supports(g) {
-            var settings = RecipeSettings.load(g)
-            settings.microphone = on
-            try RecipeSettings.save(settings, for: g)
+            value["microphone"] = on
+            try journal.write(try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]), to: file, reason: "Microphone input \(on ? "on" : "off")")
         }
-        _ = try AppPrivacy.apply(g.appURL, microphone: on)
         let fresh = GameLibrary.inspect(g.appURL) ?? g
         if let host = WineTools.hostContents(for: fresh) {
             // Finder/Dock launches must see the new saved policy immediately,

@@ -28,8 +28,8 @@ int main(int argc, char **argv) {
     if(!enabled) {
         if(opened==MMSYSERR_NOERROR) waveInClose(input);
         CloseHandle(event);
-        printf("MIC_SWITCH off_blocked=%s\n",inputs==0&&opened!=MMSYSERR_NOERROR?"yes":"NO");
-        return inputs==0&&opened!=MMSYSERR_NOERROR?0:1;
+        printf("MIC_SWITCH off_blocked=%s\n",opened!=MMSYSERR_NOERROR?"yes":"NO");
+        return opened!=MMSYSERR_NOERROR?0:1;
     }
     if(opened!=MMSYSERR_NOERROR) { CloseHandle(event); return 2; }
     UINT actual=selected;waveInGetID(input,&actual);printf("MIC_SWITCH selected_input=%u\n",actual);

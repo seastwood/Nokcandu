@@ -106,6 +106,26 @@ final class GameMicrophoneTests: XCTestCase {
         try GameMicrophone.refreshPolicies([game])
         XCTAssertEqual(try String(contentsOf: game.nokcanduState.appendingPathComponent(GameMicrophone.policyFile), encoding: .utf8), "0\n")
     }
+    func testMicrophoneTogglePreservesRunningLauncherAndUnknownSettings() throws {
+        let game = try IPXNetworkingTests().fixture()
+        defer { try? FileManager.default.removeItem(at: game.appURL) }
+        let file = CustomGameConfig.url(in: game.contents)
+        var json = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! [String: Any]
+        json["futureSetting"] = "keep"
+        try JSONSerialization.data(withJSONObject: json).write(to: file)
+        let launcher = try XCTUnwrap(game.launcherURL)
+        try NokPaths.ensure(launcher.deletingLastPathComponent())
+        let before = Data("#!/bin/bash\n# User launcher: preserve exactly\n".utf8)
+        try before.write(to: launcher)
+        for on in [true, false, true] {
+            try GameMicrophone.set(on, for: GameLibrary.inspect(game.appURL)!)
+            XCTAssertEqual(try Data(contentsOf: launcher), before)
+            let saved = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! [String: Any]
+            XCTAssertEqual(saved["futureSetting"] as? String, "keep")
+            XCTAssertEqual(saved["launcherSHA"] as? String, json["launcherSHA"] as? String)
+            XCTAssertEqual(GameMicrophone.isOn(GameLibrary.inspect(game.appURL)!), on)
+        }
+    }
     func testAudioBoundaryBlocksCaptureWithoutTouchingHardwareAndKeepsOutput() throws {
         let work = FileManager.default.temporaryDirectory.appendingPathComponent("mic-guard-" + UUID().uuidString)
         try NokPaths.ensure(work); defer { try? FileManager.default.removeItem(at: work) }
@@ -113,8 +133,12 @@ final class GameMicrophoneTests: XCTestCase {
         let executable = work.appendingPathComponent("test")
         let compile = try Shell.run("/usr/bin/xcrun", ["clang", "-O2", "-Wall", "-Wextra", "-Werror", "-Wno-unused-parameter", "-Wno-unused-function", "-I", root.appendingPathComponent("Resources/rawmouse").path, root.appendingPathComponent("Tools/audio-guard/test.m").path, "-framework", "AudioToolbox", "-framework", "CoreAudio", "-o", executable.path], timeout: 30)
         XCTAssertTrue(compile.ok, compile.combined)
-        for state in ["off", "on", "stripped"] {
+        for state in ["off", "on", "stripped", "live"] {
             if state == "stripped" { try Data("1\n".utf8).write(to: work.appendingPathComponent("microphone-policy")) }
+            if state == "live" {
+                try? FileManager.default.removeItem(at: work.appendingPathComponent("microphone-policy"))
+                try Data("1\n".utf8).write(to: work.appendingPathComponent("microphone-live"))
+            }
             let result = try Shell.run(executable.path, [state], timeout: 10)
             XCTAssertTrue(result.ok, result.combined)
             XCTAssertTrue(result.stdout.contains("output preserved, no hardware calls"))

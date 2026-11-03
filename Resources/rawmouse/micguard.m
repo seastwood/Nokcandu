@@ -1,6 +1,6 @@
-// Nokcandu: games without microphone access (Settings ▸ Sound ▸ Microphone off, NOKCANDU_NO_MICROPHONE=1) see no
-// audio input devices at all, so they never open one and macOS never asks for microphone permission for them.
-// Wine's audio driver finds inputs by asking each device for its input streams; here that answer is "none".
+// Per-program microphone policy: capture is blocked while Off. Legacy HAL input
+// queries stay hidden to avoid duplex playback permission requests. In live mode,
+// modern read-only discovery remains available because Wine caches endpoints.
 
 #include <CoreAudio/CoreAudio.h>
 #include "microphone-policy.h"
@@ -44,6 +44,25 @@ int nokcandu_microphone_blocked(void)
     }
     const char *v = getenv("NOKCANDU_NO_MICROPHONE");
     return v && !strcmp(v, "1");
+}
+
+// Wine caches its endpoint list for the life of a process. Live mode keeps
+// read-only device discovery available; capture itself remains denied below
+// AudioUnit EnableIO/Start/Render. HAL's internal legacy queries stay hidden
+// while Off so duplex playback does not ask for microphone permission.
+static int microphone_live_mode(void)
+{
+    Dl_info info;
+    char path[PATH_MAX];
+    if (!dladdr((const void *)nokcandu_microphone_blocked, &info) || !info.dli_fname ||
+        strlcpy(path, info.dli_fname, sizeof(path)) >= sizeof(path)) return 0;
+    char *slash = strrchr(path, '/');
+    if (!slash) return 0;
+    slash[1] = 0;
+    if (strlcat(path, "microphone-live", sizeof(path)) >= sizeof(path)) return 0;
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    int live = fgetc(f) == '1'; fclose(f); return live;
 }
 
 static int is_input_query(AudioObjectID obj, const AudioObjectPropertyAddress *a)
@@ -134,11 +153,22 @@ static OSStatus my_AudioHardwareGetPropertyInfo(AudioHardwarePropertyID property
     return AudioHardwareGetPropertyInfo(property, size, writable);
 }
 
+static OSStatus live_GetPropertyDataSize(AudioObjectID obj, const AudioObjectPropertyAddress *a, UInt32 qs, const void *q, UInt32 *size)
+{
+    if (microphone_live_mode()) return AudioObjectGetPropertyDataSize(obj, a, qs, q, size);
+    return my_GetPropertyDataSize(obj, a, qs, q, size);
+}
+static OSStatus live_GetPropertyData(AudioObjectID obj, const AudioObjectPropertyAddress *a, UInt32 qs, const void *q, UInt32 *size, void *data)
+{
+    if (microphone_live_mode()) return AudioObjectGetPropertyData(obj, a, qs, q, size, data);
+    return my_GetPropertyData(obj, a, qs, q, size, data);
+}
+
 #ifndef NOKCANDU_AUDIO_TEST
 __attribute__((used)) static const struct { const void *replacement, *original; } mic_interpose[]
     __attribute__((section("__DATA,__interpose"))) = {
-    { (const void *)my_GetPropertyDataSize, (const void *)AudioObjectGetPropertyDataSize },
-    { (const void *)my_GetPropertyData, (const void *)AudioObjectGetPropertyData },
+    { (const void *)live_GetPropertyDataSize, (const void *)AudioObjectGetPropertyDataSize },
+    { (const void *)live_GetPropertyData, (const void *)AudioObjectGetPropertyData },
     { (const void *)my_AudioDeviceGetProperty, (const void *)AudioDeviceGetProperty },
     { (const void *)my_AudioDeviceGetPropertyInfo, (const void *)AudioDeviceGetPropertyInfo },
     { (const void *)my_AudioHardwareGetProperty, (const void *)AudioHardwareGetProperty },

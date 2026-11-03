@@ -907,9 +907,13 @@ struct MicrophoneSettingRow: View {
     let game: InstalledGame
     var body: some View {
         SettingToggle(title: "Microphone",
-                              info: "Off blocks this game's microphone access while keeping sound output working. On lets macOS ask for permission when needed. Fully close and reopen the game after changing it. For games in a shared launcher, macOS lists the launcher in Privacy & Security; each game's switch still controls its own microphone access. Shared launchers also have their own switch.",
+                              info: "Off blocks this game's microphone access while keeping sound output working. On lets macOS ask for permission when needed. After macOS permission has been granted, changes apply while playing. First-time permission may need one close/reopen because macOS caches the app’s privacy metadata. If a game does not retry its microphone after enabling it, refresh its voice-chat settings. For games in a shared launcher, macOS lists the launcher in Privacy & Security; each game's switch still controls its own microphone access. Shared launchers also have their own switch.",
                               isOn: Binding(get: { GameMicrophone.isOn(game) }, set: { on in
-                                  model.changeSetting(for: game, title: "Microphone", edit: { current in try GameMicrophone.set(on, for: current) })
+                                  do {
+                                      try GameMicrophone.set(on, for: GameLibrary.inspect(game.appURL) ?? game)
+                                      model.refresh()
+                                      model.say(on ? "Microphone on. First-time macOS permission may need one close/reopen; later changes work while playing." : "Microphone off.")
+                                  } catch { model.fail(error) }
                               }))
     }
 }

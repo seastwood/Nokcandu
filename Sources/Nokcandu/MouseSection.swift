@@ -27,6 +27,7 @@ struct MouseSection: View {
                           info: "Whenever the game captures the mouse (aiming, turning the camera, flight or racing, rotating the view in strategy games), this reads the mouse itself: hundreds of updates a second, no macOS acceleration, no stalls when the game re-centers the cursor. While the game shows a normal cursor (menus, point-and-click games) the Mac pointer is used; for those, turning off Pointer acceleration in System Settings → Mouse gives a similar 1:1 feel.\n\n\(scope) You can turn it on or off while playing; changes apply within a second.",
                           isOn: Binding(get: { enabled }, set: { enabled = $0; save() }))
             if enabled {
+                SettingNote("macOS may ask for Input Monitoring (‘Keystroke Receiving’) for the game’s launcher. Raw mouse capture uses this to read mouse movement directly; Nokcandu’s mouse helper does not read typed keys. Without it, the fallback mouse path is used.")
                 SettingRow(title: "Speed", info: "1× matches a Windows PC at the same in-game sensitivity. Raw movement isn't accelerated, so it may feel slower than your Mac pointer at first: adjust it here or with the game's sensitivity.") {
                     Slider(value: $scale, in: 0.25...3, step: 0.05) { editing in if !editing { save() } }
                         .frame(width: 160)

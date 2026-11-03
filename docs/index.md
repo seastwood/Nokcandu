@@ -44,3 +44,4 @@ Keep credentials, account identifiers, raw session logs, copyrighted game/runtim
 - [Recipe storage and user settings](investigations/recipe-storage-settings-2026-11-02.md) — recipe content moves, editable defaults, launcher preservation, profiles and Undo.
 
 - [Microphone permission during playback](investigations/microphone-playback-permission-2026-11-02.md) — fresh-identity reproduction, Off/On eligibility, legacy Core Audio queries, shared clients and Undo.
+- [Live microphone control and raw mouse permission explanation](investigations/live-microphone-switch-2026-11-02.md) — capture stop/resume without a Wine restart, cached endpoint discovery, privacy boundaries and migration.
