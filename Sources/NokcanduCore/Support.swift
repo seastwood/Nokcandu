@@ -9,6 +9,8 @@ import CoreGraphics
 /// Well-known locations. Everything Nokcandu owns lives under Application Support;
 /// game apps stay where the user keeps them.
 public enum NokPaths {
+    /// Set only by Nokcandu’s saved-settings helper to find the installed app’s verified resources.
+    nonisolated(unsafe) public static var resourceOverride: URL?
     public static var home: URL { FileManager.default.homeDirectoryForCurrentUser }
     public static var gameAppsFolder: URL {
         if let o = ProcessInfo.processInfo.environment["NOKCANDU_GAME_APPS"], !o.isEmpty { return URL(fileURLWithPath: o, isDirectory: true) }
@@ -32,6 +34,7 @@ public enum NokPaths {
     /// Helper files shipped inside Nokcandu.app/Contents/Resources (python helpers, screen-size tool).
     public static func bundledResource(_ name: String, executable: Bool = false) -> URL? {
         let candidates = [
+            resourceOverride?.appendingPathComponent(name),
             Bundle.main.resourceURL?.appendingPathComponent(name),
             Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent(name),
             // `swift run` during development: Resources/ next to the package.

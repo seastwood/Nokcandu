@@ -93,6 +93,7 @@ struct GameDetailView: View {
                     .padding(12)
                     .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
                 }
+                if game.native == nil { PendingSettingsSection(game: game) }
                 if game.native == nil { GameWineSection(game: game).id("wine-\(game.id)-\(game.wineVersion ?? "")") }
                 if let d = cinematicDiagnosis, !CinematicFix.isPresent(for: game) {
                     CinematicCrashBanner(game: game, diagnosis: d) { fixFromBanner() }

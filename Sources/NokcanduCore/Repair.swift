@@ -234,6 +234,7 @@ public enum Repair {
             catch { steps.append(RepairStep(title: title, outcome: .failed, detail: error.localizedDescription)) }
         }
         perform("Screen helper") { try RawMouse.ensureScreenTool(contents: host) }
+        perform("Saved-settings helper") { try PendingSettings.ensureHelper(for: game) }
         perform("Native app entry") {
             let entry = game.contents.appendingPathComponent("MacOS/" + LauncherEntry.name)
             let before = try? Hashing.sha256(file: entry)

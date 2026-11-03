@@ -60,3 +60,5 @@ Keep credentials, account identifiers, raw session logs, copyrighted game/runtim
 - [Automatic store-game discovery](investigations/automatic-store-game-discovery-2026-11-03.md) — background installation detection, idempotent shortcuts, preserved settings/removal choices and installer completion callbacks.
 
 - [Explicit Sikarugir Wine versions](investigations/wine-version-selection-2026-11-03.md) — game dropdowns, new-install defaults/overrides, safe resume/Repair behavior and exact rollback.
+
+- [Save settings without forced restarts](investigations/deferred-game-settings-2026-11-03.md) — durable pending choices, idle-versus-active process evidence, direct app-icon preflight and safe retry/discard.

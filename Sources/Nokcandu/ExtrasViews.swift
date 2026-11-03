@@ -170,7 +170,7 @@ struct PerformanceSection: View {
             }
             if GameMicrophone.supported(game) { MicrophoneSettingRow(game: game) }
         }
-        .onAppear { s = Performance.settings(for: game); buffer = game.hosted == nil ? AudioBuffer.current(for: game) : nil; loaded = true }
+        .onAppear { s = PendingSettings.performance(for: game) ?? Performance.settings(for: game); buffer = game.hosted == nil ? PendingSettings.audioBuffer(for: game) ?? AudioBuffer.current(for: game) : nil; loaded = true }
     }
 
     /// Fastest refresh among connected screens (ProMotion and external monitors report 120+).
@@ -178,29 +178,21 @@ struct PerformanceSection: View {
     var autoFPS: Int { LowLatency.autoFPS(refresh: refresh) }
 
     func setLowLatency(_ on: Bool) {
-        model.changeSetting(for: game, title: "Low-latency Aiming", edit: { current in
-            try await Task.detached { try LowLatency.apply(on, to: current) }.value
-        })
+        model.changeSetting(for: game, title: "Low-latency Aiming", change: .lowLatency(on))
     }
 
     func setCap(_ fps: Int?) {
-        model.changeSetting(for: game, title: "Game Frame Cap", edit: { current in
-            try await Task.detached { try LowLatency.applyCap(fps, to: current) }.value
-        })
+        model.changeSetting(for: game, title: "Game Frame Cap", change: .frameCap(fps))
     }
 
     func setBuffer(_ ms: Int) {
-        model.changeSetting(for: game, title: "Audio Buffer", success: "Audio buffer: \(ms) ms chunks.", edit: { current in
-            try await Task.detached { try AudioBuffer.apply(ms, for: current) }.value
-        }, completion: { _ in buffer = AudioBuffer.current(for: game) })
+        model.changeSetting(for: game, title: "Audio Buffer", success: "Audio buffer: \(ms) ms chunks.", change: .audioBuffer(ms), completion: { _ in buffer = PendingSettings.audioBuffer(for: game) ?? AudioBuffer.current(for: game) })
     }
 
     func save() {
         guard loaded else { return }
         let value = s
-        model.changeSetting(for: game, title: "Performance", success: "Performance settings applied.", edit: { current in
-            try Performance.apply(value, for: current)
-        }, completion: { _ in s = Performance.settings(for: game) })
+        model.changeSetting(for: game, title: "Performance", success: "Performance settings applied.", change: .performance(value), completion: { _ in s = PendingSettings.performance(for: game) ?? Performance.settings(for: game) })
     }
 
 }
@@ -457,18 +449,12 @@ struct GameResolutionSection: View {
 
     func choose(_ tag: String) {
         let px: [Int]? = tag == "desktop" ? nil : tag.split(separator: "x").compactMap { Int($0) }
-        let lib = model.games
         working = true
-        model.changeSetting(for: game, title: "Mac Screen Resolution", success: "Saved the Mac screen resolution for this game.", edit: { current in
-            try await Task.detached { try GameDisplay.apply(px, to: current, library: lib) }.value
-        }, completion: { _ in working = false })
+        model.changeSetting(for: game, title: "Mac Screen Resolution", success: "Saved the Mac screen resolution for this game.", change: .display(px), completion: { _ in working = false })
     }
     func windowStyle(_ style: GameWindowStyle) {
         working = true; status = ""
-        let log = logger
-        model.changeSetting(for: game, title: "Window Style", edit: { current in
-            try await GameWindowStyle.apply(style, to: current, log: log)
-        }, completion: { _ in working = false })
+        model.changeSetting(for: game, title: "Window Style", change: .windowStyle(style), completion: { _ in working = false })
     }
     func openUASettings() {
         working = true; status = ""

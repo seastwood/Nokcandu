@@ -100,7 +100,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    var selectedGame: InstalledGame? { games.first { $0.id == selection } }
+    var selectedGame: InstalledGame? { games.first { $0.id == selection }.map(PendingSettings.preview) }
 
     func refresh() {
         libraryRevision += 1
@@ -176,36 +176,31 @@ final class AppModel: ObservableObject {
     }
 
     private var settingHosts = Set<String>()
-    /// One restart/confirmation flow for private games and shared Steam/Battle.net/EA environments.
-    func changeSetting(for game: InstalledGame, title: String, success: String = "Settings applied.",
-                       edit: @escaping (InstalledGame) async throws -> Void,
-                       completion: @escaping (Bool) -> Void = { _ in }) {
-        let contents = WineTools.hostContents(for: game)
-        let host = contents.flatMap { GameLibrary.inspect($0.deletingLastPathComponent()) }
-        let key = host?.id ?? game.id
-        guard settingHosts.insert(key).inserted else { fail(NokError("Another setting is still being applied in this Windows environment.")); completion(false); return }
+    /// Save desired changes immediately; never close or reopen a game to change a setting.
+    func changeSetting(for game: InstalledGame, title: String, success: String = "Settings saved.",
+                       change: PendingSettings.Change, completion: @escaping (Bool) -> Void = { _ in }) {
         Task {
-            var applied = false
-            defer { settingHosts.remove(key); completion(applied) }
-            let running = contents != nil ? await WineTools.environmentIsRunning(for: game) : false
-            if running {
-                let name = host?.name ?? game.name
-                let reopenName = host?.id == game.id ? name : "\(game.name) through \(name)"
-                let alert = NSAlert()
-                alert.messageText = "Restart \(name) to apply \(title.lowercased())?"
-                alert.informativeText = "Nokcandu will fully close all Windows programs in this environment, including its running games. Unsaved progress will be lost. It will apply the setting while everything is closed, then reopen \(reopenName)."
-                alert.alertStyle = .warning
-                alert.addButton(withTitle: "Apply and Restart")
-                alert.addButton(withTitle: "Cancel")
-                guard alert.runModal() == .alertFirstButtonReturn else { return }
-                say("Closing \(name) and its Windows programs…")
-            }
             do {
-                try await WineTools.applySettings(for: game, restart: running, edit: edit)
-                applied = true
+                let outcome = try await Task.detached(priority: .userInitiated) {
+                    let current = GameLibrary.inspect(game.appURL) ?? game
+                    try PendingSettings.save(change, title: title, for: current)
+                    let outcome = try await PendingSettings.apply(for: current)
+                    if outcome == .applied {
+                        _ = try? PendingSettings.ensureHelper(for: current)
+                        try? LauncherEntry.ensure(GameLibrary.inspect(current.appURL) ?? current)
+                    }
+                    return outcome
+                }.value
                 refresh()
-                say(running ? "\(game.name) restarted. \(success)" : success)
-            } catch { fail(error) }
+                if outcome == .deferred {
+                    let name = WineSelection.host(for: game, in: games)?.name ?? game.name
+                    say("Saved \(title.lowercased()). It will apply the next time \(name)'s Windows environment restarts.")
+                } else { say(success) }
+                completion(true)
+            } catch {
+                // A failed application retains its durable request for retry or discard.
+                refresh(); fail(error); completion(false)
+            }
         }
     }
 
@@ -308,6 +303,13 @@ final class AppModel: ObservableObject {
         if let m = GameMover.missingDrive(g) { fail(NokError(m)); return }
         // Resizable window: each game has its own choice; a launcher running with another one restarts.
         Task {
+            do {
+                if PendingSettings.hasPending(for: g) {
+                    _ = try await PendingSettings.apply(for: g, waitForApplication: true)
+                    refresh()
+                }
+            } catch { fail(error); return }
+            let g = GameLibrary.inspect(g.appURL) ?? g
             if let why = await WindowedPresentation.restartReason(for: g) {
                 let alert = NSAlert()
                 let host = WineTools.hostContents(for: g).flatMap { GameLibrary.inspect($0.deletingLastPathComponent()) }

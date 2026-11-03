@@ -142,17 +142,30 @@ public enum GameLauncher {
         return runState(of: game, processes: snapshot.rows, reliable: snapshot.reliable)
     }
 
+    static func ownsLock(pid: Int32, game: InstalledGame, processes: [(Int32, String)]) -> Bool {
+        guard pid > 1, let command = processes.first(where: { $0.0 == pid })?.1 else { return false }
+        let macOS = game.contents.appendingPathComponent("MacOS").standardizedFileURL.path + "/"
+        let canonical = game.contents.resolvingSymlinksInPath().appendingPathComponent("MacOS").path + "/"
+        if command.contains(macOS) || command.contains(canonical) { return true }
+        if game.isSteamHost {
+            if command.contains(game.contents.appendingPathComponent("Resources/" + SharedSteam.helperName).path) { return true }
+            let normalized = command.lowercased().replacingOccurrences(of: "/", with: "\\")
+            if normalized.contains(#"\steam\steam.exe"#), let contents = WineTools.hostContents(for: game), WineTools.owns(pid: pid, contents: contents) { return true }
+        }
+        return launchedGameProcess(game, processes: processes) == pid
+    }
+
     static func runState(of game: InstalledGame, processes: [(Int32, String)]?, reliable: Bool = true) -> RunState {
         if game.isSteamHost {
             let f = game.logs.appendingPathComponent("steam.lock/pid")
-            if let s = try? String(contentsOf: f, encoding: .utf8), let pid = Int32(s.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 1, kill(pid, 0) == 0 {
+            if let s = try? String(contentsOf: f, encoding: .utf8), let pid = Int32(s.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 1, kill(pid, 0) == 0, ownsLock(pid: pid, game: game, processes: processes ?? processSnapshot()) {
                 return .launcherRunning(pid: pid)
             }
             return reliable ? .notRunning : .unknown
         }
         let pidFile = game.logs.appendingPathComponent("game.lock/pid")
         if let s = try? String(contentsOf: pidFile, encoding: .utf8),
-           let pid = Int32(s.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 0, kill(pid, 0) == 0 {
+           let pid = Int32(s.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 1, kill(pid, 0) == 0, ownsLock(pid: pid, game: game, processes: processes ?? processSnapshot()) {
             return .launcherRunning(pid: pid)
         }
         // Games started by their launcher (Battle.net, EA app): the game's app hands the game over and exits, so
@@ -233,18 +246,21 @@ public enum GameLauncher {
     }
 
     private static let processCache = ProcessSnapshotCache()
-    static func processStatus() -> ProcessSnapshot {
-        processCache.read {
-            let result = try Shell.run("/bin/ps", ["-axww", "-o", "pid=,command="], timeout: 15)
-            guard result.ok else { throw NokError("Game status could not be checked.") }
-            let rows: [(Int32, String)] = result.stdout.split(separator: "\n").compactMap { line in
-                let text = line.drop(while: { $0 == " " })
-                guard let space = text.firstIndex(of: " "), let pid = Int32(text[..<space]) else { return nil }
-                return (pid, String(text[text.index(after: space)...]))
-            }
-            guard !rows.isEmpty else { throw NokError("The process scan was empty.") }
-            return rows
+    static func loadProcessRows() throws -> [(Int32, String)] {
+        let result = try Shell.run("/bin/ps", ["-axww", "-o", "pid=,command="], timeout: 15)
+        guard result.ok else { throw NokError("Game status could not be checked.") }
+        let rows: [(Int32, String)] = result.stdout.split(separator: "\n").compactMap { line in
+            let text = line.drop(while: { $0 == " " })
+            guard let space = text.firstIndex(of: " "), let pid = Int32(text[..<space]) else { return nil }
+            return (pid, String(text[text.index(after: space)...]))
         }
+        guard !rows.isEmpty else { throw NokError("The process scan was empty.") }
+        return rows
+    }
+    static func processStatus() -> ProcessSnapshot { processCache.read { try loadProcessRows() } }
+    static func freshProcessStatus() -> ProcessSnapshot {
+        do { return ProcessSnapshot(rows: try loadProcessRows(), reliable: true) }
+        catch { return ProcessSnapshot(rows: [], reliable: false) }
     }
     static func processSnapshot() -> [(Int32, String)] { processStatus().rows }
 

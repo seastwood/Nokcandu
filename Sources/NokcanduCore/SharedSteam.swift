@@ -36,7 +36,8 @@ public enum SharedSteam {
         let pidFile = contents.appendingPathComponent("SharedSupport/Logs/steam.lock/pid")
         guard let s = try? String(contentsOf: pidFile, encoding: .utf8),
               let pid = Int32(s.trimmingCharacters(in: .whitespacesAndNewlines)) else { return false }
-        return kill(pid, 0) == 0
+        guard let game = GameLibrary.inspect(appURL) else { return false }
+        return kill(pid, 0) == 0 && GameLauncher.ownsLock(pid: pid, game: game, processes: GameLauncher.processSnapshot())
     }
 
     public static var runningMode: GraphicsPreset? {

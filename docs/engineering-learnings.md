@@ -286,3 +286,7 @@ Use local installed-game readers in one background discovery path, with a single
 ### Wine selection is explicit, scoped and persistent
 
 A global installation default must not migrate existing games or unfinished installs. Snapshot it when new work starts, preserve legacy resume semantics and allow a per-install override only before preparing Wine. Game dropdowns resolve the actual Windows host, clearly state shared-client scope, keep the existing rollback transaction and record fresh selected-runtime provenance for Repair. Use checksum-verified official Sikarugir engines from Wine 10 onward with the verified wrapper; preserve dependent-feature requirements and cache entries needed by defaults/unfinished work. [Design, validation, migration and Undo](investigations/wine-version-selection-2026-11-03.md).
+
+### Saving desired settings must not require restarting a game
+
+Persist typed changes separately from applying them. Active/unknown Windows sessions defer safely, idle infrastructure can close without relaunching a game, and fresh process evidence must authorize mutations. Keep pending state outside active app bundles; a live clone rejected new bundle-internal writes. Reuse one application path for Play and app icons, serialize application while allowing further saves, preserve failures for retry/discard, and show requested/pending values. Live microphone/mouse controls keep their immediate behavior. [Evidence, migration, tests and Undo](investigations/deferred-game-settings-2026-11-03.md).

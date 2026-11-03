@@ -40,6 +40,7 @@ if [ -e .e2e ]; then rm -f .e2e; NOKCANDU_E2E=1 /usr/bin/perl -e "alarm 900; exe
 
 swift build -c release --product Nokcandu
 swift build -c release --product nokcandu-screen-size
+swift build -c release --product nokcandu-settings
 BIN="$(swift build -c release --show-bin-path)"
 
 APP="build/Nokcandu.app"
@@ -47,6 +48,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN/Nokcandu" "$APP/Contents/MacOS/Nokcandu"
 cp "$BIN/nokcandu-screen-size" "$APP/Contents/Resources/screen-size"
+cp "$BIN/nokcandu-settings" "$APP/Contents/Resources/nokcandu-settings"
 cp Resources/bonjour/nokcandu-bonjour-service.exe Resources/refresh-generals-launcher.py Resources/build-icu-adapter.py Resources/generals-launcher "$APP/Contents/Resources/"
 chmod 755 "$APP/Contents/Resources/generals-launcher" "$APP/Contents/Resources/screen-size"
 xcrun clang -arch arm64 -arch x86_64 -mmacosx-version-min=11.0 -O2 -Wall -Wextra -Werror -framework CoreFoundation Resources/launcher-entry/main.c -o "$APP/Contents/Resources/nokcandu-launcher"
@@ -175,6 +177,7 @@ PLIST
 
 # Signed with the identity chosen above (not notarized).
 codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/screen-size"
+codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/nokcandu-settings"
 codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP"
 echo "Built $(pwd)/$APP"
 

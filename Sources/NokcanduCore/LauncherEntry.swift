@@ -9,12 +9,17 @@ public enum LauncherEntry {
     static let record = "launcher-entry.json"
     struct State: Codable { var original: Data; var installed: Data; var helperSHA: String; var sourceSHA: String? = nil }
 
-    public static func ensure(_ game: InstalledGame, repairMissing: Bool = false) throws {
+    public static func ensure(_ game: InstalledGame, repairMissing: Bool = false, allowRunningHelperUpdate: Bool = false) throws {
         guard game.native == nil, let script = game.launcherURL,
-              case .notRunning = GameLauncher.runState(of: game),
+              (GameLauncher.runState(of: game) == .notRunning || allowRunningHelperUpdate),
               let source = resourceForTesting ?? NokPaths.bundledResource(name, executable: true) else { return }
         if let config = game.custom {
             guard let expected = config.launcherSHA, try Hashing.sha256(file: script) == expected else { return }
+        } else if let link = game.hosted {
+            let current = try String(contentsOf: script, encoding: .utf8)
+            guard HostedSettings.load(game).launcherSHA == Hashing.sha256(data: Data(current.utf8)) || current == PCLaunchers.launcherScript(link) else { return }
+        } else if let link = game.battleNet {
+            guard try String(contentsOf: script, encoding: .utf8) == BattleNet.launcherScript(link) else { return }
         } else {
             guard game.recipe != nil else { return }
             switch DisplayController.launcherState(game) {
@@ -31,6 +36,8 @@ public enum LauncherEntry {
         guard target.resolvingSymlinksInPath() == target else { return }
         let marker = game.nokcanduState.appendingPathComponent(record)
         let old = (try? Data(contentsOf: marker)).flatMap { try? JSONDecoder().decode(State.self, from: $0) }
+        if GameLauncher.runState(of: game) != .notRunning, old == nil { return }
+        _ = try PendingSettings.ensureHelper(for: game)
         let sourceSHA = try Hashing.sha256(file: source)
         let missing = !FileManager.default.fileExists(atPath: target.path)
         if let old {
@@ -46,6 +53,7 @@ public enum LauncherEntry {
         info["CFBundleExecutable"] = name
         info["NSRemovableVolumesUsageDescription"] = "Access this game's files on your external drive."
         let installed = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+        if GameLauncher.runState(of: game) != .notRunning, installed != before { return }
         let priorHelper = (old == nil || missing) ? nil : try Data(contentsOf: target)
         let priorMarker = try? Data(contentsOf: marker)
         // Sign outside the .app. Once this is CFBundleExecutable, codesign can

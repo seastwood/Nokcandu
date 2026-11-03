@@ -797,11 +797,7 @@ struct GraphicsPicker: View {
 
     func apply(_ p: GraphicsPreset) {
         guard game.custom != nil, p != game.custom?.graphics else { return }
-        app.changeSetting(for: game, title: "Graphics", success: "Graphics: \(p.title).", edit: { fresh in
-            guard var config = fresh.custom else { throw NokError("This game has no managed settings.") }
-            config.graphics = p
-            try CustomGames.save(config, to: fresh)
-        }, completion: { saved in if saved { current = p; onChange() } })
+        app.changeSetting(for: game, title: "Graphics", success: "Graphics: \(p.title).", change: .graphics(p), completion: { saved in if saved { current = p; onChange() } })
     }
 }
 

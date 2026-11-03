@@ -23,28 +23,21 @@ struct HostedGameSettingsSection: View {
                 }
                 TextField("Launch options", text: $settings.arguments).font(.body.monospaced())
                 if let link = game.hosted {
-                    Text("These settings apply only when you start this game from Nokcandu or its Mac app. \(link.launcher.title) keeps its own graphics settings. Nokcandu offers to restart its Windows programs when needed.").font(.caption).foregroundStyle(.secondary)
+                    Text("These settings apply only when you start this game from Nokcandu or its Mac app. \(link.launcher.title) keeps its own graphics settings. Saved changes take effect the next time its Windows environment restarts.").font(.caption).foregroundStyle(.secondary)
                     Text(link.exe ?? "Starts through the launcher").font(.caption.monospaced()).textSelection(.enabled)
                 }
                 Button("Save Game Settings") {
                     let value = settings
-                    model.changeSetting(for: game, title: "Game Settings", success: "Game settings saved. Start this game from Nokcandu to use them.", edit: { current in
-                        try HostedSettings.save(value, for: current)
-                    })
+                    model.changeSetting(for: game, title: "Game Settings", success: "Game settings saved. Start this game from Nokcandu to use them.", change: .hosted(value))
                 }
                 if BC2DisplaySettings.supports(game) {
                     Button("Use Recommended BC2 Display Settings") {
                         var value = settings; value.graphics = .classic3D; value.borderless = nil
-                        model.changeSetting(for: game, title: "BC2 Display Settings", success: "BC2 uses fullscreen at the desktop size with DirectX 9.", edit: { current in
-                            try BC2DisplaySettings.apply(current, resolution: BC2DisplaySettings.desktop)
-                            try HostedSettings.save(value, for: current)
-                        }, completion: { saved in if saved { settings = value } })
+                        model.changeSetting(for: game, title: "BC2 Display Settings", success: "BC2 uses fullscreen at the desktop size with DirectX 9.", change: .bc2(undo: false, resolution: BC2DisplaySettings.desktop, settings: value), completion: { saved in if saved { settings = value } })
                     }
                     Text("Recommended: BC2’s own fullscreen mode at your current desktop size. Avoids the menu-pointer offset caused by resizing its window.").font(.caption).foregroundStyle(.secondary)
                     Button("Undo BC2 Display Settings") {
-                        model.changeSetting(for: game, title: "BC2 Display Settings", success: "BC2 display changes undone; later edits were kept.", edit: { current in
-                            try BC2DisplaySettings.undo(current)
-                        })
+                        model.changeSetting(for: game, title: "BC2 Display Settings", success: "BC2 display changes undone; later edits were kept.", change: .bc2(undo: true, resolution: nil, settings: nil))
                     }.disabled(BC2DisplaySettings.resolution(game) == nil)
                 }
                 if game.hosted?.launcher == .ea {
@@ -62,7 +55,7 @@ struct HostedGameSettingsSection: View {
                 }
             }.padding(6)
         } label: { Text("Game Settings").font(.headline) }
-        .onAppear { settings = HostedSettings.load(game) }
+        .onAppear { settings = PendingSettings.hosted(for: game) ?? HostedSettings.load(game) }
     }
 }
 

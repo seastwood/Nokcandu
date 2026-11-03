@@ -1,7 +1,7 @@
 import Foundation
 
 /// Settings ▸ Window style.
-public enum GameWindowStyle: String, CaseIterable, Identifiable, Sendable {
+public enum GameWindowStyle: String, CaseIterable, Codable, Identifiable, Sendable {
     /// The game decides (its own windowed or full-screen mode).
     case gameDefault
     /// The game's window fills its screen, without borders (the borderless fix).

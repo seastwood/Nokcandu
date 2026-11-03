@@ -14,7 +14,7 @@ final class SettingsRestartTests: XCTestCase {
         XCTAssertFalse(idle)
         try Data("#!/bin/sh\nexec /bin/sleep 10\n".utf8).write(to: server)
         let active = await WineTools.environmentIsRunning(for: host)
-        XCTAssertTrue(active)
+        XCTAssertFalse(active, "A slow wineserver probe is not evidence of a running program")
         try Data(script.utf8).write(to: server)
         try Data().write(to: events)
         var steps: [String] = []
@@ -71,7 +71,7 @@ final class SettingsRestartTests: XCTestCase {
         XCTAssertFalse(WineTools.owns(pid: unrelated.processIdentifier, contents: host.contents))
         XCTAssertFalse(WineTools.owns(executable: host.contents.path + "-other/SharedSupport/wine/bin/wine", contents: host.contents))
         let active = await WineTools.environmentIsRunning(for: host)
-        XCTAssertTrue(active, "A native orphan must still trigger the restart confirmation")
+        XCTAssertTrue(active, "A real owned orphan remains active; setting changes must defer without terminating it")
         try await WineTools.stopAll(for: host)
         orphan.waitUntilExit()
         XCTAssertFalse(orphan.isRunning)

@@ -51,14 +51,14 @@ struct GameWineSection: View {
     @State private var confirmWarning = false
 
     var host: InstalledGame? { WineSelection.host(for: game, in: model.games) }
-    var target: EngineVersion? { WineSelection.parse(selected.isEmpty ? host.flatMap(EngineUpdate.current)?.tag ?? "" : selected) }
+    var target: EngineVersion? { WineSelection.parse(selected.isEmpty ? host.flatMap { PendingSettings.requestedWine(for: $0) ?? EngineUpdate.current($0)?.tag } ?? "" : selected) }
     var reason: String? { host.flatMap { h in target.flatMap { WineSelection.incompatibility(host: h, target: $0, games: model.games) } } }
     var warning: String? { host.flatMap { h in target.flatMap { WindowedPresentation.engineUpdateWarning(host: h, games: model.games, target: $0) } } }
 
     var body: some View {
         if let host {
             SettingsSection(title: "Wine") {
-                WineVersionMenu(selection: Binding(get: { selected.isEmpty ? EngineUpdate.current(host)?.tag ?? EngineVersion.tested.tag : selected }, set: { selected = $0 }))
+                WineVersionMenu(selection: Binding(get: { selected.isEmpty ? PendingSettings.requestedWine(for: host) ?? EngineUpdate.current(host)?.tag ?? EngineVersion.tested.tag : selected }, set: { selected = $0 }))
                     .disabled(working)
                 Text("Currently using \(EngineUpdate.current(host)?.description ?? host.wineVersion ?? "an unknown version").")
                     .font(.caption).foregroundStyle(.secondary)
@@ -97,9 +97,7 @@ struct GameWineSection: View {
                 let id = try await WineSelection.prepare(target, catalog: model.catalog) { line in
                     Task { @MainActor in progress = line }
                 }
-                model.changeSetting(for: host, title: "Wine version", success: "Trying \(target). Play, then Keep or Roll Back.", edit: { current in
-                    try await EngineUpdate.apply(current, runtimeID: id, explicitChoice: true) { _ in }
-                }, completion: { _ in working = false })
+                model.changeSetting(for: host, title: "Wine version", success: "Trying \(target). Play, then Keep or Roll Back.", change: .wine(id), completion: { _ in working = false })
             } catch { model.fail(error); working = false }
         }
     }

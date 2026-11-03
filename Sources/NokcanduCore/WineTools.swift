@@ -142,13 +142,10 @@ public enum WineTools {
     /// Read-only probe, including background services with no visible launcher window.
     /// `wineserver -w` returns immediately when no server exists; a live environment keeps it waiting.
     public static func environmentIsRunning(for game: InstalledGame) async -> Bool {
-        guard let contents = hostContents(for: game) else { return false }
-        if !ownedProcesses(contents: contents).isEmpty { return true }
-        do {
-            let result = try await Shell.runAsync(contents.appendingPathComponent("SharedSupport/wine/bin/wineserver").path,
-                ["-w"], env: environment(contents: contents), timeout: 0.3)
-            return !result.ok
-        } catch { return true }
+        switch PendingSettings.activity(for: game) {
+        case .closed: return false
+        case .backgroundOnly, .active, .unknown: return true
+        }
     }
     /// Apply while the environment is closed, then relaunch the selected game through its host. Callers obtain
     /// confirmation first; mouse settings that apply live never use this path.

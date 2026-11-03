@@ -382,3 +382,7 @@ Steam, Battle.net, EA and Ubisoft completed local installations are checked in t
 ### Sikarugir Wine version selection
 
 Game settings, new-install defaults and installation overrides share `WineSelection`. Wine 10.0 r8 remains the initial original tested default; available verified Sikarugir revisions from Wine 10.0 onward can be selected explicitly. Shared store games change their real host's engine together, Native IPX blocks incompatible targets, and every switch retains the existing trial/rollback protection. Fresh selected runtimes retain Repair provenance; recipe builtin-DLL verification follows the chosen engine. Defaults never retarget existing/resumed installs, and relevant cache entries are protected. [Evidence, validation, limitations and Undo](investigations/wine-version-selection-2026-11-03.md).
+
+### Deferred setting changes without forced restarts
+
+Ordinary settings now save independently of session shutdown. Wine/graphics/performance/display/program/recipe/hosted and compatibility changes apply safely while closed or remain visibly pending until the next full Windows start. Active programs are never terminated just to save a setting; idle services do not reopen a closed game. Shared hosts keep their existing scope, and live microphone/raw-mouse controls remain immediate. Generated app icons and Nokcandu Play share the persisted queue/helper, with fingerprint-safe migration and explicit failure/discard. [Evidence, limitations, cache retention and Undo](investigations/deferred-game-settings-2026-11-03.md).

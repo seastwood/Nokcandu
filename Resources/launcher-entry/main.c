@@ -46,6 +46,25 @@ int main(int argc, char **argv) {
         mkdir(logs, 0700);
         if (snprintf(status_path, sizeof(status_path), "%s/launcher-status.json", logs) >= (int)sizeof(status_path)) *status_path = 0;
     }
+    /* Apply saved settings before the shell starts Wine or creates its instance lock. */
+    char settings_tool[PATH_MAX], app_path[PATH_MAX];
+    if (snprintf(settings_tool, sizeof(settings_tool), "%s/../SharedSupport/nokcandu/nokcandu-settings", folder) >= (int)sizeof(settings_tool) ||
+        snprintf(app_path, sizeof(app_path), "%s/../..", folder) >= (int)sizeof(app_path)) return 126;
+    if (!access(settings_tool, X_OK)) {
+        char *settings_args[] = {settings_tool, "--apply", app_path, NULL};
+        pid_t settings_pid; int settings_status = 0;
+        int settings_error = posix_spawn(&settings_pid, settings_tool, NULL, NULL, settings_args, environ);
+        if (!settings_error) {
+            while (waitpid(settings_pid, &settings_status, 0) < 0) if (errno != EINTR) { settings_error = errno; break; }
+        }
+        if (settings_error || !WIFEXITED(settings_status) || WEXITSTATUS(settings_status)) {
+            CFUserNotificationDisplayAlert(0, kCFUserNotificationStopAlertLevel, NULL, NULL, NULL,
+                CFSTR("Couldn't apply saved game settings"),
+                CFSTR("The saved changes were kept. Open Nokcandu to review or discard them, then try again. Your game files and saves were preserved."),
+                CFSTR("OK"), NULL, NULL, NULL);
+            return 126;
+        }
+    }
     struct timespec now; clock_gettime(CLOCK_REALTIME, &now); started = now.tv_sec + now.tv_nsec / 1000000000.0;
     status_record("starting", 0);
     char **args = calloc((size_t)argc + 2, sizeof(*args)); if (!args) { status_record("exited", 126); return 126; }

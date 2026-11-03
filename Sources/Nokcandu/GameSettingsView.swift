@@ -130,15 +130,8 @@ struct GameSettingsSection: View {
     func changeProgram() {
         fixesToRedo = nil
         saving = true
-        let c = edited, o = original, g = game
-        let note = Locked("")
-        model.changeSetting(for: g, title: "Game Settings", success: "Program changed; its fixes were set up again.", edit: { fresh in
-            let missed = try await CompatibilityFixes.changeProgram(to: c, from: o, for: fresh) { _ in }
-            note.value = missed.map { "\($0.0.title) — \($0.1)" }.joined(separator: "; ")
-        }, completion: { ok in
-            saving = false
-            if ok, !note.value.isEmpty { model.say("Program changed. Not set up again for the new program: \(note.value)") }
-        })
+        let c = edited, g = game
+        model.changeSetting(for: g, title: "Game Settings", success: "Program changed; applicable fixes were set up again.", change: .custom(c, force: false, changeProgram: true), completion: { _ in saving = false })
     }
 
     func row<C: View>(_ label: String, @ViewBuilder _ content: () -> C) -> some View {
@@ -189,9 +182,7 @@ struct GameSettingsSection: View {
         }
         saving = true
         let c = edited, g = game, f = force || launcherEdited
-        model.changeSetting(for: g, title: "Game Settings", edit: { fresh in
-            try await Task.detached { try CustomGames.saveAll(c, to: fresh, force: f) }.value
-        }, completion: { _ in saving = false })
+        model.changeSetting(for: g, title: "Game Settings", change: .custom(c, force: f, changeProgram: false), completion: { _ in saving = false })
     }
 }
 
@@ -329,7 +320,7 @@ struct RecipeSettingsSection: View {
 
     init(game: InstalledGame) {
         self.game = game
-        let value = RecipeSettings.load(game)
+        let value = PendingSettings.recipe(for: game) ?? RecipeSettings.load(game)
         _draft = State(initialValue: value)
         _rows = State(initialValue: value.environment.sorted { $0.key < $1.key }.map { .init(key: $0.key, value: $0.value) })
     }
@@ -389,10 +380,6 @@ struct RecipeSettingsSection: View {
     func save() {
         saving = true
         let value = edited
-        model.changeSetting(for: game, title: "Recipe Settings", success: "Recipe settings saved.", edit: { fresh in
-            var updated = value
-            updated.microphone = GameMicrophone.isOn(fresh)
-            try RecipeSettings.save(updated, for: fresh)
-        }, completion: { _ in saving = false })
+        model.changeSetting(for: game, title: "Recipe Settings", success: "Recipe settings saved.", change: .recipe(value), completion: { _ in saving = false })
     }
 }

@@ -285,6 +285,7 @@ extension RuntimeManager {
         let inUse = Set(games.compactMap { EngineUpdate.state(for: $0)?.runtimeID } + [RecipeCatalog.sikarugirWine10.id])
             .union(games.compactMap { EngineUpdate.state(for: $0)?.previousRuntimeID })
             .union(WineSelection.protectedRuntimeIDs(defaultEngine: WineSelection.defaultEngine(), installs: InstallExecutor.savedInstalls()))
+            .union(games.flatMap { PendingSettings.entries(for: $0) }.compactMap { entry -> String? in if case .wine(let id) = entry.change { return id }; return nil })
         var removed: [String] = []
         for m in cachedRuntimes() where !inUse.contains(m.id) {
             if (try? FileManager.default.removeItem(at: folder(for: m.id))) != nil { removed.append(m.id) }

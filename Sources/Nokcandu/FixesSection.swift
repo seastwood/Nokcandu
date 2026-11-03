@@ -48,9 +48,7 @@ struct FixesSection: View {
     func install(zips: [CinematicFix.Arch: URL] = [:]) {
         working = true; log = []
         let g = game, l = logger
-        model.changeSetting(for: g, title: "Video Playback Fix", success: "Cinematic fix installed.", edit: { current in
-            try await CinematicFix.install(for: current, localZips: zips, log: l)
-        }, completion: { _ in working = false; present = CinematicFix.isPresent(for: g) })
+        model.changeSetting(for: g, title: "Video Playback Fix", success: "Cinematic fix installed.", change: .cinematic(undo: false, zips: Dictionary(uniqueKeysWithValues: zips.map { ($0.key.rawValue, $0.value.path) })), completion: { _ in working = false; present = CinematicFix.isPresent(for: g) })
     }
 
     func installFromZip() {
@@ -69,9 +67,7 @@ struct FixesSection: View {
     func undo() {
         working = true; log = []
         let g = game, l = logger
-        model.changeSetting(for: g, title: "Video Playback Fix", success: "Cinematic fix removed.", edit: { current in
-            try await CinematicFix.undo(for: current, log: l)
-        }, completion: { _ in working = false; present = CinematicFix.isPresent(for: g) })
+        model.changeSetting(for: g, title: "Video Playback Fix", success: "Cinematic fix removed.", change: .cinematic(undo: true, zips: [:]), completion: { _ in working = false; present = CinematicFix.isPresent(for: g) })
     }
 }
 
@@ -152,30 +148,23 @@ private struct ComponentFixesView: View {
     }
     func reload() {
         installed = Set(CompatibilityFixes.installedIDs(for: game))
-        nativeIPXFrame = NativeIPXNetworking.frame(for: game) ?? 3
-        nativeIPXAdapter = game.custom?.environment?["NOKCANDU_NATIVE_IPX_INTERFACE"] ?? ""
+        nativeIPXFrame = PendingSettings.nativeFrame(for: game) ?? NativeIPXNetworking.frame(for: game) ?? 3
+        nativeIPXAdapter = PendingSettings.nativeAdapter(for: game) ?? game.custom?.environment?["NOKCANDU_NATIVE_IPX_INTERFACE"] ?? ""
         nativeIPXAdapters = installed.contains(CompatibilityFix.nativeIPXNetworking.id) ? NativeIPXNetworking.availableAdapters() : []
     }
     func setNativeAdapter(_ name: String) {
         working = .nativeIPXNetworking
-        model.changeSetting(for: game, title: "IPX LAN connection", success: "Native IPX connection updated.", edit: { current in
-            try NativeIPXNetworking.setAdapter(name, for: current)
-        }, completion: { _ in reload(); working = nil })
+        model.changeSetting(for: game, title: "IPX LAN connection", success: "Native IPX connection updated.", change: .nativeAdapter(name), completion: { _ in reload(); working = nil })
     }
     func setNativeFrame(_ frame: Int) {
         working = .nativeIPXNetworking
-        model.changeSetting(for: game, title: "IPX frame type", success: "Native IPX frame updated.", edit: { current in
-            try NativeIPXNetworking.setFrame(frame, for: current)
-        }, completion: { _ in reload(); working = nil })
+        model.changeSetting(for: game, title: "IPX frame type", success: "Native IPX frame updated.", change: .nativeFrame(frame), completion: { _ in reload(); working = nil })
     }
     func run(_ fix: CompatibilityFix, update: Bool = false) {
         working = fix; status = ""
         let undo = installed.contains(fix.id) && !update, g = game
         let logger: @Sendable (String) -> Void = { line in Task { @MainActor in status = line } }
-        model.changeSetting(for: g, title: fix.title, success: undo ? "Removed \(fix.title)." : "Installed \(fix.title).", edit: { current in
-            if undo { try CompatibilityFixes.undo(fix, for: current, log: logger) }
-            else { try await CompatibilityFixes.install(fix, for: current, log: logger) }
-        }, completion: { _ in reload(); working = nil })
+        model.changeSetting(for: g, title: fix.title, success: undo ? "Removed \(fix.title)." : "Installed \(fix.title).", change: .compatibility(fix, undo: undo), completion: { _ in reload(); working = nil })
     }
 }
 
