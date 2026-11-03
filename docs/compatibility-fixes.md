@@ -386,3 +386,7 @@ Game settings, new-install defaults and installation overrides share `WineSelect
 ### Deferred setting changes without forced restarts
 
 Ordinary settings now save independently of session shutdown. Wine/graphics/performance/display/program/recipe/hosted and compatibility changes apply safely while closed or remain visibly pending until the next full Windows start. Active programs are never terminated just to save a setting; idle services do not reopen a closed game. Shared hosts keep their existing scope, and live microphone/raw-mouse controls remain immediate. Generated app icons and Nokcandu Play share the persisted queue/helper, with fingerprint-safe migration and explicit failure/discard. [Evidence, limitations, cache retention and Undo](investigations/deferred-game-settings-2026-11-03.md).
+
+## Nokcandu app-version recovery
+
+Updates → Nokcandu can return to saved app copies or older stable GitHub releases with published checksums. Every managed replacement saves the current app first; games, saves, Wine selections and user settings remain in place. Existing installations gain recovery copies at their next replacement. Backups also contain an independent Restore Nokcandu.command for a broken UI or interrupted app swap. Older app releases may not understand newer settings, so recovery does not erase or downgrade user data. Undo by selecting the saved newer copy. See [implementation, evidence and limits](investigations/app-version-rollback-2026-11-03.md).

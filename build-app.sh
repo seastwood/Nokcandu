@@ -183,7 +183,6 @@ echo "Built $(pwd)/$APP"
 
 if [ "${1:-}" = --install ]; then
   mkdir -p "$HOME/Applications"
-  rm -rf "$HOME/Applications/Nokcandu.app"
-  cp -R "$APP" "$HOME/Applications/Nokcandu.app"
+  "$APP/Contents/Resources/nokcandu-settings" --install-app "$(pwd)/$APP" "$HOME/Applications/Nokcandu.app"
   echo "Installed ~/Applications/Nokcandu.app"
 fi

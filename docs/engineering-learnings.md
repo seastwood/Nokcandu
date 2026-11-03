@@ -290,3 +290,7 @@ A global installation default must not migrate existing games or unfinished inst
 ### Saving desired settings must not require restarting a game
 
 Persist typed changes separately from applying them. Active/unknown Windows sessions defer safely, idle infrastructure can close without relaunching a game, and fresh process evidence must authorize mutations. Keep pending state outside active app bundles; a live clone rejected new bundle-internal writes. Reuse one application path for Play and app icons, serialize application while allowing further saves, preserve failures for retry/discard, and show requested/pending values. Live microphone/mouse controls keep their immediate behavior. [Evidence, migration, tests and Undo](investigations/deferred-game-settings-2026-11-03.md).
+
+## App updates need independent recovery (2026-11-03)
+
+Save a verified Nokcandu app copy before both upgrades and rollbacks. Use one replacement path for local backups, verified published releases and developer installation; never proceed after a wait timeout. A UI-only rollback is insufficient for a release that cannot launch: keep a separate recovery command/helper outside the replaced app. Preserve game/runtime/settings data, refuse stale plans and keep damaged originals for investigation. Signed-resource fingerprints detect resource-only changes as well as executable changes. See [app-version rollback](investigations/app-version-rollback-2026-11-03.md).

@@ -83,6 +83,11 @@ final class AppModel: ObservableObject {
             let more = interruptedDownloads.count > 1 ? " (and \(interruptedDownloads.count - 1) more)" : ""
             say("\(j.game.title)'s download didn't finish\(more). Resume it in Game Stores.")
         }
+        let replacementFailure = AppRollback.root.appendingPathComponent("last-failure.txt")
+        if let text = try? String(contentsOf: replacementFailure, encoding: .utf8) {
+            fail(NokError("Nokcandu version change: " + text))
+            try? FileManager.default.removeItem(at: replacementFailure)
+        }
         if Updates.isStale { Task { await checkForUpdates(quiet: true) } }
         Task.detached(priority: .utility) { await AntiCheat.refreshIfStale() }
         timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in

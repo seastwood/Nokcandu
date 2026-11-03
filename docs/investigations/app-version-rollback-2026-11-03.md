@@ -1,0 +1,25 @@
+# Nokcandu app-version rollback — 2026-11-03
+
+## Scope and reason
+
+The user requested recovery when a future Nokcandu release regresses. The previous updater moved the current app into Trash and had no managed version picker or independent recovery entry. Its shell helper also proceeded after its process-wait timeout. This change concerns the Nokcandu app itself; per-game Wine rollback remains separate.
+
+## Implementation and preservation
+
+Updates → Nokcandu offers saved app copies and explicitly fetched older stable GitHub releases. Remote choices require a published SHA-256 and use the existing checksum-verified downloader. Local and remote replacement share `AppRollback`: validate the Nokcandu bundle identifier/executable, macOS minimum and deep strict code signature, save the installed app under Application Support/App Versions, stage beside the target, and verify again before replacement. The fingerprint combines the executable, Info.plist and signed resource manifest, so resource-only changes count too. A code signature checks integrity; official GitHub download checksums supply release provenance.
+
+Backups record version, build, date and original app location. They are retained rather than automatically pruned; the UI explains their disk usage and provides Open Recovery Copies. No game bundle, save, runtime, pending-setting request, profile or preference store is a replacement target. Existing installations acquire their first recovery copy at the next managed replacement; this installation is seeded during deployment. Already lost pre-update versions cannot be reconstructed offline; users can explicitly fetch available older verified releases. The first 100 published releases are searched; unsigned-checksum, draft and prerelease assets are not offered.
+
+The copied replacement helper survives the app swap. It refuses a still-running process after timeout, a newly launched app, concurrent replacement, changed source/current/backup fingerprints or occupied displacement paths. The old path is restored on an ordinary failed replacement. Error text is kept locally and shown on return to Nokcandu; successful results remain visible in Updates. A refused replacement retains its staged copy and diagnostic work folder for investigation. No quarantine removal or security-policy override is performed.
+
+Each backup includes a separate Restore Nokcandu.command and a copy of the recovery helper, so a user can quit Nokcandu and recover without opening its UI. Recovery also handles a missing target after an interrupted swap or a damaged target, preserving a damaged app beside its original path. If the old process is still running, recovery refuses to replace it. The developer `build-app.sh --install` now uses the same backup/recovery path instead of deleting the installed app first. Running games are not stopped by an app-only replacement.
+
+## Undo and limits
+
+A rollback archives the currently installed app before replacing it, making a return to that newer copy possible through the same picker/recovery command. To remove unneeded copies, use Open Recovery Copies and move chosen version folders to Trash in Finder. Keep a working copy until the new app is verified. Older Nokcandu builds may not understand settings added later; app rollback deliberately does not downgrade, delete or reset user data. A historical release predating this feature will not create managed backups for its own updater, but the independent recovery command remains available.
+
+## Verification and useful unsuccessful comparisons
+
+Isolated tests use freshly compiled, signed disposable app bundles, including paths with spaces and apostrophes. Coverage includes downgrade/return, user-data preservation, backup deduplication, command quoting, active-process timeout, corrupt stage/backup, wrong app identity, signature failure, displacement collision, missing/damaged target recovery and direct execution of the standalone helper. No user's installed app is downgraded as a test. The first standalone test used Bundle.main and found Xcode's test runner rather than the test bundle; it now resolves the helper beside Bundle(for: AppRollbackTests.self). This matters on clean CI runners too.
+
+Verification completed: the full 325-test suite passed with 13 optional skips; after adding the signed resource-only-change regression and recovery-copy checks, all nine rollback tests passed again. The production app built and passed deep strict signature verification. Deployment used the production standalone helper to save the previously installed build and replace only Nokcandu; the installed executable matches the build and the saved app passes signature verification. The installed Updates UI exposes the app picker, saved build/date, published-version lookup and independent recovery instructions. The live official GitHub lookup populated older releases (including 0.12.1); no historical release was installed over the user's current app during verification. Gameplay is not re-tested for an app-only replacement.

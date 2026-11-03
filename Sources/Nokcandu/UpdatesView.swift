@@ -86,8 +86,9 @@ struct UpdatesView: View {
                 } else {
                     Text("Nokcandu \(AppUpdate.currentVersion) — up to date.").foregroundStyle(.secondary)
                 }
-                Text("Updates come from github.com/\(AppUpdate.repo) and are checked against GitHub's published checksum before installing. Your games and settings aren't touched.")
+                Text("Updates come from github.com/\(AppUpdate.repo) and are checked against GitHub's published checksum before installing. The current app is saved for recovery before replacement. Your games and settings stay in place.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                AppRollbackSection()
             }
             .padding(6).frame(maxWidth: .infinity, alignment: .leading)
         } label: { Label("Nokcandu", systemImage: "app.badge") .font(.headline) }

@@ -22,7 +22,7 @@ public enum AppUpdate {
     public static func isNewer(_ a: String, than b: String) -> Bool {
         func parts(_ v: String) -> ([Int], String) {
             let core = v.split(separator: "-", maxSplits: 1)
-            return (core[0].split(separator: ".").map { Int($0) ?? 0 }, core.count > 1 ? String(core[1]) : "")
+            return ((core.first ?? "").split(separator: ".").map { Int($0) ?? 0 }, core.count > 1 ? String(core[1]) : "")
         }
         let (x, xp) = parts(a), (y, yp) = parts(b)
         for i in 0..<max(x.count, y.count) {
@@ -56,57 +56,40 @@ public enum AppUpdate {
         return Release(version: version, tag: r.tag_name, notes: r.body ?? "", dmg: Updates.asset(a), page: r.html_url)
     }
 
-    /// Downloads, verifies and stages the update, then replaces this app and relaunches it.
-    /// Calls `quit` once the replacement helper is waiting for Nokcandu to exit.
+    /// Published stable app releases with verifiable DMG downloads, for explicit version selection.
+    public static func availableVersions() async throws -> [Release] {
+        var request = URLRequest(url: URL(string: "https://api.github.com/repos/\(repo)/releases?per_page=100")!)
+        request.setValue("Nokcandu/\(currentVersion)", forHTTPHeaderField: "User-Agent")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = 30
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw NokError("Could not load Nokcandu releases. Saved versions remain available offline.") }
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode([GHRelease].self, from: data).compactMap { r in
+            guard !r.draft, !r.prerelease, let dmg = r.assets.first(where: { $0.name.hasSuffix(".dmg") }),
+                  Updates.asset(dmg).sha256 != nil else { return nil }
+            return Release(version: r.tag_name.hasPrefix("v") ? String(r.tag_name.dropFirst()) : r.tag_name,
+                           tag: r.tag_name, notes: r.body ?? "", dmg: Updates.asset(dmg), page: r.html_url)
+        }.sorted { isNewer($0.version, than: $1.version) }
+    }
+
+    /// The same verified, backed-up replacement path handles updates and older releases.
     public static func install(_ r: Release, log: @escaping @Sendable (String) -> Void, quit: @escaping @Sendable () -> Void) async throws {
         let fm = FileManager.default
         let current = Bundle.main.bundleURL
         guard current.pathExtension == "app" else { throw NokError("Nokcandu isn't running from an app bundle.") }
-        let parent = current.deletingLastPathComponent()
-        guard fm.isWritableFile(atPath: parent.path) else {
-            throw NokError("Nokcandu can't replace itself in \(parent.path). Download the update from GitHub instead.")
-        }
-        let dmg = try await Updates.download(r.dmg, log: log)          // refuses without a matching sha256
-        let mount = NokPaths.support.appendingPathComponent("Work/update-mount-\(UUID().uuidString.prefix(6))")
+        let dmg = try await Updates.download(r.dmg, log: log)
+        let mount = NokPaths.support.appendingPathComponent("Work/update-mount-\(UUID().uuidString)")
         try NokPaths.ensure(mount)
         log("Opening the disk image…")
-        let a = try await Shell.runAsync("/usr/bin/hdiutil", ["attach", dmg.path, "-nobrowse", "-readonly", "-noautoopen", "-mountpoint", mount.path], timeout: 120)
-        guard a.ok else { throw NokError("Couldn't open the update: \(a.combined.suffix(200))") }
+        let attached = try await Shell.runAsync("/usr/bin/hdiutil", ["attach", dmg.path, "-nobrowse", "-readonly", "-noautoopen", "-mountpoint", mount.path], timeout: 120)
+        guard attached.ok else { try? fm.removeItem(at: mount); throw NokError("Couldn't open the update's disk image.") }
         defer { _ = try? Shell.run("/usr/bin/hdiutil", ["detach", mount.path, "-force"], timeout: 60); try? fm.removeItem(at: mount) }
-        guard let newApp = try fm.contentsOfDirectory(at: mount, includingPropertiesForKeys: nil).first(where: { $0.lastPathComponent == "Nokcandu.app" }) else {
-            throw NokError("The update's disk image has no Nokcandu.app.")
-        }
-        let info = NSDictionary(contentsOf: newApp.appendingPathComponent("Contents/Info.plist"))
-        guard (info?["CFBundleShortVersionString"] as? String) == r.version else { throw NokError("The update's version doesn't match its release.") }
-        let staged = parent.appendingPathComponent(".Nokcandu-\(r.version).app")
-        try? fm.removeItem(at: staged)
-        log("Copying the new version…")
-        let c = try await Shell.runAsync("/usr/bin/ditto", [newApp.path, staged.path], timeout: 300)
-        guard c.ok else { throw NokError("Couldn't copy the update: \(c.combined.suffix(200))") }
-        _ = try? Shell.run("/usr/bin/xattr", ["-dr", "com.apple.quarantine", staged.path])
-        try? fm.removeItem(at: dmg)
-
-        // A small helper swaps the apps after Nokcandu quits (the old one goes to the Trash), then relaunches.
-        let script = NokPaths.support.appendingPathComponent("Work/apply-update.sh")
-        let q = CustomGames.shellQuote
-        let text = """
-        #!/bin/bash
-        PID=\(ProcessInfo.processInfo.processIdentifier)
-        for _ in $(seq 1 120); do kill -0 "$PID" 2>/dev/null || break; sleep 0.5; done
-        OLD=\(q(current.path)); NEW=\(q(staged.path))
-        TRASH="$HOME/.Trash/Nokcandu \(currentVersion) $(date +%s).app"
-        /bin/mv "$OLD" "$TRASH" && /bin/mv "$NEW" "$OLD" || { [ -e "$OLD" ] || /bin/mv "$TRASH" "$OLD"; }
-        /usr/bin/open "$OLD"
-        rm -f "$0"
-        """
-        try Data(text.utf8).write(to: script)
-        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/bash")
-        p.arguments = [script.path]
-        p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
-        try p.run()
-        log("Restarting into Nokcandu \(r.version)…")
-        quit()
+        let source = mount.appendingPathComponent("Nokcandu.app")
+        let info = NSDictionary(contentsOf: source.appendingPathComponent("Contents/Info.plist"))
+        guard info?["CFBundleShortVersionString"] as? String == r.version else { throw NokError("The app's version doesn't match its release.") }
+        log("Saving the current app and preparing Nokcandu \(r.version)…")
+        let plan = try await Task.detached { try AppRollback.prepare(source: source, current: current) }.value
+        try AppRollback.launch(plan, quit: quit)
     }
 }
