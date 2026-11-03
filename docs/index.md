@@ -50,3 +50,5 @@ Keep credentials, account identifiers, raw session logs, copyrighted game/runtim
 - [Wine server closed-socket readiness](investigations/wineserver-closed-socket-readiness-2026-11-02.md) — synthetic reproduction, server-only normalization, genuine-error/OOB regression coverage and activation/Undo.
 
 - [Shared helper activation, status failure and Repair hardening](investigations/helper-activation-repair-hardening-2026-11-02.md)
+
+- [Storage settings performance and on-demand measurements](investigations/storage-browser-performance-2026-11-03.md)

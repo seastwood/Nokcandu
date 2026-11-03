@@ -364,3 +364,7 @@ A shared server-only helper correction handles macOS reporting urgent/error read
 ### Shared helper activation and Repair status
 
 Nokcandu distinguishes installed helper updates from code loaded by a running Windows session, and shows when the full game/client session needs restarting. Failed status scans retain the last known running state and cannot authorize closed-game changes. Repair covers shared audio/input, screen helper, native app entry, generated wrappers and installed compatibility companions while preserving external edits and explicit settings. Missing optional companions require a checksum-verified recovery copy; otherwise Repair reports reinstallation is needed. Fresh generation and existing installation migration use the same paths. See [evidence, safe recovery, migration and Undo](investigations/helper-activation-repair-hardening-2026-11-02.md).
+
+### Storage browsing in Settings
+
+All libraries use the same on-demand Storage sections and virtualized lists. Recent estimates are cached only for the current Nokcandu session; Refresh remeasures. Folder-capacity queries and cleanup run in the background, while cleanup rechecks cached leftovers before Trash. This changes presentation and scan scheduling, not game compatibility settings, storage locations or APFS accounting. [Evidence, migration and Undo](investigations/storage-browser-performance-2026-11-03.md).

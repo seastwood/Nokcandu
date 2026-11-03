@@ -183,131 +183,151 @@ struct PerformanceSection: View {
 
 struct StorageView: View {
     @EnvironmentObject var model: AppModel
-    /// Shown as a Settings tab (no title or Done button).
     var embedded = false
-    @State private var leftovers: [GameRemoval.Item] = []
     @Environment(\.dismiss) var dismiss
+    @State private var section: StorageInventory.Section = .drives
     @State private var volumes: [Storage.VolumeInfo] = []
-    @State private var games: [Storage.Item] = []
-    @State private var data: [Storage.Item] = []
-    @State private var loading = true
+    @State private var snapshot: StorageInventory.Snapshot?
+    @State private var displayedSection: StorageInventory.Section?
+    @State private var loading = false
+    @State private var cleaning = false
+    @State private var search = ""
+    @State private var refresh = 0
+    struct Request: Equatable { var section: StorageInventory.Section; var games: [InstalledGame]; var refresh: Int }
 
+    var items: [Storage.Item] {
+        guard displayedSection == section else { return [] }
+        if section != .games { return snapshot?.items ?? [] }
+        return (snapshot?.items ?? []).filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) || $0.detail.localizedCaseInsensitiveContains(search) }
+    }
+    var leftovers: [GameRemoval.Item] { displayedSection == section ? snapshot?.leftovers ?? [] : [] }
     var body: some View {
         VStack(spacing: 0) {
             HStack {
                 if !embedded { Text("Storage").font(.title2.bold()) }
+                if loading { ProgressView().controlSize(.small); Text("Measuring…").font(.caption).foregroundStyle(.secondary) }
+                else if displayedSection == section, let date = snapshot?.measuredAt {
+                    Text("Measured \(date, style: .relative) ago").font(.caption).foregroundStyle(.secondary)
+                }
                 Spacer()
-                if loading { ProgressView().controlSize(.small) }
-                Button("Refresh", action: load).disabled(loading)
+                Button("Refresh", action: reload).disabled(loading || cleaning)
                 if !embedded { Button("Done") { dismiss() }.keyboardShortcut(.defaultAction) }
-            }.padding(embedded ? 14 : 20)
+            }.padding(14)
+            Picker("Storage section", selection: $section) {
+                ForEach(StorageInventory.Section.allCases) { Text($0.title).tag($0) }
+            }.pickerStyle(.segmented).padding(.horizontal, 20).padding(.bottom, 12)
             Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    GroupBox {
-                        VStack(alignment: .leading, spacing: 8) {
+            if section == .drives {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 18) {
+                        GroupBox {
                             ForEach(volumes) { v in
                                 VStack(alignment: .leading, spacing: 3) {
-                                    HStack {
-                                        Text(v.name).font(.body.bold())
-                                        Spacer()
-                                        Text("\(Storage.format(v.free)) free of \(Storage.format(v.total))").font(.caption).foregroundStyle(.secondary)
-                                    }
-                                    ProgressView(value: Double(v.total - v.free), total: Double(max(v.total, 1)))
+                                    HStack { Text(v.name).bold(); Spacer(); Text("\(Storage.format(v.free)) free of \(Storage.format(v.total))").font(.caption).foregroundStyle(.secondary) }
+                                    ProgressView(value: Double(max(v.total - v.free, 0)), total: Double(max(v.total, 1)))
                                         .tint(Double(v.free) / Double(max(v.total, 1)) < 0.1 ? .orange : .accentColor)
-                                }
+                                }.padding(6)
                             }
-                        }.padding(6)
-                    } label: { Label("Drives", systemImage: "internaldrive").font(.headline) }
-
-                    GameFoldersBox()
-
-                    GroupBox {
-                        VStack(alignment: .leading, spacing: 6) {
-                            ForEach(games) { i in row(i) }
+                        } label: { Label("Drives", systemImage: "internaldrive").font(.headline) }
+                        GameFoldersBox(refreshToken: refresh)
+                    }.padding(20)
+                }
+            } else {
+                if section == .games {
+                    TextField("Search games", text: $search).textFieldStyle(.roundedBorder).padding(.horizontal, 20).padding(.top, 12)
+                }
+                List {
+                    if section == .leftovers {
+                        ForEach(leftovers) { item in
                             HStack {
-                                Text("Engine files are shared copies (APFS clones), so the real total is smaller than the sum.")
-                                    .font(.caption).foregroundStyle(.secondary)
-                                Spacer()
-                                Button("Clear All Logs") {
-                                    let n = Storage.clearLogs(model.games); model.say("Cleared \(Storage.format(n)) of logs."); load()
-                                }
+                                VStack(alignment: .leading) { Text(item.what); Text(item.url.lastPathComponent).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                                Spacer(); Text(Storage.format(item.bytes)).monospacedDigit().foregroundStyle(.secondary)
+                            }.padding(.vertical, 4)
+                        }
+                    } else {
+                        if section == .games, loading, displayedSection != .games {
+                            ForEach(model.games.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }) { game in
+                                HStack { Text(game.name); Spacer(); Text("Measuring…").foregroundStyle(.secondary) }
                             }
-                        }.padding(6)
-                    } label: { Label("Games", systemImage: "gamecontroller").font(.headline) }
-
-                    GroupBox {
-                        VStack(alignment: .leading, spacing: 6) {
-                            ForEach(data) { i in
-                                HStack {
-                                    row(i)
-                                    if i.title == "Downloads" || i.title == "Work folder" {
-                                        Button("Empty") { let n = Storage.empty(i.url); model.say("Freed \(Storage.format(n))."); load() }
-                                            .disabled(i.bytes == 0)
-                                    } else if i.title == "Engines cache" {
+                        }
+                        ForEach(items) { item in
+                            HStack {
+                                row(item)
+                                if section == .appData {
+                                    if ["Downloads", "Work folder"].contains(item.title) {
+                                        Button("Empty") { cleanup { Storage.format(Storage.empty(item.url)) + " freed." } }.disabled(item.bytes == 0 || cleaning || loading)
+                                    } else if item.title == "Engines cache" {
                                         Button("Remove Unused") {
-                                            let r = RuntimeManager.removeUnused(games: model.games)
-                                            model.say(r.isEmpty ? "Every cached engine is in use." : "Removed \(r.count) unused engine(s)."); load()
-                                        }
+                                            let games = model.games
+                                            cleanup { let removed = RuntimeManager.removeUnused(games: games); return removed.isEmpty ? "Every cached engine is in use." : "Removed \(removed.count) unused engine(s)." }
+                                        }.disabled(cleaning || loading)
                                     }
                                 }
-                            }
-                        }.padding(6)
-                    } label: { Label("Nokcandu's own data", systemImage: "shippingbox").font(.headline) }
-
-                    if !leftovers.isEmpty {
-                        GroupBox {
-                            VStack(alignment: .leading, spacing: 6) {
-                                ForEach(leftovers) { i in
-                                    HStack {
-                                        VStack(alignment: .leading, spacing: 1) {
-                                            Text(i.what)
-                                            Text(i.url.lastPathComponent).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                                        }
-                                        Spacer()
-                                        Text(Storage.format(i.bytes)).font(.caption).foregroundStyle(.secondary)
-                                    }
-                                }
-                                HStack {
-                                    Text("Kept for games that are no longer installed (for example an app deleted in Finder).").font(.caption).foregroundStyle(.secondary)
-                                    Spacer()
-                                    Button("Move to Trash") {
-                                        let n = GameRemoval.clean(leftovers); model.say("Moved \(n) leftover item(s) to the Trash."); load()
-                                    }
-                                }
-                            }.padding(6)
-                        } label: { Label("Leftovers from removed games", systemImage: "trash").font(.headline) }
+                            }.padding(.vertical, 4)
+                        }
                     }
-                }.padding(20)
+                    if !loading, displayedSection == section, (section == .leftovers ? leftovers.isEmpty : items.isEmpty) {
+                        Text(section == .leftovers ? "No leftovers found." : (section == .games && !search.isEmpty) ? "No matching games." : "Nothing here yet.").foregroundStyle(.secondary)
+                    }
+                }.listStyle(.inset)
+                Divider()
+                HStack(alignment: .center) {
+                    if section == .games {
+                        Text("Allocated estimates can share APFS blocks; they aren’t guaranteed deletion savings.").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Clear All Logs") { let games = model.games; cleanup { "Cleared " + Storage.format(Storage.clearLogs(games)) + " of logs." } }.disabled(cleaning || loading)
+                    } else if section == .leftovers {
+                        Text("History and backups kept for removed games.").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Move to Trash") { let saved = leftovers; cleanup {
+                            let current = Set(GameRemoval.orphans(library: GameLibrary.scan()).map(\.id))
+                            return "Moved \(GameRemoval.clean(saved.filter { current.contains($0.id) })) leftover item(s) to the Trash."
+                        } }.disabled(leftovers.isEmpty || cleaning || loading)
+                    } else {
+                        Text("Cleanup leaves installed games and saves in place.").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    if cleaning { ProgressView().controlSize(.small) }
+                }.padding(14)
             }
         }
-        .frame(width: 700, height: 620)
-        .onAppear(perform: load)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(minWidth: 660, minHeight: 480)
+        .task(id: Request(section: section, games: model.games, refresh: refresh)) {
+            loading = true
+            let selected = section, games = model.games
+            let result = await StorageInventory.shared.load(selected, library: games)
+            if !Task.isCancelled {
+                snapshot = result; displayedSection = selected; volumes = result.volumes; loading = false
+            }
+        }
     }
-
-    func row(_ i: Storage.Item) -> some View {
+    func row(_ item: Storage.Item) -> some View {
         HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(i.title)
-                if !i.detail.isEmpty { Text(i.detail).font(.caption).foregroundStyle(.secondary) }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.title)
+                if !item.detail.isEmpty { Text(item.detail).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
             }
             Spacer()
-            Text(Storage.format(i.bytes)).monospacedDigit().foregroundStyle(.secondary)
-            if let g = model.games.first(where: { $0.appURL == i.url }),
-               [GameMover.blocker(g), GameMover.filesBlocker(g)].contains(where: { $0 == nil || $0 == "Quit the game first." }) {
-                Menu("Move") { GameContextMenuMoveItems(game: g) }.fixedSize().menuStyle(.borderlessButton)
+            Text(Storage.format(item.bytes)).monospacedDigit().foregroundStyle(.secondary)
+            if let game = model.games.first(where: { $0.appURL == item.url }),
+               game.native == nil, !game.isSteamHost, !game.usesSharedSteam,
+               game.battleNet == nil, game.hosted == nil, !BattleNet.isHost(game), PCLaunchers.kind(of: game) == nil {
+                Button("Move…") { model.moveToChosenFolder(game) }.fixedSize()
             }
-            Button { NSWorkspace.shared.activateFileViewerSelecting([i.url]) } label: { Image(systemName: "magnifyingglass") }
+            Button { NSWorkspace.shared.activateFileViewerSelecting([item.url]) } label: { Image(systemName: "magnifyingglass") }
                 .buttonStyle(.borderless).help("Show in Finder")
         }
     }
-
-    func load() {
-        loading = true
-        let g = model.games
+    func reload() {
+        Task { await StorageInventory.shared.invalidate(); refresh += 1 }
+    }
+    func cleanup(_ operation: @escaping @Sendable () -> String) {
+        cleaning = true
         Task {
-            let r = await Task.detached { (Storage.volumes(), Storage.games(g), Storage.nokcanduData(), GameRemoval.orphans(library: g)) }.value
-            volumes = r.0; games = r.1; data = r.2; leftovers = r.3; loading = false
+            let message = await Task.detached(priority: .utility) { operation() }.value
+            model.say(message); cleaning = false
+            await StorageInventory.shared.invalidate(); refresh += 1
         }
     }
 }
@@ -711,34 +731,38 @@ struct GameContextMenuMoveItems: View {
 /// Storage → Game Folders: where games live and where new ones install.
 struct GameFoldersBox: View {
     @EnvironmentObject var model: AppModel
-    @State private var folders = GameFolders.all
-    @State private var installTo = GameFolders.installFolder
+    var refreshToken = 0
+    struct Folder: Identifiable {
+        var id: URL { url }
+        var url: URL; var title: String; var detail: String
+        var available: Bool; var standard: Bool; var selected: Bool
+    }
+    struct Request: Equatable { var games: [InstalledGame]; var refresh: Int; var revision: Int }
+    @State private var folders: [Folder] = []
+    @State private var revision = 0
     @State private var error: String?
-
     var body: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
-                ForEach(folders, id: \.self) { f in
+                ForEach(folders) { f in
                     HStack {
-                        Image(systemName: f.path.hasPrefix("/Volumes/") ? "externaldrive" : "folder")
+                        Image(systemName: f.url.path.hasPrefix("/Volumes/") ? "externaldrive" : "folder")
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(GameFolderLabel.text(f))
-                            let n = model.games.filter { GameFolders.folder(of: $0) == f || (GameMover.externalFiles($0)?.path.hasPrefix(f.path + "/") ?? false) }.count
-                            let free = GameFolders.isAvailable(f) ? (GameFolders.freeSpace(f).map { " · \(Storage.format($0)) free" } ?? "") : ""
-                            Text("\(n) app\(n == 1 ? "" : "s")\(free)\(f == installTo.standardizedFileURL ? " · new games install here" : "")")
-                                .font(.caption).foregroundStyle(.secondary)
+                            Text(f.title)
+                            Text(f.detail).font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        if f != installTo.standardizedFileURL, GameFolders.isAvailable(f) {
-                            Button("Install Here") { GameFolders.setInstallFolder(f); installTo = GameFolders.installFolder }
+                        if !f.selected, f.available {
+                            Button("Install Here") { GameFolders.setInstallFolder(f.url); reload() }
                         }
-                        Button("Show") { model.reveal(f) }.disabled(!GameFolders.isAvailable(f))
-                        if !GameFolders.isStandard(f) {
-                            Button("Remove") { GameFolders.remove(f); reload() }
+                        Button("Show") { model.reveal(f.url) }.disabled(!f.available)
+                        if !f.standard {
+                            Button("Remove") { GameFolders.remove(f.url); reload() }
                                 .help("Stops showing this folder in Nokcandu. The games in it stay on disk.")
                         }
                     }
                 }
+                if folders.isEmpty { Text("Checking game folders…").foregroundStyle(.secondary) }
                 if let error { Text(error).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true) }
                 HStack {
                     Text("Steam, Battle.net and their games stay in the standard folder (pick a drive in their own settings instead). Other games can live anywhere — move one from its page or by right-clicking it. On ExFAT drives only the game's files are stored; the app, Wine runtime and private Windows setup stay on this Mac.")
@@ -748,10 +772,24 @@ struct GameFoldersBox: View {
                 }
             }.padding(6)
         } label: { Label("Game Folders", systemImage: "folder").font(.headline) }
+        .task(id: Request(games: model.games, refresh: refreshToken, revision: revision)) {
+            let games = model.games
+            let result = await Task.detached(priority: .utility) {
+                let installTo = GameFolders.installFolder.standardizedFileURL
+                let locations = games.map { (GameFolders.folder(of: $0), GameMover.externalFiles($0)?.path) }
+                return GameFolders.all.map { url in
+                    let available = GameFolders.isAvailable(url), selected = url == installTo
+                    let count = locations.filter { $0.0 == url || ($0.1?.hasPrefix(url.path + "/") ?? false) }.count
+                    let free = available ? (GameFolders.freeSpace(url).map { " · \(Storage.format($0)) free" } ?? "") : ""
+                    return Folder(url: url, title: GameFolderLabel.text(url),
+                        detail: "\(count) app\(count == 1 ? "" : "s")\(free)\(selected ? " · new games install here" : "")",
+                        available: available, standard: GameFolders.isStandard(url), selected: selected)
+                }
+            }.value
+            if !Task.isCancelled { folders = result }
+        }
     }
-
-    func reload() { folders = GameFolders.all; installTo = GameFolders.installFolder; model.refresh() }
-
+    func reload() { revision += 1; model.refresh() }
     func add() {
         error = nil
         let panel = NSOpenPanel()
