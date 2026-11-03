@@ -5,6 +5,7 @@ import NokcanduCore
 
 @MainActor
 final class InstallerModel: ObservableObject {
+    @Published var engineChoice: EngineVersion?
     @Published var executor: InstallExecutor?
     @Published var log: String = ""
     @Published var running = false
@@ -38,7 +39,7 @@ final class InstallerModel: ObservableObject {
     }
 
     func start(recipe: GameRecipe, library: [InstalledGame]) {
-        do { wire(try InstallExecutor.make(recipe: recipe, library: library, log: logger)) }
+        do { wire(try InstallExecutor.make(recipe: recipe, library: library, engine: engineChoice, log: logger)) }
         catch { append("✗ \(error.localizedDescription)") }
     }
 
@@ -53,7 +54,7 @@ final class InstallerModel: ObservableObject {
             resume(s.installID, library: library)
             return
         }
-        do { wire(try InstallExecutor.makeCustom(name: name, source: source, library: library, folder: folder, inputs: inputs, log: logger)) }
+        do { wire(try InstallExecutor.makeCustom(name: name, source: source, library: library, folder: folder, inputs: inputs, engine: engineChoice, log: logger)) }
         catch { append("✗ \(error.localizedDescription)"); startError = error.localizedDescription }
     }
 
@@ -64,7 +65,7 @@ final class InstallerModel: ObservableObject {
             do {
                 let setup = try await PCLaunchers.downloadBattleNetSetup()
                 startCustom(name: "Battle.net", source: .installer, library: library, folder: NokPaths.gameAppsFolder, inputs: ["installerPath": setup.path])
-                if executor != nil { continueInstall() }
+
             } catch { append("✗ \(error.localizedDescription)"); startError = error.localizedDescription }
         }
     }
@@ -77,13 +78,13 @@ final class InstallerModel: ObservableObject {
             do {
                 let setup = try await PCLaunchers.downloadSetup(k)
                 startCustom(name: k.title, source: .installer, library: library, folder: NokPaths.gameAppsFolder, inputs: ["installerPath": setup.path, "launcherKind": k.rawValue])
-                if executor != nil { continueInstall() }
+
             } catch { append("✗ \(error.localizedDescription)"); startError = error.localizedDescription }
         }
     }
 
     func startSteamHost(library: [InstalledGame]) {
-        do { wire(try InstallExecutor.makeSteamHost(library: library, log: logger)) }
+        do { wire(try InstallExecutor.makeSteamHost(library: library, engine: engineChoice, log: logger)) }
         catch { append("✗ \(error.localizedDescription)") }
     }
 
@@ -120,6 +121,14 @@ final class InstallerModel: ObservableObject {
         }
     }
 
+    func chooseEngine(_ tag: String) {
+        let choice = tag.isEmpty ? nil : WineSelection.parse(tag)
+        do {
+            if let executor { try executor.selectEngine(choice ?? WineSelection.defaultEngine()) }
+            engineChoice = choice
+        } catch { startError = error.localizedDescription; append("✗ " + error.localizedDescription) }
+    }
+
     func refreshCandidates() {
         guard let ex = executor, ex.isCustom, ex.nextStage?.info.id == "exe" else { return }
         let prefix = ex.ctx.prefix, hint = ex.displayName
@@ -139,6 +148,7 @@ final class InstallerModel: ObservableObject {
     /// Used only after completion or explicit removal, never on a running window close.
     func resetSession() {
         guard !running else { return }
+        engineChoice = nil
         executor = nil; task = nil; exeCandidates = []; log = ""; workProgress = nil
         saved = Self.unfinished()
     }
@@ -176,7 +186,13 @@ struct InstallerView: View {
             }
             .padding()
             Divider()
-            if let ex = m.executor { progressView(ex) } else { chooser }
+            if let ex = m.executor {
+                if !ex.ctx.state.completed.contains("runtime") {
+                    WineVersionMenu(selection: Binding(get: { ex.ctx.state.inputs[WineSelection.inputKey] ?? EngineVersion.tested.tag }, set: { m.chooseEngine($0) }))
+                        .disabled(m.running).padding(.horizontal).padding(.top, 8)
+                }
+                progressView(ex)
+            } else { chooser }
             Divider()
             footer
         }
@@ -200,7 +216,6 @@ struct InstallerView: View {
             if let p = app.pendingStoreInstall, m.executor == nil {
                 app.pendingStoreInstall = nil
                 m.startCustom(name: p.name, source: .store, library: app.games, folder: p.folder, inputs: p.inputs)
-                if m.executor != nil { m.continueInstall() }
             }
         }
         .onDisappear {
@@ -237,6 +252,10 @@ struct InstallerView: View {
                         }
                     }
                 }
+            }
+            Section("Wine for this installation") {
+                WineVersionMenu(selection: Binding(get: { m.engineChoice?.tag ?? "" }, set: { m.chooseEngine($0) }), includeDefault: true)
+                Text("You can change it later in the game's settings. Store games sharing a launcher use that launcher's Wine version.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Any Windows game you own") {
                 VStack(alignment: .leading, spacing: 4) {

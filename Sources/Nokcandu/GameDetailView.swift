@@ -93,9 +93,7 @@ struct GameDetailView: View {
                     .padding(12)
                     .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
                 }
-                if let st = EngineUpdate.state(for: game), st.status == .trying {
-                    EngineTrialBanner(game: game, state: st)
-                }
+                if game.native == nil { GameWineSection(game: game).id("wine-\(game.id)-\(game.wineVersion ?? "")") }
                 if let d = cinematicDiagnosis, !CinematicFix.isPresent(for: game) {
                     CinematicCrashBanner(game: game, diagnosis: d) { fixFromBanner() }
                 }

@@ -114,40 +114,7 @@ public enum Repair {
             return steps
         }
 
-        // 3. Wine engine and graphics runtime: re-clone from Nokcandu's verified runtime cache if damaged.
-        let wine = g.contents.appendingPathComponent("SharedSupport/wine/bin/wine")
-        // An engine the user chose in Updates is checked against its own cached copy, not the recipe's.
-        let engineUpdate = EngineUpdate.state(for: g)
-        let pins: [String: String] = engineUpdate.flatMap { RuntimeManager.manifest(for: $0.runtimeID)?.verifiedHashes }
-            ?? (g.recipe.map(RuntimeManager.runtimePins) ?? [:])
-        let broken = !fm.isExecutableFile(atPath: wine.path) ||
-            pins.contains { rel, sha in (try? Hashing.sha256(file: g.contents.appendingPathComponent(rel))) != sha }
-        if broken {
-            if let u = engineUpdate, RuntimeManager.isCached(id: u.runtimeID) {
-                do {
-                    let src = RuntimeManager.folder(for: u.runtimeID).appendingPathComponent("Contents")
-                    for c in RuntimeManager.components {
-                        let dst = g.contents.appendingPathComponent(c)
-                        if fm.fileExists(atPath: dst.path) { try fm.trashItem(at: dst, resultingItemURL: nil) }
-                        try fm.cloneItem(at: src.appendingPathComponent(c), to: dst)
-                    }
-                    add("Game engine", .fixed, "Restored \(u.engine) from Nokcandu's verified copy (old files are in the Trash).")
-                } catch { add("Game engine", .failed, error.localizedDescription) }
-            } else if let spec = g.recipe?.runtime, RuntimeManager.isCached(spec) {
-                do {
-                    for c in RuntimeManager.components {
-                        let u = g.contents.appendingPathComponent(c)
-                        if fm.fileExists(atPath: u.path) { try fm.trashItem(at: u, resultingItemURL: nil) }
-                    }
-                    try RuntimeManager.install(spec, into: g.contents)
-                    add("Game engine", .fixed, "Restored the tested Wine engine and graphics files from Nokcandu's verified copy (old files are in the Trash).")
-                } catch { add("Game engine", .failed, error.localizedDescription) }
-            } else {
-                add("Game engine", .failed, "Engine files are missing or changed, and Nokcandu has no verified copy to restore from.")
-            }
-        } else {
-            add("Game engine", .ok, engineUpdate.map { "\($0.engine) (updated by you) is intact." } ?? "Wine engine and graphics files match.")
-        }
+        steps += engineSteps(g)
 
         // 4. Windows environment basics.
         let driveC = g.prefix.appendingPathComponent("drive_c")
@@ -190,6 +157,53 @@ public enum Repair {
 
         steps += launcherSteps(g)
         steps += componentSteps(g)
+        return steps
+    }
+
+    /// Restore only the engine selected for this app; never substitute the recipe's engine.
+    static func engineSteps(_ g: InstalledGame) -> [RepairStep] {
+        var steps: [RepairStep] = []
+        let fm = FileManager.default
+        func add(_ title: String, _ outcome: RepairStep.Outcome, _ detail: String) {
+            steps.append(RepairStep(title: title, outcome: outcome, detail: detail))
+        }
+        // 3. Wine engine and graphics runtime: re-clone from Nokcandu's verified runtime cache if damaged.
+        let wine = g.contents.appendingPathComponent("SharedSupport/wine/bin/wine")
+        // An engine the user chose in Updates is checked against its own cached copy, not the recipe's.
+        let engineUpdate = EngineUpdate.state(for: g)
+        let pins: [String: String] = engineUpdate.flatMap { RuntimeManager.manifest(for: $0.runtimeID)?.verifiedHashes }
+            ?? (g.recipe.map(RuntimeManager.runtimePins) ?? [:])
+        let broken = !fm.isExecutableFile(atPath: wine.path) ||
+            pins.contains { rel, sha in (try? Hashing.sha256(file: g.contents.appendingPathComponent(rel))) != sha }
+        if let selected = engineUpdate, !RuntimeManager.isCached(id: selected.runtimeID) {
+            add("Game engine", .failed, "The verified copy of \(selected.engine) is missing. Download that Wine version again before repairing; the selected engine was preserved.")
+        } else if broken {
+            if let u = engineUpdate, RuntimeManager.isCached(id: u.runtimeID) {
+                do {
+                    let src = RuntimeManager.folder(for: u.runtimeID).appendingPathComponent("Contents")
+                    for c in RuntimeManager.components {
+                        let dst = g.contents.appendingPathComponent(c)
+                        if fm.fileExists(atPath: dst.path) { try fm.trashItem(at: dst, resultingItemURL: nil) }
+                        try fm.cloneItem(at: src.appendingPathComponent(c), to: dst)
+                    }
+                    add("Game engine", .fixed, "Restored \(u.engine) from Nokcandu's verified copy (old files are in the Trash).")
+                } catch { add("Game engine", .failed, error.localizedDescription) }
+            } else if let spec = g.recipe?.runtime, RuntimeManager.isCached(spec) {
+                do {
+                    for c in RuntimeManager.components {
+                        let u = g.contents.appendingPathComponent(c)
+                        if fm.fileExists(atPath: u.path) { try fm.trashItem(at: u, resultingItemURL: nil) }
+                    }
+                    try RuntimeManager.install(spec, into: g.contents)
+                    add("Game engine", .fixed, "Restored the tested Wine engine and graphics files from Nokcandu's verified copy (old files are in the Trash).")
+                } catch { add("Game engine", .failed, error.localizedDescription) }
+            } else {
+                add("Game engine", .failed, "Engine files are missing or changed, and Nokcandu has no verified copy to restore from.")
+            }
+        } else {
+            add("Game engine", .ok, engineUpdate.map { "\($0.engine) (updated by you) is intact." } ?? "Wine engine and graphics files match.")
+        }
+
         return steps
     }
 

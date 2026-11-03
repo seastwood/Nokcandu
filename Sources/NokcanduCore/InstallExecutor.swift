@@ -71,6 +71,7 @@ public final class InstallContext: @unchecked Sendable {
     public var gameFiles: URL { contents.appendingPathComponent(recipe.gameDirectory) }
     public var workDir: URL { NokPaths.installs.appendingPathComponent(state.installID) }
     public var wine: URL { support.appendingPathComponent("wine/bin/wine") }
+    public var selectedRuntime: RuntimeSpec { get throws { WineSelection.spec(for: try WineSelection.engine(for: state)) } }
 
     init(recipe: GameRecipe, state: InstallState, library: [InstalledGame], log: @escaping @Sendable (String) -> Void) {
         self.recipe = recipe
@@ -130,7 +131,7 @@ public final class InstallExecutor: @unchecked Sendable {
     }
 
     /// Start a new install, or resume one from its saved state.
-    public static func make(recipe: GameRecipe, library: [InstalledGame], resume installID: String? = nil,
+    public static func make(recipe: GameRecipe, library: [InstalledGame], resume installID: String? = nil, engine: EngineVersion? = nil,
                             log: @escaping @Sendable (String) -> Void) throws -> InstallExecutor {
         guard recipe.id == RecipeCatalog.zeroHour.id else { throw NokError("No installer is validated for \(recipe.displayName) yet.") }
         var state: InstallState
@@ -146,6 +147,7 @@ public final class InstallExecutor: @unchecked Sendable {
                 target = NokPaths.gameAppsFolder.appendingPathComponent("\(recipe.displayName) (Nokcandu) \(n).app"); n += 1
             }
             state = InstallState(installID: id, recipeID: recipe.id, targetApp: target.path)
+            try WineSelection.freeze(&state, choice: engine)
         }
         let ex = InstallExecutor(recipe: recipe, state: state, library: library, stages: ZeroHourInstall.stages, log: log)
         try ex.ctx.saveState()
@@ -159,7 +161,7 @@ public final class InstallExecutor: @unchecked Sendable {
 
     /// Start a general install: any owned Windows game, from the chosen source.
     public static func makeCustom(name: String, source: GameSource, library: [InstalledGame], folder: URL = GameFolders.installFolder,
-                                  inputs: [String: String] = [:], log: @escaping @Sendable (String) -> Void) throws -> InstallExecutor {
+                                  inputs: [String: String] = [:], engine: EngineVersion? = nil, log: @escaping @Sendable (String) -> Void) throws -> InstallExecutor {
         let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { throw NokError("Give the game a name first.") }
         let appName = CustomGames.safeFolderName(clean)
@@ -172,6 +174,7 @@ public final class InstallExecutor: @unchecked Sendable {
         state.inputs["source"] = source.rawValue
         if let files = plan.files { state.inputs["filesFolder"] = files.path }
         for (k, v) in inputs { state.inputs[k] = v }
+        try WineSelection.freeze(&state, choice: engine)
         return try resumeCustom(state, library: library, log: log)
     }
 
@@ -193,7 +196,7 @@ public final class InstallExecutor: @unchecked Sendable {
     }
 
     /// Set up the shared Windows Steam (Steam.app). Only one exists.
-    public static func makeSteamHost(library: [InstalledGame], log: @escaping @Sendable (String) -> Void) throws -> InstallExecutor {
+    public static func makeSteamHost(library: [InstalledGame], engine: EngineVersion? = nil, log: @escaping @Sendable (String) -> Void) throws -> InstallExecutor {
         if let existing = savedInstalls().first(where: { $0.recipeID == SharedSteam.recipeID && $0.finishedAt == nil }) {
             return try resumeSteamHost(existing, library: library, log: log)
         }
@@ -203,6 +206,7 @@ public final class InstallExecutor: @unchecked Sendable {
         var state = InstallState(installID: "steam-" + String(UUID().uuidString.prefix(6)).lowercased(),
                                  recipeID: SharedSteam.recipeID, targetApp: SharedSteam.appURL.path)
         state.inputs["name"] = "Steam"
+        try WineSelection.freeze(&state, choice: engine)
         return try resumeSteamHost(state, library: library, log: log)
     }
 
@@ -223,6 +227,18 @@ public final class InstallExecutor: @unchecked Sendable {
         return dirs.compactMap { d in
             (try? Data(contentsOf: d.appendingPathComponent("state.json"))).flatMap { try? ChangeJournal.decoder.decode(InstallState.self, from: $0) }
         }.sorted { $0.startedAt > $1.startedAt }
+    }
+
+    public func selectEngine(_ engine: EngineVersion) throws {
+        guard !ctx.state.completed.contains("runtime"), statuses["runtime"] != .running,
+              !FileManager.default.fileExists(atPath: ctx.wine.path) else {
+            throw NokError("This installation has already prepared Wine. Finish it, then change Wine from the game's settings.")
+        }
+        var state = ctx.state
+        try WineSelection.freeze(&state, choice: engine)
+        ctx.state = state
+        try ctx.saveState()
+        refreshStatuses()
     }
 
     public func setInput(_ key: String, _ value: String) {

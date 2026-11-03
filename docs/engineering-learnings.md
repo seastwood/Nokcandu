@@ -282,3 +282,7 @@ Wine may map a mounted native installer image into otherwise unrelated private e
 ### Store completion must update the library independently of store views
 
 Use local installed-game readers in one background discovery path, with a single in-flight scan and a bounded poll interval. Add by stable product/host identity, never by display name; share an idempotent creation transaction with manual Add. Preserve existing settings and intentional removals, distinguish offline folders from uninstalls, and avoid recreating shortcuts on disconnected app libraries. A retained installer should notify the library after its self-check, without requiring window dismissal. [Implementation, evidence, migration and Undo](investigations/automatic-store-game-discovery-2026-11-03.md).
+
+### Wine selection is explicit, scoped and persistent
+
+A global installation default must not migrate existing games or unfinished installs. Snapshot it when new work starts, preserve legacy resume semantics and allow a per-install override only before preparing Wine. Game dropdowns resolve the actual Windows host, clearly state shared-client scope, keep the existing rollback transaction and record fresh selected-runtime provenance for Repair. Use checksum-verified official Sikarugir engines from Wine 10 onward with the verified wrapper; preserve dependent-feature requirements and cache entries needed by defaults/unfinished work. [Design, validation, migration and Undo](investigations/wine-version-selection-2026-11-03.md).

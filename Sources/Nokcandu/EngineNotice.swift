@@ -31,7 +31,7 @@ struct EngineNotice: View {
         let id = RuntimeManager.runtimeID(engine: latest, template: cat.latestTemplate?.version ?? .tested)
         if EngineSelfTests.failed(id) { return nil }
         let place = host.contents == game.contents ? "This game" : "\(host.isSteamHost ? "Steam" : host.name), which runs this game,"
-        var detail = "\(place) uses \(current.description). Try the new engine from Updates; you can roll back."
+        var detail = "\(place) uses \(current.description). Choose a version in the Wine section above, or try the newest from Updates. You can roll back."
         if let w = WindowedPresentation.engineUpdateWarning(host: host, games: model.games, target: latest) { detail += " " + w }
         return (latest, detail)
     }

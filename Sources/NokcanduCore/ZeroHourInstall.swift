@@ -53,10 +53,17 @@ public enum ZeroHourInstall {
 
     struct Runtime: InstallStage {
         let info = StageInfo(id: "runtime", title: "Prepare the game engine",
-                             detail: "Caches the tested Wine engine and graphics files (copied from an existing app or downloaded, then hash-checked).", kind: .automatic)
-        func isDone(_ ctx: InstallContext) -> Bool { RuntimeManager.isCached(ctx.recipe.runtime) }
+                             detail: "Prepares the selected Sikarugir Wine engine with verified graphics files and a Windows startup check.", kind: .automatic)
+        func isDone(_ ctx: InstallContext) -> Bool {
+            guard let spec = try? ctx.selectedRuntime else { return false }
+            return RuntimeManager.isCached(spec) && !EngineSelfTests.failed(spec.id)
+                && (spec.id == RecipeCatalog.sikarugirWine10.id || RuntimeManager.manifest(for: spec.id)?.selfTest == true)
+        }
         func run(_ ctx: InstallContext) async throws {
-            if let source = RuntimeManager.importCandidate(for: ctx.recipe, in: ctx.library) {
+            let selected = try WineSelection.engine(for: ctx.state)
+            if selected != .tested {
+                _ = try await WineSelection.prepare(selected, log: ctx.log)
+            } else if let source = RuntimeManager.importCandidate(for: ctx.recipe, in: ctx.library) {
                 try RuntimeManager.importRuntime(for: ctx.recipe, from: source, log: ctx.log)
             } else {
                 ctx.log("Downloading the tested Wine engine and graphics files (about 260 MB)…")
@@ -84,7 +91,9 @@ public enum ZeroHourInstall {
             }
             try Data("APPL????".utf8).write(to: ctx.contents.appendingPathComponent("PkgInfo"))
             ctx.log("Cloning runtime into the app (APFS clone: no extra space until files change)…")
-            try RuntimeManager.install(ctx.recipe.runtime, into: ctx.contents)
+            let spec = try ctx.selectedRuntime
+            try RuntimeManager.install(spec, into: ctx.contents)
+            try WineSelection.recordInstalled(spec, contents: ctx.contents)
         }
     }
 
@@ -338,7 +347,13 @@ public enum ZeroHourInstall {
         func systemDLLsOriginal(_ ctx: InstallContext) -> Bool {
             ["d3d8.dll", "d3d9.dll"].allSatisfy { n in
                 let rel = "SharedSupport/prefix/drive_c/windows/syswow64/\(n)"
-                return (try? Hashing.sha256(file: ctx.contents.appendingPathComponent(rel))) == ctx.recipe.pinnedHashes[rel]
+                let original: String?
+                if let spec = try? ctx.selectedRuntime, spec.id != RecipeCatalog.sikarugirWine10.id {
+                    let source = RuntimeManager.folder(for: spec.id).appendingPathComponent("Contents/SharedSupport/wine/lib/wine/i386-windows/" + n)
+                    original = try? Hashing.sha256(file: source)
+                } else { original = ctx.recipe.pinnedHashes[rel] }
+                guard let original else { return false }
+                return (try? Hashing.sha256(file: ctx.contents.appendingPathComponent(rel))) == original
             }
         }
         func run(_ ctx: InstallContext) async throws {

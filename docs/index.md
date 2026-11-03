@@ -58,3 +58,5 @@ Keep credentials, account identifiers, raw session logs, copyrighted game/runtim
 - [Automatic installer-media drives](investigations/automatic-installer-drives-2026-11-03.md) — stale image mappings, guarded shared cleanup, existing-installation authorization and Undo.
 
 - [Automatic store-game discovery](investigations/automatic-store-game-discovery-2026-11-03.md) — background installation detection, idempotent shortcuts, preserved settings/removal choices and installer completion callbacks.
+
+- [Explicit Sikarugir Wine versions](investigations/wine-version-selection-2026-11-03.md) — game dropdowns, new-install defaults/overrides, safe resume/Repair behavior and exact rollback.

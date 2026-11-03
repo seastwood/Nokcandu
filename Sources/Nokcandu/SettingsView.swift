@@ -45,6 +45,7 @@ struct GeneralSettings: View {
                     .id(discordTick)
             }
             Section("New games") {
+                DefaultWineSetting()
                 InstallFolderPicker(folder: $installTo)
                 Text("Where installs go unless you choose otherwise. Manage folders and drives under Storage.")
                     .font(.caption).foregroundStyle(.secondary)

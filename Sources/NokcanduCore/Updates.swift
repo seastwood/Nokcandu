@@ -179,7 +179,7 @@ extension RuntimeManager {
                              log: @escaping @Sendable (String) -> Void) async throws -> String {
         let id = runtimeID(engine: engine, template: template)
         if isCached(id: id) {
-            if manifest(for: id)?.selfTest == nil { try await runSelfTest(id: id, log: log) }
+            if manifest(for: id)?.selfTest != true { try await runSelfTest(id: id, log: log) }
             return id
         }
         if EngineSelfTests.failed(id) { throw NokError("\(engine) with template \(template) already failed Nokcandu's test on this Mac. It isn't offered until a newer build appears.") }
@@ -284,6 +284,7 @@ extension RuntimeManager {
     public static func removeUnused(games: [InstalledGame]) -> [String] {
         let inUse = Set(games.compactMap { EngineUpdate.state(for: $0)?.runtimeID } + [RecipeCatalog.sikarugirWine10.id])
             .union(games.compactMap { EngineUpdate.state(for: $0)?.previousRuntimeID })
+            .union(WineSelection.protectedRuntimeIDs(defaultEngine: WineSelection.defaultEngine(), installs: InstallExecutor.savedInstalls()))
         var removed: [String] = []
         for m in cachedRuntimes() where !inUse.contains(m.id) {
             if (try? FileManager.default.removeItem(at: folder(for: m.id))) != nil { removed.append(m.id) }
@@ -338,13 +339,15 @@ public enum EngineUpdate {
 
     static func wineEnv(_ c: URL) -> [String: String] { WineTools.environment(contents: c) }
 
-    public static func apply(_ g: InstalledGame, runtimeID: String, log: @escaping @Sendable (String) -> Void) async throws {
+    public static func apply(_ g: InstalledGame, runtimeID: String, explicitChoice: Bool = false, log: @escaping @Sendable (String) -> Void) async throws {
         let fm = FileManager.default
         let c = g.contents
         guard WineTools.hostContents(for: g) == c else { throw NokError("Change the engine from this game's launcher app. Its shortcut has no engine of its own.") }
         guard let m = RuntimeManager.manifest(for: runtimeID), RuntimeManager.isCached(id: runtimeID) else { throw NokError("That engine isn't downloaded yet.") }
         if GameLauncher.runState(of: g) != .notRunning { throw NokError("Quit \(g.name) first.") }
-        if isHeld(g) { throw NokError("\(g.name) is set to stay on its engine. Turn that off in Updates first.") }
+        if isHeld(g) && !explicitChoice { throw NokError("\(g.name) is set to stay on its engine. Turn that off in Updates first.") }
+        if let target = EngineVersion(versionString: m.wineVersion),
+           let reason = WineSelection.incompatibility(host: g, target: target, games: GameLibrary.scan()) { throw NokError(reason) }
         RestorePoints.before(g, "Before engine \(RuntimeManager.manifest(for: runtimeID)?.wineVersion ?? runtimeID)", log: log)
         if state(for: g)?.status == .trying { throw NokError("\(g.name) is already trying an engine. Keep it or roll back first.") }
         let previous = g.wineVersion ?? "unknown"
