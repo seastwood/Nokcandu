@@ -2,7 +2,7 @@
 
 `test.c` is the hardware-free CI boundary check, compiled by `SocketEventTests`. It checks role gating, errno preservation, clean EOF, real urgent data, non-sockets, truncated socket information and real errors.
 
-`probe.c` and `probe.py` are real end-to-end tests. CI runs them through `ci.py` after building the app, downloading checksum-pinned official Wine 10/11 and template archives and compiling both 32/64-bit probes. All four modes run for each engine/architecture combination. They use a local synthetic TCP responder and a new disposable Wine prefix on every run. They never read game profiles or submit account credentials. The script stops only its own Wine prefix before deleting it.
+`probe.c` and `probe.py` are real end-to-end tests. CI runs them through `ci.py` after building the app, downloading checksum-pinned official Wine 10/11 and template archives and provisioning the official llvm-mingw compiler from the engine build’s pinned checksum, and compiling both 32/64-bit probes. It does not depend on an existing developer compiler cache. All four modes run for each engine/architecture combination. They use a local synthetic TCP responder and a new disposable Wine prefix on every run. They never read game profiles or submit account credentials. The script stops only its own Wine prefix before deleting it.
 
 Compile `probe.c` using llvm-mingw (`i686-w64-mingw32-clang` or `x86_64-w64-mingw32-clang`) with `-lws2_32`, then run:
 

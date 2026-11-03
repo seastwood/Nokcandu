@@ -10,10 +10,13 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
 ASSETS = {
-    '10.0_8': ('Engines', 'WS12WineSikarugir10.0_8.tar.xz', '2a6bcf2a3bf13cddf825599b6bc1e3659cbf71e1282c6d77141a92f6ac8d4c68'),
-    '11.0_1': ('Engines', 'WS12WineSikarugir11.0_1.tar.xz', '67e29fb3d74f363af39c69ba11f9b13a79812c5db07cf4748672658e4a200a0e'),
-    'template': ('Template', 'Template-1.0.24.tar.xz', '4b5f89eeb9ef139936bdfad33d9b420b05ea4597cb7d63376674f7a8e171321c'),
+    '10.0_8': ('Sikarugir-App/Engines', 'v1.0', 'WS12WineSikarugir10.0_8.tar.xz', '2a6bcf2a3bf13cddf825599b6bc1e3659cbf71e1282c6d77141a92f6ac8d4c68'),
+    '11.0_1': ('Sikarugir-App/Engines', 'v1.0', 'WS12WineSikarugir11.0_1.tar.xz', '67e29fb3d74f363af39c69ba11f9b13a79812c5db07cf4748672658e4a200a0e'),
+    'template': ('Sikarugir-App/Template', 'v1.0', 'Template-1.0.24.tar.xz', '4b5f89eeb9ef139936bdfad33d9b420b05ea4597cb7d63376674f7a8e171321c'),
 }
+COMPILER = 'llvm-mingw-20261006-ucrt-macos-universal'
+ASSETS['compiler'] = ('mstorsjo/llvm-mingw', '20261006', COMPILER+'.tar.xz',
+                      (ROOT/'Engine/winemac/checksums'/f'{COMPILER}.sha256').read_text().strip())
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--app', type=Path, default=ROOT/'build/Nokcandu.app')
 parser.add_argument('--runtime-contents', type=Path, action='append', help='Local validation only; CI downloads the pinned archives by default.')
@@ -21,12 +24,11 @@ args = parser.parse_args()
 library = args.app.resolve()/'Contents/Resources/nokcandu-rawmouse.dylib'
 if not library.is_file():
     parser.error('Build Nokcandu first.')
-compiler_root = ROOT/'build/tools/llvm-mingw/bin'
 
 def unpack(key, work):
-    project, name, sha = ASSETS[key]
+    project, release, name, sha = ASSETS[key]
     archive = work/name
-    with urllib.request.urlopen(f'https://github.com/Sikarugir-App/{project}/releases/download/v1.0/{name}', timeout=120) as response:
+    with urllib.request.urlopen(f'https://github.com/{project}/releases/download/{release}/{name}', timeout=120) as response:
         with archive.open('wb') as output:
             shutil.copyfileobj(response, output)
     if hashlib.sha256(archive.read_bytes()).hexdigest() != sha:
@@ -38,6 +40,11 @@ def unpack(key, work):
 
 with tempfile.TemporaryDirectory(prefix='nok-winsock-ci-') as temporary:
     work = Path(temporary)
+    # Provision the same official checksum-pinned compiler as the engine build.
+    # The app build uses Zig and does not populate a local llvm-mingw cache.
+    compiler_root = unpack('compiler', work)/COMPILER/'bin'
+    for architecture in ['i686', 'x86_64']:
+        subprocess.run([str(compiler_root/(architecture+'-w64-mingw32-clang')), str(ROOT/'Tools/socket-events/probe.c'), '-O2', '-Wall', '-Wextra', '-Werror', '-lws2_32', '-o', str(work/(architecture+'.exe'))], check=True)
     runtimes = args.runtime_contents
     if not runtimes:
         template = unpack('template', work)
@@ -53,7 +60,6 @@ with tempfile.TemporaryDirectory(prefix='nok-winsock-ci-') as temporary:
             runtimes.append(runtime)
     for architecture in ['i686', 'x86_64']:
         probe = work/(architecture+'.exe')
-        subprocess.run([str(compiler_root/(architecture+'-w64-mingw32-clang')), str(ROOT/'Tools/socket-events/probe.c'), '-O2', '-Wall', '-Wextra', '-Werror', '-lws2_32', '-o', str(probe)], check=True)
         for runtime in runtimes:
             runtime = runtime.resolve()
             for mode in ['graceful', 'refused', 'urgent', 'reset']:
