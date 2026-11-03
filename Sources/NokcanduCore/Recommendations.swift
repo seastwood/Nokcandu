@@ -176,7 +176,7 @@ public enum Recommendations {
     /// in Settings, fixes in Fixes). Returns what couldn't be applied, in words.
     @discardableResult
     public static func apply(_ chosen: [Recommendation], to game: InstalledGame, log: @escaping @Sendable (String) -> Void) async throws -> [String] {
-        if case .launcherRunning = GameLauncher.runState(of: game) { throw NokError("Quit \(game.name) first.") }
+        if GameLauncher.runState(of: game) != .notRunning { throw NokError("Quit \(game.name) first.") }
         RestorePoints.before(game, "Before recommended setup", log: log)
         var skipped: [String] = []
         for r in chosen.sorted(by: { $0.order < $1.order }) {

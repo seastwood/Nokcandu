@@ -121,6 +121,7 @@ public enum WineTools {
         let file = URL(fileURLWithPath: path).standardizedFileURL.path
         if ["wine", "wine64", "wine-preloader", "wine64-preloader", "wineserver"].contains((file as NSString).lastPathComponent),
            (file as NSString).deletingLastPathComponent == support + "/wine/bin" { return true }
+        if file == support + "/wine/lib/wine/x86_64-unix/wine" { return true }
         // Wine's loader for the environment's programs, named after the app it belongs to
         // (GameApp/StarCraft.app/Contents/MacOS/StarCraft) or plain "wine".
         guard file.hasPrefix(support + "/GameApp/") else { return false }

@@ -112,7 +112,7 @@ public enum HostedSettings {
     public static func save(_ settings: Settings, for game: InstalledGame) throws {
         let launcher = game.launcherURL ?? game.contents.appendingPathComponent("MacOS/\(CustomGames.launcherName)")
         guard let link = game.hosted else { throw NokError("Choose an EA or Ubisoft game added to Nokcandu.") }
-        if case .launcherRunning = GameLauncher.runState(of: game) { throw NokError("Quit this game before changing its launch settings.") }
+        if GameLauncher.runState(of: game) != .notRunning { throw NokError("Quit this game before changing its launch settings.") }
         var value = settings
         let current = try String(contentsOf: launcher, encoding: .utf8), old = load(game)
         guard current == PCLaunchers.legacyLauncherScript(link) || current == PCLaunchers.launcherScript(link, legacyProcessDetection: true) ||

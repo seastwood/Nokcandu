@@ -103,3 +103,45 @@ final class GameAppTests: XCTestCase {
         XCTAssertEqual(try Shell.run("/bin/bash", ["-n", f.path]).status, 0)
     }
 }
+
+extension GameAppTests {
+    func testRepairDetectsCorruptSignedLoaderEvenWhenSourceStampMatches() throws {
+        let wrappers: [GameApp.Wrapper] = [.init(name: "G", iconFrom: nil)]
+        GameApp.ensure(host: host, wrappers: wrappers, programs: [:], fallback: "G")
+        let executable = dir.appendingPathComponent("G.app/Contents/MacOS/G")
+        let expected = try Data(contentsOf: executable)
+        try Data("corrupt loader".utf8).write(to: executable)
+        GameApp.ensure(host: host, wrappers: wrappers, programs: [:], fallback: "G")
+        XCTAssertEqual(try Data(contentsOf: executable), expected)
+        try FileManager.default.removeItem(at: executable)
+        GameApp.ensure(host: host, wrappers: wrappers, programs: [:], fallback: "G")
+        XCTAssertEqual(try Data(contentsOf: executable), expected)
+    }
+}
+
+extension GameAppTests {
+    func testRealSignedWrapperStaysValidAfterChecksumAndCorruptionRecovery() throws {
+        let wine = host.appendingPathComponent("SharedSupport/wine/bin/wine")
+        try FileManager.default.removeItem(at: wine)
+        try FileManager.default.copyItem(at: URL(fileURLWithPath: "/usr/bin/true"), to: wine)
+        try FileManager.default.copyItem(at: wine, to: wine.deletingLastPathComponent().appendingPathComponent("wineserver"))
+        try NokPaths.ensure(host.appendingPathComponent("SharedSupport/wine/share"))
+        GameApp.useSystemTools = true
+        let name = "Nokcandu Integrity Fixture " + UUID().uuidString.prefix(8)
+        let app = dir.appendingPathComponent(name + ".app")
+        defer { GameApp.remove(app); GameApp.useSystemTools = false }
+        let wrappers: [GameApp.Wrapper] = [.init(name: name, iconFrom: nil)]
+        GameApp.ensure(host: host, wrappers: wrappers, programs: [:], fallback: name)
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: wine.path))
+        XCTAssertTrue(GameApp.enabled)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: app.path), "Wrappers: \(String(describing: try? FileManager.default.contentsOfDirectory(atPath: dir.path)))")
+        var checked = try Shell.run("/usr/bin/codesign", ["--verify", app.path], timeout: 30)
+        XCTAssertTrue(checked.ok, checked.combined)
+        let loader = app.appendingPathComponent("Contents/MacOS/" + name)
+        try Data("corrupted loader".utf8).write(to: loader)
+        GameApp.ensure(host: host, wrappers: wrappers, programs: [:], fallback: name)
+        checked = try Shell.run("/usr/bin/codesign", ["--verify", app.path], timeout: 30)
+        XCTAssertTrue(checked.ok, checked.combined)
+        XCTAssertEqual(try Hashing.sha256(file: loader), try String(contentsOf: dir.appendingPathComponent("." + name + ".loader-sha256"), encoding: .utf8))
+    }
+}

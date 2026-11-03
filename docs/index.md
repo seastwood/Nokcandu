@@ -48,3 +48,5 @@ Keep credentials, account identifiers, raw session logs, copyrighted game/runtim
 - [Shared microphone routing, UI polling and helper Repair](investigations/shared-microphone-routing-ui-repair-2026-11-02.md) — Wine argv mutation, frozen status polling, host-level helper restoration and regression coverage.
 - [BF2Hub account connectivity investigation](investigations/bf2hub-account-connectivity-2026-11-02.md) — confirmed TCP reachability and official module checks, failed tracing comparisons, restored startup and unresolved login.
 - [Wine server closed-socket readiness](investigations/wineserver-closed-socket-readiness-2026-11-02.md) — synthetic reproduction, server-only normalization, genuine-error/OOB regression coverage and activation/Undo.
+
+- [Shared helper activation, status failure and Repair hardening](investigations/helper-activation-repair-hardening-2026-11-02.md)

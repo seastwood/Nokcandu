@@ -22,6 +22,8 @@ final class AppModel: ObservableObject {
     /// Games being moved to another folder right now.
     @Published var moving: Set<InstalledGame.ID> = []
     @Published var selection: InstalledGame.ID?
+    @Published var helperActivation: [InstalledGame.ID: HelperActivation] = [:]
+    @Published var statusUnavailable = false
     @Published var runStates: [InstalledGame.ID: RunState] = [:]
     /// Game waiting for Quit to be confirmed.
     @Published var quitting: InstalledGame?
@@ -221,15 +223,21 @@ final class AppModel: ObservableObject {
                             .map { .launcherRunning(pid: $0.1) } ?? .notRunning
                     }
                 }
-                return states
+                return (states, HelperActivation.statuses(for: snapshot))
             }.value
             refreshingRunStates = false
             guard revision == libraryRevision else { refreshRunStates(); return }
-            applyRunStates(states)
+            helperActivation = states.1
+            applyRunStates(states.0)
         }
     }
 
-    private func applyRunStates(_ s: [InstalledGame.ID: RunState]) {
+    private func applyRunStates(_ incoming: [InstalledGame.ID: RunState]) {
+        statusUnavailable = incoming.values.contains(.unknown)
+        var s = incoming
+        for (id, state) in incoming where state == .unknown {
+            if case .launcherRunning = runStates[id] { s[id] = runStates[id] }
+        }
         if s != runStates {
             // A game with Epic cloud saves just quit: upload its newer saves.
             for g in games where CloudSaves.supported(g) != nil {

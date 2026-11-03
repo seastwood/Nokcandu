@@ -908,17 +908,39 @@ public enum SteamHostInstall {
 extension SharedSteam {
     /// Keeps Steam.app's helper and launcher in step with this version of Nokcandu (called at startup).
     public static func refreshHostScriptsIfNeeded() {
-        let fm = FileManager.default
-        let launcher = contents.appendingPathComponent("MacOS/\(hostLauncher)")
-        // Written atomically (a new file replaces the old one), so a helper that's running keeps reading
-        // its own copy. Waiting for Steam to close left games starting through an outdated helper.
-        guard fm.fileExists(atPath: helper.path), fm.fileExists(atPath: launcher.path) else { return }
-        for (url, text) in [(helper, helperScript()), (launcher, hostLauncherScript())] {
-            if (try? Hashing.sha256(file: url)) != Hashing.sha256(data: Data(text.utf8)) {
-                try? Data(text.utf8).write(to: url, options: .atomic)
-                try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        _ = repairHostScripts(contents: contents, restoreMissing: false)
+    }
+
+    /// Script ownership is separate from the native entry, so Repair can recover
+    /// missing companions without overwriting a manually edited launcher.
+    static func repairHostScripts(contents: URL, restoreMissing: Bool = true) -> [RepairStep] {
+        guard isHost(contents: contents) else { return [] }
+        let state = contents.appendingPathComponent("SharedSupport/nokcandu")
+        let marker = state.appendingPathComponent("generated-scripts.json")
+        guard marker.resolvingSymlinksInPath() == marker else { return [RepairStep(title: "Steam scripts", outcome: .skipped, detail: "Linked ownership record preserved.")] }
+        var known = ((try? Data(contentsOf: marker)).flatMap { try? JSONDecoder().decode([String: String].self, from: $0) }) ?? [:]
+        var steps: [RepairStep] = []
+        for (relative, text) in [("Resources/" + helperName, helperScript()), ("MacOS/" + hostLauncher, hostLauncherScript())] {
+            let url = contents.appendingPathComponent(relative), expected = Hashing.sha256(data: Data(text.utf8))
+            let current = try? Hashing.sha256(file: url)
+            guard url.resolvingSymlinksInPath() == url else { steps.append(RepairStep(title: "Steam scripts", outcome: .skipped, detail: "Linked script preserved.")); continue }
+            guard current == expected || (current == nil ? restoreMissing : current == known[relative]) else {
+                steps.append(RepairStep(title: "Steam scripts", outcome: .skipped, detail: "Unrecognized script edits preserved: " + url.lastPathComponent)); continue
             }
+            do {
+                let changed = current != expected || !FileManager.default.isExecutableFile(atPath: url.path)
+                if changed {
+                    try ChangeJournal(scope: "generated-scripts", root: state, portableRoot: contents.deletingLastPathComponent()).write(Data(text.utf8), to: url, reason: "Repair: Steam companion script")
+                    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+                }
+                guard try Hashing.sha256(file: url) == expected else { throw NokError("Steam script failed verification.") }
+                known[relative] = expected
+                steps.append(RepairStep(title: "Steam scripts", outcome: changed ? .fixed : .ok, detail: url.lastPathComponent + " verified."))
+            } catch { steps.append(RepairStep(title: "Steam scripts", outcome: .failed, detail: error.localizedDescription)) }
         }
+        do { try NokPaths.ensure(state); try JSONEncoder().encode(known).write(to: marker, options: .atomic) }
+        catch { steps.append(RepairStep(title: "Steam script ownership", outcome: .failed, detail: error.localizedDescription)) }
+        return steps
     }
 
     /// Writes (or refreshes) Steam.app's launcher, helper, marker, icon and Info.plist.
@@ -934,6 +956,7 @@ extension SharedSteam {
         let marker = contents.appendingPathComponent("SharedSupport/nokcandu/\(hostMarker)")
         try fm.createDirectory(at: marker.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(#"{"schema":1,"role":"steam-host"}"#.utf8).write(to: marker)
+        _ = repairHostScripts(contents: contents, restoreMissing: false)
         var iconFile = ""
         let icns = contents.appendingPathComponent("Resources/AppIcon.icns")
         if PEFile.writeIcns(from: contents.appendingPathComponent("\(steamRel)/steam.exe"), to: icns, workDir: workDir) {

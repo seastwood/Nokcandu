@@ -94,7 +94,7 @@ public enum GameDisplay {
     /// Runs the game on a Wine virtual screen of this size (nil = off). Turns off display switching.
     public static func applyVirtualScreen(_ size: [Int]?, to g: InstalledGame) throws {
         guard var c = g.custom, !g.usesSharedSteam else { return }
-        if case .launcherRunning = GameLauncher.runState(of: g) { throw NokError("Quit the game first.") }
+        if GameLauncher.runState(of: g) != .notRunning { throw NokError("Quit the game first.") }
         c.virtualScreen = size
         if size != nil { c.displayPixels = nil }
         try CustomGames.saveAll(c, to: g, force: false)

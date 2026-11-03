@@ -66,3 +66,23 @@ final class HelperRepairTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: launcher), manual)
     }
 }
+
+extension HelperRepairTests {
+    func testScreenToolRestoresBytesAndExecutablePermissionButRefusesLinks() throws {
+        let game = try fixture()
+        defer { try? FileManager.default.removeItem(at: game.appURL) }
+        let source = game.support.appendingPathComponent("screen-fixture")
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: source)
+        let target = game.nokcanduState.appendingPathComponent("screen-size")
+        XCTAssertTrue(try RawMouse.ensureScreenTool(contents: game.contents, source: source))
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: target.path)
+        XCTAssertTrue(try RawMouse.ensureScreenTool(contents: game.contents, source: source))
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: target.path))
+        try Data("corrupt".utf8).write(to: target)
+        XCTAssertTrue(try RawMouse.ensureScreenTool(contents: game.contents, source: source))
+        XCTAssertFalse(try RawMouse.ensureScreenTool(contents: game.contents, source: source))
+        try FileManager.default.removeItem(at: target)
+        try FileManager.default.createSymbolicLink(at: target, withDestinationURL: source)
+        XCTAssertThrowsError(try RawMouse.ensureScreenTool(contents: game.contents, source: source))
+    }
+}

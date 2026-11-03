@@ -95,6 +95,7 @@ public enum GameLibrary {
 
 public enum RunState: Equatable {
     case notRunning
+    case unknown // No reliable process scan; never treat this as permission to mutate a game.
     /// The launcher process is alive. This is NOT proof the game is playable.
     case launcherRunning(pid: Int32)
 }
@@ -137,16 +138,17 @@ public enum GameLauncher {
 
     /// Reads the launcher's single-instance lock (Logs/game.lock/pid).
     public static func runState(of game: InstalledGame) -> RunState {
-        runState(of: game, processes: nil)
+        let snapshot = processStatus()
+        return runState(of: game, processes: snapshot.rows, reliable: snapshot.reliable)
     }
 
-    static func runState(of game: InstalledGame, processes: [(Int32, String)]?) -> RunState {
+    static func runState(of game: InstalledGame, processes: [(Int32, String)]?, reliable: Bool = true) -> RunState {
         if game.isSteamHost {
             let f = game.logs.appendingPathComponent("steam.lock/pid")
-            if let s = try? String(contentsOf: f, encoding: .utf8), let pid = Int32(s.trimmingCharacters(in: .whitespacesAndNewlines)), kill(pid, 0) == 0 {
+            if let s = try? String(contentsOf: f, encoding: .utf8), let pid = Int32(s.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 1, kill(pid, 0) == 0 {
                 return .launcherRunning(pid: pid)
             }
-            return .notRunning
+            return reliable ? .notRunning : .unknown
         }
         let pidFile = game.logs.appendingPathComponent("game.lock/pid")
         if let s = try? String(contentsOf: pidFile, encoding: .utf8),
@@ -156,19 +158,20 @@ public enum GameLauncher {
         // Games started by their launcher (Battle.net, EA app): the game's app hands the game over and exits, so
         // look for the game's own program in the launcher's environment. Also right after Nokcandu restarts.
         if let pid = launchedGameProcess(game, processes: processes) { return .launcherRunning(pid: pid) }
-        return .notRunning
+        return reliable ? .notRunning : .unknown
     }
 
     /// A library-wide status pass uses one process scan, even when checking many
     /// games takes longer than the snapshot cache lifetime. Call off the UI thread.
     public static func runStates(of games: [InstalledGame]) -> [InstalledGame.ID: RunState] {
-        let processes = processSnapshot()
+        let snapshot = processStatus()
+        let processes = snapshot.rows
         let steam = games.contains(where: \.usesSharedSteam) ? SharedSteam.runningGames(processes: processes) : [:]
         var result: [InstalledGame.ID: RunState] = [:]
         for game in games {
             if game.usesSharedSteam {
-                result[game.id] = steam[game.custom?.steamAppID ?? -1].map { .launcherRunning(pid: $0) } ?? .notRunning
-            } else { result[game.id] = runState(of: game, processes: processes) }
+                result[game.id] = steam[game.custom?.steamAppID ?? -1].flatMap { kill($0, 0) == 0 ? .launcherRunning(pid: $0) : nil } ?? (snapshot.reliable ? .notRunning : .unknown)
+            } else { result[game.id] = runState(of: game, processes: processes, reliable: snapshot.reliable) }
         }
         return result
     }
@@ -180,7 +183,7 @@ public enum GameLauncher {
         if let n = game.native {
             // A Mac game: its app's own program.
             let prefix = URL(fileURLWithPath: n.appPath).standardizedFileURL.path + "/Contents/MacOS/"
-            return rows.first { $0.1.hasPrefix(prefix) }?.0
+            return rows.first { kill($0.0, 0) == 0 && $0.1.hasPrefix(prefix) }?.0
         }
         var match: ((String) -> Bool)?
         if BattleNet.isHost(game) || PCLaunchers.kind(of: game) != nil {
@@ -197,14 +200,14 @@ public enum GameLauncher {
             match = { c in c.contains(tail) }
         }
         guard let match, let host = WineTools.hostContents(for: game) else { return nil }
-        for (pid, command) in rows where match(command.lowercased()) {
+        for (pid, command) in rows where kill(pid, 0) == 0 && match(command.lowercased()) {
             if WineTools.owns(pid: pid, contents: host) { return pid }
         }
         // A private game may hand off from its configured launcher to another
         // executable. Keep tracking that game's own environment, never another
         // game's similarly named process or a shared store client.
         if hasPrivateGamePrefix(game) {
-            for (pid, command) in rows where privateGameCommand(command) {
+            for (pid, command) in rows where kill(pid, 0) == 0 && privateGameCommand(command) {
                 if WineTools.owns(pid: pid, contents: host) { return pid }
             }
         }
@@ -229,24 +232,21 @@ public enum GameLauncher {
         return (parts.count >= 2 ? parts[parts.count - 2] + "\\" + file : "\\" + file).lowercased()
     }
 
-    private static let snapshotLock = NSLock()
-    private nonisolated(unsafe) static var snapshot: (time: Date, rows: [(Int32, String)]) = (.distantPast, [])
-
-    /// All processes with their command lines, refreshed at most once a second (the library checks often).
-    static func processSnapshot() -> [(Int32, String)] {
-        snapshotLock.lock(); defer { snapshotLock.unlock() }
-        if Date().timeIntervalSince(snapshot.time) < 1 { return snapshot.rows }
-        var rows: [(Int32, String)] = []
-        if let r = try? Shell.run("/bin/ps", ["-axww", "-o", "pid=,command="], timeout: 15), r.ok {
-            for line in r.stdout.split(separator: "\n") {
-                let t = line.drop(while: { $0 == " " })
-                guard let sp = t.firstIndex(of: " "), let pid = Int32(t[..<sp]) else { continue }
-                rows.append((pid, String(t[t.index(after: sp)...])))
+    private static let processCache = ProcessSnapshotCache()
+    static func processStatus() -> ProcessSnapshot {
+        processCache.read {
+            let result = try Shell.run("/bin/ps", ["-axww", "-o", "pid=,command="], timeout: 15)
+            guard result.ok else { throw NokError("Game status could not be checked.") }
+            let rows: [(Int32, String)] = result.stdout.split(separator: "\n").compactMap { line in
+                let text = line.drop(while: { $0 == " " })
+                guard let space = text.firstIndex(of: " "), let pid = Int32(text[..<space]) else { return nil }
+                return (pid, String(text[text.index(after: space)...]))
             }
+            guard !rows.isEmpty else { throw NokError("The process scan was empty.") }
+            return rows
         }
-        snapshot = (Date(), rows)
-        return rows
     }
+    static func processSnapshot() -> [(Int32, String)] { processStatus().rows }
 
     /// Opens the game's own app through LaunchServices so it behaves exactly like a Finder double-click.
     /// `arguments` are passed through to the launcher (e.g. ["--windowed"]).

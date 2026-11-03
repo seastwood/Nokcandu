@@ -138,7 +138,7 @@ public enum BattleNet {
     public static func refreshSteamLaunchers(_ games: [InstalledGame]) {
         for g in games {
             guard let c = g.custom, g.battleNet == nil, !isHost(g) || true else { continue }
-            if case .launcherRunning = GameLauncher.runState(of: g) { continue }
+            if GameLauncher.runState(of: g) != .notRunning { continue }
             let f = g.appURL.appendingPathComponent("Contents/MacOS/\(CustomGames.launcherName)")
             if (try? String(contentsOf: f, encoding: .utf8)) == CustomGames.launcherScript(for: c) { continue }
             try? CustomGames.saveAll(c, to: g, force: false)

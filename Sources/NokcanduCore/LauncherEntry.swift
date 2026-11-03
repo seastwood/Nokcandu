@@ -9,7 +9,7 @@ public enum LauncherEntry {
     static let record = "launcher-entry.json"
     struct State: Codable { var original: Data; var installed: Data; var helperSHA: String; var sourceSHA: String? = nil }
 
-    public static func ensure(_ game: InstalledGame) throws {
+    public static func ensure(_ game: InstalledGame, repairMissing: Bool = false) throws {
         guard game.native == nil, let script = game.launcherURL,
               case .notRunning = GameLauncher.runState(of: game),
               let source = resourceForTesting ?? NokPaths.bundledResource(name, executable: true) else { return }
@@ -32,9 +32,11 @@ public enum LauncherEntry {
         let marker = game.nokcanduState.appendingPathComponent(record)
         let old = (try? Data(contentsOf: marker)).flatMap { try? JSONDecoder().decode(State.self, from: $0) }
         let sourceSHA = try Hashing.sha256(file: source)
+        let missing = !FileManager.default.fileExists(atPath: target.path)
         if let old {
-            guard before == old.installed, try Hashing.sha256(file: target) == old.helperSHA else { return }
-            if old.sourceSHA == sourceSHA { return }
+            guard before == old.installed else { return }
+            guard missing ? repairMissing : (try Hashing.sha256(file: target) == old.helperSHA) else { return }
+            if !missing && old.sourceSHA == sourceSHA { return }
         } else {
             guard info["CFBundleExecutable"] as? String == script.lastPathComponent,
                   info[key] == nil, !FileManager.default.fileExists(atPath: target.path),
@@ -44,7 +46,7 @@ public enum LauncherEntry {
         info["CFBundleExecutable"] = name
         info["NSRemovableVolumesUsageDescription"] = "Access this game's files on your external drive."
         let installed = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
-        let priorHelper = old == nil ? nil : try Data(contentsOf: target)
+        let priorHelper = (old == nil || missing) ? nil : try Data(contentsOf: target)
         let priorMarker = try? Data(contentsOf: marker)
         // Sign outside the .app. Once this is CFBundleExecutable, codesign can
         // otherwise treat the file as the surrounding bundle and reject scripts.
@@ -58,7 +60,7 @@ public enum LauncherEntry {
             guard signed.ok else { throw NokError("Couldn't prepare the game's native launcher: " + signed.combined) }
             guard try Data(contentsOf: plist) == before, target.resolvingSymlinksInPath() == target else { throw NokError("The app entry changed during preparation. It was preserved.") }
             if let old {
-                guard try Hashing.sha256(file: target) == old.helperSHA else { throw NokError("The native launcher was edited during preparation. It was preserved.") }
+                guard missing ? !FileManager.default.fileExists(atPath: target.path) : (try Hashing.sha256(file: target) == old.helperSHA) else { throw NokError("The native launcher was edited during preparation. It was preserved.") }
             } else {
                 guard !FileManager.default.fileExists(atPath: target.path) else { throw NokError("The native launcher destination is already in use. It was preserved.") }
             }

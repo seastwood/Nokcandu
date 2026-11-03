@@ -191,6 +191,7 @@ public enum Diagnostics {
 
         // Process
         switch GameLauncher.runState(of: g) {
+        case .unknown: add(.process, "Launcher", .warning, "Status unavailable; no exit inferred.")
         case .notRunning: add(.process, "Launcher", .info, "Not running")
         case .launcherRunning(let pid): add(.process, "Launcher", .info, "Running (pid \(pid)). This only shows the launcher is alive — not that gameplay works.")
         }

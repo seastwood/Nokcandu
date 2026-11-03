@@ -47,7 +47,7 @@ public enum StartupMonitor {
         let window = !runtime.isEmpty && (runtime.contains { windows.contains($0.pid) } ||
             host.map { h in windows.contains { WineTools.owns(pid: $0, contents: h) } } == true)
         let running: Bool
-        if case .launcherRunning = GameLauncher.runState(of: g) { running = true } else { running = !runtime.isEmpty }
+        if GameLauncher.runState(of: g) != .notRunning { running = true } else { running = !runtime.isEmpty }
         let log = g.logs.appendingPathComponent("launch.log")
         var detail = "Open Health → Diagnostics for the launch log."
         if let date = try? log.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,

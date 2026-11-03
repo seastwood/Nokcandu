@@ -56,11 +56,13 @@ xcrun clang -arch arm64 -arch x86_64 -mmacosx-version-min=11.0 -O2 -Wall -Wextra
 # devices and Bonjour from the Mac (the resizable window lives in Nokcandu's Wine Mac driver, Engine/winemac).
 # Built for both x86_64 (today's Wine runs under Rosetta) and arm64 (a native Wine later) — nothing in it is
 # specific to one architecture.
+HELPER_BUILD="$( { cat Resources/rawmouse/*.[cmh]; printf '%s' 'macos11-universal-O2-v1'; } | shasum -a 256 | cut -d' ' -f1)"
+printf '%s\n' "$HELPER_BUILD" > "$APP/Contents/Resources/helper-build.txt"
 xcrun clang -arch x86_64 -arch arm64 -mmacosx-version-min=11.0 -dynamiclib -fobjc-arc -O2 -Wall \
   -framework AppKit -framework GameController -framework CoreGraphics -framework IOKit -framework OpenGL \
   -framework AudioToolbox -framework CoreAudio \
-  -install_name @rpath/nokcandu-rawmouse.dylib \
-  -o "$APP/Contents/Resources/nokcandu-rawmouse.dylib" Resources/rawmouse/rawmouse.m Resources/rawmouse/audiofollow.m Resources/rawmouse/bonjourbridge.m Resources/rawmouse/micguard.m Resources/rawmouse/socket-events.c
+  -install_name @rpath/nokcandu-rawmouse.dylib "-DNOKCANDU_HELPER_BUILD=\"$HELPER_BUILD\"" \
+  -o "$APP/Contents/Resources/nokcandu-rawmouse.dylib" Resources/rawmouse/rawmouse.m Resources/rawmouse/audiofollow.m Resources/rawmouse/bonjourbridge.m Resources/rawmouse/micguard.m Resources/rawmouse/socket-events.c Resources/rawmouse/helper-state.c
 # Nokcandu's Wine Mac drivers (resizable game windows), one per Wine version in Engine/winemac/SUPPORTED_WINE,
 # built by Engine/winemac/build.sh into build/winemac-<version> (Wine 10.0's may also be in build/winemac).
 # Bundled as Resources/winemac/<version>/; Nokcandu puts each into engines of that Wine version.

@@ -10,6 +10,12 @@ final class RunStateTests: XCTestCase {
         XCTAssertNil(GameLauncher.windowsProgramTail(nil))
     }
 
+    func testFailedScanCannotAuthorizeMutation() throws {
+        let g = try IPXNetworkingTests().fixture()
+        defer { try? FileManager.default.removeItem(at: g.appURL) }
+        XCTAssertEqual(GameLauncher.runState(of: g, processes: [], reliable: false), .unknown)
+        XCTAssertEqual(GameLauncher.runState(of: g, processes: [], reliable: true), .notRunning)
+    }
     func testProcessSnapshotSeesThisProcess() {
         XCTAssertTrue(GameLauncher.processSnapshot().contains { $0.0 == getpid() })
     }
@@ -21,6 +27,7 @@ final class WineOwnershipTests: XCTestCase {
         XCTAssertTrue(WineTools.owns(executable: "/Apps/Battle.net.app/Contents/SharedSupport/GameApp/StarCraft.app/Contents/MacOS/StarCraft", contents: c))
         XCTAssertTrue(WineTools.owns(executable: "/Apps/Battle.net.app/Contents/SharedSupport/GameApp/Battle.net.app/Contents/MacOS/wine", contents: c))
         XCTAssertTrue(WineTools.owns(executable: "/Apps/Battle.net.app/Contents/SharedSupport/wine/bin/wineserver", contents: c))
+        XCTAssertTrue(WineTools.owns(executable: "/Apps/Battle.net.app/Contents/SharedSupport/wine/lib/wine/x86_64-unix/wine", contents: c))
         XCTAssertFalse(WineTools.owns(executable: "/Apps/Other.app/Contents/SharedSupport/GameApp/X.app/Contents/MacOS/X", contents: c))
         XCTAssertFalse(WineTools.owns(executable: "/Apps/Battle.net.app/Contents/SharedSupport/GameApp/X.app/Contents/Resources/x", contents: c))
     }

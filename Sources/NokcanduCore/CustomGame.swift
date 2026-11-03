@@ -558,7 +558,7 @@ public enum CustomGames {
     public static func upgradeLaunchers(_ games: [InstalledGame]) {
         for g in games {
             guard let c = g.custom, let l = g.launcherURL, let sha = try? Hashing.sha256(file: l), sha == c.launcherSHA else { continue }
-            if case .launcherRunning = GameLauncher.runState(of: g) { continue }
+            if GameLauncher.runState(of: g) != .notRunning { continue }
             do { try BF1942DisplayFix.refreshMenuCopies(g) } catch { continue }
             if Hashing.sha256(data: Data(launcherScript(for: c).utf8)) != sha { try? save(c, to: g) }
         }
@@ -576,7 +576,7 @@ public enum CustomGames {
 
     /// `force` rewrites the launcher even if it was edited outside Nokcandu (the old one is kept in the journal).
     public static func save(_ config: CustomGameConfig, to game: InstalledGame, force: Bool = false, allowDisplayProgramChange: Bool = false) throws {
-        if case .launcherRunning = GameLauncher.runState(of: game) { throw NokError("Quit \(game.name) first.") }
+        if GameLauncher.runState(of: game) != .notRunning { throw NokError("Quit \(game.name) first.") }
         var c = config
         let installed = CompatibilityFixes.installedIDs(for: game)
         if !allowDisplayProgramChange, BF1942DisplayFix.hasChanges(for: game),

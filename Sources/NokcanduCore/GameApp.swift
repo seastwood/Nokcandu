@@ -125,8 +125,14 @@ public enum GameApp {
         let exeName = executableName(name)
         let loader = c.appendingPathComponent("MacOS/\(exeName)"), stamp = c.appendingPathComponent("Resources/loader-sha256")
         let link = c.appendingPathComponent("MacOS/wine")
+        let installedStamp = dir.appendingPathComponent("." + safeName(name) + ".loader-sha256")
+        let installedSHA = try? String(contentsOf: installedStamp, encoding: .utf8)
+        let actualSHA = try? Hashing.sha256(file: loader)
+        let legacyInvalid = installedSHA == nil && actualSHA != nil && useSystemTools &&
+            ((try? Shell.run("/usr/bin/codesign", ["--verify", app.path], timeout: 30).ok) != true)
+        let damaged = installedSHA.map { $0 != actualSHA } ?? legacyInvalid
         let source = try? Hashing.sha256(file: wine)
-        if !fm.fileExists(atPath: loader.path) || source == nil || (try? String(contentsOf: stamp, encoding: .utf8)) != source {
+        if damaged || !fm.fileExists(atPath: loader.path) || source == nil || (try? String(contentsOf: stamp, encoding: .utf8)) != source {
             try? fm.removeItem(at: loader)
             if (try? fm.copyItem(at: wine, to: loader)) == nil { return }
             if let source { try? source.write(to: stamp, atomically: true, encoding: .utf8) }
@@ -178,6 +184,12 @@ public enum GameApp {
             _ = try? Shell.run("/usr/bin/codesign", ["--force", "--sign", "-", app.path], timeout: 60)
             // Register it, so macOS (the Games app, Game Mode) knows the app's name and icon.
             _ = try? Shell.run(lsregister, ["-f", app.path], timeout: 30)
+        }
+        // Capture the signed bytes, not the unsigned engine source. Legacy wrappers
+        // are adopted only after signature verification (or fixture-only tool suppression).
+        let verified = !useSystemTools || (!changed && installedSHA == actualSHA) || ((try? Shell.run("/usr/bin/codesign", ["--verify", app.path], timeout: 30).ok) == true)
+        if verified, let sha = try? Hashing.sha256(file: loader), installedSHA != sha {
+            try? sha.write(to: installedStamp, atomically: true, encoding: .utf8)
         }
     }
 

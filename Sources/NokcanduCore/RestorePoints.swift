@@ -110,7 +110,7 @@ public enum RestorePoints {
     /// so a restore can be undone too.
     public static func restore(_ p: RestorePoint, app: URL) throws {
         let fm = FileManager.default
-        if let g = GameLibrary.inspect(app), case .launcherRunning = GameLauncher.runState(of: g) {
+        if let g = GameLibrary.inspect(app), GameLauncher.runState(of: g) != .notRunning {
             throw NokError("Quit \(g.name) first.")
         }
         guard fm.fileExists(atPath: p.app.path) else { throw NokError("That restore point is missing.") }

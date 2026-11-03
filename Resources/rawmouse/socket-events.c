@@ -13,6 +13,9 @@
 #include <string.h>
 #include <errno.h>
 
+#ifndef NOKCANDU_SOCKET_TEST
+extern void nokcandu_record_loaded_helper(void);
+#endif
 static int socket_server_process;
 __attribute__((constructor)) static void identify_socket_server(void)
 {
@@ -41,6 +44,13 @@ static int clean_tcp_close(int fd)
 
 static int socket_event_poll(struct pollfd *fds, nfds_t count, int timeout)
 {
+    int before = errno;
+#ifndef NOKCANDU_SOCKET_TEST
+    // The server can daemonize after constructors ran. Record the child too;
+    // this is a cheap PID comparison after the first call in each process.
+    if (socket_server_process) nokcandu_record_loaded_helper();
+#endif
+    errno = before;
     int result = poll(fds, count, timeout), saved = errno;
     if (socket_server_process && result > 0) {
         for (nfds_t i = 0; i < count; i++) {

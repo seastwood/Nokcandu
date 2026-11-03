@@ -80,12 +80,12 @@ public enum AppPrivacy {
         var needed = hostGame.map(GameMicrophone.isOn) ?? false
         // Once an enabled game opts this live client session in, keep its declaration
         // until the client closes. Do not revoke a sibling's active audio capability.
-        if let hostGame, case .launcherRunning = GameLauncher.runState(of: hostGame),
+        if let hostGame, GameLauncher.runState(of: hostGame) != .notRunning,
            (NSDictionary(contentsOf: host.appendingPathComponent("Info.plist"))?[microphoneIntentKey] as? Bool) == true { needed = true }
         needed = needed || GameMicrophone.isOn(fresh)
         for saved in library where saved.id != fresh.id && WineTools.hostContents(for: saved) == host {
             let other = GameLibrary.inspect(saved.appURL) ?? saved
-            if GameMicrophone.isOn(other), case .launcherRunning = GameLauncher.runState(of: other) { needed = true }
+            if GameMicrophone.isOn(other), GameLauncher.runState(of: other) != .notRunning { needed = true }
         }
         _ = try apply(host.deletingLastPathComponent(), microphone: needed)
         // Shortcuts can start a client without its own Play button being used.

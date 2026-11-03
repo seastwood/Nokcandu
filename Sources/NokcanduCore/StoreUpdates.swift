@@ -110,7 +110,7 @@ public enum StoreUpdates {
     public static func update(_ g: InstalledGame, log: @escaping @Sendable (String) -> Void,
                               progress: @escaping @Sendable (StoreTools.Progress) -> Void) async throws {
         guard let (l, mac) = link(g) else { throw NokError("\(g.name) wasn't installed from GOG or Epic.") }
-        if case .launcherRunning = GameLauncher.runState(of: g) { throw NokError("Quit \(g.name) first.") }
+        if GameLauncher.runState(of: g) != .notRunning { throw NokError("Quit \(g.name) first.") }
         let status: Int32
         switch l.store {
         case .epic:

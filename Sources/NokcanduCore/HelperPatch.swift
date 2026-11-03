@@ -77,7 +77,7 @@ public enum HelperPatch {
         var changed: [String] = []
         for g in games {
             guard let url = g.launcherURL, let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
-            if case .launcherRunning = GameLauncher.runState(of: g) { continue }
+            if GameLauncher.runState(of: g) != .notRunning { continue }
             do { try BF1942DisplayFix.refreshMenuCopies(g) } catch { continue }
             CompatibilityFixes.refreshBundledHelpers(g)
             do { try EACompatibility.stage(g) } catch { continue }

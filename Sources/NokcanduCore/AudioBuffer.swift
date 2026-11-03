@@ -120,7 +120,7 @@ public enum AudioBuffer {
     public static func apply(_ ms: Int, for g: InstalledGame) throws {
         guard choices.contains(ms) else { throw NokError("Unsupported buffer size.") }
         guard let h = WineTools.hostContents(for: g) else { throw NokError("This game has no Windows environment.") }
-        if case .launcherRunning = GameLauncher.runState(of: g) { throw NokError("Quit the game first.") }
+        if GameLauncher.runState(of: g) != .notRunning { throw NokError("Quit the game first.") }
         if g.usesSharedSteam || g.isSteamHost, SharedSteam.isRunning { throw NokError("Quit Steam first (Steam page → Quit Steam).") }
         try write(ms: ms, host: h)
     }

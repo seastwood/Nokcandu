@@ -77,7 +77,7 @@ nokcandu_recipe_wine() {
     }
     public static func save(_ settings: Settings, for g: InstalledGame) throws {
         guard supports(g), let recipe = g.recipe, let launcher = g.launcherURL else { throw NokError("This game has no shipped recipe.") }
-        if case .launcherRunning = GameLauncher.runState(of: g) { throw NokError("Quit \(g.name) before changing its launch settings.") }
+        if GameLauncher.runState(of: g) != .notRunning { throw NokError("Quit \(g.name) before changing its launch settings.") }
         guard [.original, .nokcanduPatched].contains(DisplayController.launcherState(g)) else {
             throw NokError("The launcher was edited outside Nokcandu, so your changes were kept. Restore the recipe launcher before applying these settings.")
         }

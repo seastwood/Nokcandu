@@ -61,7 +61,7 @@ public enum Repair {
         func add(_ t: String, _ o: RepairStep.Outcome, _ d: String) { steps.append(RepairStep(title: t, outcome: o, detail: d)) }
         let fm = FileManager.default
 
-        if case .launcherRunning = GameLauncher.runState(of: g) {
+        if GameLauncher.runState(of: g) != .notRunning {
             return [RepairStep(title: "Game is running", outcome: .skipped, detail: "Quit the game first, then run Repair.")]
         }
 
@@ -85,18 +85,22 @@ public enum Repair {
             add("Battle.net app", ok ? .ok : .failed, ok ? link.hostApp : "Not found — set up Battle.net again, then re-add this game.")
             if let l = g.launcherURL {
                 let want = BattleNet.launcherScript(link)
-                if (try? Hashing.sha256(file: l)) != Hashing.sha256(data: Data(want.utf8)) {
+                let current = try? String(contentsOf: l, encoding: .utf8)
+                if let current, current != want, WineEnvironment.upgradeExports(current) != want {
+                    add("Launcher", .skipped, "Manual launcher changes were preserved.")
+                } else if current != want {
                     do { try Data(want.utf8).write(to: l); try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: l.path); add("Launcher", .fixed, "Rebuilt.") }
                     catch { add("Launcher", .failed, error.localizedDescription) }
                 } else { add("Launcher", .ok, "In place.") }
             }
+            steps += componentSteps(g)
             return steps
         }
 
         // 2. Steam games live in the shared Steam app.
         if g.usesSharedSteam {
+            steps += SharedSteam.repairHostScripts(contents: SharedSteam.contents)
             if SharedSteam.isSetUp {
-                SharedSteam.refreshHostScriptsIfNeeded()
                 add("Shared Steam", .ok, "Steam.app and its helper are in place.")
             } else {
                 add("Shared Steam", .failed, "Steam.app is missing or incomplete — set it up again from Steam Library.")
@@ -106,6 +110,7 @@ public enum Repair {
                 add("Game in Steam", installed ? .ok : .failed, installed ? "Installed." : "Not installed in the shared Steam — install it there (Steam Library → Install in Steam).")
             }
             steps += launcherSteps(g)
+            steps += componentSteps(g)
             return steps
         }
 
@@ -184,6 +189,7 @@ public enum Repair {
         }
 
         steps += launcherSteps(g)
+        steps += componentSteps(g)
         return steps
     }
 
@@ -197,6 +203,52 @@ public enum Repair {
             return [RepairStep(title: "Audio and input helper", outcome: changed ? .fixed : .ok,
                 detail: changed ? "Restored and verified Nokcandu's current shared helper. To activate server-level fixes, quit this game through Nokcandu and reopen it. For shared Steam/Battle.net games, quit their launcher through Nokcandu too." : "Matches this Nokcandu build; saved per-game microphone policies refreshed.")]
         } catch { return [RepairStep(title: "Audio and input helper", outcome: .failed, detail: error.localizedDescription)] }
+    }
+
+    /// Keep optional components scoped to existing installations. Never enable a fix
+    /// simply because Repair was clicked, and never rebuild a live host's wrappers.
+    static func componentSteps(_ game: InstalledGame) -> [RepairStep] {
+        guard let host = WineTools.hostContents(for: game) else { return [] }
+        let snapshot = GameLauncher.processStatus()
+        guard snapshot.reliable, !snapshot.rows.contains(where: { WineTools.owns(pid: $0.0, contents: host) }) else {
+            return [RepairStep(title: "Launcher and companion helpers", outcome: .skipped, detail: "Close this game's Windows environment and shared launcher before repairing companion components.")]
+        }
+        var steps = CompanionRepair.repair(game)
+        if game.isSteamHost { steps += SharedSteam.repairHostScripts(contents: host) }
+        func perform(_ title: String, _ body: () throws -> Bool) {
+            do { steps.append(RepairStep(title: title, outcome: try body() ? .fixed : .ok, detail: "Verified the owned component; game content and settings were preserved.")) }
+            catch { steps.append(RepairStep(title: title, outcome: .failed, detail: error.localizedDescription)) }
+        }
+        perform("Screen helper") { try RawMouse.ensureScreenTool(contents: host) }
+        perform("Native app entry") {
+            let entry = game.contents.appendingPathComponent("MacOS/" + LauncherEntry.name)
+            let before = try? Hashing.sha256(file: entry)
+            try LauncherEntry.ensure(game, repairMissing: true)
+            guard let record = try? Data(contentsOf: game.nokcanduState.appendingPathComponent(LauncherEntry.record)),
+                  let state = try? JSONDecoder().decode(LauncherEntry.State.self, from: record),
+                  (try? Hashing.sha256(file: entry)) == state.helperSHA else {
+                throw NokError("The native entry could not be verified. Manual launchers and externally edited entries were preserved.")
+            }
+            return before != (try? Hashing.sha256(file: entry))
+        }
+        perform("Bonjour companion") { try BonjourService.fix(prefix: host.appendingPathComponent("SharedSupport/prefix")) }
+        // Regenerate wrappers and route tables through the same path used for fresh
+        // installations. Wrapper loader integrity is checked after signing.
+        let related = GameLibrary.scan().filter { WineTools.hostContents(for: $0) == host }
+        RawMouse.refreshLibraries(related.contains(where: { $0.id == game.id }) ? related : related + [game])
+        if let wrapper = GameApp.wrapper(host: host) {
+            perform("Game wrappers") {
+                let root = wrapper.deletingLastPathComponent()
+                for app in try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) where app.pathExtension == "app" {
+                    let contents = app.appendingPathComponent("Contents")
+                    guard let info = NSDictionary(contentsOf: contents.appendingPathComponent("Info.plist")), let exe = info["CFBundleExecutable"] as? String,
+                          let sha = try? String(contentsOf: root.appendingPathComponent("." + app.deletingPathExtension().lastPathComponent + ".loader-sha256"), encoding: .utf8),
+                          (try? Hashing.sha256(file: contents.appendingPathComponent("MacOS/" + exe))) == sha else { throw NokError("A game wrapper failed verification; check its engine and permissions.") }
+                }
+                return false
+            }
+        }
+        return steps
     }
 
     static func restoreData(_ spec: GameDataSpec) -> [RepairStep] {
@@ -249,7 +301,9 @@ public enum Repair {
             switch DisplayController.launcherState(g) {
             case .original, .nokcanduPatched:
                 return [RepairStep(title: "Launcher", outcome: .ok, detail: "Tested launcher in place.")]
-            case .missing, .unrecognized:
+            case .unrecognized:
+                return [RepairStep(title: "Launcher", outcome: .skipped, detail: "Unrecognized launcher changes were preserved.")]
+            case .missing:
                 guard let template = NokPaths.bundledResource("generals-launcher"), let data = try? Data(contentsOf: template) else {
                     return [RepairStep(title: "Launcher", outcome: .failed, detail: "Nokcandu's launcher template is missing.")]
                 }

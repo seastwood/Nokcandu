@@ -343,7 +343,7 @@ public enum EngineUpdate {
         let c = g.contents
         guard WineTools.hostContents(for: g) == c else { throw NokError("Change the engine from this game's launcher app. Its shortcut has no engine of its own.") }
         guard let m = RuntimeManager.manifest(for: runtimeID), RuntimeManager.isCached(id: runtimeID) else { throw NokError("That engine isn't downloaded yet.") }
-        if case .launcherRunning = GameLauncher.runState(of: g) { throw NokError("Quit \(g.name) first.") }
+        if GameLauncher.runState(of: g) != .notRunning { throw NokError("Quit \(g.name) first.") }
         if isHeld(g) { throw NokError("\(g.name) is set to stay on its engine. Turn that off in Updates first.") }
         RestorePoints.before(g, "Before engine \(RuntimeManager.manifest(for: runtimeID)?.wineVersion ?? runtimeID)", log: log)
         if state(for: g)?.status == .trying { throw NokError("\(g.name) is already trying an engine. Keep it or roll back first.") }
@@ -403,7 +403,7 @@ public enum EngineUpdate {
 
     /// Puts the previous engine and Windows system files back.
     public static func rollBack(_ g: InstalledGame, log: @escaping @Sendable (String) -> Void) async throws {
-        if case .launcherRunning = GameLauncher.runState(of: g) { throw NokError("Quit \(g.name) first.") }
+        if GameLauncher.runState(of: g) != .notRunning { throw NokError("Quit \(g.name) first.") }
         guard FileManager.default.fileExists(atPath: rollbackDir(g.contents).path) else { throw NokError("There's no previous engine kept for \(g.name).") }
         try await WineTools.stopAll(for: g)
         try restore(g.contents, prefix: g.prefix, log: log)

@@ -147,7 +147,7 @@ public enum CompatibilityFixes {
         return nil
     }
     static func requireClosed(_ g: InstalledGame) throws {
-        if case .launcherRunning = GameLauncher.runState(of: g) { throw NokError("Quit \(g.name) first.") }
+        if GameLauncher.runState(of: g) != .notRunning { throw NokError("Quit \(g.name) first.") }
     }
     /// Expand grouped Wine rules so changing d3d8 never accidentally removes a d3d9 rule.
     static func overrides(_ text: String?) -> [String: String] {
@@ -359,6 +359,7 @@ public enum CompatibilityFixes {
             log("Installation did not finish. \(report?.summary ?? "The update recovery record was retained.") Use Undo to clear the recovery record.")
             throw error
         }
+        CompanionRepair.snapshot(g)
         log("Installed \(fix.title). Undo is available in Fixes.")
     }
     /// Refresh only app-owned bundled helper files, independently of game settings or downloads.

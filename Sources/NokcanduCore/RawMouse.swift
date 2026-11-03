@@ -35,6 +35,9 @@ public enum RawMouse {
         return Settings(enabled: true, scale: s, smooth: lines.dropFirst().contains("smooth"), frameSync: lines.dropFirst().contains("framesync"))
     }
 
+    public static var bundledBuildID: String? {
+        NokPaths.bundledResource("helper-build.txt").flatMap { try? String(contentsOf: $0, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) }
+    }
     public static var bundledLibrary: URL? { NokPaths.bundledResource(dylibName) }
 
     /// Restore only Nokcandu's owned helper, by atomic replacement. Processes
@@ -46,11 +49,33 @@ public enum RawMouse {
         guard destination.resolvingSymlinksInPath() == destination else { throw NokError("The audio/input helper path is linked. It was preserved.") }
         let data = try Data(contentsOf: source)
         let expected = Hashing.sha256(data: data)
-        if (try? Hashing.sha256(file: destination)) == expected { return false }
+        let changed = (try? Hashing.sha256(file: destination)) != expected
         try NokPaths.ensure(folder(contents))
-        try data.write(to: destination, options: .atomic)
+        if changed { try data.write(to: destination, options: .atomic) }
         guard try Hashing.sha256(file: destination) == expected else { throw NokError("The restored audio/input helper did not pass verification.") }
-        return true
+        if source == bundledLibrary, let build = bundledBuildID {
+            let marker = folder(contents).appendingPathComponent("helper-build.txt")
+            guard marker.resolvingSymlinksInPath() == marker else { throw NokError("The helper version path is linked. It was preserved.") }
+            if (try? String(contentsOf: marker, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) != build {
+                try Data((build + "\n").utf8).write(to: marker, options: .atomic)
+            }
+        }
+        return changed
+    }
+
+    @discardableResult
+    static func ensureScreenTool(contents: URL, source: URL? = nil) throws -> Bool {
+        guard let source = source ?? NokPaths.bundledResource("screen-size") else { throw NokError("The screen helper is missing from Nokcandu.") }
+        let dst = folder(contents).appendingPathComponent("screen-size")
+        guard dst.resolvingSymlinksInPath() == dst else { throw NokError("The screen helper is linked; it was preserved.") }
+        let data = try Data(contentsOf: source), sha = try Hashing.sha256(file: source)
+        let changed = (try? Hashing.sha256(file: dst)) != sha || !FileManager.default.isExecutableFile(atPath: dst.path)
+        if changed {
+            try NokPaths.ensure(folder(contents)); try data.write(to: dst, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dst.path)
+        }
+        guard try Hashing.sha256(file: dst) == sha else { throw NokError("The screen helper failed verification.") }
+        return changed
     }
 
     /// Turns it on (copying the current library into the app) or off. A running game picks the change up
@@ -75,6 +100,7 @@ public enum RawMouse {
     /// Called on refresh, off the main thread (it looks through game folders).
     public static func refreshLibraries(_ games: [InstalledGame]) {
         try? GameMicrophone.refreshPolicies(games)
+        for game in games where game.native == nil { CompanionRepair.snapshot(game) }
         let fm = FileManager.default
         var input: [URL: [String: String]] = [:]
         var basenames: [URL: [String: [String]]] = [:]
@@ -129,10 +155,7 @@ public enum RawMouse {
             if (try? String(contentsOf: routeFile, encoding: .utf8)) != routeText { try? Data(routeText.utf8).write(to: routeFile, options: .atomic) }
             try? fm.createDirectory(at: folder(h), withIntermediateDirectories: true)
             try? ensureLibrary(contents: h)
-            if let tool = NokPaths.bundledResource("screen-size"), let want = try? Hashing.sha256(file: tool) {
-                let dst = folder(h).appendingPathComponent("screen-size")
-                if (try? Hashing.sha256(file: dst)) != want { try? fm.removeItem(at: dst); try? fm.copyItem(at: tool, to: dst) }
-            }
+            _ = try? ensureScreenTool(contents: h)
             let text = m.sorted { $0.key < $1.key }.map { "\($0.key)\t\($0.value)" }.joined(separator: "\n") + "\n"
             if !fm.fileExists(atPath: chosen(h).path) {
                 if !fm.fileExists(atPath: flag(h).path) {

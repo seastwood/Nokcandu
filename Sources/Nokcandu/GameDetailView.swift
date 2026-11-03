@@ -30,6 +30,12 @@ struct GameDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 header
+                if let message = model.helperActivation[game.id]?.message {
+                    SettingNote(message, warning: true)
+                }
+                if model.statusUnavailable {
+                    SettingNote("Game status is temporarily unavailable. The last known status is kept; changes that require a closed game will wait for a reliable check.", warning: true)
+                }
                 if let w = AntiCheat.warning(for: game), !game.isSteamHost, !LibraryOrganizer.isLauncher(game) {
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: w.verdict == .blocked ? "xmark.shield" : "exclamationmark.shield")

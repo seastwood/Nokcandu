@@ -265,6 +265,7 @@ struct GameRow: View {
 
     var subtitle: String {
         if case .launcherRunning = state { return "Running" }
+        if state == .unknown { return "Status unavailable" }
         if model.moving.contains(game.id) { return "Moving…" }
         if let d = model.missingDrive[game.id] { return "Connect \(d) to play" }
         if let u = model.updating[game.id] { return "Updating" + (u.progress.map { " · \($0.label)" } ?? "…") }

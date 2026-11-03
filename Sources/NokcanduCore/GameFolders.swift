@@ -147,7 +147,7 @@ public enum GameMover {
         if g.battleNet != nil { return "Blizzard games are stored inside Battle.net, so they can't be moved on their own." }
         if let h = g.hosted { return "Use \(h.launcher.title)’s storage controls to move its installed game files. This small Nokcandu app is only a shortcut." }
         if let k = PCLaunchers.kind(of: g) { return "\(k.title) stays in the standard folder — your \(k.title) games run inside it." }
-        if case .launcherRunning = GameLauncher.runState(of: g) { return "Quit the game first." }
+        if GameLauncher.runState(of: g) != .notRunning { return "Quit the game first." }
         return nil
     }
 
@@ -211,7 +211,7 @@ public enum GameMover {
         if g.isSteamHost || BattleNet.isHost(g) || g.battleNet != nil || g.hosted != nil || PCLaunchers.kind(of: g) != nil {
             return "Launchers choose where games go themselves: pick the drive in Steam's or Battle.net's own install options."
         }
-        if case .launcherRunning = GameLauncher.runState(of: g) { return "Quit the game first." }
+        if GameLauncher.runState(of: g) != .notRunning { return "Quit the game first." }
         if gameFilesFolder(g) == nil { return "Nokcandu can't tell which folder holds this game's files." }
         return nil
     }

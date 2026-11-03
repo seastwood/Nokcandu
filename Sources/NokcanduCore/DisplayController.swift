@@ -115,7 +115,7 @@ if [ "${1:-}" = --windowed ] || { [ -z "${1:-}" ] && [ "$(cat "$MODE_FILE" 2>/de
     @discardableResult
     public static func apply(_ mode: DisplayMode, to g: InstalledGame) throws -> String {
         guard let policy = g.recipe?.display else { throw NokError("Display modes are not validated for \(g.name).") }
-        if case .launcherRunning = GameLauncher.runState(of: g) {
+        if GameLauncher.runState(of: g) != .notRunning {
             throw NokError("Quit \(g.name) first — settings are read when the game starts.")
         }
         let journal = ChangeJournal(scope: g.journalScope)
@@ -176,7 +176,7 @@ if [ "${1:-}" = --windowed ] || { [ -z "${1:-}" ] && [ "$(cat "$MODE_FILE" 2>/de
     /// Safe reset: undo every Nokcandu change for this game (launcher, mode file, game settings).
     /// Saves, replays, maps and anything Nokcandu did not write are never touched.
     public static func reset(_ g: InstalledGame) throws -> ChangeJournal.RevertReport {
-        if case .launcherRunning = GameLauncher.runState(of: g) {
+        if GameLauncher.runState(of: g) != .notRunning {
             throw NokError("Quit \(g.name) before resetting.")
         }
         var report = ChangeJournal(scope: g.journalScope).revertAll()

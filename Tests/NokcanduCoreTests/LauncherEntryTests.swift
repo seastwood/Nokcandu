@@ -90,3 +90,27 @@ final class LauncherEntryTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(Storage.allocatedSize(app), Storage.size(app))
     }
 }
+
+extension LauncherEntryTests {
+    func testRepairRestoresMissingOwnedEntryAndPreservesManualReplacement() throws {
+        let resources = try entryResourceFixture()
+        defer { LauncherEntry.resourceForTesting = nil; try? FileManager.default.removeItem(at: resources) }
+        let g = try IPXNetworkingTests().fixture()
+        defer { try? FileManager.default.removeItem(at: g.appURL) }
+        let script = g.launcherURL!, text = Data("#!/bin/bash\nexit 0\n".utf8)
+        try text.write(to: script)
+        var config = g.custom!; config.launcherSHA = Hashing.sha256(data: text)
+        try config.encoded().write(to: CustomGameConfig.url(in: g.contents))
+        let managed = try XCTUnwrap(GameLibrary.inspect(g.appURL))
+        try LauncherEntry.ensure(managed)
+        let entry = g.contents.appendingPathComponent("MacOS/" + LauncherEntry.name)
+        try FileManager.default.removeItem(at: entry)
+        try LauncherEntry.ensure(managed, repairMissing: true)
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: entry.path))
+        XCTAssertEqual(try Data(contentsOf: script), text)
+        let manual = Data("manual replacement".utf8)
+        try manual.write(to: entry)
+        try LauncherEntry.ensure(managed, repairMissing: true)
+        XCTAssertEqual(try Data(contentsOf: entry), manual)
+    }
+}

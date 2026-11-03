@@ -113,7 +113,7 @@ public enum GameRemoval {
 
     /// Why this game can't be removed right now (nil = it can).
     public static func blocker(_ g: InstalledGame, library: [InstalledGame]) -> String? {
-        if case .launcherRunning = GameLauncher.runState(of: g) { return "Quit the game first." }
+        if GameLauncher.runState(of: g) != .notRunning { return "Quit the game first." }
         if g.isSteamHost {
             if SharedSteam.isRunning { return "Quit Steam first." }
             let dependents = library.filter(\.usesSharedSteam)

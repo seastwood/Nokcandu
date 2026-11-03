@@ -24,7 +24,7 @@ The author's source fix also changes Wine's server error mapping more broadly. T
 - Hardware-free boundary tests check that game processes, non-sockets, short socket-information responses and unexpected errors are unchanged; errno is preserved.
 - Full suite: 249 tests, ten optional skips, zero failures. The signed development app passed deep/strict signature verification.
 
-After activation and a full private-session restart, the user confirmed BF2Hub login completes and multiplayer servers appear: “it works, i got in and i can see games!” This verifies account login and server browsing. Joining a server and sustained multiplayer gameplay have not been verified in this check.
+After activation and a full private-session restart, the user confirmed BF2Hub login completes and multiplayer servers appear: “it works, i got in and i can see games!” The user subsequently confirmed joining an Internet multiplayer match and running around in it. Login, server browsing, joining and basic multiplayer gameplay are verified; a sustained session and all anti-cheat/server configurations have not been tested.
 
 ## Fresh installs, migration, profiles and Undo
 
@@ -42,4 +42,4 @@ After the user closed BF2, the signed development app was installed atomically w
 
 ## Confirmed result
 
-The installed shared correction resolved the reported BF2Hub account-screen hang without changing the account, BF2Hub modules, game executable, engine choice, renderer, hosts file or firewall. BF2 continued through BF2Hub’s normal Play route. The user confirmed login and visible games; do not extend that result to anti-cheat compatibility or sustained server gameplay without a separate test.
+The installed shared correction resolved the reported BF2Hub account-screen hang without changing the account, BF2Hub modules, game executable, engine choice, renderer, hosts file or firewall. BF2 continued through BF2Hub’s normal Play route. The user confirmed login, visible games, joining an Internet multiplayer match and moving around in it. Do not extend that result to every anti-cheat configuration or sustained-session reliability without a separate test.

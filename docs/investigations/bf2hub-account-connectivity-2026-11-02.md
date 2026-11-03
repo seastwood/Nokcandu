@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-**Resolved for login and server browsing:** the shared wineserver closed-socket readiness correction was installed after the investigation below. The user confirmed successful login and visible multiplayer games. See [the confirmed correction](wineserver-closed-socket-readiness-2026-11-02.md). Joining/gameplay remain unverified. The following records the initial indefinite connection/creation investigation. Keep the working engine, renderer, BF2Hub Play route and saved settings intact. The displayed profile was identified by BF2Hub as single-player; whether a verified multiplayer account exists is a separate question from green client/CD-key readiness checks.
+**Resolved for login and server browsing:** the shared wineserver closed-socket readiness correction was installed after the investigation below. The user confirmed successful login and visible multiplayer games. See [the confirmed correction](wineserver-closed-socket-readiness-2026-11-02.md). The user later confirmed joining an Internet multiplayer match and running around; basic gameplay is verified, while extended-session reliability remains untested. The following records the initial indefinite connection/creation investigation. Keep the working engine, renderer, BF2Hub Play route and saved settings intact. The displayed profile was identified by BF2Hub as single-player; whether a verified multiplayer account exists is a separate question from green client/CD-key readiness checks.
 
 ## Verified checks
 
