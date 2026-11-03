@@ -384,8 +384,12 @@ public enum EngineUpdate {
 
             log("Updating the Windows environment for the new engine (wineboot)…")
             let wine = c.appendingPathComponent("SharedSupport/wine/bin/wine").path
+            let drivesBefore = AutomaticDriveMappings.snapshot(prefix: g.prefix)
             let r = try await Shell.runAsync(wine, ["wineboot", "-u"], env: wineEnv(c), timeout: 600)
             _ = try? await Shell.runAsync(c.appendingPathComponent("SharedSupport/wine/bin/wineserver").path, ["-w"], env: wineEnv(c), timeout: 300)
+            let imageMounts = await Task.detached(priority: .utility) { Discs.attached() }.value
+            do { try AutomaticDriveMappings.recordNew(contents: c, before: drivesBefore, images: imageMounts) }
+            catch { log("Could not record automatic installer drives; leaving those mappings unchanged: \(error.localizedDescription)") }
             if !r.ok { log("wineboot exited \(r.status); checking that Windows programs still run…") }
             // The real test: can the new engine run a Windows program in this environment?
             let v = try await Shell.runAsync(wine, ["cmd", "/c", "ver"], env: wineEnv(c), timeout: 300)

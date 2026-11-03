@@ -25,7 +25,7 @@ public enum Drives {
             guard let dest = try? FileManager.default.destinationOfSymbolicLink(atPath: link.path) else { continue }
             let abs = dest.hasPrefix("/") ? dest : dir.appendingPathComponent(dest).standardizedFileURL.path
             let letter = String(n.prefix(1)).uppercased()
-            out.append(Drive(letter: letter, target: abs, connected: FileManager.default.fileExists(atPath: abs),
+            out.append(Drive(letter: letter, target: abs, connected: LauncherInstallation.presence(at: URL(fileURLWithPath: abs)) == .present,
                              builtIn: letter == "C" || letter == "Z", gameDisc: discGame && letter == "D"))
         }
         return out
@@ -43,8 +43,11 @@ public enum Drives {
         guard l.count == 1, "DEFGHIJKLMNOPQRSTUVWXY".contains(l) else { throw NokError("Choose a letter from D to Y.") }
         guard freeLetters(for: g).contains(l) else { throw NokError("\(l): is already used.") }
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try FileManager.default.createSymbolicLink(atPath: dir.appendingPathComponent(l.lowercased() + ":").path,
-                                                   withDestinationPath: url.standardizedFileURL.path)
+        let link = dir.appendingPathComponent(l.lowercased() + ":")
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: url.standardizedFileURL.path)
+        do {
+            if let contents = WineTools.hostContents(for: g) { try AutomaticDriveMappings.rememberManual(l, target: url.standardizedFileURL.path, contents: contents) }
+        } catch { try? FileManager.default.removeItem(at: link); throw error }
     }
 
     /// Removes a drive letter (the files it points to are not touched).
@@ -52,8 +55,9 @@ public enum Drives {
         guard let dir = folder(g) else { return }
         let l = letter.uppercased()
         guard l != "C", l != "Z" else { throw NokError("C: and Z: are part of Wine and can't be removed.") }
-        let link = dir.appendingPathComponent(l.lowercased() + ":")
-        guard (try? FileManager.default.destinationOfSymbolicLink(atPath: link.path)) != nil else { return }
-        try FileManager.default.removeItem(at: link)
+        let prefix = dir.deletingLastPathComponent()
+        guard let mapping = AutomaticDriveMappings.snapshot(prefix: prefix)[l] else { return }
+        guard try AutomaticDriveMappings.unlink(mapping, prefix: prefix) else { throw NokError("The drive mapping changed; it was preserved.") }
+        if let contents = WineTools.hostContents(for: g) { try AutomaticDriveMappings.rememberManual(l, target: nil, contents: contents) }
     }
 }

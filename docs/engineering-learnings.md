@@ -274,3 +274,7 @@ A detached disk scan can still be expensive if every settings appearance repeats
 ### Storage location coverage must be shared (2026-11-03)
 
 The Games inventory and game-detail summary must not maintain separate location rules. Resolve launcher registration/manifests and known native install data as well as private linked content; a selected hub executable can be outside the actual game directory. Keep discovery bounded to dedicated game containers, deduplicate canonical roots, and exclude separately listed game content from shared launcher inventory rows. Unknown/unavailable game content is an incomplete estimate, not a complete tiny-app total. Moves must invalidate session measurements even when the app path/config is unchanged. [Evidence, scope, migration and Undo](investigations/storage-game-location-accounting-2026-11-03.md).
+
+### Installer media is not a permanent game drive
+
+Wine may map a mounted native installer image into otherwise unrelated private environments. Never infer safe removal solely from an offline `/Volumes` path. Track only newly created mappings proven to belong to an attached disk image during managed initialization/update, preserve explicit mappings and game/registry references, and clean up unchanged link pairs only in reliably closed environments. Unknown historical mappings require explicit authorization. Record recovery before unlinking; Undo must not overwrite a reused letter or block the UI. [Evidence, migration, protections and limits](investigations/automatic-installer-drives-2026-11-03.md).

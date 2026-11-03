@@ -100,6 +100,7 @@ final class AppModel: ObservableObject {
         games = GameLibrary.scan()
         GameFolders.remember(games)
         let snapshot = games
+        Task.detached(priority: .utility) { AutomaticDriveMappings.reconcile(games: snapshot) }
         // Bring helper files inside the game apps up to date — at startup, when games are added or moved,
         // and otherwise at most every 10 minutes (it hashes and rewrites files, so not on every refresh).
         let paths = Set(games.map(\.appURL.path))

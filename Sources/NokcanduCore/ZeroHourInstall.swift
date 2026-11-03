@@ -96,8 +96,12 @@ public enum ZeroHourInstall {
             FileManager.default.fileExists(atPath: ctx.prefix.appendingPathComponent("drive_c/windows/syswow64").path)
         }
         func run(_ ctx: InstallContext) async throws {
+            let before = AutomaticDriveMappings.snapshot(prefix: ctx.prefix)
             let r = try await ctx.runWine(["wineboot", "-i"], timeout: 600)
             try await ZeroHourInstall.flushRegistry(ctx)
+            let images = await Task.detached(priority: .utility) { Discs.attached() }.value
+            do { try AutomaticDriveMappings.recordNew(contents: ctx.contents, before: before, images: images) }
+            catch { ctx.log("Could not record automatic installer drives; leaving those mappings unchanged: \(error.localizedDescription)") }
             if !r.ok { ctx.log("wineboot exited with \(r.status)") }
         }
     }

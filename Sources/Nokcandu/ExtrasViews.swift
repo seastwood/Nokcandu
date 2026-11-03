@@ -11,6 +11,9 @@ struct DrivesSection: View {
     let game: InstalledGame
     @State private var drives: [Drives.Drive] = []
     @State private var letter = "D"
+    @State private var canUndo = false
+    @State private var undoing = false
+    @State private var refresh = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -35,23 +38,46 @@ struct DrivesSection: View {
             }
             HStack {
                 Picker("", selection: $letter) {
-                    ForEach(Drives.freeLetters(for: game), id: \.self) { Text("\($0):").tag($0) }
+                    ForEach(freeLetters, id: \.self) { Text("\($0):").tag($0) }
                 }
                 .labelsHidden().frame(width: 70)
                 Button("Add Drive…", action: add)
+                if canUndo {
+                    Button("Undo drive cleanup") {
+                        undoing = true
+                        Task {
+                            let selected = game
+                            do {
+                                try await Task.detached(priority: .utility) { try AutomaticDriveMappings.undo(for: selected) }.value
+                                reload()
+                            } catch { model.fail(error) }
+                            undoing = false
+                        }
+                    }.buttonStyle(.link).disabled(undoing)
+                }
                 Spacer()
             }
             Text(game.usesSharedSteam ? "Drives for the shared Steam, used by all Steam games. A drive letter points at a Mac folder or external drive; games and stores (Steam libraries, Battle.net install locations) can install there."
                                       : "A drive letter points at a Mac folder or external drive, so games and stores (Battle.net install locations, Steam libraries) can install there. Restart the game after changes.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
-        .onAppear(perform: reload)
+        .task(id: "\(game.id)-\(model.libraryRevision)-\(refresh)") {
+            let games = model.games, selected = game
+            let result = await Task.detached(priority: .utility) {
+                AutomaticDriveMappings.reconcile(games: games)
+                return (Drives.list(for: selected), AutomaticDriveMappings.hasUndo(for: selected))
+            }.value
+            if !Task.isCancelled {
+                drives = result.0; canUndo = result.1
+                if !freeLetters.contains(letter) { letter = freeLetters.first ?? "D" }
+            }
+        }
     }
-
-    func reload() {
-        drives = Drives.list(for: game)
-        if !Drives.freeLetters(for: game).contains(letter) { letter = Drives.freeLetters(for: game).first ?? "D" }
+    var freeLetters: [String] {
+        let used = Set(drives.map(\.letter))
+        return "DEFGHIJKLMNOPQRSTUVWXY".map(String.init).filter { !used.contains($0) }
     }
+    func reload() { refresh += 1 }
 
     func add() {
         let p = NSOpenPanel()

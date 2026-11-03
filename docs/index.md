@@ -54,3 +54,5 @@ Keep credentials, account identifiers, raw session logs, copyrighted game/runtim
 - [Storage settings performance and on-demand measurements](investigations/storage-browser-performance-2026-11-03.md)
 
 - [Storage game-location accounting across drives and launchers](investigations/storage-game-location-accounting-2026-11-03.md)
+
+- [Automatic installer-media drives](investigations/automatic-installer-drives-2026-11-03.md) — stale image mappings, guarded shared cleanup, existing-installation authorization and Undo.
