@@ -45,3 +45,4 @@ Keep credentials, account identifiers, raw session logs, copyrighted game/runtim
 
 - [Microphone permission during playback](investigations/microphone-playback-permission-2026-11-02.md) — fresh-identity reproduction, Off/On eligibility, legacy Core Audio queries, shared clients and Undo.
 - [Live microphone control and raw mouse permission explanation](investigations/live-microphone-switch-2026-11-02.md) — capture stop/resume without a Wine restart, cached endpoint discovery, privacy boundaries and migration.
+- [Shared microphone routing, UI polling and helper Repair](investigations/shared-microphone-routing-ui-repair-2026-11-02.md) — Wine argv mutation, frozen status polling, host-level helper restoration and regression coverage.

@@ -650,8 +650,10 @@ public enum SharedSteam {
     /// Steam games running right now (app id → process id), found from Windows processes started from a
     /// steamapps\common\<folder> (the game's launcher app exits as soon as it hands off to Steam).
     public static func runningGames() -> [Int: Int32] {
-        guard let r = try? Shell.run("/bin/ps", ["-axo", "pid=,command="], timeout: 5), r.ok else { return [:] }
-        return matchRunning(r.stdout, folders: installFolders())
+        runningGames(processes: GameLauncher.processSnapshot())
+    }
+    static func runningGames(processes: [(Int32, String)]) -> [Int: Int32] {
+        matchRunning(processes.map { "\($0.0) \($0.1)" }.joined(separator: "\n"), folders: installFolders())
     }
 
     static func matchRunning(_ ps: String, folders: [String: Int]) -> [Int: Int32] {

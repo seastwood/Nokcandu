@@ -37,6 +37,22 @@ public enum RawMouse {
 
     public static var bundledLibrary: URL? { NokPaths.bundledResource(dylibName) }
 
+    /// Restore only Nokcandu's owned helper, by atomic replacement. Processes
+    /// already mapping the previous inode keep it until their next normal launch.
+    @discardableResult
+    static func ensureLibrary(contents: URL, source: URL? = nil) throws -> Bool {
+        guard let source = source ?? bundledLibrary else { throw NokError("Nokcandu's audio/input helper is missing from this app. Reinstall Nokcandu.") }
+        let destination = folder(contents).appendingPathComponent(dylibName)
+        guard destination.resolvingSymlinksInPath() == destination else { throw NokError("The audio/input helper path is linked. It was preserved.") }
+        let data = try Data(contentsOf: source)
+        let expected = Hashing.sha256(data: data)
+        if (try? Hashing.sha256(file: destination)) == expected { return false }
+        try NokPaths.ensure(folder(contents))
+        try data.write(to: destination, options: .atomic)
+        guard try Hashing.sha256(file: destination) == expected else { throw NokError("The restored audio/input helper did not pass verification.") }
+        return true
+    }
+
     /// Turns it on (copying the current library into the app) or off. A running game picks the change up
     /// within a second (libraries from Nokcandu 0.9.7 on); older ones on their next start.
     public static func apply(_ s: Settings, for g: InstalledGame) throws {
@@ -45,12 +61,7 @@ public enum RawMouse {
         let fm = FileManager.default
         try fm.createDirectory(at: folder(state), withIntermediateDirectories: true)
         if s.enabled {
-            guard let lib = bundledLibrary else { throw NokError("Nokcandu's raw-mouse library is missing; rebuild Nokcandu.") }
-            let dst = folder(h).appendingPathComponent(dylibName)
-            if (try? Hashing.sha256(file: dst)) != (try? Hashing.sha256(file: lib)) {
-                try? fm.removeItem(at: dst)
-                try fm.copyItem(at: lib, to: dst)
-            }
+            try ensureLibrary(contents: h)
             let scale = min(max(s.scale, 0.1), 10)
             try Data((String(format: "%.2f\n", scale) + (s.smooth ? "smooth\n" : "") + (s.frameSync ? "framesync\n" : "")).utf8).write(to: flag(state), options: .atomic)
         } else {
@@ -65,8 +76,6 @@ public enum RawMouse {
     public static func refreshLibraries(_ games: [InstalledGame]) {
         try? GameMicrophone.refreshPolicies(games)
         let fm = FileManager.default
-        let lib = bundledLibrary
-        let want = lib.flatMap { try? Hashing.sha256(file: $0) }
         var input: [URL: [String: String]] = [:]
         var basenames: [URL: [String: [String]]] = [:]
         var names: [URL: [String: String]] = [:]       // host Contents → exe → name
@@ -119,13 +128,7 @@ public enum RawMouse {
             try? NokPaths.ensure(folder(h))
             if (try? String(contentsOf: routeFile, encoding: .utf8)) != routeText { try? Data(routeText.utf8).write(to: routeFile, options: .atomic) }
             try? fm.createDirectory(at: folder(h), withIntermediateDirectories: true)
-            if let lib, let want {
-                let dst = folder(h).appendingPathComponent(dylibName)
-                if (try? Hashing.sha256(file: dst)) != want {
-                    try? fm.removeItem(at: dst)
-                    try? fm.copyItem(at: lib, to: dst)
-                }
-            }
+            try? ensureLibrary(contents: h)
             if let tool = NokPaths.bundledResource("screen-size"), let want = try? Hashing.sha256(file: tool) {
                 let dst = folder(h).appendingPathComponent("screen-size")
                 if (try? Hashing.sha256(file: dst)) != want { try? fm.removeItem(at: dst); try? fm.copyItem(at: tool, to: dst) }

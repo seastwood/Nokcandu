@@ -17,6 +17,14 @@
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 
+static char microphone_program[PATH_MAX];
+__attribute__((constructor(101))) static void remember_microphone_program(void)
+{
+    const char *program = nokcandu_microphone_program(*_NSGetArgc(), *_NSGetArgv());
+    if (program && strlcpy(microphone_program, program, sizeof(microphone_program)) >= sizeof(microphone_program))
+        microphone_program[0] = 0; // Unknown identities use the prefix's safe default.
+}
+
 int nokcandu_microphone_blocked(void)
 {
     // Per-program settings can be applied during loader initialization. Do not
@@ -29,9 +37,8 @@ int nokcandu_microphone_blocked(void)
             if (slash) {
                 slash[1] = 0;
                 char directory[PATH_MAX]; strlcpy(directory, file, sizeof(directory));
-                int argc = *_NSGetArgc(); char **argv = *_NSGetArgv();
                 if (strlcat(file, "program-microphones.tsv", sizeof(file)) < sizeof(file)) {
-                    int choice = argc > 1 ? nokcandu_microphone_route(file, argv[1], getenv("SteamAppId")) : -1;
+                    int choice = microphone_program[0] ? nokcandu_microphone_route(file, microphone_program, getenv("SteamAppId")) : -1;
                     if (choice >= 0) return choice;
                 }
                 strlcpy(file, directory, sizeof(file));

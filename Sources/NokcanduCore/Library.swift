@@ -137,6 +137,10 @@ public enum GameLauncher {
 
     /// Reads the launcher's single-instance lock (Logs/game.lock/pid).
     public static func runState(of game: InstalledGame) -> RunState {
+        runState(of: game, processes: nil)
+    }
+
+    static func runState(of game: InstalledGame, processes: [(Int32, String)]?) -> RunState {
         if game.isSteamHost {
             let f = game.logs.appendingPathComponent("steam.lock/pid")
             if let s = try? String(contentsOf: f, encoding: .utf8), let pid = Int32(s.trimmingCharacters(in: .whitespacesAndNewlines)), kill(pid, 0) == 0 {
@@ -151,17 +155,32 @@ public enum GameLauncher {
         }
         // Games started by their launcher (Battle.net, EA app): the game's app hands the game over and exits, so
         // look for the game's own program in the launcher's environment. Also right after Nokcandu restarts.
-        if let pid = launchedGameProcess(game) { return .launcherRunning(pid: pid) }
+        if let pid = launchedGameProcess(game, processes: processes) { return .launcherRunning(pid: pid) }
         return .notRunning
+    }
+
+    /// A library-wide status pass uses one process scan, even when checking many
+    /// games takes longer than the snapshot cache lifetime. Call off the UI thread.
+    public static func runStates(of games: [InstalledGame]) -> [InstalledGame.ID: RunState] {
+        let processes = processSnapshot()
+        let steam = games.contains(where: \.usesSharedSteam) ? SharedSteam.runningGames(processes: processes) : [:]
+        var result: [InstalledGame.ID: RunState] = [:]
+        for game in games {
+            if game.usesSharedSteam {
+                result[game.id] = steam[game.custom?.steamAppID ?? -1].map { .launcherRunning(pid: $0) } ?? .notRunning
+            } else { result[game.id] = runState(of: game, processes: processes) }
+        }
+        return result
     }
 
     /// A running copy of the game that its own launcher script didn't record: a game its launcher (Battle.net,
     /// Steam, EA app) started, a Mac game, or any game after Nokcandu restarted. Found by the game's own program.
-    static func launchedGameProcess(_ game: InstalledGame) -> Int32? {
+    static func launchedGameProcess(_ game: InstalledGame, processes: [(Int32, String)]? = nil) -> Int32? {
+        let rows = processes ?? processSnapshot()
         if let n = game.native {
             // A Mac game: its app's own program.
             let prefix = URL(fileURLWithPath: n.appPath).standardizedFileURL.path + "/Contents/MacOS/"
-            return processSnapshot().first { $0.1.hasPrefix(prefix) }?.0
+            return rows.first { $0.1.hasPrefix(prefix) }?.0
         }
         var match: ((String) -> Bool)?
         if BattleNet.isHost(game) || PCLaunchers.kind(of: game) != nil {
@@ -178,14 +197,14 @@ public enum GameLauncher {
             match = { c in c.contains(tail) }
         }
         guard let match, let host = WineTools.hostContents(for: game) else { return nil }
-        for (pid, command) in processSnapshot() where match(command.lowercased()) {
+        for (pid, command) in rows where match(command.lowercased()) {
             if WineTools.owns(pid: pid, contents: host) { return pid }
         }
         // A private game may hand off from its configured launcher to another
         // executable. Keep tracking that game's own environment, never another
         // game's similarly named process or a shared store client.
         if hasPrivateGamePrefix(game) {
-            for (pid, command) in processSnapshot() where privateGameCommand(command) {
+            for (pid, command) in rows where privateGameCommand(command) {
                 if WineTools.owns(pid: pid, contents: host) { return pid }
             }
         }
@@ -218,7 +237,7 @@ public enum GameLauncher {
         snapshotLock.lock(); defer { snapshotLock.unlock() }
         if Date().timeIntervalSince(snapshot.time) < 1 { return snapshot.rows }
         var rows: [(Int32, String)] = []
-        if let r = try? Shell.run("/bin/ps", ["-axww", "-o", "pid=,command="], timeout: 5), r.ok {
+        if let r = try? Shell.run("/bin/ps", ["-axww", "-o", "pid=,command="], timeout: 15), r.ok {
             for line in r.stdout.split(separator: "\n") {
                 let t = line.drop(while: { $0 == " " })
                 guard let sp = t.firstIndex(of: " "), let pid = Int32(t[..<sp]) else { continue }

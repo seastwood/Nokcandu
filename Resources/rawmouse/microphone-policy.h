@@ -8,6 +8,17 @@ __attribute__((unused)) static int nokcandu_microphone_same_path(const char *a, 
     while (*a && *b) { unsigned char x=*a++, y=*b++; if(x=='/')x='\\';if(y=='/')y='\\';if(tolower(x)!=tolower(y))return 0; }
     return !*a && !*b;
 }
+/* Wine removes its loader from argv and can shift the strings themselves.
+ * Save the program bytes before Wine initialization, never retain an argv pointer. */
+__attribute__((unused)) static const char *nokcandu_microphone_program(int argc, char *const argv[]) {
+    if (!argv || argc < 1) return NULL;
+    const char *first = argv[0];
+    if (first && first[0] && first[0] != '/') {
+        size_t n = strlen(first);
+        if (n >= 4 && !strcasecmp(first + n - 4, ".exe")) return first;
+    }
+    return argc > 1 && argv[1] && argv[1][0] != '-' ? argv[1] : NULL;
+}
 /* A pure read of the generated per-program policy. This must also work before
  * the renderer constructor has copied settings into the process environment. */
 __attribute__((unused)) static int nokcandu_microphone_route(const char *file, const char *program, const char *app_id) {

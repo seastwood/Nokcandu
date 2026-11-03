@@ -97,8 +97,6 @@ final class AppModel: ObservableObject {
         libraryRevision += 1
         games = GameLibrary.scan()
         GameFolders.remember(games)
-        for g in games { AppPrivacy.ensure(g.appURL) }
-        CustomGames.upgradeLaunchers(games)
         let snapshot = games
         // Bring helper files inside the game apps up to date — at startup, when games are added or moved,
         // and otherwise at most every 10 minutes (it hashes and rewrites files, so not on every refresh).
@@ -110,6 +108,8 @@ final class AppModel: ObservableObject {
         }
         maintainedPaths = paths; lastMaintenance = Date()
         Task.detached(priority: .utility) {
+            for game in snapshot { AppPrivacy.ensure(game.appURL) }
+            CustomGames.upgradeLaunchers(snapshot)
             // Icons first: the rest can be slow when a game drive is slow to answer.
             if StoreAccounts.refreshIcons(snapshot) { await MainActor.run { self.games = GameLibrary.scan() } }
             HotCorners.recoverIfStale()
@@ -123,6 +123,24 @@ final class AppModel: ObservableObject {
         }
         if selection == nil || !games.contains(where: { $0.id == selection }) { selection = LibraryOrganizer.mostRecentlyPlayed(games)?.id }
         refreshRunStates()
+    }
+
+    func changeMicrophone(_ on: Bool, for game: InstalledGame) {
+        guard settingHosts.insert(game.id).inserted else { return }
+        Task {
+            defer { settingHosts.remove(game.id) }
+            do {
+                let fresh = try await Task.detached(priority: .userInitiated) {
+                    let current = GameLibrary.inspect(game.appURL) ?? game
+                    try GameMicrophone.set(on, for: current)
+                    return GameLibrary.inspect(game.appURL) ?? current
+                }.value
+                if let index = games.firstIndex(where: { $0.id == fresh.id }) { games[index] = fresh }
+                libraryRevision += 1
+                refreshRunStates()
+                say(on ? "Microphone on. First-time macOS permission may need one close/reopen; later changes work while playing." : "Microphone off.")
+            } catch { fail(error) }
+        }
     }
 
     private var settingHosts = Set<String>()
@@ -181,21 +199,37 @@ final class AppModel: ObservableObject {
         return n
     }
 
+    private var refreshingRunStates = false
     func refreshRunStates() {
-        HotCorners.recoverIfStale()        // a game that switched hot corners off may have crashed
-        var s: [InstalledGame.ID: RunState] = [:]
-        let steamRunning = games.contains(where: \.usesSharedSteam) ? SharedSteam.runningGames() : [:]
-        for g in games {
-            if g.native != nil {
-                // Mac games: running if macOS lists the app as running.
-                let running = NSWorkspace.shared.runningApplications.first { $0.bundleURL?.standardizedFileURL == g.appURL.standardizedFileURL }
-                s[g.id] = running.map { .launcherRunning(pid: $0.processIdentifier) } ?? .notRunning
-            } else if g.usesSharedSteam {
-                s[g.id] = steamRunning[g.custom?.steamAppID ?? -1].map { .launcherRunning(pid: $0) } ?? .notRunning
-            } else {
-                s[g.id] = GameLauncher.runState(of: g)
-            }
+        // A timer must not queue another scan behind a slow one. All filesystem,
+        // process and LaunchServices queries stay off the main actor.
+        guard !refreshingRunStates else { return }
+        refreshingRunStates = true
+        let snapshot = games, revision = libraryRevision
+        Task {
+            let states = await Task.detached(priority: .utility) {
+                HotCorners.recoverIfStale()
+                var states = GameLauncher.runStates(of: snapshot)
+                if snapshot.contains(where: { $0.native != nil }) {
+                    let running = NSWorkspace.shared.runningApplications
+                    let apps = running.compactMap { app -> (URL, Int32)? in
+                        guard let url = app.bundleURL?.standardizedFileURL else { return nil }
+                        return (url, app.processIdentifier)
+                    }
+                    for game in snapshot where game.native != nil {
+                        states[game.id] = apps.first { $0.0 == game.appURL.standardizedFileURL }
+                            .map { .launcherRunning(pid: $0.1) } ?? .notRunning
+                    }
+                }
+                return states
+            }.value
+            refreshingRunStates = false
+            guard revision == libraryRevision else { refreshRunStates(); return }
+            applyRunStates(states)
         }
+    }
+
+    private func applyRunStates(_ s: [InstalledGame.ID: RunState]) {
         if s != runStates {
             // A game with Epic cloud saves just quit: upload its newer saves.
             for g in games where CloudSaves.supported(g) != nil {
@@ -208,7 +242,7 @@ final class AppModel: ObservableObject {
             runStates = s
             // Something just started or stopped: if Steam is closed now, bring its helper up to date
             // (it can only be replaced while Steam isn't running).
-            SharedSteam.refreshHostScriptsIfNeeded()
+            Task.detached(priority: .utility) { SharedSteam.refreshHostScriptsIfNeeded() }
         }
     }
 

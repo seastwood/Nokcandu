@@ -65,6 +65,10 @@ public enum Repair {
             return [RepairStep(title: "Game is running", outcome: .skipped, detail: "Quit the game first, then run Repair.")]
         }
 
+        // Shared children use their client's library, not the shortcut bundle.
+        // Do this before any Steam/Battle.net early return.
+        steps += helperSteps(g)
+
         // 1. Stale single-instance lock (left behind by a crash) and log folder.
         let lock = g.logs.appendingPathComponent("game.lock")
         if fm.fileExists(atPath: lock.path) {
@@ -183,6 +187,18 @@ public enum Repair {
         return steps
     }
 
+    static func helperSteps(_ game: InstalledGame, source: URL? = nil, relatedGames: [InstalledGame]? = nil) -> [RepairStep] {
+        guard let host = WineTools.hostContents(for: game) else { return [] }
+        do {
+            let changed = try RawMouse.ensureLibrary(contents: host, source: source)
+            let related = relatedGames ?? GameLibrary.scan().filter { WineTools.hostContents(for: $0) == host }
+            try GameMicrophone.refreshPolicies(related.contains(where: { $0.id == game.id }) ? related : related + [game])
+            try AppPrivacy.prepare(game, games: related)
+            return [RepairStep(title: "Audio and input helper", outcome: changed ? .fixed : .ok,
+                detail: changed ? "Restored and verified Nokcandu's current shared helper. Running Windows programs load it after they close and reopen; shared Steam/Battle.net games need their client closed too." : "Matches this Nokcandu build; saved per-game microphone policies refreshed.")]
+        } catch { return [RepairStep(title: "Audio and input helper", outcome: .failed, detail: error.localizedDescription)] }
+    }
+
     static func restoreData(_ spec: GameDataSpec) -> [RepairStep] {
         let fm = FileManager.default
         var out: [RepairStep] = []
@@ -220,6 +236,9 @@ public enum Repair {
             let expected = Hashing.sha256(data: Data(CustomGames.launcherScript(for: c).utf8))
             if sha == expected && fm.isExecutableFile(atPath: launcher.path) {
                 return [RepairStep(title: "Launcher", outcome: .ok, detail: "Matches the game's settings.")]
+            }
+            if let sha, sha != c.launcherSHA {
+                return [RepairStep(title: "Launcher", outcome: .skipped, detail: "Manual launcher changes were preserved. The audio/input helper is repaired separately.")]
             }
             do {
                 try CustomGames.save(c, to: g, force: true)

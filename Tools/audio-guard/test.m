@@ -4,6 +4,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <crt_externs.h>
+static int wine_argc=2;
+static char wine_program[128]="C:\\Games\\cs2.exe";
+static char *wine_args[]={"wine",wine_program,NULL};
+static char **wine_argv=wine_args;
+static int *fake_argc(void){return &wine_argc;}
+static char ***fake_argv(void){return &wine_argv;}
+#define _NSGetArgc fake_argc
+#define _NSGetArgv fake_argv
 static int starts, stops, renders;
 static int input_queries, output_queries, input_listeners, output_listeners, capture_enables, output_sets;
 static OSStatus fake_data(AudioObjectID obj, const AudioObjectPropertyAddress *a, UInt32 qs, const void *q, UInt32 *size, void *data) {
@@ -41,7 +50,11 @@ static OSStatus fake_hardware_info(AudioHardwarePropertyID p,UInt32*n,Boolean*w)
 #include "audiofollow.m"
 #define CHECK(x) do{if(!(x)){fprintf(stderr,"Failure at line %d: %s\n",__LINE__,#x);return 1;}}while(0)
 int main(int argc,char**argv){
-    CHECK(argc==2);int stripped=!strcmp(argv[1],"stripped");int off=strcmp(argv[1],"on")!=0;int live=!strcmp(argv[1],"live");
+    CHECK(argc==2);
+    CHECK(!strcmp(microphone_program,"C:\\Games\\cs2.exe"));
+    strcpy(wine_program,"-steam");wine_args[0]=wine_program;wine_args[1]="-novid";
+    CHECK(!strcmp(microphone_program,"C:\\Games\\cs2.exe")); // Own bytes survive Wine mutation.
+int stripped=!strcmp(argv[1],"stripped");int off=strcmp(argv[1],"on")!=0;int live=!strcmp(argv[1],"live");
     if(stripped)unsetenv("NOKCANDU_NO_MICROPHONE");else setenv("NOKCANDU_NO_MICROPHONE",off?"1":"0",1);
     AudioObjectPropertyAddress a={kAudioHardwarePropertyDefaultInputDevice,kAudioObjectPropertyScopeGlobal,kAudioObjectPropertyElementMain};
     AudioDeviceID device=99;UInt32 size=sizeof(device),enabled=1;
