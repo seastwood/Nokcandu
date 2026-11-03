@@ -278,3 +278,7 @@ The Games inventory and game-detail summary must not maintain separate location 
 ### Installer media is not a permanent game drive
 
 Wine may map a mounted native installer image into otherwise unrelated private environments. Never infer safe removal solely from an offline `/Volumes` path. Track only newly created mappings proven to belong to an attached disk image during managed initialization/update, preserve explicit mappings and game/registry references, and clean up unchanged link pairs only in reliably closed environments. Unknown historical mappings require explicit authorization. Record recovery before unlinking; Undo must not overwrite a reused letter or block the UI. [Evidence, migration, protections and limits](investigations/automatic-installer-drives-2026-11-03.md).
+
+### Store completion must update the library independently of store views
+
+Use local installed-game readers in one background discovery path, with a single in-flight scan and a bounded poll interval. Add by stable product/host identity, never by display name; share an idempotent creation transaction with manual Add. Preserve existing settings and intentional removals, distinguish offline folders from uninstalls, and avoid recreating shortcuts on disconnected app libraries. A retained installer should notify the library after its self-check, without requiring window dismissal. [Implementation, evidence, migration and Undo](investigations/automatic-store-game-discovery-2026-11-03.md).

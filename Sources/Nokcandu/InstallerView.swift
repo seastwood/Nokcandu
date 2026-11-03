@@ -26,6 +26,7 @@ final class InstallerModel: ObservableObject {
     }
     @Published var exeCandidates: [CustomGames.ExeCandidate] = []
     private var task: Task<Void, Never>?
+    var onLibraryReady: (() -> Void)?
 
     private func wire(_ ex: InstallExecutor) {
         ex.onChange = { [weak self] in Task { @MainActor in self?.tick += 1 } }
@@ -115,6 +116,7 @@ final class InstallerModel: ObservableObject {
             running = false; cancelling = false; workProgress = nil
             tick += 1
             refreshCandidates()
+            if ex.statuses["check"] == .done || ex.isComplete { onLibraryReady?() }
         }
     }
 

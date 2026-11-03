@@ -702,13 +702,20 @@ public enum SharedSteam {
     /// Creates the small Mac app for an installed Steam game. Graphics are suggested from the game's .exe,
     /// the icon comes from the game's .exe (or Steam's own icon for it).
     @discardableResult
-    public static func addGame(_ game: LibraryGame) throws -> URL {
+    public static func addGame(_ game: LibraryGame, in folder: URL? = nil) throws -> URL {
+        StoreGameDiscovery.creationLock.lock(); defer { StoreGameDiscovery.creationLock.unlock() }
+        let current = folder.map { GameLibrary.scan(folders: [$0]) } ?? GameLibrary.scan()
+        if let existing = addedApp(appID: game.appID, in: current) { return existing.appURL }
         guard isSetUp else { throw NokError("Set up Steam first.") }
         let fm = FileManager.default
         let probe = game.folder.flatMap { mainExecutable(in: $0, gameName: game.name) }
         let pe = probe.flatMap(PEFile.inspectForGraphics)
         let name = CustomGames.safeFolderName(game.name)
-        let target = try CustomGames.freeAppURL(name)
+        let target = try CustomGames.freeAppURL(name, in: folder ?? NokPaths.gameAppsFolder)
+        try NokPaths.ensure(target.deletingLastPathComponent())
+        try fm.createDirectory(at: target, withIntermediateDirectories: false)
+        var completed = false
+        defer { if !completed { try? fm.removeItem(at: target) } }
         let c = target.appendingPathComponent("Contents")
         for d in ["MacOS", "Resources", "SharedSupport/nokcandu", "SharedSupport/Logs"] {
             try fm.createDirectory(at: c.appendingPathComponent(d), withIntermediateDirectories: true)
@@ -736,6 +743,7 @@ public enum SharedSteam {
         try PropertyListSerialization.data(fromPropertyList: plist.merging(AppPrivacy.keys) { a, _ in a }, format: .xml, options: 0).write(to: c.appendingPathComponent("Info.plist"))
         if let game = GameLibrary.inspect(target) { try LauncherEntry.ensure(game) }
         _ = try? Shell.run("/usr/bin/touch", [target.path])
+        completed = true
         return target
     }
 

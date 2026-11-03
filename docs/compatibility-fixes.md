@@ -374,3 +374,7 @@ Storage accounting follow-up: Games now uses the shared location resolver for pr
 ### Automatic installer-media drive ownership
 
 Shared Wine initialization and engine updates record new disk-image mappings; background refresh removes eligible recorded mappings after unmounting and environment shutdown. Explicit Add Drive mappings, configured game discs, referenced letters and unknown historical mappings survive. Remove clears both DOS-device links without deleting their targets. Files & Tools exposes conflict-safe Undo. This applies to private and shared launcher environments, without an ET Legacy-specific rule or profile-exported machine paths. [Evidence, validation and limitations](investigations/automatic-installer-drives-2026-11-03.md).
+
+### Automatic installed-store game entries
+
+Steam, Battle.net, EA and Ubisoft completed local installations are checked in the background while Nokcandu is open; eligible games automatically get their normal managed shortcuts. Existing integrated store/native completion also refreshes the game list. Manual Add and discovery reuse the same product/host entry and preserve edits. Missing/offline/incomplete installations are skipped, deliberate removals stay removed, and manual Add/Trash restore can reintroduce them. This adds library entries without altering a running game's settings or host. Optional external Galaxy/Epic/Amazon client discovery is not implemented by this change. [Scope, tests, removal behavior and Undo](investigations/automatic-store-game-discovery-2026-11-03.md).

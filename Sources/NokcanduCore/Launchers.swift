@@ -155,9 +155,16 @@ public enum PCLaunchers {
 
     /// Creates "<Game>.app" that starts the game through the launcher app.
     @discardableResult
-    public static func addGame(_ game: HostedGame, kind: PCLauncher, host: InstalledGame) throws -> URL {
+    public static func addGame(_ game: HostedGame, kind: PCLauncher, host: InstalledGame, in folder: URL? = nil) throws -> URL {
+        StoreGameDiscovery.creationLock.lock(); defer { StoreGameDiscovery.creationLock.unlock() }
+        let current = folder.map { GameLibrary.scan(folders: [$0]) } ?? GameLibrary.scan()
+        if let existing = addedApp(for: game, kind: kind, host: host, in: current) { return existing.appURL }
         let fm = FileManager.default
-        let target = try CustomGames.freeAppURL(CustomGames.safeFolderName(game.name))
+        let target = try CustomGames.freeAppURL(CustomGames.safeFolderName(game.name), in: folder ?? NokPaths.gameAppsFolder)
+        try NokPaths.ensure(target.deletingLastPathComponent())
+        try fm.createDirectory(at: target, withIntermediateDirectories: false)
+        var completed = false
+        defer { if !completed { try? fm.removeItem(at: target) } }
         let c = target.appendingPathComponent("Contents")
         for d in ["MacOS", "Resources", "SharedSupport/nokcandu", "SharedSupport/Logs"] {
             try fm.createDirectory(at: c.appendingPathComponent(d), withIntermediateDirectories: true)
@@ -189,6 +196,7 @@ public enum PCLaunchers {
         try PropertyListSerialization.data(fromPropertyList: plist.merging(AppPrivacy.keys) { a, _ in a }, format: .xml, options: 0)
             .write(to: c.appendingPathComponent("Info.plist"))
         _ = try? Shell.run("/usr/bin/touch", [target.path])
+        completed = true
         return target
     }
 

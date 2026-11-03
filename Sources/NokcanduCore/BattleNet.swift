@@ -86,10 +86,17 @@ public enum BattleNet {
 
     /// Creates "<Game>.app" next to the other game apps.
     @discardableResult
-    public static func addGame(_ game: BlizzardGame, host: InstalledGame) throws -> URL {
+    public static func addGame(_ game: BlizzardGame, host: InstalledGame, in folder: URL? = nil) throws -> URL {
+        StoreGameDiscovery.creationLock.lock(); defer { StoreGameDiscovery.creationLock.unlock() }
+        let current = folder.map { GameLibrary.scan(folders: [$0]) } ?? GameLibrary.scan()
+        if let existing = addedApp(for: game, host: host, in: current) { return existing.appURL }
         let fm = FileManager.default
         let name = CustomGames.safeFolderName(game.name)
-        let target = try CustomGames.freeAppURL(name)
+        let target = try CustomGames.freeAppURL(name, in: folder ?? NokPaths.gameAppsFolder)
+        try NokPaths.ensure(target.deletingLastPathComponent())
+        try fm.createDirectory(at: target, withIntermediateDirectories: false)
+        var completed = false
+        defer { if !completed { try? fm.removeItem(at: target) } }
         let c = target.appendingPathComponent("Contents")
         for d in ["MacOS", "Resources", "SharedSupport/nokcandu", "SharedSupport/Logs"] {
             try fm.createDirectory(at: c.appendingPathComponent(d), withIntermediateDirectories: true)
@@ -115,6 +122,7 @@ public enum BattleNet {
         try PropertyListSerialization.data(fromPropertyList: plist.merging(AppPrivacy.keys) { a, _ in a }, format: .xml, options: 0)
             .write(to: c.appendingPathComponent("Info.plist"))
         _ = try? Shell.run("/usr/bin/touch", [target.path])
+        completed = true
         return target
     }
 

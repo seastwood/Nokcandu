@@ -135,9 +135,11 @@ public enum GameRemoval {
     @discardableResult
     public static func remove(_ game: InstalledGame, library: [InstalledGame], mode: Mode = .appOnly,
                               expectedFolder: FolderChoice? = nil) throws -> [String] {
-        try remove(game, library: library, mode: mode, expectedFolder: expectedFolder, trash: {
-            try FileManager.default.trashItem(at: $0, resultingItemURL: nil)
-        })
+        try StoreGameDiscovery.preservingRemovalIntent(for: game, library: library, at: StoreGameDiscovery.stateURL) {
+            try remove(game, library: library, mode: mode, expectedFolder: expectedFolder, trash: {
+                try FileManager.default.trashItem(at: $0, resultingItemURL: nil)
+            })
+        }
     }
     static func remove(_ game: InstalledGame, library: [InstalledGame], mode: Mode,
                        expectedFolder: FolderChoice?, trash: (URL) throws -> Void) throws -> [String] {

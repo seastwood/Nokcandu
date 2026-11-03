@@ -12,7 +12,7 @@ struct BlizzardGamesSection: View {
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
                 if games.isEmpty {
-                    Text("No Blizzard games installed yet. Install one in Battle.net, then come back here.")
+                    Text("No Blizzard games installed yet. Finished installations appear in your game list automatically.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 ForEach(games) { bg in
@@ -44,12 +44,15 @@ struct BlizzardGamesSection: View {
     }
 
     func add(_ bg: BattleNet.BlizzardGame) {
-        do {
-            let url = try BattleNet.addGame(bg, host: host)
-            model.refresh()
-            model.selection = url.path
-            model.say("Added \(bg.name). Play starts it through Battle.net.")
-        } catch { model.fail(error) }
+        Task {
+            do {
+                let selectedHost = host
+                let url = try await Task.detached(priority: .userInitiated) { try BattleNet.addGame(bg, host: selectedHost) }.value
+                model.refresh()
+                model.selection = url.path
+                model.say("Added \(bg.name). Play starts it through Battle.net.")
+            } catch { model.fail(error) }
+        }
     }
 }
 
@@ -96,13 +99,13 @@ struct SteamGamesSection: View {
     @State private var gpu = SharedSteam.gpuDrawing
 
     /// Steam's own runtimes and redistributables aren't games.
-    static let notGames: Set<Int> = [228980, 1070560, 1391110, 1628350, 1493710]
+    static let notGames: Set<Int> = [7, 228980, 1070560, 1391110, 1628350, 1493710]
 
     var body: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
                 if games.isEmpty {
-                    Text("No games installed in Steam yet. Install one in Steam, then come back here.")
+                    Text("No games installed in Steam yet. Finished installations appear in your game list automatically.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 ForEach(games) { sg in
@@ -319,7 +322,8 @@ struct LauncherGamesSection: View {
             do {
                 if kind == .ea, let folder = BattleNet.unixPath(hg.installLocation, prefix: host.prefix),
                    PhysXRuntime.required(in: folder) { try await PhysXRuntime.install(for: host) }
-                let url = try PCLaunchers.addGame(hg, kind: kind, host: host)
+                let selectedHost = host, selectedKind = kind
+                let url = try await Task.detached(priority: .userInitiated) { try PCLaunchers.addGame(hg, kind: selectedKind, host: selectedHost) }.value
                 model.refresh(); model.selection = url.path
                 model.say("Added \(hg.name). Play uses its own game settings through \(kind.title).")
             } catch { model.fail(error) }

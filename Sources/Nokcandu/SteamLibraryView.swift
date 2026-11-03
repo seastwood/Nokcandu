@@ -327,13 +327,13 @@ struct SteamLibraryView: View {
             }
             do {
                 if g.installed {
-                    let url = try SharedSteam.addGame(g)
+                    let url = try await Task.detached(priority: .userInitiated) { try SharedSteam.addGame(g) }.value
                     app.refresh()
                     app.say("\(g.name) added. Open it from Nokcandu or \(url.deletingLastPathComponent().lastPathComponent).")
                 } else {
                     try SharedSteam.install(appID: g.appID)
                     m.waiting[g.appID] = Date()
-                    app.say("Steam is opening the install for \(g.name). When it finishes, press Add to Nokcandu here.")
+                    app.say("Steam is opening the install for \(g.name). It will appear in your game list automatically when installation finishes.")
                 }
                 m.refresh()
             } catch { app.fail(error) }

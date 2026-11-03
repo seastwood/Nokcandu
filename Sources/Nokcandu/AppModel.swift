@@ -67,10 +67,14 @@ final class AppModel: ObservableObject {
     private var timer: Timer?
     private var maintainedPaths: Set<String> = []
     private var lastMaintenance = Date.distantPast
+    private var discoveringStoreGames = false
+    private var lastStoreDiscovery = Date.distantPast
+    private var lastStoreDiscoveryErrors: [String] = []
 
     init() {
         SharedSteam.refreshHostScriptsIfNeeded()
         refresh()
+        installer.onLibraryReady = { [weak self] in self?.refresh() }
         interruptedDownloads = StoreJobs.all()
         if Date().timeIntervalSince(StoreUpdates.cached()?.saved ?? .distantPast) > 6 * 3600 {
             Task { await checkStoreUpdates() }
@@ -82,7 +86,10 @@ final class AppModel: ObservableObject {
         if Updates.isStale { Task { await checkForUpdates(quiet: true) } }
         Task.detached(priority: .utility) { await AntiCheat.refreshIfStale() }
         timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refreshRunStates() }
+            Task { @MainActor in
+                self?.refreshRunStates()
+                self?.refreshStoreGames()
+            }
         }
         // A drive plugged in or out: games on it become playable or show "Connect … to play" right away.
         let ws = NSWorkspace.shared.notificationCenter
@@ -100,6 +107,7 @@ final class AppModel: ObservableObject {
         games = GameLibrary.scan()
         GameFolders.remember(games)
         let snapshot = games
+        refreshStoreGames(force: true)
         Task.detached(priority: .utility) { AutomaticDriveMappings.reconcile(games: snapshot) }
         // Bring helper files inside the game apps up to date — at startup, when games are added or moved,
         // and otherwise at most every 10 minutes (it hashes and rewrites files, so not on every refresh).
@@ -126,6 +134,27 @@ final class AppModel: ObservableObject {
         }
         if selection == nil || !games.contains(where: { $0.id == selection }) { selection = LibraryOrganizer.mostRecentlyPlayed(games)?.id }
         refreshRunStates()
+    }
+
+    /// Installation readers and shortcut generation never block the library UI.
+    private func refreshStoreGames(force: Bool = false) {
+        guard !discoveringStoreGames, force || Date().timeIntervalSince(lastStoreDiscovery) >= 15 else { return }
+        discoveringStoreGames = true
+        lastStoreDiscovery = Date()
+        Task {
+            let result = await Task.detached(priority: .utility) { StoreGameDiscovery.refresh() }.value
+            // Keep the guard set through refresh(), which also requests discovery.
+            if !result.added.isEmpty {
+                await StorageInventory.shared.invalidate()
+                refresh()
+                say("Added \(result.added.count) installed store game\(result.added.count == 1 ? "" : "s") to your game list.")
+            }
+            if !result.errors.isEmpty, result.errors != lastStoreDiscoveryErrors {
+                fail(NokError(result.errors.joined(separator: "\n")))
+            }
+            lastStoreDiscoveryErrors = result.errors
+            discoveringStoreGames = false
+        }
     }
 
     func changeMicrophone(_ on: Bool, for game: InstalledGame) {

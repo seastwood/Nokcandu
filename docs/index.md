@@ -56,3 +56,5 @@ Keep credentials, account identifiers, raw session logs, copyrighted game/runtim
 - [Storage game-location accounting across drives and launchers](investigations/storage-game-location-accounting-2026-11-03.md)
 
 - [Automatic installer-media drives](investigations/automatic-installer-drives-2026-11-03.md) — stale image mappings, guarded shared cleanup, existing-installation authorization and Undo.
+
+- [Automatic store-game discovery](investigations/automatic-store-game-discovery-2026-11-03.md) — background installation detection, idempotent shortcuts, preserved settings/removal choices and installer completion callbacks.
