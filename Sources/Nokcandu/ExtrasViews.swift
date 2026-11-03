@@ -142,13 +142,7 @@ struct PerformanceSection: View {
                     }.labelsHidden().frame(width: settingControlWidth)
                 }
             }
-            if GameMicrophone.supported(game) {
-                SettingToggle(title: "Microphone",
-                              info: "Lets this game or launcher use your Mac's microphone for voice chat. Off blocks microphone discovery and capture setup while keeping sound output working. Takes effect after fully closing and reopening it. Shared launchers have their own setting, separate from each game.",
-                              isOn: Binding(get: { GameMicrophone.isOn(game) }, set: { on in
-                                  model.changeSetting(for: game, title: "Microphone", edit: { current in try GameMicrophone.set(on, for: current) })
-                              }))
-            }
+            if GameMicrophone.supported(game) { MicrophoneSettingRow(game: game) }
         }
         .onAppear { s = Performance.settings(for: game); buffer = game.hosted == nil ? AudioBuffer.current(for: game) : nil; loaded = true }
     }
@@ -903,5 +897,19 @@ struct ResizableWindowSection: View {
             }
             working = false
         }
+    }
+}
+
+
+/// Per-game consent control, also used for games whose performance settings live in a shared client.
+struct MicrophoneSettingRow: View {
+    @EnvironmentObject var model: AppModel
+    let game: InstalledGame
+    var body: some View {
+        SettingToggle(title: "Microphone",
+                              info: "Off blocks this game's microphone access while keeping sound output working. On lets macOS ask for permission when needed. Fully close and reopen the game after changing it. For games in a shared launcher, macOS lists the launcher in Privacy & Security; each game's switch still controls its own microphone access. Shared launchers also have their own switch.",
+                              isOn: Binding(get: { GameMicrophone.isOn(game) }, set: { on in
+                                  model.changeSetting(for: game, title: "Microphone", edit: { current in try GameMicrophone.set(on, for: current) })
+                              }))
     }
 }

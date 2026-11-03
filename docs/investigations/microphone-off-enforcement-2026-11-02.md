@@ -1,5 +1,7 @@
 # Microphone-off enforcement — 2026-11-02
 
+**Superseded prompt guarantee:** Zero Hour subsequently displayed a real microphone request with its switch Off. Endpoint/capture blocking remains required but is insufficient to prevent all playback-time prompts. See [the confirmed follow-up and metadata correction](microphone-playback-permission-2026-11-02.md). The earlier Warcraft observation below is a bounded historical result. The follow-up now includes verified On → Off → On live capture, with only level statistics retained.
+
 ## Report and confirmed gaps
 
 The user reported microphone prompts despite the per-game switch being off,

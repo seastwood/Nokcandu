@@ -11,6 +11,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Apple's HAL audio unit still calls the legacy device APIs internally. Those
+// functions call CoreAudio's own implementation, bypassing dyld interposition
+// of AudioObjectGetPropertyData. Hide inputs at both public API boundaries.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
 int nokcandu_microphone_blocked(void)
 {
     // Per-program settings can be applied during loader initialization. Do not
@@ -84,11 +90,60 @@ static OSStatus my_GetPropertyData(AudioObjectID obj, const AudioObjectPropertyA
     return AudioObjectGetPropertyData(obj, a, qs, q, size, data);
 }
 
+static AudioObjectPropertyAddress legacy_device_address(UInt32 channel, Boolean input, AudioDevicePropertyID property)
+{
+    return (AudioObjectPropertyAddress){property,
+        input ? kAudioObjectPropertyScopeInput : kAudioObjectPropertyScopeOutput, channel};
+}
+
+static OSStatus my_AudioDeviceGetProperty(AudioDeviceID device, UInt32 channel, Boolean input,
+                                         AudioDevicePropertyID property, UInt32 *size, void *data)
+{
+    AudioObjectPropertyAddress a = legacy_device_address(channel, input, property);
+    if (is_input_query(device, &a)) return my_GetPropertyData(device, &a, 0, NULL, size, data);
+    return AudioDeviceGetProperty(device, channel, input, property, size, data);
+}
+
+static OSStatus my_AudioDeviceGetPropertyInfo(AudioDeviceID device, UInt32 channel, Boolean input,
+                                             AudioDevicePropertyID property, UInt32 *size, Boolean *writable)
+{
+    AudioObjectPropertyAddress a = legacy_device_address(channel, input, property);
+    if (is_input_query(device, &a)) {
+        if (writable) *writable = false;
+        UInt32 ignored;
+        return my_GetPropertyDataSize(device, &a, 0, NULL, size ? size : &ignored);
+    }
+    return AudioDeviceGetPropertyInfo(device, channel, input, property, size, writable);
+}
+
+static OSStatus my_AudioHardwareGetProperty(AudioHardwarePropertyID property, UInt32 *size, void *data)
+{
+    AudioObjectPropertyAddress a = {property, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+    if (is_input_query(kAudioObjectSystemObject, &a)) return my_GetPropertyData(kAudioObjectSystemObject, &a, 0, NULL, size, data);
+    return AudioHardwareGetProperty(property, size, data);
+}
+
+static OSStatus my_AudioHardwareGetPropertyInfo(AudioHardwarePropertyID property, UInt32 *size, Boolean *writable)
+{
+    AudioObjectPropertyAddress a = {property, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+    if (is_input_query(kAudioObjectSystemObject, &a)) {
+        if (writable) *writable = false;
+        UInt32 ignored;
+        return my_GetPropertyDataSize(kAudioObjectSystemObject, &a, 0, NULL, size ? size : &ignored);
+    }
+    return AudioHardwareGetPropertyInfo(property, size, writable);
+}
+
 #ifndef NOKCANDU_AUDIO_TEST
 __attribute__((used)) static const struct { const void *replacement, *original; } mic_interpose[]
     __attribute__((section("__DATA,__interpose"))) = {
     { (const void *)my_GetPropertyDataSize, (const void *)AudioObjectGetPropertyDataSize },
     { (const void *)my_GetPropertyData, (const void *)AudioObjectGetPropertyData },
+    { (const void *)my_AudioDeviceGetProperty, (const void *)AudioDeviceGetProperty },
+    { (const void *)my_AudioDeviceGetPropertyInfo, (const void *)AudioDeviceGetPropertyInfo },
+    { (const void *)my_AudioHardwareGetProperty, (const void *)AudioHardwareGetProperty },
+    { (const void *)my_AudioHardwareGetPropertyInfo, (const void *)AudioHardwareGetPropertyInfo },
 };
 
 #endif
+#pragma clang diagnostic pop

@@ -55,7 +55,7 @@ public enum GameApp {
     /// "wine" stays as a link to it for anything that looks for that name.
     static func executableName(_ name: String) -> String { safeName(name) == "wine" ? "wine-game" : safeName(name) }
 
-    static func plist(name: String, icon: Bool, game: Bool = true) -> [String: Any] {
+    static func plist(name: String, icon: Bool, game: Bool = true, microphone: Bool = false) -> [String: Any] {
         var p: [String: Any] = [
             "CFBundleExecutable": executableName(name),
             "CFBundleIdentifier": bundleID(name),
@@ -67,8 +67,8 @@ public enum GameApp {
             // Start in the background like bare Wine does; Wine brings a process forward when it shows a window
             // (otherwise every helper process — Steam's web helpers, Wine's services — would get a Dock icon).
             "LSUIElement": true,
-            "NSMicrophoneUsageDescription": "\(name) wants to use the microphone (for example for voice chat).",
         ]
+        if microphone { p[AppPrivacy.microphoneKey] = "\(name) wants to use the microphone (for example for voice chat)." }
         if icon { p["CFBundleIconFile"] = "game" }
         // Games only — launchers (Steam, Battle.net) and their many helper processes aren't games.
         if game { p["LSApplicationCategoryType"] = "public.app-category.games"; p["GCSupportsGameMode"] = true }
@@ -78,8 +78,8 @@ public enum GameApp {
 
     /// One wrapper to create: its name, and the app whose icon it shows.
     public struct Wrapper: Hashable {
-        public var name: String; public var iconFrom: URL?; public var isGame = true
-        public init(name: String, iconFrom: URL?, isGame: Bool = true) { self.name = name; self.iconFrom = iconFrom; self.isGame = isGame }
+        public var name: String; public var iconFrom: URL?; public var isGame = true; public var microphone = false
+        public init(name: String, iconFrom: URL?, isGame: Bool = true, microphone: Bool = false) { self.name = name; self.iconFrom = iconFrom; self.isGame = isGame; self.microphone = microphone }
     }
 
     /// Creates or updates an app's wrappers (one per program name — "Steam", "Counter-Strike 2"…) and the
@@ -102,7 +102,7 @@ public enum GameApp {
         var seen = Set<String>(), keep = Set<String>()
         for w in wrappers where seen.insert(safeName(w.name)).inserted {
             keep.insert(safeName(w.name) + ".app")
-            ensureOne(dir: dir, wine: loaderSource, name: w.name, iconFrom: w.iconFrom, isGame: w.isGame, realLoader: modern)
+            ensureOne(dir: dir, wine: loaderSource, name: w.name, iconFrom: w.iconFrom, isGame: w.isGame, realLoader: modern, microphone: w.microphone)
         }
         for u in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
             where u.pathExtension == "app" && !keep.contains(u.lastPathComponent) { remove(u) }
@@ -114,7 +114,7 @@ public enum GameApp {
         if (try? String(contentsOf: list, encoding: .utf8)) != text { try? Data(text.utf8).write(to: list, options: .atomic) }
     }
 
-    static func ensureOne(dir: URL, wine: URL, name: String, iconFrom: URL?, isGame: Bool, realLoader: Bool = false) {
+    static func ensureOne(dir: URL, wine: URL, name: String, iconFrom: URL?, isGame: Bool, realLoader: Bool = false, microphone: Bool = false) {
         let fm = FileManager.default
         let app = dir.appendingPathComponent(safeName(name) + ".app", isDirectory: true)
         let c = app.appendingPathComponent("Contents", isDirectory: true)
@@ -170,7 +170,7 @@ public enum GameApp {
             }
         }
         let plistURL = c.appendingPathComponent("Info.plist")
-        if let data = try? PropertyListSerialization.data(fromPropertyList: plist(name: name, icon: hasIcon, game: isGame), format: .xml, options: 0),
+        if let data = try? PropertyListSerialization.data(fromPropertyList: plist(name: name, icon: hasIcon, game: isGame, microphone: microphone), format: .xml, options: 0),
            (try? Data(contentsOf: plistURL)) != data {
             try? data.write(to: plistURL, options: .atomic); changed = true
         }

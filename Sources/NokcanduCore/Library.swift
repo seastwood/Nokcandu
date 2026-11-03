@@ -232,6 +232,7 @@ public enum GameLauncher {
     /// Opens the game's own app through LaunchServices so it behaves exactly like a Finder double-click.
     /// `arguments` are passed through to the launcher (e.g. ["--windowed"]).
     public static func launch(_ game: InstalledGame, arguments: [String] = []) throws {
+        try AppPrivacy.prepare(game)
         if game.hosted != nil { PCLaunchers.refreshLaunchers([game]) }
         HelperPatch.refresh([game])
         try LauncherEntry.ensure(game)

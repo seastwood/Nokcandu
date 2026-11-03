@@ -14,6 +14,8 @@ final class RecipeSettingsTests: XCTestCase {
         let wine = app.appendingPathComponent("Contents/SharedSupport/wine/bin/wine")
         try "#!/bin/bash\nexit 0\n".write(to: wine, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: wine.path)
+        let info: [String: Any] = ["CFBundleExecutable": "generals-launcher", "CFBundleIdentifier": "local.nokcandu.recipe-test." + UUID().uuidString, "CFBundleName": "Recipe Game", "NokcanduRecipe": RecipeCatalog.zeroHour.id]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: app.appendingPathComponent("Contents/Info.plist"))
         return InstalledGame(appURL: app, name: "Recipe Game", recipe: RecipeCatalog.zeroHour, executableName: "generals-launcher")
     }
     func testRecipeMovesDedicatedContentAndKeepsWindowsPathAndCanMoveBack() throws {

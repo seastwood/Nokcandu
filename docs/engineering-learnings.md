@@ -221,6 +221,8 @@ fresh tree and the GitHub result. See [the CI investigation](investigations/ci-c
 
 ### Microphone off must cover setup and capture, not just enumeration
 
+**Follow-up correction:** Zero Hour proved the earlier prompt guarantee incomplete. Off also requires omitting the macOS microphone declaration, and the guard must cover Core Audio’s legacy device APIs. On preserves normal eligibility and input forwarding. Shared-client consent follows the responsible parent; do not mistake an enabled parent’s capability for permission to capture in an Off child. See [confirmed evidence, failed alternatives, migration and Undo](investigations/microphone-playback-permission-2026-11-02.md).
+
 The microphone flag was exported after an earlier Wine setup call, audio-follow
 registered input listeners regardless of the switch, and cached endpoints could
 reach capture EnableIO. Shared Steam also omitted its per-game microphone choice.

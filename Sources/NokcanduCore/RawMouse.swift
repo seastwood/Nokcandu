@@ -83,9 +83,9 @@ public enum RawMouse {
             else if appNames[h] == nil, !g.usesSharedSteam, g.battleNet == nil, g.hosted == nil { appNames[h] = LibraryOrganizer.canonicalName(g) }
             if g.isSteamHost || BattleNet.isHost(g) || (!g.usesSharedSteam && g.battleNet == nil && g.hosted == nil) {
                 wrappers[h, default: []].insert(GameApp.Wrapper(name: appNames[h] ?? g.name, iconFrom: g.contents,
-                                                               isGame: !g.isSteamHost && !BattleNet.isHost(g) && PCLaunchers.kind(of: g) == nil), at: 0)
+                                                               isGame: !g.isSteamHost && !BattleNet.isHost(g) && PCLaunchers.kind(of: g) == nil, microphone: GameMicrophone.isOn(g)), at: 0)
             } else {
-                wrappers[h, default: []].append(GameApp.Wrapper(name: g.battleNet?.name ?? g.name, iconFrom: g.contents))
+                wrappers[h, default: []].append(GameApp.Wrapper(name: g.battleNet?.name ?? g.name, iconFrom: g.contents, microphone: GameMicrophone.isOn(g)))
             }
             if g.isSteamHost {
                 for e in ["steam.exe", "steamwebhelper.exe", "steamerrorreporter.exe", "steamservice.exe"] { m[e] = "Steam" }

@@ -120,6 +120,9 @@ struct GameDetailView: View {
                 if game.custom != nil || game.isSteamHost || game.hosted?.exe != nil || RecipeSettings.supports(game) {
                     PerformanceSection(game: game).id("perf-\(game.id)")
                 }
+                if game.battleNet != nil {
+                    SettingsSection(title: "Microphone") { MicrophoneSettingRow(game: game) }
+                }
                 if WineTools.hostContents(for: game) != nil, game.hosted == nil || game.hosted?.exe != nil {
                     MouseSection(game: game).id("mouse-\(game.id)")
                 }

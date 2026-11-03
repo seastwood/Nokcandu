@@ -16,4 +16,4 @@ jobs:
       - name: Build app
         run: ./build-app.sh
       - name: Check shell scripts
-        run: bash -n build-app.sh make-dmg.sh dev-watch-agent.sh Resources/borderless/build.sh Resources/cabextract/build.sh Engine/wpcap/build.sh Engine/wpcap/package-source.sh Tools/native-ipx/packet-access.sh Tools/ipx-probe/win98/build.sh
+        run: bash -n build-app.sh make-dmg.sh dev-watch-agent.sh Resources/borderless/build.sh Resources/cabextract/build.sh Engine/wpcap/build.sh Engine/wpcap/package-source.sh Tools/native-ipx/packet-access.sh Tools/ipx-probe/win98/build.sh Tools/audio-guard/build-permission-probe.sh

@@ -113,5 +113,18 @@ public enum GameMicrophone {
             settings.microphone = on
             try RecipeSettings.save(settings, for: g)
         }
+        _ = try AppPrivacy.apply(g.appURL, microphone: on)
+        let fresh = GameLibrary.inspect(g.appURL) ?? g
+        if let host = WineTools.hostContents(for: fresh) {
+            // Finder/Dock launches must see the new saved policy immediately,
+            // rather than waiting for Play or the periodic library maintenance.
+            var related = [fresh]
+            if host != fresh.contents {
+                related += GameLibrary.scan().filter { $0.id != fresh.id && WineTools.hostContents(for: $0) == host }
+                if let parent = GameLibrary.inspect(host.deletingLastPathComponent()), !related.contains(where: { $0.id == parent.id }) { related.append(parent) }
+            }
+            try refreshPolicies(related)
+            if on { try AppPrivacy.prepare(fresh, games: related) }
+        }
     }
 }

@@ -42,3 +42,5 @@ Keep credentials, account identifiers, raw session logs, copyrighted game/runtim
 
 - [Microphone-off enforcement](investigations/microphone-off-enforcement-2026-11-02.md) — shared bootstrap policy, capture boundary, launcher separation and tests without recording audio.
 - [Recipe storage and user settings](investigations/recipe-storage-settings-2026-11-02.md) — recipe content moves, editable defaults, launcher preservation, profiles and Undo.
+
+- [Microphone permission during playback](investigations/microphone-playback-permission-2026-11-02.md) — fresh-identity reproduction, Off/On eligibility, legacy Core Audio queries, shared clients and Undo.
