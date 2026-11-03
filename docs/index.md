@@ -64,3 +64,5 @@ Keep credentials, account identifiers, raw session logs, copyrighted game/runtim
 - [Save settings without forced restarts](investigations/deferred-game-settings-2026-11-03.md) — durable pending choices, idle-versus-active process evidence, direct app-icon preflight and safe retry/discard.
 
 - [Nokcandu app-version rollback](investigations/app-version-rollback-2026-11-03.md) — verified local/remote app replacement, independent recovery, preserved user data and failure safety.
+
+- [Release 0.12.3 verification](investigations/release-0.12.3-2026-11-03.md) — release gate evidence, packaged components, migration and recovery scope.
