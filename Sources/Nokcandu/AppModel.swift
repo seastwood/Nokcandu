@@ -462,6 +462,7 @@ final class AppModel: ObservableObject {
         Task {
             let r = await Task.detached(priority: .userInitiated) { Result { try GameMover.move(g, to: folder) } }.value
             moving.remove(g.id)
+            await StorageInventory.shared.invalidate()
             switch r {
             case .success(let newURL):
                 refresh()
@@ -481,6 +482,7 @@ final class AppModel: ObservableObject {
         Task {
             let r = await Task.detached(priority: .userInitiated) { Result { try GameMover.moveFiles(g, to: folder) } }.value
             moving.remove(g.id)
+            await StorageInventory.shared.invalidate()
             switch r {
             case .success(let dest):
                 say(folder == nil ? "\(g.name)'s files are back on this Mac." : "\(g.name)'s files are now on \(GameFolders.volumeName(dest)). The app and Wine runtime stay on this Mac; keep the drive connected to play.")

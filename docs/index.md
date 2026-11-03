@@ -52,3 +52,5 @@ Keep credentials, account identifiers, raw session logs, copyrighted game/runtim
 - [Shared helper activation, status failure and Repair hardening](investigations/helper-activation-repair-hardening-2026-11-02.md)
 
 - [Storage settings performance and on-demand measurements](investigations/storage-browser-performance-2026-11-03.md)
+
+- [Storage game-location accounting across drives and launchers](investigations/storage-game-location-accounting-2026-11-03.md)

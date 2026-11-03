@@ -193,7 +193,7 @@ struct StorageView: View {
     @State private var cleaning = false
     @State private var search = ""
     @State private var refresh = 0
-    struct Request: Equatable { var section: StorageInventory.Section; var games: [InstalledGame]; var refresh: Int }
+    struct Request: Equatable { var section: StorageInventory.Section; var games: [InstalledGame]; var refresh: Int; var libraryRevision: Int }
 
     var items: [Storage.Item] {
         guard displayedSection == section else { return [] }
@@ -293,7 +293,7 @@ struct StorageView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .frame(minWidth: 660, minHeight: 480)
-        .task(id: Request(section: section, games: model.games, refresh: refresh)) {
+        .task(id: Request(section: section, games: model.games, refresh: refresh, libraryRevision: model.libraryRevision)) {
             loading = true
             let selected = section, games = model.games
             let result = await StorageInventory.shared.load(selected, library: games)
@@ -309,7 +309,7 @@ struct StorageView: View {
                 if !item.detail.isEmpty { Text(item.detail).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
             }
             Spacer()
-            Text(Storage.format(item.bytes)).monospacedDigit().foregroundStyle(.secondary)
+            Text((item.incomplete ? "At least " : "") + Storage.format(item.bytes)).monospacedDigit().foregroundStyle(.secondary)
             if let game = model.games.first(where: { $0.appURL == item.url }),
                game.native == nil, !game.isSteamHost, !game.usesSharedSteam,
                game.battleNet == nil, game.hosted == nil, !BattleNet.isHost(game), PCLaunchers.kind(of: game) == nil {
@@ -737,7 +737,7 @@ struct GameFoldersBox: View {
         var url: URL; var title: String; var detail: String
         var available: Bool; var standard: Bool; var selected: Bool
     }
-    struct Request: Equatable { var games: [InstalledGame]; var refresh: Int; var revision: Int }
+    struct Request: Equatable { var games: [InstalledGame]; var refresh: Int; var revision: Int; var libraryRevision: Int }
     @State private var folders: [Folder] = []
     @State private var revision = 0
     @State private var error: String?
@@ -772,7 +772,7 @@ struct GameFoldersBox: View {
                 }
             }.padding(6)
         } label: { Label("Game Folders", systemImage: "folder").font(.headline) }
-        .task(id: Request(games: model.games, refresh: refreshToken, revision: revision)) {
+        .task(id: Request(games: model.games, refresh: refreshToken, revision: revision, libraryRevision: model.libraryRevision)) {
             let games = model.games
             let result = await Task.detached(priority: .utility) {
                 let installTo = GameFolders.installFolder.standardizedFileURL

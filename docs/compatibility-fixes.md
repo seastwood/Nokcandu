@@ -368,3 +368,5 @@ Nokcandu distinguishes installed helper updates from code loaded by a running Wi
 ### Storage browsing in Settings
 
 All libraries use the same on-demand Storage sections and virtualized lists. Recent estimates are cached only for the current Nokcandu session; Refresh remeasures. Folder-capacity queries and cleanup run in the background, while cleanup rechecks cached leftovers before Trash. This changes presentation and scan scheduling, not game compatibility settings, storage locations or APFS accounting. [Evidence, migration and Undo](investigations/storage-browser-performance-2026-11-03.md).
+
+Storage accounting follow-up: Games now uses the shared location resolver for private, Steam, Battle.net, EA, Ubisoft and known native installations. Each game includes its separately stored content with drive/size details; shared launcher rows exclude content represented by their game rows. Missing content is explicitly incomplete. No game files are moved or modified. [Tests, bounded linked-folder discovery and Undo](investigations/storage-game-location-accounting-2026-11-03.md).

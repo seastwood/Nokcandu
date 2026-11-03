@@ -8,6 +8,7 @@ public enum Storage {
         public var url: URL
         public var bytes: Int64
         public var detail: String
+        public var incomplete = false
     }
 
     public struct VolumeInfo: Identifiable, Hashable {
@@ -79,14 +80,18 @@ public enum Storage {
         }
         public var parts: [Part]
         public var appOnly = false
+        public var unavailableGameFilesDrive: String? = nil
         public var bytes: Int64 { parts.compactMap(\.bytes).reduce(0, +) }
-        public var complete: Bool { parts.allSatisfy { $0.bytes != nil } }
+        public var complete: Bool { parts.allSatisfy { $0.bytes != nil } && unavailableGameFilesDrive == nil }
         public var summary: String {
-            let drives = Set(parts.map(\.drive))
+            var drives = Set(parts.map(\.drive))
+            if let drive = unavailableGameFilesDrive, drive != "an unknown drive" { drives.insert(drive) }
             return (appOnly ? "App: " : "") + (complete ? "" : "At least ") + Storage.format(bytes) + " · " + (drives.count == 1 ? (drives.first ?? "Unknown drive") : "\(drives.count) drives")
         }
         public var detail: String {
-            parts.map { "\($0.title): " + ($0.bytes.map(Storage.format) ?? "drive not connected") + " on \($0.drive)" }.joined(separator: " · ")
+            var details = parts.map { "\($0.title): " + ($0.bytes.map(Storage.format) ?? "unavailable") + " on \($0.drive)" }
+            if let drive = unavailableGameFilesDrive { details.append("Game files: unavailable on " + drive) }
+            return details.joined(separator: " · ")
         }
     }
     public static func driveName(_ url: URL) -> String {
@@ -95,20 +100,38 @@ public enum Storage {
     }
     /// App/runtime plus separately stored game files and known Documents data. Never add a folder
     /// already inside another counted folder, and never follow arbitrary links while sizing the app.
-    public static func usage(for g: InstalledGame) -> GameUsage {
-        let app = g.native?.installFolder.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath() } ?? g.appURL.resolvingSymlinksInPath()
-        // Launchers: games installed in the launcher's own library are listed separately, not as its size.
-        let hosted = launcherGames(in: g).filter { $0.1.path.hasPrefix(app.path + "/") }
+    public static func usage(for g: InstalledGame, includingLauncherGames: Bool = true) -> GameUsage {
+        let originalApp = g.appURL.resolvingSymlinksInPath()
+        let nativeFolder = g.native?.installFolder.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath() }
+        let app = nativeFolder.flatMap { originalApp.path.hasPrefix($0.path + "/") ? $0 : nil } ?? originalApp
+        // Launcher summaries may include games across several drives. The Settings
+        // inventory lists those games individually, so its launcher row excludes them.
+        var hosted: [(String, URL)] = []
+        for (name, folder) in launcherGames(in: g).map({ ($0.0, $0.1.resolvingSymlinksInPath()) }).sorted(by: { $0.1.path.count < $1.1.path.count }) {
+            guard folder != app, !app.path.hasPrefix(folder.path + "/"),
+                  !hosted.contains(where: { folder == $0.1 || folder.path.hasPrefix($0.1.path + "/") }) else { continue }
+            hosted.append((name, folder))
+        }
         if !hosted.isEmpty {
-            var parts = [GameUsage.Part(title: g.isSteamHost ? "Steam" : "Launcher", url: app, bytes: allocatedSize(app, excluding: hosted.map(\.1)), drive: driveName(app))]
-            parts += hosted.map { name, url in GameUsage.Part(title: name, url: url, bytes: FileManager.default.fileExists(atPath: url.path) ? allocatedSize(url) : nil, drive: driveName(url)) }
+            var parts = [GameUsage.Part(title: g.isSteamHost ? "Steam" : "Launcher", url: app, bytes: FileManager.default.fileExists(atPath: app.path) ? allocatedSize(app, excluding: hosted.filter { $0.1.path.hasPrefix(app.path + "/") }.map(\.1)) : nil, drive: driveName(app))]
+            if includingLauncherGames {
+                parts += hosted.map { name, url in GameUsage.Part(title: name, url: url, bytes: FileManager.default.fileExists(atPath: url.path) ? allocatedSize(url) : nil, drive: driveName(url)) }
+            }
             return GameUsage(parts: parts)
         }
-        var roots: [(String, URL)] = [("App", app)]
+        var roots: [(String, URL)] = [(app != originalApp ? "App & game files" : "App", app)]
         let launcherFolder = (g.usesSharedSteam || g.battleNet != nil || g.hosted != nil) ? LauncherInstallation.location(for: g)?.folder : nil
-        if let data = launcherFolder ?? GameMover.externalFiles(g) ?? WineTools.places(for: g).first(where: { $0.title == "Game folder" })?.url {
-            let resolved = data.resolvingSymlinksInPath()
-            if !resolved.path.hasPrefix(app.path + "/"), resolved != app { roots.append(("Game files", resolved)) }
+        var candidates = [nativeFolder, launcherFolder, GameMover.externalFiles(g),
+                          WineTools.places(for: g).first(where: { $0.title == "Game folder" })?.url].compactMap { $0 }
+        if g.native == nil, !g.usesSharedSteam, g.battleNet == nil, g.hosted == nil,
+           !g.isSteamHost, !BattleNet.isHost(g), PCLaunchers.kind(of: g) == nil {
+            candidates += linkedGameFolders(in: g)
+        }
+        for data in candidates.map({ $0.resolvingSymlinksInPath() }).sorted(by: { $0.path.count < $1.path.count }) {
+            if !roots.contains(where: { data == $0.1 || data.path.hasPrefix($0.1.path + "/") }),
+               !app.path.hasPrefix(data.path + "/") {
+                roots.append(("Game files", data))
+            }
         }
         if let data = GameDataSpec.forGame(g)?.folder {
             let resolved = data.resolvingSymlinksInPath()
@@ -116,9 +139,44 @@ public enum Storage {
                 roots.append(("Settings & saves", resolved))
             }
         }
-        return GameUsage(parts: roots.map { title, url in
+        var result = GameUsage(parts: roots.map { title, url in
             GameUsage.Part(title: title, url: url, bytes: FileManager.default.fileExists(atPath: url.path) ? allocatedSize(url) : nil, drive: driveName(url))
         }, appOnly: g.native != nil && g.native?.installFolder == nil)
+        if launcherFolder == nil, g.usesSharedSteam || g.battleNet != nil || g.hosted != nil,
+           !roots.contains(where: { $0.0 == "Game files" }) {
+            result.unavailableGameFilesDrive = g.custom?.steamAppID.flatMap(SharedSteam.offlineDrive) ?? "an unknown drive"
+        }
+        return result
+    }
+
+    /// Private apps can launch a hub/client outside the game's folder. Count their
+    /// explicit game-directory links even when the selected executable changes.
+    /// Never walk users/, dosdevices/ or arbitrary symlinks inside the app.
+    static func linkedGameFolders(in game: InstalledGame) -> [URL] {
+        let fm = FileManager.default, app = game.appURL.resolvingSymlinksInPath()
+        var queue = ["Games", "GOG Games", "GOG.com", "Program Files", "Program Files (x86)"].map {
+            (game.prefix.appendingPathComponent("drive_c/" + $0), 0)
+        }
+        var result: [URL] = [], visited = 0, inspected = 0
+        while !queue.isEmpty, visited < 256, inspected < 10_000 {
+            let (folder, depth) = queue.removeFirst(); visited += 1
+            // A container itself can be linked to a shared library: don't scan it.
+            guard (try? fm.destinationOfSymbolicLink(atPath: folder.path)) == nil else { continue }
+            for entry in (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isDirectoryKey], options: .skipsHiddenFiles)) ?? [] {
+                inspected += 1; if inspected > 10_000 { break }
+                if let link = try? fm.destinationOfSymbolicLink(atPath: entry.path) {
+                    let target = (link.hasPrefix("/") ? URL(fileURLWithPath: link) : folder.appendingPathComponent(link)).resolvingSymlinksInPath().standardizedFileURL
+                    guard target.path != "/", !(target.path.hasPrefix("/Volumes/") && target.pathComponents.count <= 3),
+                          target != NokPaths.home, !NokPaths.home.path.hasPrefix(target.path + "/"),
+                          target != app, !target.path.hasPrefix(app.path + "/"), !app.path.hasPrefix(target.path + "/"),
+                          !fm.fileExists(atPath: target.path) || fm.isDirectory(target) else { continue }
+                    result.append(target)
+                } else if depth < 1, (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                    queue.append((entry, depth + 1))
+                }
+            }
+        }
+        return result
     }
 
     /// Games a launcher app (Steam, Battle.net, EA, Ubisoft) has installed: (name, folder).
@@ -134,20 +192,16 @@ public enum Storage {
     }
 
     public static func games(_ games: [InstalledGame]) -> [Item] {
-        games.map { g in
-            let logs = allocatedSize(g.logs)
-            var detail: [String] = []
-            let folder = g.appURL.deletingLastPathComponent()
-            if folder.path.hasPrefix("/Volumes/") { detail.append("on \(folder.pathComponents.count > 2 ? folder.pathComponents[2] : "another drive")") }
-            var bytes = allocatedSize(g.appURL)
-            if let ext = GameMover.externalFiles(g) {
-                let b = allocatedSize(ext)
-                detail.append("game files on \(ext.path.hasPrefix("/Volumes/") ? ext.pathComponents[2] : "another drive") (\(format(b)))")
-                bytes += b
+        games.map { game in
+            let usage = usage(for: game, includingLauncherGames: false)
+            let logs = allocatedSize(game.logs)
+            var detail = usage.detail
+            if game.isSteamHost || BattleNet.isHost(game) || PCLaunchers.kind(of: game) != nil {
+                detail = "Launcher & shared Windows environment · " + detail
             }
-            if logs > 1_000_000 { detail.append("logs \(format(logs))") }
-            return Item(title: g.isSteamHost ? "Steam (all Steam games)" : g.name, url: g.appURL, bytes: bytes,
-                        detail: detail.joined(separator: " · "))
+            if logs > 1_000_000 { detail += " · logs " + format(logs) }
+            return Item(title: game.name, url: game.appURL, bytes: usage.bytes,
+                        detail: detail, incomplete: !usage.complete)
         }.sorted { $0.bytes > $1.bytes }
     }
 
