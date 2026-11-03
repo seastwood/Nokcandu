@@ -394,3 +394,7 @@ Updates → Nokcandu can return to saved app copies or older stable GitHub relea
 ## Wine 10 → 11 upgrade startup check
 
 Managed engine replacement now bypasses game identity wrappers for setup while preserving microphone privacy. The Wine 11 helper also rejects stale wrapper stamps and recognizes setup utilities without `.exe`. This prevents the new engine from loading an older wrapper's incompatible loader, which produced an apparent missing ntdll.so error on Falconeer. The fix is shared across applicable Wine environments; pending selections can be retried and normal generation/Repair updates the helper. Existing engine rollback remains the Undo. [Reproduction, direction-specific coverage and migration](investigations/wine-upgrade-stale-wrapper-2026-11-03.md).
+
+## Known microphone-Off prompt limitation (0.12.3)
+
+Falconeer on Wine 11 reproduced a permission dialog despite saved Microphone Off and an active capture guard. Earlier no-prompt confirmations apply to their specific tested installations and do not establish universal suppression. The user authorized shipping 0.12.3 with this clearly disclosed, targeting a shared correction for 0.12.4. No failed experimental audio or launcher-identity change is included. See [evidence and remaining checks](investigations/microphone-off-prompt-2026-11-03.md).

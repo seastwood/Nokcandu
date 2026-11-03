@@ -68,3 +68,5 @@ Keep credentials, account identifiers, raw session logs, copyrighted game/runtim
 - [Release 0.12.3 verification](investigations/release-0.12.3-2026-11-03.md) — release gate evidence, packaged components, migration and recovery scope.
 
 - [Wine 10 → 11 stale-wrapper upgrade failure](investigations/wine-upgrade-stale-wrapper-2026-11-03.md) — reproduced ntdll startup error, shared setup/identity correction and exact rollback coverage.
+
+- [Microphone-Off prompt: 0.12.4 target](investigations/microphone-off-prompt-2026-11-03.md) — unresolved dialog regression, verified capture blocking, unsuccessful comparisons and release deferral.

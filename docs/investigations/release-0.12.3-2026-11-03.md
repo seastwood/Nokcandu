@@ -21,3 +21,7 @@ Synthetic and real-Wine CI checks do not establish compatibility with every game
 ## Pre-publication regression correction
 
 The first workflow-dispatch package run was canceled before publication after the user reproduced a Wine 10 → 11 stale-wrapper startup-check failure. No public 0.12.3 tag was pushed. The shared correction is documented in [the dedicated investigation](wine-upgrade-stale-wrapper-2026-11-03.md), including the exact pre-fix reproduction, successful production-helper upgrade/rollback test, 329-test full-suite result and actual Falconeer pending-upgrade recovery. The corrected local DMG was rebuilt and rechecked with all required modules. GitHub checks on the corrected source and final publication evidence follow below when complete.
+
+## Authorized known-issue deferral
+
+After confirming Falconeer ran on Wine 11, the user reported a microphone prompt with its switch Off. The follow-up remains unresolved. The user then explicitly authorized releasing 0.12.3 and targeting that correction for 0.12.4. Release notes disclose the prompt; unsuccessful temporary comparisons are excluded from product source. The original Falconeer launcher identity was restored after the failed rename comparison. See the [open microphone investigation](microphone-off-prompt-2026-11-03.md). CI for implementation commit c07c09d passed all checks, including the real Wine socket matrix; subsequent release-decision changes are documentation only.
