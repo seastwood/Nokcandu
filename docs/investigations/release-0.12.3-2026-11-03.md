@@ -17,3 +17,7 @@ Existing game content, saves and explicit user settings stay in place. Recognize
 ## Limits
 
 Synthetic and real-Wine CI checks do not establish compatibility with every game, device, router or anti-cheat configuration. Detailed game-specific menu/gameplay confirmations and unresolved limits are recorded in the relevant investigations. No credentials, raw account/session traces, machine-specific backups or runtime binaries belong in this release commit.
+
+## Pre-publication regression correction
+
+The first workflow-dispatch package run was canceled before publication after the user reproduced a Wine 10 → 11 stale-wrapper startup-check failure. No public 0.12.3 tag was pushed. The shared correction is documented in [the dedicated investigation](wine-upgrade-stale-wrapper-2026-11-03.md), including the exact pre-fix reproduction, successful production-helper upgrade/rollback test, 329-test full-suite result and actual Falconeer pending-upgrade recovery. The corrected local DMG was rebuilt and rechecked with all required modules. GitHub checks on the corrected source and final publication evidence follow below when complete.
