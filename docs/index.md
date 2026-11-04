@@ -4,6 +4,7 @@ The project README introduces the app. This folder keeps the implementation know
 
 | Document | What belongs there |
 | --- | --- |
+| [Release 0.12.4 verification](investigations/release-0.12.4-2026-11-04.md) | Profile/component release scope, migration, known issues and package verification. |
 | [Fullscreen Spaces input investigation](investigations/fullscreen-space-input-2026-11-03.md) | Deferred BF2 virtual-screen input loss, failed candidate, safe cleanup and evidence needed before resuming. |
 | [Profile validator parity](investigations/profile-validator-parity-2026-11-03.md) | Corrected missing software-audio fix ID, explicit invalid reasons, revalidation and app/catalog CI parity. |
 | [Launcher DX8 eligibility and icon editing](investigations/launcher-dx8-and-icon-editing-2026-11-03.md) | Mixed-architecture launcher handling, independent EXE icon selection, Undo and separate unresolved BF1942/BF2 reports. |
