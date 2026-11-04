@@ -1,6 +1,8 @@
-# Microphone-Off permission prompt — open, targeted for 0.12.4
+# Microphone-Off permission prompt — still open in 0.12.4
 
 ## Release decision
+
+**November 4 update:** 0.12.4 was released for the profile/component fixes, with this microphone issue explicitly disclosed as still unresolved. The former 0.12.4 target was not met; no new fix version is promised. The findings and required verification below remain the next work. See the [current handoff](../handoffs/development-handoff-2026-11-04.md).
 
 On 2026-11-03 the user authorized releasing 0.12.3 with this issue explicitly deferred to 0.12.4. It is not fixed in 0.12.3. The release notes identify the limitation instead of claiming that Off universally prevents prompts.
 

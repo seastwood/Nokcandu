@@ -4,6 +4,7 @@ The project README introduces the app. This folder keeps the implementation know
 
 | Document | What belongs there |
 | --- | --- |
+| [Development handoff — November 4, 2026](handoffs/development-handoff-2026-11-04.md) | Released work, exact verification, confirmed open issues, prioritized polish, code map and safe continuation checklist. |
 | [Release 0.12.4 verification](investigations/release-0.12.4-2026-11-04.md) | Profile/component release scope, migration, known issues and package verification. |
 | [Fullscreen Spaces input investigation](investigations/fullscreen-space-input-2026-11-03.md) | Deferred BF2 virtual-screen input loss, failed candidate, safe cleanup and evidence needed before resuming. |
 | [Profile validator parity](investigations/profile-validator-parity-2026-11-03.md) | Corrected missing software-audio fix ID, explicit invalid reasons, revalidation and app/catalog CI parity. |
@@ -13,7 +14,7 @@ The project README introduces the app. This folder keeps the implementation know
 | [Graphics detection investigation](investigations/graphics-detection-2026-11-01.md) | Bootstrap launchers, delay imports, unknown API defaults, installed Rocket League regression and review-only migration. |
 | [LAN discovery investigation](investigations/lan-discovery-2026-11-01.md) | Battlefield/GameSpy query evidence and reusable diagnostic; LAN browsing restored after the user disabled the Windows host’s virtual Ethernet adapter. |
 | [BF1942 Internet browser](investigations/bf1942-internet-browser-2026-11-01.md) | Verified obsolete master hostname, fingerprinted managed-copy correction, safe migration and combined Undo; user confirmed Internet servers appear after the two-slot correction. |
-| [Mac native IPX investigation](investigations/native-ipx-mac-2026-11-01.md) | User-confirmed Wi-Fi native IPX discovery/join/gameplay; optional shared component, profiles, registry/file Undo, packet lease and pending final managed migration. | — final managed ROM2 discovery/joining confirmed in both directions; session-based permissions, adapter-redaction migration, and VM snapshot/NAT troubleshooting.
+| [Mac native IPX investigation](investigations/native-ipx-mac-2026-11-01.md) | Final managed ROM2 discovery/joining confirmed in both directions; earlier gameplay confirmation, session-based permissions, adapter migration, profile/Undo behavior and VM NAT/bridge troubleshooting. |
 | [Shared IPX and ROM2 investigation](investigations/ipx-rom2-networking-2026-11-01.md) | Optional shared IPX component, native engine/probe evidence, TCP/IP comparison, profile service parity and later multiplayer test. |
 | [Engineering learnings](engineering-learnings.md) | Confirmed lessons, the scope of each fix, evidence, unresolved issues, and rules for future changes. Start here. |
 | [Compatibility fixes](compatibility-fixes.md) | Component IDs, implementation details, sources, ownership/Undo, migrations, and game/launcher-specific findings. |

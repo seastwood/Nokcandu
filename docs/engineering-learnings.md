@@ -301,7 +301,7 @@ A scratch-engine self-test and a historical Wine 10 selection do not cover Wine 
 
 ## Distinguish blocked capture from suppressed consent (2026-11-03)
 
-A refused input-open call, Off policy and previously allowed OS permission do not prove a fresh launch will avoid a microphone dialog. The Falconeer report demonstrates the gap. Trace the earliest consent-requesting call and check fresh identities; record the difference between a silent OS refusal and no request at all. The unresolved prompt is disclosed in 0.12.3 and targeted for 0.12.4; see [the open investigation](investigations/microphone-off-prompt-2026-11-03.md).
+A refused input-open call, Off policy and previously allowed OS permission do not prove a fresh launch will avoid a microphone dialog. The Falconeer report demonstrates the gap. Trace the earliest consent-requesting call and check fresh identities; record the difference between a silent OS refusal and no request at all. The unresolved prompt is disclosed in both 0.12.3 and 0.12.4; the former 0.12.4 target was not met. No new fix version is promised; see [the open investigation](investigations/microphone-off-prompt-2026-11-03.md).
 
 ## Launcher architecture is not game architecture
 

@@ -1,6 +1,8 @@
 # Next improvements for Nokcandu
 
-Reviewed 27 October 2026. These are proposals, not changes made to installed game runtimes.
+Reviewed 27 October 2026. These are historical proposals, not a current completion checklist.
+
+**November 4 status:** applicable shared-launcher program routing, storage/accounting improvements, runtime selection, recovery and resizable presentation have since shipped. Some expansion ideas below remain proposals; BF2 fullscreen Spaces input remains deferred. Use the [current development handoff](handoffs/development-handoff-2026-11-04.md) for released scope, known issues and priorities.
 
 Nokcandu already has isolated game apps, profiles, optional fixes, crash hints, preflight/repair tools, and runtime update trials. The next work should strengthen those features rather than replace working setups with a newer graphics stack by default.
 
