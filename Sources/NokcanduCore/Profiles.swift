@@ -372,6 +372,9 @@ public enum Profiles {
                                                        engine: host.wineVersion ?? g.wineVersion, nokcandu: AppUpdate.currentVersion),
                             notes: notes)
         if OpenUASettings.isConfigured(g), p.fixes?.contains("openua-display") != true { p.fixes = (p.fixes ?? []) + ["openua-display"] }
+        if BF1942AudioFix.isConfigured(g), p.fixes?.contains(CompatibilityFix.bf1942SoftwareAudio.id) != true {
+            p.fixes = (p.fixes ?? []) + [CompatibilityFix.bf1942SoftwareAudio.id]
+        }
         if !g.usesSharedSteam, g.battleNet == nil, let exe = c?.exe { p.program = exe }
         if g.battleNet != nil, let a = hc?.arguments, !a.isEmpty { p.hostArguments = a }
         if !drives.isEmpty { p.drives = drives.sorted() }
@@ -469,7 +472,7 @@ public enum Profiles {
         let host = settingsApp(g)
         let shared = g.usesSharedSteam ? " (all Steam games)" : g.battleNet != nil ? " (all Battle.net games)" : g.hosted != nil ? " (shared launcher environment; kept unchanged)" : ""
         if let prog = p.program, (g.custom != nil || RecipeSettings.supports(g)), !g.usesSharedSteam, g.battleNet == nil {
-            if prog != g.custom?.exe, (!CompatibilityFixes.installedIDs(for: g).isEmpty || BF1942DisplayFix.hasChanges(for: g) || p.gameDisplay != nil) {
+            if prog != g.custom?.exe, (!CompatibilityFixes.installedIDs(for: g).isEmpty || BF1942DisplayFix.ownsProgram(for: g) || p.gameDisplay?.menuCorrection == true) {
                 plan.skipped.append("Program \(prog) — Undo installed game fixes before changing the program")
             } else if BattleNet.unixPath(prog, prefix: g.prefix).map({ FileManager.default.fileExists(atPath: $0.path) }) == true {
                 plan.gameSettings.append("Program: \(prog)")
@@ -584,6 +587,7 @@ public enum Profiles {
         var recipe: RecipeSettings.Settings? = nil
         var bc2Display: BC2DisplaySettings.Checkpoint? = nil
         var resizable: [Int]?? = nil
+        var addedComponents: [CompatibilityFix] = []
         public var gameName: String { game.name }
     }
 
@@ -595,6 +599,12 @@ public enum Profiles {
         if let frame = s.nativeIPXFrame, let expected = s.appliedNativeIPXFrame {
             guard NativeIPXNetworking.frame(for: s.game) == expected else { throw NokError("The native IPX frame changed after applying the profile. Your setting was kept.") }
             try NativeIPXNetworking.setFrame(frame, for: s.game)
+        }
+        for fix in s.addedComponents.reversed() {
+            let current = CompatibilityFixes.fresh(s.game)
+            if CompatibilityFixes.isInstalled(fix, for: current) {
+                try CompatibilityFixes.undo(fix, for: current) { _ in }
+            }
         }
         if let r = s.resizable { try WindowedPresentation.saveSetting(r, for: s.game) }
         try s.displayCheckpoint?.restore()
@@ -610,7 +620,43 @@ public enum Profiles {
         if let b = s.buffer, b != AudioBuffer.current(for: s.game) { try? AudioBuffer.apply(b, for: s.game) }
     }
 
-    /// Applies the profile's settings (not the cinematic fix — that downloads, so the UI runs it).
+    public struct ApplyResult {
+        public var snapshot: Snapshot
+        public var issues: [String]
+    }
+
+    /// Shared entry point for catalog profiles, local profiles and note snapshots.
+    /// Return partial results with reasons and Undo instead of claiming full success.
+    public static func applyComplete(_ p: GameProfile, to g: InstalledGame, includeShared: Bool,
+                                     log: @escaping @Sendable (String) -> Void = { _ in }) async throws -> ApplyResult {
+        let before = Set(CompatibilityFixes.installedIDs(for: g))
+        var snapshot = try apply(p, to: g, includeShared: includeShared)
+        let current = CompatibilityFixes.fresh(g)
+        let next = plan(p, for: current)
+        var issues = next.skipped
+        if next.needsCinematicFix {
+            do { try await CinematicFix.install(for: current, log: log) }
+            catch { issues.append("Cinematic fix: \(error.localizedDescription)") }
+        }
+        for fix in next.componentFixes {
+            do { try await CompatibilityFixes.install(fix, for: CompatibilityFixes.fresh(g), log: log) }
+            catch { issues.append("\(fix.title): \(error.localizedDescription)") }
+        }
+        if next.appliesGameDisplay || p.nativeIPXFrame != nil {
+            do { try await applyGameDisplay(p, to: CompatibilityFixes.fresh(g), snapshot: snapshot, log: log) }
+            catch { issues.append("Game display settings: \(error.localizedDescription)") }
+        }
+        let completed = CompatibilityFixes.fresh(g)
+        snapshot.appliedNativeIPXFrame = CompatibilityFixes.isInstalled(.nativeIPXNetworking, for: completed)
+            && NativeIPXNetworking.frame(for: completed) == p.nativeIPXFrame ? p.nativeIPXFrame : nil
+        snapshot.addedComponents = CompatibilityFix.allCases.filter {
+            !before.contains($0.id) && CompatibilityFixes.isInstalled($0, for: completed)
+                && !($0 == .ipxNetworking && before.contains(CompatibilityFix.nativeIPXNetworking.id))
+        }
+        return ApplyResult(snapshot: snapshot, issues: issues)
+    }
+
+    /// Applies settings only. Product UI uses applyComplete so component downloads aren't omitted.
     /// Works on any game, not only the one it was made for. Returns what to restore for Undo.
     @discardableResult
     public static func apply(_ p: GameProfile, to g: InstalledGame, includeShared: Bool) throws -> Snapshot {
@@ -664,7 +710,7 @@ public enum Profiles {
             if g.battleNet == nil { c.arguments = p.arguments ?? "" }
             if g.battleNet != nil, let a = p.hostArguments { c.arguments = a }
             if let prog = p.program, g.battleNet == nil, !g.usesSharedSteam,
-               CompatibilityFixes.installedIDs(for: target).isEmpty, !BF1942DisplayFix.hasChanges(for: target), p.gameDisplay == nil,
+               CompatibilityFixes.installedIDs(for: target).isEmpty, !BF1942DisplayFix.ownsProgram(for: target), p.gameDisplay?.menuCorrection != true,
                BattleNet.unixPath(prog, prefix: g.prefix).map({ FileManager.default.fileExists(atPath: $0.path) }) == true {
                 c.exe = prog
             }

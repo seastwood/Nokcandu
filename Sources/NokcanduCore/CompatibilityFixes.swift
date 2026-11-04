@@ -4,12 +4,14 @@ import Foundation
 /// downloads or patch bytes. Components own only documented private game/prefix destinations;
 /// file and registry Undo preserve later user changes. Global engines are untouched.
 public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable, Sendable {
+    case bf1942SoftwareAudio = "bf1942-software-audio"
     case shaderCompiler47 = "shader-compiler-47", ubisoftBrowser = "ubisoft-browser"
     case directx9Extras = "directx9-extras", d3d8to9, borderless, cursorVisibility = "cursor-visibility", openUA = "openua-display", bundledVC = "bundled-vc-runtime", crossProcessWindows = "cross-process-windows"
     case ipxNetworking = "ipx-networking", nativeIPXNetworking = "native-ipx-networking"
     public var id: String { rawValue }
     public var title: String {
         switch self {
+        case .bf1942SoftwareAudio: "BF1942 software sound"
         case .ipxNetworking: "IPX networking (legacy games)"
         case .nativeIPXNetworking: "Native IPX for original LAN games"
         case .ubisoftBrowser: "Ubisoft Connect browser display"
@@ -25,6 +27,7 @@ public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable, Senda
     }
     public var detail: String {
         switch self {
+        case .bf1942SoftwareAudio: "Turns off BF1942 hardware-accelerated sound for the current player profile. This resolved a repeated menu crash in the Moongamers installation; online joining was verified. Keeps volume and other sound settings. Saved/shared profiles include it. Restart after applying; reapply if you switch player profiles. Undo restores the previous hardware-sound setting."
         case .nativeIPXNetworking: "Connects to original IPX computers, including Windows 98, using your Mac’s LAN adapter. Requires the legacy IPX component and Wine 11; they are checked before installation. Uses 802.2 frames by default. macOS asks for packet access when you launch. Access lasts while IPX games are active, with no match timer, and ends after the last IPX game closes. The game stays unprivileged. Saved/shared profiles include this requirement; adapter choices and permissions stay on this Mac. SPX is not supported. Undo returns to the previous IPX transport."
         case .ipxNetworking: "Adds IPX-over-LAN support with IPXWrapper 0.7.2 and Microsoft's legacy DirectPlay library for 32-bit legacy Winsock/DirectPlay games. Other computers need compatible IPXWrapper support too. Choose IPX inside the game. Network Settings lets you select a physical adapter if virtual adapters interfere. Preserves TCP/IP support; does not enable real Ethernet IPX frames. Restart after installing or Undo. Saved and shared profiles include this fix."
         case .ubisoftBrowser: "Fixes Ubisoft Connect’s blank browser with DXMT. Enables its GPU launch switch in an exactly verified browser file; keeps the original for Undo. Only for Ubisoft Connect. Restart afterward."
@@ -96,6 +99,29 @@ public enum CompatibilityFixes {
            resolved.hasPrefix(external + "/") { return exe }
         return nil
     }
+    /// A 64-bit launcher can start a 32-bit DirectX 8 game. The DLL belongs beside
+    /// the renderer, not necessarily to the launcher's architecture. Stay in the
+    /// same managed folder and accept only one directly evidenced candidate.
+    static func directX8Program(_ g: InstalledGame) -> URL? {
+        guard let exe = managedProgram(g), let info = PEFile.inspect(exe) else { return nil }
+        if !info.is64Bit { return exe }
+        let root = exe.deletingLastPathComponent().resolvingSymlinksInPath()
+        let files = (try? FileManager.default.contentsOfDirectory(at: root,
+            includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey])) ?? []
+        guard files.count <= 1024 else { return nil }
+        var bytesRemaining = 256 * 1024 * 1024, candidates = 0
+        let matches = files.sorted { $0.path < $1.path }.filter { file in
+            guard file.pathExtension.lowercased() == "exe",
+                  file.resolvingSymlinksInPath().deletingLastPathComponent() == root,
+                  let values = try? file.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]),
+                  values.isRegularFile == true, let size = values.fileSize,
+                  size <= min(64 * 1024 * 1024, bytesRemaining), candidates < 64 else { return false }
+            candidates += 1; bytesRemaining -= size
+            guard let pe = PEFile.inspect(file), !pe.is64Bit else { return false }
+            return pe.imports.contains { $0.lowercased() == "d3d8.dll" }
+        }
+        return matches.count == 1 ? exe.deletingLastPathComponent().appendingPathComponent(matches[0].lastPathComponent) : nil
+    }
     static let vcNames = ["concrt140", "msvcp140", "msvcp140_1", "msvcp140_2", "msvcp140_atomic_wait", "msvcp140_codecvt_ids", "vcruntime140", "vcruntime140_1", "vcruntime140_threads"]
     static func bundledVCRules(_ g: InstalledGame) -> [String: String] {
         guard let exe = managedProgram(g), let arch = PEFile.inspect(exe)?.is64Bit else { return [:] }
@@ -113,6 +139,7 @@ public enum CompatibilityFixes {
     /// routing before these can safely be offered there.
     public static func visible(_ fix: CompatibilityFix, for g:InstalledGame) -> Bool {
         if isInstalled(fix,for:g) { return true }
+        if fix == .bf1942SoftwareAudio { return BF1942AudioFix.supports(g) }
         if fix == .ipxNetworking || fix == .nativeIPXNetworking { return IPXNetworking.supports(g) }
         if fix == .openUA { return OpenUASettings.supports(g) }
         if fix == .ubisoftBrowser { return UbisoftBrowser.supports(g) }
@@ -124,6 +151,7 @@ public enum CompatibilityFixes {
         guard let exe = managedProgram(g), PEFile.inspect(exe) != nil else {
             return "The selected program is missing or outside this game's C: folders. Choose it under Settings → Program."
         }
+        if fix == .bf1942SoftwareAudio, !BF1942AudioFix.supports(g) { return "Requires a standalone BF1942 installation with identifiable current-player sound settings." }
         if fix == .nativeIPXNetworking, !NativeIPXNetworking.supports(g) { return "Requires Wine 11 and Nokcandu’s native packet module for a private 32-bit game." }
         if fix == .ipxNetworking, !IPXNetworking.supports(g) { return "Requires a 32-bit legacy Winsock/DirectPlay game in its own Windows environment." }
         if fix == .ubisoftBrowser {
@@ -138,7 +166,7 @@ public enum CompatibilityFixes {
             return "Temporarily unavailable for BF1942 because it can flicker. Leave it off; Fullscreen (Borderless) handles the mouse movement area separately."
         }
         if fix == .d3d8to9 {
-            if PEFile.inspect(exe)?.is64Bit != false { return "This fix is for 32-bit DirectX 8 games." }
+            if directX8Program(g) == nil { return "This fix needs a 32-bit game. No single 32-bit DirectX 8 program was found beside the selected launcher. Choose the game's program under Settings → Program." }
             if g.custom?.graphics != .classic3D { return "Choose Older 3D games in Settings first." }
             if !FileManager.default.fileExists(atPath: g.support.appendingPathComponent("renderer/dxvk/wine/i386-windows/d3d9.dll").path) {
                 return "This Windows environment doesn't include the required DirectX 9 compatibility renderer."
@@ -275,6 +303,7 @@ public enum CompatibilityFixes {
         try NokPaths.ensure(work); defer { try? FileManager.default.removeItem(at: work) }
         var files: [URL: Data] = [:], applied: [String: String] = [:], appliedEnv: [String: String] = [:]
         switch fix {
+        case .bf1942SoftwareAudio: files = try BF1942AudioFix.plannedFiles(g)
         case .nativeIPXNetworking:
             files = try NativeIPXNetworking.plannedFiles(for: g)
             applied = ["wpcap": "b"]
@@ -296,9 +325,10 @@ public enum CompatibilityFixes {
             for (name, data) in try await extras(for: g, work: work, log: log) { files[exe.deletingLastPathComponent().appendingPathComponent(name)] = data }
             applied = ["d3dx9_43": "n,b", "d3dcompiler_43": "n,b"]
         case .d3d8to9:
+            guard let target = directX8Program(g) else { throw NokError("The DirectX 8 game program could not be identified.") }
             let dll = try await verifiedDownload("d3d8to9-1.16.0.dll", url: "https://github.com/crosire/d3d8to9/releases/download/v1.16.0/d3d8.dll",
                 sha: "122928cfe225c25d30decf7184a5d37e490cecf3b58256ba3206c7e1853f8ab8", log: log)
-            files[exe.deletingLastPathComponent().appendingPathComponent("d3d8.dll")] = try Data(contentsOf: dll)
+            files[target.deletingLastPathComponent().appendingPathComponent("d3d8.dll")] = try Data(contentsOf: dll)
             applied = ["d3d8": "n", "d3d9": "b"]
         case .cursorVisibility:
             files[g.nokcanduState.appendingPathComponent("cursor-visibility-fix")] = Data("1\n".utf8)
@@ -339,7 +369,8 @@ public enum CompatibilityFixes {
         let j = journal(fix, g)
         do {
             for (url, data) in files {
-                if fix == .openUA { try j.writeSettings(data, to: url, keys: ["gfx.vbo", "menu.windowed", "gfx.custommodes"], reason: fix.title) }
+                if fix == .bf1942SoftwareAudio { try j.writeSettings(data, to: url, keys: [BF1942AudioFix.key], reason: fix.title) }
+                else if fix == .openUA { try j.writeSettings(data, to: url, keys: ["gfx.vbo", "menu.windowed", "gfx.custommodes"], reason: fix.title) }
                 else { try j.write(data, to: url, reason: fix.title) }
             }
             if fix == .nativeIPXNetworking { try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: NativeIPXNetworking.directory(g).appendingPathComponent(NativeIPXNetworking.helperName).path) }

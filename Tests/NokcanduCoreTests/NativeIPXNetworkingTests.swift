@@ -84,6 +84,20 @@ final class NativeIPXNetworkingTests: XCTestCase {
         XCTAssertNil(p.environment?[NativeIPXNetworking.flag]); XCTAssertNil(p.environment?["WINEDLLPATH"])
         XCTAssertEqual(try GameProfile.parse(p.json()).nativeIPXFrame, 3)
         XCTAssertEqual(p.problems, [])
+        // Frame selection is independent of an obsolete helper upgrade.
+        let package = try adapterResourceFixture()
+        defer { NativeIPXNetworking.resourceForTesting = nil; try? FileManager.default.removeItem(at: package) }
+        var currentState = try XCTUnwrap(CompatibilityFixes.state(.nativeIPXNetworking, g))
+        currentState.nativeIPXRevision = NativeIPXNetworking.revision
+        try JSONEncoder().encode(currentState).write(to: CompatibilityFixes.marker(.nativeIPXNetworking, g))
+        try CompatibilityFixes.journal(.nativeIPXNetworking, g).write(
+            Data(contentsOf: package.appendingPathComponent(NativeIPXNetworking.helperName)),
+            to: NativeIPXNetworking.directory(g).appendingPathComponent(NativeIPXNetworking.helperName), reason: "Fixture helper")
+        p.nativeIPXFrame = 2
+        let complete = try await Profiles.applyComplete(p, to: g, includeShared: false)
+        XCTAssertEqual(NativeIPXNetworking.frame(for: g), 2)
+        try Profiles.undo(complete.snapshot)
+        XCTAssertEqual(NativeIPXNetworking.frame(for: g), 3)
         p.nativeIPXFrame = 1
         let snapshot = try Profiles.apply(p, to: g, includeShared: false)
         try await Profiles.applyGameDisplay(p, to: g, snapshot: snapshot) { _ in }

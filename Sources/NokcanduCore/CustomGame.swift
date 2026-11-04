@@ -579,7 +579,7 @@ public enum CustomGames {
         if GameLauncher.runState(of: game) != .notRunning { throw NokError("Quit \(game.name) first.") }
         var c = config
         let installed = CompatibilityFixes.installedIDs(for: game)
-        if !allowDisplayProgramChange, BF1942DisplayFix.hasChanges(for: game),
+        if !allowDisplayProgramChange, BF1942DisplayFix.ownsProgram(for: game),
            let old = CustomGameConfig.load(contents: game.contents), old.exe != c.exe {
             throw NokError("Undo BF1942 display settings in Display before changing the game's program.")
         }

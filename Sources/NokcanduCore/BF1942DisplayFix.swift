@@ -35,7 +35,9 @@ public enum BF1942DisplayFix {
     static func folder(_ g: InstalledGame) -> URL? {
         guard g.custom != nil, !g.usesSharedSteam, g.battleNet == nil, g.hosted == nil, g.native == nil,
               let program = CompatibilityFixes.program(g) else { return nil }
-        let names = ["bf1942.exe", "bf1942borderless.exe", "bf1942-menu-test.exe", "bftest.exe", copyName.lowercased()]
+        // Recognize the known third-party wrapper without treating uninstallers or
+        // unrelated programs in the same directory as BF1942.
+        let names = ["bf1942.exe", "bf1942borderless.exe", "borderless1942.exe", "bf1942-menu-test.exe", "bftest.exe", copyName.lowercased()]
         guard names.contains(program.lastPathComponent.lowercased()) else { return nil }
         let logical = program.deletingLastPathComponent()
         let folder = logical.resolvingSymlinksInPath()
@@ -49,6 +51,8 @@ public enum BF1942DisplayFix {
     }
     public static func supports(_ g: InstalledGame) -> Bool { folder(g) != nil }
     public static func hasChanges(for g: InstalledGame) -> Bool { state(g) != nil }
+    /// Resolution-only receipts own settings, never the selected executable.
+    static func ownsProgram(for g: InstalledGame) -> Bool { state(g)?.recommended == true }
     public static func isRecommended(for g: InstalledGame) -> Bool { state(g)?.recommended == true }
     public static func resolution(for g: InstalledGame) -> [Int]? { state(g).map { [$0.width, $0.height] } }
     public static func menuUnavailable(for g: InstalledGame) -> String? {
@@ -223,7 +227,11 @@ public enum BF1942DisplayFix {
     }
     static func validateJournal(_ g: InstalledGame) throws {
         let j = journal(g)
-        guard let root = folder(g) else { throw NokError("The BF1942 installation moved or its program changed. Its display files were left untouched.") }
+        // Recovery remains reachable after selecting an unrelated program: validate
+        // owned paths against the receipt's original, still-managed installation.
+        var recorded = g
+        if let previous = state(g)?.previousProgram { recorded.custom?.exe = previous }
+        guard let root = folder(g) ?? folder(recorded) else { throw NokError("The BF1942 installation moved or its program changed. Its display files were left untouched.") }
         for path in j.touchedPaths {
             let url = try checkedURL(URL(fileURLWithPath: path), root: root)
             if let keys = settingKeys(url) { try j.manageSettings(url, keys: keys) }
@@ -272,7 +280,7 @@ public enum BF1942DisplayFix {
         try CompatibilityFixes.requireClosed(g)
         guard let root = folder(g), var c = g.custom else { throw NokError("Choose a standalone BF1942 installation first.") }
         try validateJournal(g)
-        if let st = state(g), c.exe != st.appliedProgram, c.exe != st.previousProgram {
+        if let st = state(g), st.recommended, c.exe != st.appliedProgram, c.exe != st.previousProgram {
             throw NokError("The selected BF1942 program changed. Restore it before updating display settings.")
         }
         let wantsRecommended = recommended || state(g)?.recommended == true
@@ -392,7 +400,7 @@ public enum BF1942DisplayFix {
         guard let st = state(g), var c = g.custom else { throw NokError("No BF1942 display changes to undo.") }
         try validateJournal(g)
         try journal(g).validateForUndo()
-        guard c.exe == st.appliedProgram || c.exe == st.previousProgram else {
+        guard !st.recommended || c.exe == st.appliedProgram || c.exe == st.previousProgram else {
             throw NokError("The selected BF1942 program changed. Restore it before undoing display settings.")
         }
         let others = CompatibilityFixes.installedIDs(for: g).filter { $0 != CompatibilityFix.borderless.rawValue || !st.ownsBorderless }
@@ -403,7 +411,7 @@ public enum BF1942DisplayFix {
             try CompatibilityFixes.undoReserved(.borderless, for: g, log: log)
             g = CompatibilityFixes.fresh(g); c = g.custom ?? c
         }
-        if c.exe == st.appliedProgram { c.exe = st.previousProgram }
+        if st.recommended, c.exe == st.appliedProgram { c.exe = st.previousProgram }
         if c.bf1942MenuCopy == true { c.bf1942MenuCopy = st.previousMenuCopy }
         if st.recommended, c.displayPixels == nil { c.displayPixels = st.previousDisplay }
         try CustomGames.save(c, to: g, allowDisplayProgramChange: true)

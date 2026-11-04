@@ -172,7 +172,7 @@ struct GameDetailView: View {
 
     var header: some View {
         HStack(alignment: .center, spacing: 18) {
-            Image(nsImage: game.icon).resizable().frame(width: 96, height: 96)
+            GameIconEditor(game: game)
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(game.name).font(.largeTitle.bold())

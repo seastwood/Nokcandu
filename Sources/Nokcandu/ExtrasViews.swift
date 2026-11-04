@@ -399,7 +399,7 @@ struct GameResolutionSection: View {
                     Text("Fixes the invisible window and tiny menu text using the settings confirmed on this Mac. The original menu fills the screen; mission resolution stays under the game’s control. These settings are included when you save or share a profile.")
                         .font(.caption).foregroundStyle(.secondary)
                     Button(CompatibilityFixes.isInstalled(.openUA, for: game) ? "Undo OpenUA Display Settings" : "Apply Recommended OpenUA Display Settings") { openUASettings() }
-                } else if BF1942DisplayFix.supports(game) {
+                } else if BF1942DisplayFix.supports(game) || BF1942DisplayFix.hasChanges(for: game) {
                     Divider()
                     HStack {
                         Text("Game resolution")

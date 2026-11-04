@@ -17,6 +17,7 @@ struct NotesSection: View {
     @State private var expanded: Set<GameNote.ID> = []
     @State private var restoring: GameNote?
     @State private var undo: Profiles.Snapshot?
+    @State private var applyingSetup = false
 
     var shown: [GameNote] { notes.filter { filter == nil || $0.kind == filter } }
 
@@ -96,7 +97,8 @@ struct NotesSection: View {
         } message: {
             if let p = restoring?.snapshot {
                 let plan = Profiles.plan(p, for: game)
-                Text((plan.gameSettings + plan.sharedSettings).map { "• " + $0 }.joined(separator: "\n")
+                Text((plan.gameSettings + plan.sharedSettings + plan.componentFixes.map { "Installs " + $0.title }
+                      + (plan.needsCinematicFix ? ["Installs cinematic fix"] : [])).map { "• " + $0 }.joined(separator: "\n")
                      + (plan.skipped.isEmpty ? "" : "\n\nSkipped: " + plan.skipped.joined(separator: ", "))
                      + "\n\nYou can undo this right after.")
             }
@@ -218,12 +220,18 @@ struct NotesSection: View {
     }
 
     func restore(_ n: GameNote) {
-        guard let p = n.snapshot else { return }
-        do {
-            undo = try Profiles.apply(p, to: game, includeShared: true)
-            model.refresh()
-            model.say("Restored the setup from \(n.created.formatted(date: .abbreviated, time: .shortened)). Press Play to try it.")
-        } catch { model.fail(error) }
+        guard !applyingSetup, let p = n.snapshot else { return }
+        applyingSetup = true
+        Task {
+            defer { applyingSetup = false }
+            do {
+                let result = try await Profiles.applyComplete(p, to: game, includeShared: true)
+                undo = result.snapshot
+                model.refresh()
+                if result.issues.isEmpty { model.say("Restored the setup from \(n.created.formatted(date: .abbreviated, time: .shortened)). Press Play to try it.") }
+                else { model.fail(NokError("Partially restored the setup. These items need attention:\n" + result.issues.joined(separator: "\n"))) }
+            } catch { model.fail(error) }
+        }
     }
 
     func saveEdit(_ n: GameNote) {

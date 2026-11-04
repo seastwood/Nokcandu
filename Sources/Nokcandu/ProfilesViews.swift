@@ -554,12 +554,11 @@ struct ProfileDetail: View {
         working = true
         Task {
             do {
-                undoSnapshot = try Profiles.apply(p, to: g, includeShared: includeShared)
-                if plan.needsCinematicFix { try await CinematicFix.install(for: g) { _ in } }
-                for fix in plan.componentFixes { try await CompatibilityFixes.install(fix, for: g) { _ in } }
-                if let snap = undoSnapshot { try await Profiles.applyGameDisplay(p, to: g, snapshot: snap) { _ in } }
+                let result = try await Profiles.applyComplete(p, to: g, includeShared: includeShared)
+                undoSnapshot = result.snapshot
                 model.refresh()
-                model.say("Applied “\(p.title)” to \(g.name).")
+                if result.issues.isEmpty { model.say("Applied “\(p.title)” to \(g.name).") }
+                else { model.fail(NokError("Partially applied “\(p.title)”. These items need attention:\n" + result.issues.joined(separator: "\n"))) }
             } catch { model.fail(error) }
             working = false
         }

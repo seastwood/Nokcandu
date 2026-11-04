@@ -4,6 +4,7 @@ The project README introduces the app. This folder keeps the implementation know
 
 | Document | What belongs there |
 | --- | --- |
+| [Launcher DX8 eligibility and icon editing](investigations/launcher-dx8-and-icon-editing-2026-11-03.md) | Mixed-architecture launcher handling, independent EXE icon selection, Undo and separate unresolved BF1942/BF2 reports. |
 | [Installer destination mismatch](investigations/installer-destination-2026-11-01.md) | Why GOG setup bypassed the prepared external folder; shared Inno destination handoff and copy fallback. |
 | [Nonblocking installation](investigations/nonblocking-installation-2026-11-01.md) | Separate installation window, retained session, library access and existing Windows-setup preservation. |
 | [Graphics detection investigation](investigations/graphics-detection-2026-11-01.md) | Bootstrap launchers, delay imports, unknown API defaults, installed Rocket League regression and review-only migration. |
