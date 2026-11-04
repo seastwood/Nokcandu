@@ -4,7 +4,7 @@ import Foundation
 public enum OpenUASettings {
     static let modes = ["640x480", "800x600", "1024x768", "1280x800"]
     static func ini(_ g: InstalledGame) -> URL? {
-        guard g.custom != nil, !g.usesSharedSteam, g.battleNet == nil, g.hosted == nil, g.native == nil,
+        guard g.native == nil,
               let exe = CompatibilityFixes.managedProgram(g), exe.lastPathComponent.lowercased() == "ua_source.exe",
               PEFile.inspect(exe)?.imports.contains(where: { $0.lowercased() == "opengl32.dll" }) == true else { return nil }
         let folder = exe.deletingLastPathComponent(), real = folder.resolvingSymlinksInPath().path

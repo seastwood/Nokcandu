@@ -15,7 +15,7 @@ struct FixesSection: View {
     var body: some View {
         SettingsSection(title: "Fixes") {
             SettingRow(title: "Video and music playback",
-                       info: "Adds a movie reader, video decoder and audio decoder (LAV Filters \(CinematicFix.version), open source) to \(game.usesSharedSteam ? "the shared Steam's" : "this game's") Windows environment, for games whose videos crash or stay black, or whose MP3 music won't play (“Music Error: Can not play file”). Confirmed to fix Warcraft III's cinematics.") {
+                       info: "Adds a movie reader, video decoder and audio decoder (LAV Filters \(CinematicFix.version), open source) to \(CompatibilityFixes.hasSharedEnvironment(game) ? "the shared launcher's" : "this game's") Windows environment, for games whose videos crash or stay black, or whose MP3 music won't play (“Music Error: Can not play file”). Confirmed to fix Warcraft III's cinematics.") {
                 if working { ProgressView().controlSize(.small) }
                 else if present {
                     InstalledBadge()
@@ -38,7 +38,7 @@ struct FixesSection: View {
             }
         }
         .onAppear { present = CinematicFix.isPresent(for: game) }
-        .confirmationDialog("Remove the cinematic fix from \(game.usesSharedSteam ? "the shared Steam" : game.name)?", isPresented: $confirmUndo) {
+        .confirmationDialog("Remove the cinematic fix from \(CompatibilityFixes.hasSharedEnvironment(game) ? "the shared Windows environment" : game.name)?", isPresented: $confirmUndo) {
             Button("Remove", role: .destructive) { undo() }
         } message: { Text("Unregisters the three LAV components and moves their folder to the Trash.") }
     }
@@ -106,13 +106,24 @@ private struct ComponentFixesView: View {
     @State private var nativeIPXAdapters: [NativeIPXNetworking.NetworkAdapter] = []
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if CompatibilityFixes.hasSharedEnvironment(game) {
+                SettingRow(title: "Program for fixes", info: "Compatibility fixes belong to this game's registered folder and program. Choosing here does not change what the launcher starts.") {
+                    Text(CompatibilityFixes.programForFixes(game)?.lastPathComponent ?? "Choose a program")
+                        .font(.caption.monospaced()).lineLimit(1)
+                    Button("Choose…") { chooseProgramForFixes() }.disabled(working != nil)
+                }
+                SettingNote("Game-specific fixes do not change the shared launcher's graphics or other games. Changes wait until its Windows programs close.")
+            }
             ForEach(CompatibilityFix.allCases.filter { CompatibilityFixes.visible($0, for: game) }) { fix in
                 let on = installed.contains(fix.id)
                 let reason = on ? nil : CompatibilityFixes.unavailable(fix, for: game)
                 SettingRow(title: fix.title, info: fix.detail + (reason.map { "\n\n" + $0 } ?? "")) {
                     if working == fix { ProgressView().controlSize(.small) }
                     else {
-                        if on { InstalledBadge() }
+                        if on {
+                            if CompatibilityFixes.needsRecovery(fix, for: game) { Text("Needs recovery").font(.caption).foregroundStyle(.orange) }
+                            else { InstalledBadge() }
+                        }
                         if on, CompatibilityFixes.needsUpdate(fix, for: game) {
                             Button("Update") { run(fix, update: true) }.disabled(working != nil)
                         }
@@ -145,6 +156,17 @@ private struct ComponentFixesView: View {
         }
         .onAppear { reload() }
         .onChange(of: game) { reload() }
+    }
+    func chooseProgramForFixes() {
+        let panel = NSOpenPanel()
+        panel.directoryURL = CompatibilityFixes.folderForFixes(game)
+        panel.allowedContentTypes = [UTType(filenameExtension: "exe")].compactMap { $0 }
+        panel.message = "Choose this game's Windows program for compatibility fixes. Its launch program stays unchanged."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try CompatibilityFixes.selectProgramForFixes(url, for: game)
+            reload(); model.refresh()
+        } catch { model.fail(error) }
     }
     func reload() {
         installed = Set(CompatibilityFixes.installedIDs(for: game))

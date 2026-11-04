@@ -65,4 +65,8 @@ with tempfile.TemporaryDirectory(prefix='nok-winsock-ci-') as temporary:
             for mode in ['graceful', 'refused', 'urgent', 'reset']:
                 print(f'Winsock {runtime.parent.name} {architecture} {mode}', flush=True)
                 subprocess.run(['python3', str(ROOT/'Tools/socket-events/probe.py'), '--wine', str(runtime/'SharedSupport/wine/bin/wine'), '--frameworks', str(runtime/'Frameworks'), '--probe', str(probe), '--library', str(library), '--mode', mode], check=True, timeout=150)
+    for runtime in runtimes:
+        print(f'Scoped client/game DLL routing {runtime.parent.name} (32 and 64 bit)', flush=True)
+        subprocess.run(['python3', str(ROOT/'Tools/program-fixes/probe.py'), '--runtime', str(runtime.resolve()),
+                        '--compiler', str(compiler_root), '--library', str(library)], check=True, timeout=300)
 print('All real Winsock socket regressions passed.', flush=True)

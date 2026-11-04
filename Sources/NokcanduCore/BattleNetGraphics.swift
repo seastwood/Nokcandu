@@ -14,6 +14,16 @@ public enum BattleNetGraphics {
         (try? String(contentsOf: file(g), encoding: .utf8)).flatMap { GraphicsPreset(rawValue: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }
     }
 
+    static func environmentFile(_ g: InstalledGame) -> URL { g.nokcanduState.appendingPathComponent("game-environment.json") }
+    static func environment(_ g: InstalledGame) -> [String: String] {
+        (try? Data(contentsOf: environmentFile(g))).flatMap { try? JSONDecoder().decode([String: String].self, from: $0) } ?? [:]
+    }
+    static func setEnvironment(_ value: [String: String], for g: InstalledGame) throws {
+        try NokPaths.ensure(g.nokcanduState)
+        try JSONEncoder().encode(value).write(to: environmentFile(g), options: .atomic)
+        try SharedGameCompatibility.writeRoutes(g)
+    }
+
     public static func host(of g: InstalledGame, in games: [InstalledGame]) -> InstalledGame? {
         games.first { $0.appURL.path == g.battleNet?.hostApp }
     }
@@ -23,6 +33,7 @@ public enum BattleNetGraphics {
         try FileManager.default.createDirectory(at: f.deletingLastPathComponent(), withIntermediateDirectories: true)
         if let p { try Data(p.rawValue.utf8).write(to: f, options: .atomic) } else { try? FileManager.default.removeItem(at: f) }
         if let h = host(of: g, in: games) { try writeMap(host: h, games: games) }
+        try SharedGameCompatibility.writeRoutes(g)
     }
 
     /// The game's program name (e.g. D2R.exe), from Battle.net's install records.

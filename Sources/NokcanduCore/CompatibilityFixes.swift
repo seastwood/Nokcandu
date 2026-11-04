@@ -66,6 +66,7 @@ public enum CompatibilityFixes {
         var appliedArguments: String? = nil
         var previousEnvironment: [String: String]? = nil
         var appliedEnvironment: [String: String]? = nil
+        var sharedActive: Bool? = nil
     }
     static func marker(_ fix: CompatibilityFix, _ g: InstalledGame) -> URL {
         g.nokcanduState.appendingPathComponent("fix-\(fix.rawValue).json")
@@ -77,6 +78,8 @@ public enum CompatibilityFixes {
         (try? Data(contentsOf: marker(fix, g))).flatMap { try? JSONDecoder().decode(State.self, from: $0) }
     }
     public static func isInstalled(_ fix: CompatibilityFix, for g: InstalledGame) -> Bool { state(fix, g) != nil }
+    public static func needsRecovery(_ fix: CompatibilityFix, for g: InstalledGame) -> Bool { state(fix, g)?.sharedActive == false }
+    public static func isEnabled(_ fix: CompatibilityFix, for g: InstalledGame) -> Bool { isInstalled(fix, for: g) && !needsRecovery(fix, for: g) }
     public static func installedIDs(for g: InstalledGame) -> [String] {
         CompatibilityFix.allCases.filter { isInstalled($0, for: g) }.map(\.rawValue)
     }
@@ -85,11 +88,13 @@ public enum CompatibilityFixes {
     }
     static func fresh(_ g: InstalledGame) -> InstalledGame { GameLibrary.inspect(g.appURL) ?? g }
     static func program(_ g: InstalledGame) -> URL? {
-        g.custom.flatMap { BattleNet.unixPath($0.exe, prefix: g.prefix) }
+        if SharedGameCompatibility.isShared(g) { return SharedGameCompatibility.target(g)?.program }
+        return g.custom.flatMap { BattleNet.unixPath($0.exe, prefix: g.prefix) }
     }
     /// A linked game folder is still C: to Windows. Resolve both the selected program and
     /// the managed game-folder link, rejecting further links that escape either allowed root.
     static func managedProgram(_ g: InstalledGame) -> URL? {
+        if SharedGameCompatibility.isShared(g) { return SharedGameCompatibility.target(g)?.program }
         guard let windows = g.custom?.exe, CustomGames.driveCRelative(windowsPath: windows) != nil,
               let exe = program(g) else { return nil }
         let resolved = exe.resolvingSymlinksInPath().path
@@ -135,8 +140,21 @@ public enum CompatibilityFixes {
         }
         return rules
     }
-    /// Restrict changes to standalone managed apps: shared launcher environments need per-program
-    /// routing before these can safely be offered there.
+    public static func hasSharedEnvironment(_ g: InstalledGame) -> Bool { SharedGameCompatibility.isShared(g) }
+    public static func programForFixes(_ g: InstalledGame) -> URL? { managedProgram(g) }
+    public static func folderForFixes(_ g: InstalledGame) -> URL? { LauncherInstallation.location(for: g)?.folder }
+    public static func selectProgramForFixes(_ file: URL, for g: InstalledGame) throws {
+        guard SharedGameCompatibility.isShared(g), let location = SharedGameCompatibility.location(g),
+              file.resolvingSymlinksInPath().path.hasPrefix(location.folder.resolvingSymlinksInPath().path + "/"),
+              PEFile.inspect(file) != nil else { throw NokError("Choose a Windows program inside this game's registered installation folder.") }
+        if !installedIDs(for: g).isEmpty, programForFixes(g)?.resolvingSymlinksInPath() != file.resolvingSymlinksInPath() {
+            throw NokError("Undo this game's installed compatibility fixes before choosing a different program for them. The game's launch program is unchanged.")
+        }
+        try NokPaths.ensure(g.nokcanduState)
+        guard let windows = SharedGameCompatibility.windowsPaths(file, host: location.host).sorted().first else { throw NokError("This program has no Windows drive mapping in the launcher.") }
+        try Data(windows.utf8).write(to: g.nokcanduState.appendingPathComponent("compatibility-program"), options: .atomic)
+        try SharedGameCompatibility.writeRoutes(g)
+    }
     public static func visible(_ fix: CompatibilityFix, for g:InstalledGame) -> Bool {
         if isInstalled(fix,for:g) { return true }
         if fix == .bf1942SoftwareAudio { return BF1942AudioFix.supports(g) }
@@ -145,7 +163,8 @@ public enum CompatibilityFixes {
         if fix == .ubisoftBrowser { return UbisoftBrowser.supports(g) }
         return true
     }
-    public static func unavailable(_ fix: CompatibilityFix, for g: InstalledGame) -> String? {
+    public static func unavailable(_ fix: CompatibilityFix, for g: InstalledGame, graphics: GraphicsPreset? = nil) -> String? {
+        if SharedGameCompatibility.isShared(g) { return SharedGameCompatibility.unavailable(fix, for: g, graphics: graphics) }
         guard g.custom != nil, !g.usesSharedSteam, g.battleNet == nil, g.hosted == nil,
               g.native == nil else { return "Available for games with their own Nokcandu Windows environment." }
         guard let exe = managedProgram(g), PEFile.inspect(exe) != nil else {
@@ -175,6 +194,10 @@ public enum CompatibilityFixes {
         return nil
     }
     static func requireClosed(_ g: InstalledGame) throws {
+        if SharedGameCompatibility.isShared(g) {
+            let activity = PendingSettings.activity(for: g)
+            guard activity == .closed || activity == .backgroundOnly else { throw NokError("Close the launcher and its games first. Saved fixes apply automatically when the Windows environment is idle.") }
+        }
         if GameLauncher.runState(of: g) != .notRunning { throw NokError("Quit \(g.name) first.") }
     }
     /// Expand grouped Wine rules so changing d3d8 never accidentally removes a d3d9 rule.
@@ -251,6 +274,7 @@ public enum CompatibilityFixes {
     }
     /// Profile settings cannot silently disable components still installed on disk.
     static func preservingInstalledSettings(_ config: CustomGameConfig, for g: InstalledGame) -> CustomGameConfig {
+        if SharedGameCompatibility.isShared(g) { return config }
         var c = config, rules = overrides(c.environment?["WINEDLLOVERRIDES"])
         if BF1942DisplayFix.isRecommended(for: g) { c.bf1942MenuCopy = true }
         for fix in CompatibilityFix.allCases {
@@ -282,6 +306,7 @@ public enum CompatibilityFixes {
         try await installReserved(fix, for: g, log: log)
     }
     static func installReserved(_ fix: CompatibilityFix, for g: InstalledGame, log: @escaping @Sendable (String) -> Void) async throws {
+        if SharedGameCompatibility.isShared(g) { try await SharedGameCompatibility.install(fix, for: g, log: log); return }
         try requireClosed(g)
         let upgrading = needsUpdate(fix, for: g)
         if isInstalled(fix, for: g) && !upgrading { throw NokError("This fix already has an installation record. Undo it before installing again.") }
@@ -299,46 +324,7 @@ public enum CompatibilityFixes {
                 throw NokError("IPX settings or the launcher changed. They were left untouched; restore them before updating.")
             }
         }
-        let work = NokPaths.support.appendingPathComponent("Work/fix-\(UUID().uuidString)")
-        try NokPaths.ensure(work); defer { try? FileManager.default.removeItem(at: work) }
-        var files: [URL: Data] = [:], applied: [String: String] = [:], appliedEnv: [String: String] = [:]
-        switch fix {
-        case .bf1942SoftwareAudio: files = try BF1942AudioFix.plannedFiles(g)
-        case .nativeIPXNetworking:
-            files = try NativeIPXNetworking.plannedFiles(for: g)
-            applied = ["wpcap": "b"]
-            appliedEnv = [NativeIPXNetworking.flag: "1"]
-        case .ipxNetworking:
-            files = try await IPXNetworking.download(for: g, work: work, log: log)
-            applied = IPXNetworking.overrides
-        case .ubisoftBrowser:
-            files = try UbisoftBrowser.plannedFiles(g)
-            appliedEnv = ["DXMT_ALLOW_CROSS_PROCESS_SWAPCHAIN":"1"]
-        case .shaderCompiler47:
-            files[exe.deletingLastPathComponent().appendingPathComponent("d3dcompiler_47.dll")] = try await shaderCompiler47(for: g, work: work, log: log)
-            applied = ["d3dcompiler_47": "n,b"]
-        case .bundledVC: applied = bundledVCRules(g)
-        case .crossProcessWindows: appliedEnv = ["DXMT_ALLOW_CROSS_PROCESS_SWAPCHAIN": "1"]
-        case .openUA:
-            files = try OpenUASettings.plannedFiles(for: g)
-        case .directx9Extras:
-            for (name, data) in try await extras(for: g, work: work, log: log) { files[exe.deletingLastPathComponent().appendingPathComponent(name)] = data }
-            applied = ["d3dx9_43": "n,b", "d3dcompiler_43": "n,b"]
-        case .d3d8to9:
-            guard let target = directX8Program(g) else { throw NokError("The DirectX 8 game program could not be identified.") }
-            let dll = try await verifiedDownload("d3d8to9-1.16.0.dll", url: "https://github.com/crosire/d3d8to9/releases/download/v1.16.0/d3d8.dll",
-                sha: "122928cfe225c25d30decf7184a5d37e490cecf3b58256ba3206c7e1853f8ab8", log: log)
-            files[target.deletingLastPathComponent().appendingPathComponent("d3d8.dll")] = try Data(contentsOf: dll)
-            applied = ["d3d8": "n", "d3d9": "b"]
-        case .cursorVisibility:
-            files[g.nokcanduState.appendingPathComponent("cursor-visibility-fix")] = Data("1\n".utf8)
-        case .borderless:
-            let arch = PEFile.inspect(exe)?.is64Bit == true ? "x86_64" : "x86"
-            for (name, ext) in [("launcher", "exe"), ("window", "dll")] {
-                guard let source = NokPaths.bundledResource("borderless-\(arch).\(ext)") else { throw NokError("The borderless helper is missing. Rebuild or update Nokcandu first.") }
-                files[g.prefix.appendingPathComponent("drive_c/nokcandu/borderless/\(name).\(ext)")] = try Data(contentsOf: source)
-            }
-        }
+        var (files, applied, appliedEnv) = try await payload(fix, for: g, log: log)
         // Downloads happen before mutation; recheck because the user could have started the game.
         try requireClosed(fresh(g))
         guard CustomGameConfig.load(contents: g.contents) == g.custom else { throw NokError("Game settings changed during download. Try again.") }
@@ -393,11 +379,64 @@ public enum CompatibilityFixes {
         CompanionRepair.snapshot(g)
         log("Installed \(fix.title). Undo is available in Fixes.")
     }
+    static func payload(_ fix: CompatibilityFix, for g: InstalledGame, log: @escaping @Sendable (String) -> Void) async throws -> ([URL: Data], [String: String], [String: String]) {
+        guard let exe = program(g) else { throw NokError("Choose the game's program first.") }
+        let work = NokPaths.support.appendingPathComponent("Work/fix-\(UUID().uuidString)")
+        try NokPaths.ensure(work); defer { try? FileManager.default.removeItem(at: work) }
+        var files: [URL: Data] = [:], applied: [String: String] = [:], appliedEnv: [String: String] = [:]
+        switch fix {
+        case .bf1942SoftwareAudio: files = try BF1942AudioFix.plannedFiles(g)
+        case .nativeIPXNetworking:
+            files = try NativeIPXNetworking.plannedFiles(for: g)
+            applied = ["wpcap": "b"]
+            appliedEnv = [NativeIPXNetworking.flag: "1"]
+        case .ipxNetworking:
+            files = try await IPXNetworking.download(for: g, work: work, log: log)
+            applied = IPXNetworking.overrides
+        case .ubisoftBrowser:
+            files = try UbisoftBrowser.plannedFiles(g)
+            appliedEnv = ["DXMT_ALLOW_CROSS_PROCESS_SWAPCHAIN":"1"]
+        case .shaderCompiler47:
+            files[exe.deletingLastPathComponent().appendingPathComponent("d3dcompiler_47.dll")] = try await shaderCompiler47(for: g, work: work, log: log)
+            applied = ["d3dcompiler_47": "n,b"]
+        case .bundledVC: applied = bundledVCRules(g)
+        case .crossProcessWindows: appliedEnv = ["DXMT_ALLOW_CROSS_PROCESS_SWAPCHAIN": "1"]
+        case .openUA:
+            files = try OpenUASettings.plannedFiles(for: g)
+        case .directx9Extras:
+            for (name, data) in try await extras(for: g, work: work, log: log) { files[exe.deletingLastPathComponent().appendingPathComponent(name)] = data }
+            applied = ["d3dx9_43": "n,b", "d3dcompiler_43": "n,b"]
+        case .d3d8to9:
+            guard let target = directX8Program(g) else { throw NokError("The DirectX 8 game program could not be identified.") }
+            let dll = try await verifiedDownload("d3d8to9-1.16.0.dll", url: "https://github.com/crosire/d3d8to9/releases/download/v1.16.0/d3d8.dll",
+                sha: "122928cfe225c25d30decf7184a5d37e490cecf3b58256ba3206c7e1853f8ab8", log: log)
+            files[target.deletingLastPathComponent().appendingPathComponent("d3d8.dll")] = try Data(contentsOf: dll)
+            applied = ["d3d8": "n", "d3d9": "b"]
+        case .cursorVisibility:
+            files[g.nokcanduState.appendingPathComponent("cursor-visibility-fix")] = Data("1\n".utf8)
+        case .borderless:
+            if SharedGameCompatibility.isShared(g) { break }
+            let arch = PEFile.inspect(exe)?.is64Bit == true ? "x86_64" : "x86"
+            for (name, ext) in [("launcher", "exe"), ("window", "dll")] {
+                guard let source = NokPaths.bundledResource("borderless-\(arch).\(ext)") else { throw NokError("The borderless helper is missing. Rebuild or update Nokcandu first.") }
+                files[g.prefix.appendingPathComponent("drive_c/nokcandu/borderless/\(name).\(ext)")] = try Data(contentsOf: source)
+            }
+        }
+        return (files, applied, appliedEnv)
+    }
     /// Refresh only app-owned bundled helper files, independently of game settings or downloads.
     /// This keeps improvements to the shared window helper available to existing installations.
     static func refreshBundledHelpers(_ g: InstalledGame) {
         NativeIPXNetworking.refreshHelper(g)
         NativeIPXNetworking.refreshAdapter(g)
+        if SharedGameCompatibility.isShared(g) {
+            let activity = PendingSettings.activity(for: g)
+            if activity == .closed || activity == .backgroundOnly,
+               SharedGameCompatibility.isActive(.borderless, g), let link = g.hosted, link.launcher == .ea {
+                try? HostedSettings.ensureBorderless(link)
+            }
+            return
+        }
         guard let st = state(.borderless, g), st.executable == g.custom?.exe,
               (try? requireClosed(g)) != nil, (try? begin(g)) != nil else { return }
         defer { end(g) }
@@ -449,6 +488,7 @@ public enum CompatibilityFixes {
         try undoReserved(fix, for: g, log: log)
     }
     static func undoReserved(_ fix: CompatibilityFix, for g: InstalledGame, log: @escaping @Sendable (String) -> Void) throws {
+        if SharedGameCompatibility.isShared(g) { try SharedGameCompatibility.undo(fix, for: g, log: log); return }
         try requireClosed(g)
         if fix == .ipxNetworking, isInstalled(.nativeIPXNetworking, for: g) { throw NokError("Undo Native IPX first; it uses the legacy networking component.") }
         guard let st = state(fix, g), var c = g.custom else { throw NokError("No installation record for this fix.") }

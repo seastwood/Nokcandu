@@ -332,3 +332,11 @@ A local test pass is not evidence that GitHub CI passed. Non-sensitive stage mar
 ## Label actual state, not unexplained development status (2026-11-04)
 
 The installer’s unconditional Preview badge had no behavioral meaning and confused real installation progress. Removed it from the shared header for all installation flows; no state migration is required. See [installer notes](investigations/nonblocking-installation-2026-11-01.md).
+
+## Scope shared-launcher components to registered game programs (2026-11-04)
+
+A shared prefix is not a reason to block all compatibility components. Resolve a dedicated registered game root and actual PE program, keep receipts and DLL rules on its shortcut, and apply them before DLL search initialization through complete-path routing. Whole-folder removal rules are too strict for games nested inside a client; component validation must instead ensure the client is outside the selected game root. Receipts must keep targeting stable across UI renames. Treat incomplete installs as inactive recovery records, and never export them as working profile fixes. Shared profiles must not redirect game graphics to client settings or restore unrelated shared preferences that they never changed. See [implementation and evidence](investigations/shared-launcher-compatibility-2026-11-04.md).
+
+## Request platform-specific runners only for platform-specific work (2026-11-04)
+
+A scheduled engine watcher failed before executing any step because GitHub could not supply its hosted ARM Mac. Retrying succeeded. Run version discovery on a general runner and request macOS only for a genuinely needed native build; do not classify runner-capacity failures as product build defects. [Evidence](investigations/ci-pending-monitor-and-refusal-2026-11-04.md).

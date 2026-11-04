@@ -601,6 +601,9 @@ public enum CustomGames {
         try journal.write(Data(script.utf8), to: launcher, reason: "Launcher for \(c.graphics.title)")
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: launcher.path)
         try journal.write(try c.encoded(), to: CustomGameConfig.url(in: game.contents), reason: "Game settings")
-        if let updated = GameLibrary.inspect(game.appURL) { try LauncherEntry.ensure(updated) }
+        if let updated = GameLibrary.inspect(game.appURL) {
+            try LauncherEntry.ensure(updated)
+            if updated.usesSharedSteam { try SharedGameCompatibility.writeRoutes(updated) }
+        }
     }
 }

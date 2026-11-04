@@ -1095,6 +1095,13 @@ __attribute__((constructor)) static void start(void) {
                 fprintf(stderr, "nokcandu: %s uses its own graphics mode\n", argv[1]);
         }
     }
+    if (argc > 1) {
+        Dl_info fix_info;
+        if (dladdr((const void *)start, &fix_info) && fix_info.dli_fname) {
+            char library[PATH_MAX]; strlcpy(library, fix_info.dli_fname, sizeof library);
+            nokcandu_configure_program_fixes(argv[1], dirname(library));
+        }
+    }
     if (argc > 1 && nokcandu_background_program(argv[1])) {
         helper_enabled = false;
         if (responsible_for_itself()) run_from_game_app_as(true);
@@ -1111,8 +1118,10 @@ __attribute__((constructor)) static void start(void) {
         snprintf(settings_path, sizeof settings_path, "%s/raw-mouse", state);
         char routes[PATH_MAX]; snprintf(routes, sizeof routes, "%s/program-input.tsv", state);
         if (argc > 1) per_game_input = nokcandu_program_input(routes, argv[1], settings_path, sizeof settings_path);
-        snprintf(visibility_flag, sizeof visibility_flag, "%s/cursor-visibility-fix", state);
-        snprintf(borderless_confinement_record, sizeof borderless_confinement_record, "%s/fix-borderless.json", state);
+        const char *fix_state = getenv("NOKCANDU_GAME_FIX_STATE");
+        if (!fix_state || fix_state[0] != '/') fix_state = state;
+        snprintf(visibility_flag, sizeof visibility_flag, "%s/cursor-visibility-fix", fix_state);
+        snprintf(borderless_confinement_record, sizeof borderless_confinement_record, "%s/fix-borderless.json", fix_state);
     }
     debug_on = getenv("NOKCANDU_RAW_MOUSE_DEBUG") != NULL;
     game_cursor = getenv("NOKCANDU_RAW_MOUSE_GAME_CURSOR") != NULL;

@@ -19,6 +19,13 @@ final class ProfileCompletenessTests: XCTestCase {
         var wrong = p; wrong.schema = 1
         XCTAssertFalse(wrong.problems.isEmpty, "old clients must not silently accept settings they cannot apply")
     }
+    func testScopedProfileSchemaRoundTripsAndRejectsFutureVersions() throws {
+        var profile = sample(); profile.schema = 3
+        XCTAssertEqual(profile.problems, [])
+        XCTAssertEqual(try GameProfile.parse(profile.json()), profile)
+        profile.schema = 4
+        XCTAssertEqual(try GameProfile.parse(profile.json()).problems.first, "unknown schema 4")
+    }
     func testOnlyBuiltInBF1942RecipeAndResolutionsCanBeShared() {
         var p = sample(); p.gameDisplay?.recipe = "https://example.com/patch.exe"
         XCTAssertFalse(p.problems.isEmpty)

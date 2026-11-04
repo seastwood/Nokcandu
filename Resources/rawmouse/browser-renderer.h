@@ -94,4 +94,41 @@ __attribute__((unused)) static bool nokcandu_configure_program_renderer(const ch
     fclose(f);
     return done;
 }
+
+// Compatibility routes deliberately require the complete program path. Games with
+// the same basename must never inherit each other's DLL overrides or helper flags.
+static bool nokcandu_same_fix_program_path(const char *a, const char *b) {
+    if (!a || !b || (!strchr(a, '/') && !strchr(a, '\\'))) return false;
+    while (*a && *b) {
+        unsigned char x = (unsigned char)*a++, y = (unsigned char)*b++;
+        if (x == '\\') x = '/'; if (y == '\\') y = '/';
+        if (x >= 'A' && x <= 'Z') x += 'a' - 'A';
+        if (y >= 'A' && y <= 'Z') y += 'a' - 'A';
+        if (x != y) return false;
+    }
+    return !*a && !*b;
+}
+__attribute__((unused)) static bool nokcandu_configure_program_fixes(const char *path, const char *state_dir) {
+    if (!path || !*path || !state_dir || !*state_dir) return false;
+    char file[4096]; snprintf(file, sizeof file, "%s/program-fixes.tsv", state_dir);
+    FILE *f = fopen(file, "r"); if (!f) return false;
+    char line[8192]; bool applied = false;
+    while (fgets(line, sizeof line, f)) {
+        if (!strchr(line, '\n') && !feof(f)) { int c; while ((c = fgetc(f)) != '\n' && c != EOF) {} continue; }
+        line[strcspn(line, "\r\n")] = 0;
+        char *save = NULL;
+        if (!strtok_r(line, "\t", &save)) continue; // stable owner, used by the writer
+        char *key = strtok_r(NULL, "\t", &save);
+        if (!key || !nokcandu_same_fix_program_path(path, key)) continue;
+        static const char *renderers[] = { "WINEDLLPATH_D9VK", "WINEDLLPATH_DXVK", "WINEDLLPATH_D3DMETAL", "WINEDLLPATH_DXMT", "WINEDLLPATH_CNCD", "WINEDLLOVERRIDES" };
+        for (size_t i = 0; i < sizeof renderers / sizeof *renderers; ++i) unsetenv(renderers[i]);
+        char *field;
+        while ((field = strtok_r(NULL, "\t", &save))) {
+            char *eq = strchr(field, '='); if (!eq || eq == field) continue;
+            *eq = 0; setenv(field, eq + 1, 1);
+        }
+        applied = true; break;
+    }
+    fclose(f); return applied;
+}
 #endif

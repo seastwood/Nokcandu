@@ -77,3 +77,5 @@ Keep credentials, account identifiers, raw session logs, copyrighted game/runtim
 - [Apply pending settings after exit](investigations/pending-settings-idle-2026-11-04.md) — automatic idle application, per-control indicators, shared-host safety and bounded failure retries.
 
 - [CI monitor crash and refused-connection probe](investigations/ci-pending-monitor-and-refusal-2026-11-04.md) — runner/local differences, callback compatibility and synchronous versus asynchronous Winsock errors.
+
+- [Shared-launcher game compatibility components](investigations/shared-launcher-compatibility-2026-11-04.md) — Steam/Battle.net/EA/Ubisoft program isolation, generic fix installation, profiles, recovery and Undo.

@@ -35,6 +35,36 @@ final class SteamBrowserRenderingTests: XCTestCase {
         if compiled.ok { XCTAssertTrue(try Shell.run(exe.path, []).ok) }
     }
 
+    func testCompatibilityRoutesUseCompletePathsAndPreserveOtherGames() throws {
+        let fm = FileManager.default, work = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try NokPaths.ensure(work); defer { try? fm.removeItem(at: work) }
+        let source = work.appendingPathComponent("routes.c"), exe = work.appendingPathComponent("routes")
+        let header = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Resources/rawmouse")
+        try #"""
+        #include "browser-renderer.h"
+        int main(int argc, char **argv) {
+            if (argc != 2) return 1;
+            if (nokcandu_configure_browser_renderer(NULL)) return 9;
+            setenv("WINEDLLPATH_DXMT", "client-renderer", 1);
+            setenv("WINEDLLOVERRIDES", "d3d8=b", 1);
+            const char *others[] = {"game.exe", "C:\\Other Game\\game.exe", "C:\\Client\\client.exe", "C:\\Games\\Own\\game.exe.bak"};
+            for (unsigned i=0; i<sizeof(others)/sizeof(*others); ++i)
+                if (nokcandu_configure_program_fixes(others[i], argv[1])) return 2;
+            if (strcmp(getenv("WINEDLLPATH_DXMT"), "client-renderer")) return 3;
+            if (strcmp(getenv("WINEDLLOVERRIDES"), "d3d8=b")) return 4;
+            if (!nokcandu_configure_program_fixes("c:/GAMES/own/GAME.exe", argv[1])) return 5;
+            if (getenv("WINEDLLPATH_DXMT")) return 6;
+            if (strcmp(getenv("WINEDLLPATH_D9VK"), "own-renderer")) return 7;
+            if (strcmp(getenv("WINEDLLOVERRIDES"), "d3d8=n;d3d9=b")) return 8;
+            return 0;
+        }
+        """#.write(to: source, atomically: true, encoding: .utf8)
+        try "owner\tC:\\Games\\Own\\game.exe\tWINEDLLPATH_D9VK=own-renderer\tWINEDLLOVERRIDES=d3d8=n;d3d9=b\n".write(to: work.appendingPathComponent("program-fixes.tsv"), atomically: true, encoding: .utf8)
+        let result = try Shell.run("/usr/bin/clang", ["-Wall", "-Werror", "-I", header.path, source.path, "-o", exe.path])
+        XCTAssertTrue(result.ok, result.combined)
+        if result.ok { let run = try Shell.run(exe.path, [work.path]); XCTAssertTrue(run.ok, run.combined + "status \(run.status)") }
+    }
+
     func testDrawingDefaultTracksEngineAndPreservesExplicitChoices() throws {
         let fm = FileManager.default, h = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? fm.removeItem(at: h) }

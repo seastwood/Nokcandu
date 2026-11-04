@@ -100,7 +100,10 @@ public enum RawMouse {
     /// Called on refresh, off the main thread (it looks through game folders).
     public static func refreshLibraries(_ games: [InstalledGame]) {
         try? GameMicrophone.refreshPolicies(games)
-        for game in games where game.native == nil { CompanionRepair.snapshot(game) }
+        for game in games where game.native == nil {
+            CompanionRepair.snapshot(game)
+            if SharedGameCompatibility.isShared(game) { try? SharedGameCompatibility.writeRoutes(game) }
+        }
         let fm = FileManager.default
         var input: [URL: [String: String]] = [:]
         var basenames: [URL: [String: [String]]] = [:]

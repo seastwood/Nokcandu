@@ -26,7 +26,13 @@ public enum HostedSettings {
     public static func graphics(_ game: InstalledGame) -> GraphicsPreset {
         load(game).graphics ?? game.hosted.flatMap(host)?.custom?.graphics ?? .classic3D
     }
-    static func script(_ link: HostedGameLink, settings: Settings) -> String {
+    static func script(_ link: HostedGameLink, settings: Settings, game: InstalledGame? = nil) -> String {
+        var settings = settings
+        if link.launcher == .ea, let game, let host = host(link) {
+            settings.environment = SharedGameCompatibility.environment(game, base: settings.environment, support: host.support)
+            if SharedGameCompatibility.isActive(.d3d8to9, game) { settings.graphics = .classic3D }
+            if SharedGameCompatibility.isActive(.borderless, game) { settings.borderless = true }
+        }
         let q = CustomGames.shellQuote, host = host(link)
         let mode = settings.graphics ?? host?.custom?.graphics ?? .classic3D
         let program = link.exe.flatMap { exe in host.flatMap { BattleNet.unixPath(exe, prefix: $0.prefix) } }
@@ -109,18 +115,23 @@ public enum HostedSettings {
         """
         return HelperPatch.scopeWineLibrary(script)
     }
-    public static func save(_ settings: Settings, for game: InstalledGame) throws {
+    static func validateLauncher(_ game: InstalledGame) throws {
         let launcher = game.launcherURL ?? game.contents.appendingPathComponent("MacOS/\(CustomGames.launcherName)")
-        guard let link = game.hosted else { throw NokError("Choose an EA or Ubisoft game added to Nokcandu.") }
-        if GameLauncher.runState(of: game) != .notRunning { throw NokError("Quit this game before changing its launch settings.") }
-        var value = settings
+        guard let link = game.hosted else { throw NokError("Choose a launcher game.") }
         let current = try String(contentsOf: launcher, encoding: .utf8), old = load(game)
         guard current == PCLaunchers.legacyLauncherScript(link) || current == PCLaunchers.launcherScript(link, legacyProcessDetection: true) ||
                 old.launcherSHA == Hashing.sha256(data: Data(current.utf8)) else {
             throw NokError("This game's launcher was edited outside Nokcandu, so it was kept. Restore the generated launcher before changing settings.")
         }
-        if value.borderless == true { try ensureBorderless(link) }
-        let script = script(link, settings: value)
+    }
+    public static func save(_ settings: Settings, for game: InstalledGame) throws {
+        let launcher = game.launcherURL ?? game.contents.appendingPathComponent("MacOS/\(CustomGames.launcherName)")
+        guard let link = game.hosted else { throw NokError("Choose an EA or Ubisoft game added to Nokcandu.") }
+        if GameLauncher.runState(of: game) != .notRunning { throw NokError("Quit this game before changing its launch settings.") }
+        var value = settings
+        try validateLauncher(game)
+        if value.borderless == true || SharedGameCompatibility.isActive(.borderless, game) { try ensureBorderless(link) }
+        let script = script(link, settings: value, game: game)
         value.launcherSHA = Hashing.sha256(data: Data(script.utf8))
         let journal = ChangeJournal(scope: game.journalScope)
         try journal.write(Data(script.utf8), to: launcher, reason: "Hosted game launch settings")

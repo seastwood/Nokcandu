@@ -266,7 +266,7 @@ public enum PCLaunchers {
             guard let l = g.hosted else { continue }
             let f = g.appURL.appendingPathComponent("Contents/MacOS/\(CustomGames.launcherName)")
             guard let current = try? String(contentsOf: f, encoding: .utf8) else { continue }
-            let settings = HostedSettings.load(g), want = HostedSettings.script(l, settings: settings)
+            let settings = HostedSettings.load(g), want = HostedSettings.script(l, settings: settings, game: g)
             guard current != want else { continue }
             // Known older generated scripts and fingerprinted scripts migrate; manual edits stay.
             if WineEnvironment.upgradeExports(current) == legacyLauncherScript(l) || WineEnvironment.upgradeExports(current) == launcherScript(l, legacyProcessDetection: true) ||

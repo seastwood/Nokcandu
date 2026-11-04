@@ -7,6 +7,7 @@ struct HostedGameSettingsSection: View {
     let game: InstalledGame
     @State private var settings = HostedSettings.Settings()
     @State private var busy = false
+    @State private var styleEdited = false
     var body: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
@@ -19,7 +20,7 @@ struct HostedGameSettingsSection: View {
                 Text((settings.graphics ?? HostedSettings.graphics(game)).detail).font(.caption).foregroundStyle(.secondary)
                 if game.hosted?.launcher == .ea {
                     SettingRow(title: "Window style") {
-                        Picker("Window style", selection: Binding(get: { GameWindowStyle.current(settings) }, set: { GameWindowStyle.set($0, in: &settings) })) {
+                        Picker("Window style", selection: Binding(get: { !styleEdited && CompatibilityFixes.isEnabled(.borderless, for: game) ? (settings.macFullScreen == true ? .fullScreen : .borderless) : GameWindowStyle.current(settings) }, set: { styleEdited = true; GameWindowStyle.set($0, in: &settings) })) {
                             ForEach(GameWindowStyle.allCases) { Text($0.title).tag($0) }
                         }.labelsHidden().frame(maxWidth: 380)
                     }
@@ -31,7 +32,8 @@ struct HostedGameSettingsSection: View {
                     Text(link.exe ?? "Starts through the launcher").font(.caption.monospaced()).textSelection(.enabled)
                 }
                 Button("Save Game Settings") {
-                    let value = settings
+                    var value = settings
+                    if !styleEdited, CompatibilityFixes.isEnabled(.borderless, for: game) { value.borderless = true }
                     model.changeSetting(for: game, title: "Game Settings", success: "Game settings saved. Start this game from Nokcandu to use them.", change: .hosted(value))
                 }
                 if BC2DisplaySettings.supports(game) {

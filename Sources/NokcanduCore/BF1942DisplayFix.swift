@@ -33,8 +33,8 @@ public enum BF1942DisplayFix {
         try JSONEncoder().encode(state).write(to: record(g), options: .atomic)
     }
     static func folder(_ g: InstalledGame) -> URL? {
-        guard g.custom != nil, !g.usesSharedSteam, g.battleNet == nil, g.hosted == nil, g.native == nil,
-              let program = CompatibilityFixes.program(g) else { return nil }
+        let selected = SharedGameCompatibility.isShared(g) ? CompatibilityFixes.managedProgram(g) : CompatibilityFixes.program(g)
+        guard g.native == nil, let program = selected else { return nil }
         // Recognize the known third-party wrapper without treating uninstallers or
         // unrelated programs in the same directory as BF1942.
         let names = ["bf1942.exe", "bf1942borderless.exe", "borderless1942.exe", "bf1942-menu-test.exe", "bftest.exe", copyName.lowercased()]
@@ -44,12 +44,12 @@ public enum BF1942DisplayFix {
         let base = g.prefix.appendingPathComponent("drive_c").resolvingSymlinksInPath().path + "/"
         let external = GameMover.externalFiles(g)?.resolvingSymlinksInPath()
         let inManagedFiles = external.map { folder.path == $0.path || folder.path.hasPrefix($0.path + "/") } ?? false
-        guard folder.path.hasPrefix(base) || inManagedFiles else { return nil }
+        guard SharedGameCompatibility.isShared(g) || folder.path.hasPrefix(base) || inManagedFiles else { return nil }
         guard FileManager.default.fileExists(atPath: folder.appendingPathComponent("BF1942.exe").path),
               FileManager.default.fileExists(atPath: folder.appendingPathComponent("Mods/bf1942/Settings").path) else { return nil }
         return logical
     }
-    public static func supports(_ g: InstalledGame) -> Bool { folder(g) != nil }
+    public static func supports(_ g: InstalledGame) -> Bool { !SharedGameCompatibility.isShared(g) && folder(g) != nil }
     public static func hasChanges(for g: InstalledGame) -> Bool { state(g) != nil }
     /// Resolution-only receipts own settings, never the selected executable.
     static func ownsProgram(for g: InstalledGame) -> Bool { state(g)?.recommended == true }

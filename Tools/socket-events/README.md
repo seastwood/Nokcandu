@@ -24,3 +24,5 @@ python3 Tools/socket-events/ci.py
 ```
 
 For offline developer validation, repeat `--runtime-contents /absolute/runtime/Contents` for already verified local runtimes. CI uses the pinned downloads, never user installations. An ARM runner installs Rosetta before executing x86 Wine.
+
+The same pinned-runtime CI harness also runs `Tools/program-fixes/probe.py`: a synthetic client launches a child game, the child receives its exact-path DLL rule, and the client retains its original rule. This runs for both Wine engines and both Windows architectures in separate disposable prefixes. See [shared-launcher verification](../../docs/investigations/shared-launcher-compatibility-2026-11-04.md).

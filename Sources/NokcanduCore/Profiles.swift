@@ -30,6 +30,7 @@ public struct GameProfile: Codable, Hashable {
         public var nokcandu: String?
     }
 
+    public static let supportedSchemas = [1, 2, 3]
     public var schema = 1
     public var title: String
     public var match: Match
@@ -105,8 +106,8 @@ public struct GameProfile: Codable, Hashable {
         var p: [String] = []
         let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
         if t.isEmpty || t.count > 100 { p.append("title must be 1–100 characters") }
-        if ![1, 2].contains(schema) { p.append("unknown schema \(schema)") }
-        if (gameDisplay != nil || rawMouseFrameSync != nil || nativeIPXFrame != nil), schema != 2 { p.append("these settings require profile schema 2") }
+        if !Self.supportedSchemas.contains(schema) { p.append("unknown schema \(schema)") }
+        if (gameDisplay != nil || rawMouseFrameSync != nil || nativeIPXFrame != nil), ![2, 3].contains(schema) { p.append("these settings require profile schema 2 or newer") }
         if let frame = nativeIPXFrame, !(1...3).contains(frame) || fixes?.contains("native-ipx-networking") != true { p.append("native IPX frame requires the native IPX component and frame 1, 2 or 3") }
         if let d = gameDisplay {
             if d.recipe == "bf1942" {
@@ -346,7 +347,7 @@ public enum Profiles {
         let recipeEnvironment = recipe.map { overrides in
             (g.recipe?.environment ?? [:]).merging(overrides.environment) { _, value in value }
         }
-        for (k, v) in recipeEnvironment ?? hosted?.environment ?? hc?.environment ?? [:] {
+        for (k, v) in recipeEnvironment ?? hosted?.environment ?? (g.battleNet != nil ? BattleNetGraphics.environment(g) : hc?.environment) ?? [:] {
             let pv = portable(v, contents: host.contents)
             if GameProfile.envNameAllowed(k) && GameProfile.envValueAllowed(pv) { env[k] = pv }
         }
@@ -361,12 +362,12 @@ public enum Profiles {
             for d in Drives.list(for: g) where !d.builtIn && lib.standardizedFileURL.path.hasPrefix(URL(fileURLWithPath: d.target).standardizedFileURL.path) { drives.insert(d.letter) }
         }
         var p = GameProfile(title: g.battleNet?.name ?? c?.name ?? g.name, match: match, source: source, install: install,
-                            graphics: recipe != nil ? RecipeSettings.graphics(g) : (hosted != nil ? HostedSettings.graphics(g) : hc?.graphics),
+                            graphics: recipe != nil ? RecipeSettings.graphics(g) : (hosted != nil ? HostedSettings.graphics(g) : g.battleNet != nil ? BattleNetGraphics.choice(g) ?? hc?.graphics : hc?.graphics),
                             arguments: recipe?.arguments ?? hosted?.arguments ?? (g.battleNet == nil ? c?.arguments : nil),
                             environment: env.isEmpty ? nil : env,
                             rawMouse: raw.enabled ? raw.scale : 0,
                             performance: Performance.settings(for: g),
-                            fixes: (CinematicFix.isPresent(for: g) ? ["cinematic"] : []) + CompatibilityFixes.installedIDs(for: g),
+                            fixes: (CinematicFix.isPresent(for: g) ? ["cinematic"] : []) + CompatibilityFix.allCases.filter { CompatibilityFixes.isEnabled($0, for: g) }.map(\.id),
                             rating: rating,
                             tested: GameProfile.Tested(mac: macModel, macOS: ProcessInfo.processInfo.operatingSystemVersionString,
                                                        engine: host.wineVersion ?? g.wineVersion, nokcandu: AppUpdate.currentVersion),
@@ -386,10 +387,11 @@ public enum Profiles {
             p.gameDisplay = GameProfile.GameDisplay(resolution: size, menuCorrection: BF1942DisplayFix.isRecommended(for: g))
             p.match.exeName = "BF1942.exe"
         }
-        if hosted?.borderless == true { p.fixes = (p.fixes ?? []) + ["borderless"] }
+        if hosted?.borderless == true, p.fixes?.contains("borderless") != true { p.fixes = (p.fixes ?? []) + ["borderless"] }
+        if SharedGameCompatibility.isShared(g), SharedGameCompatibility.isActive(.d3d8to9, g) { p.graphics = .classic3D }
         if let size = BC2DisplaySettings.resolution(g), BC2DisplaySettings.supports(g) { p.gameDisplay = .init(recipe: size == BC2DisplaySettings.desktop ? "bfbc2-desktop" : "bfbc2", resolution: size, menuCorrection: false) }
         p.nativeIPXFrame = NativeIPXNetworking.frame(for: g)
-        p.schema = 2
+        p.schema = SharedGameCompatibility.isShared(g) ? 3 : 2
         p.audioBuffer = hosted == nil ? AudioBuffer.current(for: g) : nil
         if g.battleNet == nil { p.displayPixels = c?.displayPixels }
         p.resizableWindow = WindowedPresentation.setting(for: g)
@@ -481,9 +483,9 @@ public enum Profiles {
             }
         }
         if let gr = p.graphics {
-            if host.custom?.legacyD3D9 == true, gr != .classic3D {
+            if (SharedGameCompatibility.isShared(g) ? SharedGameCompatibility.isActive(.d3d8to9, g) : host.custom?.legacyD3D9 == true), gr != .classic3D {
                 plan.skipped.append("Graphics: \(gr.title) — Older 3D games stays selected while DirectX 8 compatibility is installed")
-            } else { plan.gameSettings.append("Graphics: \(gr.title)\(g.battleNet != nil ? shared : "")") }
+            } else { plan.gameSettings.append("Graphics: \(gr.title)") }
         }
         let a = p.arguments ?? ""
         if g.battleNet != nil {
@@ -493,16 +495,13 @@ public enum Profiles {
         } else if !a.isEmpty {
             plan.gameSettings.append("Launch options: \(a) (same as now)")
         }
-        if let a = p.hostArguments, g.battleNet != nil { plan.gameSettings.append("Battle.net launch options: \(a)") }
+        if let a = p.hostArguments, g.battleNet != nil { plan.sharedSettings.append("Battle.net launch options: \(a)") }
         let env = p.environment ?? [:]
         let text = env.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
-        if g.usesSharedSteam {
-            if !env.isEmpty { plan.skipped.append("Extra settings \(text) (Steam games share Steam's environment — add them to a non-Steam copy if needed)") }
-        } else {
-            let removed = (RecipeSettings.supports(host) ? RecipeSettings.load(host).environment : host.custom?.environment ?? [:]).filter { env[$0.key] == nil && replaceable($0.key, $0.value, host) }.keys.sorted()
-            if !env.isEmpty || !removed.isEmpty {
-                plan.gameSettings.append("Extra settings: " + (env.isEmpty ? "none" : text) + (removed.isEmpty ? "" : " (removes \(removed.joined(separator: ", ")))") + (g.battleNet != nil ? shared : ""))
-            }
+        let currentEnvironment = g.battleNet != nil ? BattleNetGraphics.environment(g) : g.hosted != nil ? HostedSettings.load(g).environment : RecipeSettings.supports(host) ? RecipeSettings.load(host).environment : host.custom?.environment ?? [:]
+        let removed = currentEnvironment.filter { env[$0.key] == nil && replaceable($0.key, $0.value, g) }.keys.sorted()
+        if !env.isEmpty || !removed.isEmpty {
+            plan.gameSettings.append("Extra settings: " + (env.isEmpty ? "none" : text) + (removed.isEmpty ? "" : " (removes \(removed.joined(separator: ", ")))") + (SharedGameCompatibility.isShared(g) ? " (this game)" : ""))
         }
         if g.hosted != nil, let r = p.rawMouse { plan.gameSettings.append(r == 0 ? "Raw mouse: off (this game)" : "Raw mouse: on (this game)") }
         if g.hosted == nil, let r = p.rawMouse { plan.sharedSettings.append(r == 0 ? "Raw mouse: off\(shared)" : "Raw mouse: on at \(String(format: "%.2f", r))×\(p.rawMouseSmooth == true ? ", smooth movement" : "")\(shared)") }
@@ -555,12 +554,12 @@ public enum Profiles {
             } else { plan.skipped.append("Native IPX frame: requires the supported native-IPX component") }
         }
         for fix in CompatibilityFix.allCases where p.fixes?.contains(fix.rawValue) == true {
-            if g.hosted != nil, fix == .borderless { plan.gameSettings.append("Fullscreen (Borderless)"); continue }
             // The profile's graphics choice is applied before component installation.
             var planned = g
             if let gr = p.graphics, var c = planned.custom { c.graphics = gr; planned.custom = c }
-            if CompatibilityFixes.isInstalled(fix, for: g) && !CompatibilityFixes.needsUpdate(fix, for: g) { plan.gameSettings.append("\(fix.title): already installed") }
-            else if let reason = CompatibilityFixes.unavailable(fix, for: planned) { plan.skipped.append("\(fix.title): \(reason)") }
+            if CompatibilityFixes.needsRecovery(fix, for: g) { plan.skipped.append("\(fix.title): incomplete installation; use Undo in Fixes before retrying") }
+            else if CompatibilityFixes.isInstalled(fix, for: g) && !CompatibilityFixes.needsUpdate(fix, for: g) { plan.gameSettings.append("\(fix.title): already installed") }
+            else if let reason = CompatibilityFixes.unavailable(fix, for: planned, graphics: p.graphics) { plan.skipped.append("\(fix.title): \(reason)") }
             else { plan.componentFixes.append(fix) }
         }
         let have = Set(Drives.list(for: host).map(\.letter))
@@ -584,10 +583,15 @@ public enum Profiles {
         var appliedNativeIPXFrame: Int? = nil
         var displayCheckpoint: BF1942DisplayFix.Checkpoint? = nil
         var hosted: HostedSettings.Settings? = nil
+        var battleNetGraphics: GraphicsPreset?? = nil
+        var battleNetEnvironment: [String: String]? = nil
         var recipe: RecipeSettings.Settings? = nil
         var bc2Display: BC2DisplaySettings.Checkpoint? = nil
         var resizable: [Int]?? = nil
         var addedComponents: [CompatibilityFix] = []
+        var appliedRawMouse = false
+        var appliedPerformance = false
+        var appliedBuffer = false
         public var gameName: String { game.name }
     }
 
@@ -613,11 +617,13 @@ public enum Profiles {
             let current = GameLibrary.inspect(s.target.appURL) ?? s.target
             try CustomGames.saveAll(CompatibilityFixes.preservingInstalledSettings(c, for: current), to: current)
         }
+        if let choice = s.battleNetGraphics { try BattleNetGraphics.set(choice, for: s.game, games: GameLibrary.scan()) }
+        if let environment = s.battleNetEnvironment { try BattleNetGraphics.setEnvironment(environment, for: s.game) }
         if let recipe = s.recipe { try RecipeSettings.save(recipe, for: s.game) }
         if let hosted = s.hosted { try HostedSettings.save(hosted, for: GameLibrary.inspect(s.game.appURL) ?? s.game) }
-        try RawMouse.apply(s.raw, for: s.game)
-        try Performance.apply(s.perf, for: s.game)
-        if let b = s.buffer, b != AudioBuffer.current(for: s.game) { try? AudioBuffer.apply(b, for: s.game) }
+        if s.appliedRawMouse { try RawMouse.apply(s.raw, for: s.game) }
+        if s.appliedPerformance { try Performance.apply(s.perf, for: s.game) }
+        if s.appliedBuffer, let b = s.buffer, b != AudioBuffer.current(for: s.game) { try? AudioBuffer.apply(b, for: s.game) }
     }
 
     public struct ApplyResult {
@@ -677,7 +683,7 @@ public enum Profiles {
         if g.hosted != nil {
             snapshot.hosted = HostedSettings.load(g)
             var value = snapshot.hosted!
-            if let graphics = p.graphics { value.graphics = graphics }
+            if let graphics = p.graphics, !SharedGameCompatibility.isActive(.d3d8to9, g) || graphics == .classic3D { value.graphics = graphics }
             value.arguments = p.arguments ?? ""
             if let fixes = p.fixes { value.borderless = fixes.contains("borderless") ? true : nil }
             value.environment = value.environment.filter { !replaceable($0.key, $0.value, g) }
@@ -685,9 +691,27 @@ public enum Profiles {
                 value.environment[k] = expand(v, contents: g.contents)
             }
             try HostedSettings.save(value, for: g)
-            if let perf = p.performance { try Performance.apply(perf, for: g) }
-            if let raw = p.rawMouse { try RawMouse.apply(.init(enabled: raw > 0, scale: raw > 0 ? raw : 1, smooth: p.rawMouseSmooth ?? false, frameSync: p.rawMouseFrameSync ?? false), for: g) }
+            if let perf = p.performance { try Performance.apply(perf, for: g); snapshot.appliedPerformance = true }
+            if let raw = p.rawMouse { try RawMouse.apply(.init(enabled: raw > 0, scale: raw > 0 ? raw : 1, smooth: p.rawMouseSmooth ?? false, frameSync: p.rawMouseFrameSync ?? false), for: g); snapshot.appliedRawMouse = true }
             return snapshot // These are per-game settings; the shared client's audio remains unchanged.
+        }
+        if g.battleNet != nil {
+            snapshot.battleNetGraphics = .some(BattleNetGraphics.choice(g))
+            snapshot.battleNetEnvironment = BattleNetGraphics.environment(g)
+            if let graphics = p.graphics, !SharedGameCompatibility.isActive(.d3d8to9, g) || graphics == .classic3D { try BattleNetGraphics.set(graphics, for: g, games: GameLibrary.scan()) }
+            var environment = snapshot.battleNetEnvironment!.filter { !replaceable($0.key, $0.value, g) }
+            for (key, value) in p.environment ?? [:] where GameProfile.envNameAllowed(key) && GameProfile.envValueAllowed(value) {
+                environment[key] = expand(value, contents: g.contents)
+            }
+            try BattleNetGraphics.setEnvironment(environment, for: g)
+            if includeShared {
+                if let arguments = p.hostArguments, var config = target.custom { config.arguments = arguments; try CustomGames.saveAll(config, to: target) }
+                if let raw = p.rawMouse { try RawMouse.apply(.init(enabled: raw > 0, scale: raw > 0 ? raw : 1, smooth: p.rawMouseSmooth ?? false, frameSync: p.rawMouseFrameSync ?? RawMouse.settings(for: g).frameSync), for: g); snapshot.appliedRawMouse = true }
+                if p.rawMouse == nil, let frameSync = p.rawMouseFrameSync { var raw = RawMouse.settings(for: g); raw.frameSync = frameSync; try RawMouse.apply(raw, for: g); snapshot.appliedRawMouse = true }
+                if let performance = p.performance { try Performance.apply(performance, for: g); snapshot.appliedPerformance = true }
+                if let buffer = p.audioBuffer, buffer != AudioBuffer.current(for: g), (try? AudioBuffer.apply(buffer, for: g)) != nil { snapshot.appliedBuffer = true }
+            }
+            return snapshot
         }
         if let d = p.gameDisplay, d.recipe == "bf1942", displayUnavailable(d, for: target) == nil {
             snapshot.displayCheckpoint = try BF1942DisplayFix.checkpoint(for: CompatibilityFixes.fresh(target), size: d.resolution, menuCorrection: d.menuCorrection)
@@ -706,7 +730,7 @@ public enum Profiles {
             try RecipeSettings.save(value, for: target)
         }
         if var c = target.custom {
-            if let gr = p.graphics, c.legacyD3D9 != true { c.graphics = gr }
+            if let gr = p.graphics, c.legacyD3D9 != true && !SharedGameCompatibility.isActive(.d3d8to9, g) { c.graphics = gr }
             if g.battleNet == nil { c.arguments = p.arguments ?? "" }
             if g.battleNet != nil, let a = p.hostArguments { c.arguments = a }
             if let prog = p.program, g.battleNet == nil, !g.usesSharedSteam,
@@ -714,7 +738,7 @@ public enum Profiles {
                BattleNet.unixPath(prog, prefix: g.prefix).map({ FileManager.default.fileExists(atPath: $0.path) }) == true {
                 c.exe = prog
             }
-            if !g.usesSharedSteam {
+            do {
                 // The profile is the complete set of shareable settings; local-only ones are kept.
                 var merged = (c.environment ?? [:]).filter { !replaceable($0.key, $0.value, target) }
                 for (k, v) in p.environment ?? [:] where GameProfile.envNameAllowed(k) && GameProfile.envValueAllowed(v) {
@@ -731,13 +755,13 @@ public enum Profiles {
             if c != target.custom { try CustomGames.saveAll(c, to: target) }
         }
         if includeShared {
-            if let r = p.rawMouse { try RawMouse.apply(RawMouse.Settings(enabled: r > 0, scale: r > 0 ? r : 1, smooth: p.rawMouseSmooth ?? false, frameSync: p.rawMouseFrameSync ?? RawMouse.settings(for: g).frameSync), for: g) }
+            if let r = p.rawMouse { try RawMouse.apply(RawMouse.Settings(enabled: r > 0, scale: r > 0 ? r : 1, smooth: p.rawMouseSmooth ?? false, frameSync: p.rawMouseFrameSync ?? RawMouse.settings(for: g).frameSync), for: g); snapshot.appliedRawMouse = true }
             if p.rawMouse == nil, let f = p.rawMouseFrameSync {
-                var raw = RawMouse.settings(for: g); raw.frameSync = f; try RawMouse.apply(raw, for: g)
+                var raw = RawMouse.settings(for: g); raw.frameSync = f; try RawMouse.apply(raw, for: g); snapshot.appliedRawMouse = true
             }
-            if let perf = p.performance { try Performance.apply(perf, for: g) }
+            if let perf = p.performance { try Performance.apply(perf, for: g); snapshot.appliedPerformance = true }
             // Needs the game (or Steam) closed; skipped quietly otherwise — the profile sheet says so.
-            if let b = p.audioBuffer, b != AudioBuffer.current(for: g) { try? AudioBuffer.apply(b, for: g) }
+            if let b = p.audioBuffer, b != AudioBuffer.current(for: g), (try? AudioBuffer.apply(b, for: g)) != nil { snapshot.appliedBuffer = true }
         }
         return snapshot
     }

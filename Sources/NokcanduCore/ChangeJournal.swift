@@ -17,6 +17,7 @@ public struct JournalEntry: Codable, Identifiable, Hashable {
 }
 
 public final class ChangeJournal {
+    nonisolated(unsafe) static var defaultRootForTesting: URL?
     public let scope: String
     public private(set) var entries: [JournalEntry] = []
     private let journalURL: URL
@@ -25,6 +26,7 @@ public final class ChangeJournal {
     private let fm = FileManager.default
 
     public init(scope: String, root: URL = NokPaths.support, portableRoot: URL? = nil) {
+        let root = root == NokPaths.support ? Self.defaultRootForTesting ?? root : root
         self.scope = scope
         self.portableRoot = portableRoot
         journalURL = root.appendingPathComponent("Journals/\(scope).json")

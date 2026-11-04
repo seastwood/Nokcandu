@@ -39,7 +39,11 @@ public enum PendingSettings {
                 }
                 else { try CustomGames.saveAll(value, to: game, force: force) }
             case .recipe(var value): value.microphone = GameMicrophone.isOn(game); try RecipeSettings.save(value, for: game)
-            case .hosted(var value): value.microphone = GameMicrophone.isOn(game); try HostedSettings.save(value, for: game)
+            case .hosted(var value):
+                if value.borderless != true, CompatibilityFixes.isInstalled(.borderless, for: game) {
+                    try CompatibilityFixes.undo(.borderless, for: game, log: log)
+                }
+                value.microphone = GameMicrophone.isOn(game); try HostedSettings.save(value, for: game)
             case .nativeAdapter(let value): try NativeIPXNetworking.setAdapter(value, for: game)
             case .nativeFrame(let value): try NativeIPXNetworking.setFrame(value, for: game)
             case .compatibility(let fix, let undo):

@@ -84,7 +84,7 @@ public enum CinematicFix {
     public static func install(for g: InstalledGame, localZips: [Arch: URL] = [:], release: Release = .pinned, log: @escaping @Sendable (String) -> Void) async throws {
         RestorePoints.before(g, "Before the cinematic fix", log: log)
         guard let h = host(g) else { throw NokError("This game has no Windows environment.") }
-        if GameLauncher.runState(of: g) != .notRunning { throw NokError("Quit the game first.") }
+        try CompatibilityFixes.requireClosed(g)
         if g.usesSharedSteam && SharedSteam.isRunning { throw NokError("Quit Steam first (Steam menu → Exit).") }
         // Stop any idle Windows processes of this environment so tools start with matching settings.
         _ = try? await Shell.runAsync(h.appendingPathComponent("SharedSupport/wine/bin/wineserver").path, ["-k"],
@@ -153,7 +153,7 @@ public enum CinematicFix {
 
     public static func undo(for g: InstalledGame, log: @escaping @Sendable (String) -> Void) async throws {
         guard let h = host(g) else { throw NokError("This game has no Windows environment.") }
-        if GameLauncher.runState(of: g) != .notRunning { throw NokError("Quit the game first.") }
+        try CompatibilityFixes.requireClosed(g)
         if g.usesSharedSteam && SharedSteam.isRunning { throw NokError("Quit Steam first (Steam menu → Exit).") }
         // Stop any idle Windows processes of this environment so tools start with matching settings.
         _ = try? await Shell.runAsync(h.appendingPathComponent("SharedSupport/wine/bin/wineserver").path, ["-k"],

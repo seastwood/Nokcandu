@@ -11,7 +11,7 @@ jobs:
         with: { fetch-depth: 0 }
       - name: Toolchain
         run: swift --version && xcodebuild -version
-      - name: Check shared profile fix IDs
+      - name: Check shared profile fix IDs and schemas
         run: |
           curl --fail --silent --show-error --location --retry 3 https://raw.githubusercontent.com/seastwood/Nokcandu-Profiles/main/scripts/profiles.py -o "$RUNNER_TEMP/profile-validator.py"
           python3 Tools/profile-check/check-fix-ids.py "$RUNNER_TEMP/profile-validator.py"
@@ -24,7 +24,7 @@ jobs:
           if [ "$(uname -m)" = arm64 ]; then
             sudo /usr/sbin/softwareupdate --install-rosetta --agree-to-license
           fi
-      - name: Real Wine 10 and 11 Winsock regression (32 and 64 bit)
+      - name: Real Wine 10 and 11 regressions (32 and 64 bit)
         timeout-minutes: 30
         run: python3 Tools/socket-events/ci.py
       - name: Check shell scripts

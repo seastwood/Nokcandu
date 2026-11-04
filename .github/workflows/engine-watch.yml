@@ -10,9 +10,14 @@ permissions:
   contents: read
   issues: write
 jobs:
-  watch:
-    runs-on: macos-latest
-    timeout-minutes: 90
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      wine: ${{ steps.v.outputs.wine }}
+      new: ${{ steps.v.outputs.new }}
+      open: ${{ steps.seen.outputs.open }}
+      title: ${{ steps.seen.outputs.title }}
     steps:
       - uses: actions/checkout@v4
       - name: Newest Wine in Sikarugir's engines
@@ -32,19 +37,24 @@ jobs:
           T="Resizable window: support Wine ${{ steps.v.outputs.wine }} engines"
           N=$(gh issue list --state open --search "in:title \"$T\"" --json title --jq "[.[] | select(.title == \"$T\")] | length")
           echo "title=$T" >> "$GITHUB_OUTPUT"; echo "open=$N" >> "$GITHUB_OUTPUT"
+  watch:
+    needs: check
+    if: needs.check.outputs.new == 'true' && needs.check.outputs.open == '0'
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
       - name: Try the driver patches on it
-        if: steps.v.outputs.new == 'true' && steps.seen.outputs.open == '0'
         id: try
         continue-on-error: true
         run: |
           /usr/sbin/softwareupdate --install-rosetta --agree-to-license >/dev/null 2>&1 || true
           set -o pipefail
-          WINE_VERSION='${{ steps.v.outputs.wine }}' WINEMAC_TRY=1 bash Engine/winemac/build.sh "$RUNNER_TEMP/winemac" 2>&1 | tee "$RUNNER_TEMP/try.log"
+          WINE_VERSION='${{ needs.check.outputs.wine }}' WINEMAC_TRY=1 bash Engine/winemac/build.sh "$RUNNER_TEMP/winemac" 2>&1 | tee "$RUNNER_TEMP/try.log"
       - name: Report
-        if: steps.v.outputs.new == 'true' && steps.seen.outputs.open == '0'
         env: { GH_TOKEN: '${{ github.token }}' }
         run: |
-          V='${{ steps.v.outputs.wine }}'
+          V='${{ needs.check.outputs.wine }}'
           {
             echo "Sikarugir now ships engines on **Wine $V**; Nokcandu's driver supports $(tr '\n' ' ' < Engine/winemac/SUPPORTED_WINE)."
             echo "Until it supports Wine $V, Nokcandu keeps games that use the resizable window on their current engine (others update normally)."
@@ -59,4 +69,4 @@ jobs:
             echo '```'; echo '</details>'; echo
             echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           } > body.md
-          gh issue create --title '${{ steps.seen.outputs.title }}' --body-file body.md
+          gh issue create --title '${{ needs.check.outputs.title }}' --body-file body.md
