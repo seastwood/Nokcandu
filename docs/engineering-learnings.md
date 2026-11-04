@@ -328,3 +328,7 @@ A durable setting queue with launch preflight is incomplete if normal session po
 ## Verify the actual CI toolchain and terminal network errors (2026-11-04)
 
 A local test pass is not evidence that GitHub CI passed. Non-sensitive stage markers localized an older-runner XCTest crash to the pending monitor's async call; replacing default async callback values with nil injection and direct production calls passed the runner's full test step. Keep callback behavior covered rather than removing the test. A nonblocking connect probe must distinguish an immediate terminal refusal from an asynchronous failure notification; checking only select can reject valid synchronous error delivery. The earlier log lacked the initial connect result, so do not present that explanation as retrospectively proven. [Investigation and verification](investigations/ci-pending-monitor-and-refusal-2026-11-04.md).
+
+## Label actual state, not unexplained development status (2026-11-04)
+
+The installer’s unconditional Preview badge had no behavioral meaning and confused real installation progress. Removed it from the shared header for all installation flows; no state migration is required. See [installer notes](investigations/nonblocking-installation-2026-11-01.md).

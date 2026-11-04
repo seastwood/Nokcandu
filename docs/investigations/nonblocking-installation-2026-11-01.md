@@ -70,3 +70,9 @@ location, and its signature/version were checked. Reopening that installed app
 confirmed Add a Game creates a standard Game Installation window; Close returned
 to the library. Battlefront remained Running across the handoff. The disposable
 session was removed through its own Remove action; no test game files were created.
+
+## Installer label cleanup — 2026-11-04
+
+Removed the unconditional Preview badge from the shared installer header. It was static text, not a dry-run mode or installation-state indicator, and appeared during real installations. Fresh, resumed and existing installation windows use the same view, so no saved-state migration or game changes are needed. Reverting the app restores the label. Verification uses production compilation and the installed Add a Game window; no installation needs to be started to check this cosmetic change.
+
+Verification completed: required Wine/IPX production build and installed app deep/strict signature checks passed. The installed Game Installation window shows “Add a Game” and the library-use hint with no Preview badge. No installer was started and no game settings were changed.

@@ -181,8 +181,6 @@ struct InstallerView: View {
                 Spacer()
                 Text("Use your library while this window is open.")
                     .font(.caption).foregroundStyle(.secondary)
-                Text("Preview").font(.caption.bold()).padding(.horizontal, 8).padding(.vertical, 3)
-                    .background(.orange.opacity(0.2), in: Capsule())
             }
             .padding()
             Divider()
