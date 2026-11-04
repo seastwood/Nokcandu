@@ -116,12 +116,18 @@ final class PendingSettingsTests: XCTestCase {
 
 extension PendingSettingsTests {
     func testMonitorAppliesStoppedGameWithoutLaunchingAndClearsControlMarkers() async throws {
+        func progress(_ stage: String) { FileHandle.standardError.write(Data(("Pending monitor regression: " + stage + "\n").utf8)) }
+        progress("fixture")
         let f = try LauncherRemovalTests().fixture(); defer { try? FileManager.default.removeItem(at: f.root) }
         var desired = Performance.settings(for: f.host); desired.vsync.toggle()
         try PendingSettings.save(.performance(desired), title: "Performance", for: f.host)
+        progress("control markers")
         XCTAssertEqual(PendingSettings.controlTitles(for: PendingSettings.preview(f.host)), ["vsync"])
+        progress("monitor initialization")
         let monitor = PendingSettingsMonitor()
+        progress("drain")
         let report = await monitor.drain([f.host, f.host], observe: { _ in .closed })
+        progress("verification")
         XCTAssertEqual(report.applied, [f.host.name]); XCTAssertTrue(report.failures.isEmpty)
         XCTAssertEqual(Performance.settings(for: f.host), desired)
         XCTAssertTrue(PendingSettings.controlTitles(for: f.host).isEmpty)
