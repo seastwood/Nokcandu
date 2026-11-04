@@ -4,6 +4,7 @@ The project README introduces the app. This folder keeps the implementation know
 
 | Document | What belongs there |
 | --- | --- |
+| [Profile validator parity](investigations/profile-validator-parity-2026-11-03.md) | Corrected missing software-audio fix ID, explicit invalid reasons, revalidation and app/catalog CI parity. |
 | [Launcher DX8 eligibility and icon editing](investigations/launcher-dx8-and-icon-editing-2026-11-03.md) | Mixed-architecture launcher handling, independent EXE icon selection, Undo and separate unresolved BF1942/BF2 reports. |
 | [Installer destination mismatch](investigations/installer-destination-2026-11-01.md) | Why GOG setup bypassed the prepared external folder; shared Inno destination handoff and copy fallback. |
 | [Nonblocking installation](investigations/nonblocking-installation-2026-11-01.md) | Separate installation window, retained session, library access and existing Windows-setup preservation. |

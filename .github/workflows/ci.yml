@@ -11,6 +11,10 @@ jobs:
         with: { fetch-depth: 0 }
       - name: Toolchain
         run: swift --version && xcodebuild -version
+      - name: Check shared profile fix IDs
+        run: |
+          curl --fail --silent --show-error --location --retry 3 https://raw.githubusercontent.com/seastwood/Nokcandu-Profiles/main/scripts/profiles.py -o "$RUNNER_TEMP/profile-validator.py"
+          python3 Tools/profile-check/check-fix-ids.py "$RUNNER_TEMP/profile-validator.py"
       - name: Test
         run: swift test
       - name: Build app
