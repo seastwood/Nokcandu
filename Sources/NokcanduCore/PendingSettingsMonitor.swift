@@ -15,8 +15,8 @@ public actor PendingSettingsMonitor {
 
     public func drain(_ games: [InstalledGame],
                       observe: @Sendable (InstalledGame) -> PendingSettings.Activity = { PendingSettings.activity(for: $0) },
-                      apply: @Sendable (InstalledGame) async throws -> PendingSettings.Outcome = { try await PendingSettings.apply(for: $0) },
-                      prepareWindow: @Sendable (InstalledGame) async throws -> Bool = { try await WindowedPresentation.applyWhenIdle($0) }) async -> Report {
+                      apply: (@Sendable (InstalledGame) async throws -> PendingSettings.Outcome)? = nil,
+                      prepareWindow: (@Sendable (InstalledGame) async throws -> Bool)? = nil) async -> Report {
         guard !busy else { return Report() }
         busy = true; defer { busy = false }
         var report = Report(), seen = Set<String>()
@@ -36,11 +36,17 @@ public actor PendingSettingsMonitor {
             guard failed[key] != fingerprint else { continue }
             do {
                 // Rechecks session activity under its cross-process lock before mutation.
-                guard try await apply(game) == .applied else { continue }
+                let outcome: PendingSettings.Outcome
+                if let apply { outcome = try await apply(game) }
+                else { outcome = try await PendingSettings.apply(for: game) }
+                guard outcome == .applied else { continue }
                 if windowPending {
                     // With no queued requests there may still be idle Wine services.
                     // prepareForLaunch refuses to replace a running environment's driver.
-                    guard try await prepareWindow(game) else { continue }
+                    let ready: Bool
+                    if let prepareWindow { ready = try await prepareWindow(game) }
+                    else { ready = try await WindowedPresentation.applyWhenIdle(game) }
+                    guard ready else { continue }
                 }
                 failed[key] = nil
                 report.applied.append(game.name)

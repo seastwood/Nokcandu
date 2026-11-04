@@ -109,7 +109,9 @@ with tempfile.TemporaryDirectory(prefix='nok-socket-regression-') as temporary:
         if errors:
             raise SystemExit('Local responder failed: '+', '.join(errors))
         output = result.stdout
-        if args.mode == 'refused' and not ('exceptional=1' in output and 'socket_error=10061' in output):
+        if args.mode == 'refused' and not (
+                ('connect result=-1 error=10061' in output and 'refused synchronous socket_error=10061' in output)
+                or ('exceptional=1' in output and 'socket_error=10061' in output)):
             raise SystemExit('A real refused connection was lost.')
         if args.mode == 'urgent' and 'exceptional=1' not in output:
             raise SystemExit('Real urgent data was lost.')
