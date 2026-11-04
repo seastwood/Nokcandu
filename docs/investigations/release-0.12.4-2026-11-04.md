@@ -15,3 +15,15 @@ The shared component generation, exact-program routes and normal maintenance/Rep
 ## Limits
 
 The microphone-Off permission prompt and BF2 fullscreen Spaces issue remain open. The release includes no experimental focus driver or temporary launcher-identity comparison. Shared networking/provider and launch-wrapper restrictions remain component-specific; fixture success does not prove every store build or game. No credentials, game/runtime binaries, account traces or machine-specific backups are committed.
+
+
+## Published package verification
+
+Tag `v0.12.4` resolves to `f9539499137b87a313bda4b1a979f585d0b23931`. [Release workflow 41902533400](https://github.com/seastwood/Nokcandu/actions/runs/41902533400) succeeded, including both Wine driver checks, native-IPX building/patch checks, 355 tests with 21 expected release-runner skips and no failures, and DMG packaging. [Nokcandu 0.12.4](https://github.com/seastwood/Nokcandu/releases/tag/v0.12.4) was published as a regular non-draft release on 2026-11-04 at 20:17:36 UTC with four assets.
+
+The actual public downloads matched all GitHub asset digests and both published checksum files:
+
+- DMG SHA-256: `94921bb8cbcd942f9adbf50925b14b54554162c20f1c1709259070910c0bce3c`.
+- Native-IPX corresponding-source SHA-256: `8407b90acbb78e0cb41e9e4b767044c721cdbf0af88cbfaedb9dfb9862b63f84`.
+
+The public DMG mounted read-only; its app reported 0.12.4 and passed deep/strict signature verification. Both Wine versions contain all three driver components; the native-IPX SHA256SUMS verified; launcher/audio helpers are present and the helper-build stamp matches the tested local build. The source archive contains pinned Wine 11 source, packet-module patches/build scripts and license notices. The Mac was locked during the final optional install check, so the public package was not substituted for the already-installed tested b33b860 build. It is available through the ordinary updater. No game files or settings were changed during public-package verification.
