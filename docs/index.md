@@ -75,3 +75,5 @@ Keep credentials, account identifiers, raw session logs, copyrighted game/runtim
 - [Microphone-Off prompt: 0.12.4 target](investigations/microphone-off-prompt-2026-11-03.md) — unresolved dialog regression, verified capture blocking, unsuccessful comparisons and release deferral.
 
 - [Apply pending settings after exit](investigations/pending-settings-idle-2026-11-04.md) — automatic idle application, per-control indicators, shared-host safety and bounded failure retries.
+
+- [CI monitor crash and refused-connection probe](investigations/ci-pending-monitor-and-refusal-2026-11-04.md) — runner/local differences, callback compatibility and synchronous versus asynchronous Winsock errors.
