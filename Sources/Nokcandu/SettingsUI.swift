@@ -31,6 +31,27 @@ struct InfoButton: View {
 /// Standard width for pickers and menus in a setting row, so controls line up down the page.
 let settingControlWidth: CGFloat = 220
 
+private struct PendingControlTitlesKey: EnvironmentKey {
+    static let defaultValue = Set<String>()
+}
+extension EnvironmentValues {
+    var pendingControlTitles: Set<String> {
+        get { self[PendingControlTitlesKey.self] }
+        set { self[PendingControlTitlesKey.self] = newValue }
+    }
+}
+struct PendingSettingBadge: View {
+    @Environment(\.pendingControlTitles) private var pending
+    let title: String
+    var body: some View {
+        if pending.contains(title.lowercased()) {
+            Label("Pending", systemImage: "clock").font(.caption2).foregroundStyle(.orange)
+                .help("Saved; applies automatically once this Windows environment is idle.")
+                .accessibilityLabel("\(title): pending")
+        }
+    }
+}
+
 /// One setting: name and (i) on the left, its control on the right.
 struct SettingRow<Control: View>: View {
     let title: String
@@ -42,6 +63,7 @@ struct SettingRow<Control: View>: View {
             Text(title)
             if let info, !info.isEmpty { InfoButton(info) }
             Spacer(minLength: 12)
+            PendingSettingBadge(title: title)
             control()
         }
     }

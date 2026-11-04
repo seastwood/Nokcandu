@@ -25,6 +25,7 @@ final class AppModel: ObservableObject {
     @Published var helperActivation: [InstalledGame.ID: HelperActivation] = [:]
     @Published var statusUnavailable = false
     @Published var runStates: [InstalledGame.ID: RunState] = [:]
+    @Published var pendingActivities: [InstalledGame.ID: PendingSettings.Activity] = [:]
     /// Game waiting for Quit to be confirmed.
     @Published var quitting: InstalledGame?
     @Published var banner: Banner?
@@ -65,6 +66,8 @@ final class AppModel: ObservableObject {
     }
 
     private var timer: Timer?
+    private let pendingMonitor = PendingSettingsMonitor()
+    private var checkingPending = false
     private var maintainedPaths: Set<String> = []
     private var lastMaintenance = Date.distantPast
     private var discoveringStoreGames = false
@@ -199,7 +202,7 @@ final class AppModel: ObservableObject {
                 refresh()
                 if outcome == .deferred {
                     let name = WineSelection.host(for: game, in: games)?.name ?? game.name
-                    say("Saved \(title.lowercased()). It will apply the next time \(name)'s Windows environment restarts.")
+                    say("Saved \(title.lowercased()). It will apply automatically when \(name)'s Windows environment is idle.")
                 } else { say(success) }
                 completion(true)
             } catch {
@@ -259,6 +262,24 @@ final class AppModel: ObservableObject {
             guard revision == libraryRevision else { refreshRunStates(); return }
             helperActivation = states.1
             applyRunStates(states.0)
+            applyIdleSettings()
+        }
+    }
+
+    func applyIdleSettings(retry: Bool = false) {
+        guard !checkingPending else { return }
+        checkingPending = true
+        let snapshot = games, monitor = pendingMonitor
+        Task {
+            if retry { await monitor.retry() }
+            let result = await Task.detached(priority: .utility) { await monitor.drain(snapshot) }.value
+            checkingPending = false
+            pendingActivities = result.activities
+            if !result.applied.isEmpty {
+                refresh()
+                say("Applied saved settings for \(result.applied.joined(separator: ", ")).")
+            }
+            if !result.failures.isEmpty { refresh(); fail(NokError(result.failures.joined(separator: "\n"))) }
         }
     }
 

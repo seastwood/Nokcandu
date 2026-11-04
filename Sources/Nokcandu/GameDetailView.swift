@@ -23,7 +23,8 @@ struct GameDetailView: View {
     var running: Bool { if case .launcherRunning = model.runStates[game.id] ?? .notRunning { return true }; return false }
 
     var body: some View {
-        if let n = game.native { NativeGameDetail(game: game, native: n) } else { wineBody }
+        if let n = game.native { NativeGameDetail(game: game, native: n) }
+        else { wineBody.environment(\.pendingControlTitles, PendingSettings.controlTitles(for: game)) }
     }
 
     var wineBody: some View {

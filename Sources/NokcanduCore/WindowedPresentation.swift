@@ -316,6 +316,24 @@ public enum WindowedPresentation {
         try apply(want, host: h)
     }
 
+    /// A saved on/off or resolution choice still needs to reach the closed environment.
+    public static func needsIdleApply(for g: InstalledGame) -> Bool {
+        guard g.native == nil, let h = WineTools.hostContents(for: g) else { return false }
+        guard !g.usesSharedSteam, g.battleNet == nil, g.hosted == nil, !g.isSteamHost,
+              !BattleNet.isHost(g), PCLaunchers.kind(of: g) == nil else { return false }
+        return setting(for: g) != applied(host: h)
+    }
+
+    public static func applyWhenIdle(_ g: InstalledGame) async throws -> Bool {
+        switch PendingSettings.activity(for: g) {
+        case .active, .unknown: return false
+        case .backgroundOnly: try await WineTools.stopAll(for: g)
+        case .closed: break
+        }
+        try await prepareForLaunch(g)
+        return !needsIdleApply(for: g)
+    }
+
     /// The game's choice differs from what its running launcher/environment started with: why a restart is needed.
     public static func restartReason(for g: InstalledGame) async -> String? {
         guard g.native == nil, let h = WineTools.hostContents(for: g) else { return nil }

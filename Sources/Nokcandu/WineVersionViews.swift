@@ -58,8 +58,11 @@ struct GameWineSection: View {
     var body: some View {
         if let host {
             SettingsSection(title: "Wine") {
-                WineVersionMenu(selection: Binding(get: { selected.isEmpty ? PendingSettings.requestedWine(for: host) ?? EngineUpdate.current(host)?.tag ?? EngineVersion.tested.tag : selected }, set: { selected = $0 }))
-                    .disabled(working)
+                HStack {
+                    WineVersionMenu(selection: Binding(get: { selected.isEmpty ? PendingSettings.requestedWine(for: host) ?? EngineUpdate.current(host)?.tag ?? EngineVersion.tested.tag : selected }, set: { selected = $0 }))
+                        .disabled(working)
+                    PendingSettingBadge(title: "Wine version")
+                }
                 Text("Currently using \(EngineUpdate.current(host)?.description ?? host.wineVersion ?? "an unknown version").")
                     .font(.caption).foregroundStyle(.secondary)
                 if host.id != game.id || host.isSteamHost || BattleNet.isHost(host) || PCLaunchers.kind(of: host) != nil {

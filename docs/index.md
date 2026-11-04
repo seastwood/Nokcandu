@@ -73,3 +73,5 @@ Keep credentials, account identifiers, raw session logs, copyrighted game/runtim
 - [Wine 10 → 11 stale-wrapper upgrade failure](investigations/wine-upgrade-stale-wrapper-2026-11-03.md) — reproduced ntdll startup error, shared setup/identity correction and exact rollback coverage.
 
 - [Microphone-Off prompt: 0.12.4 target](investigations/microphone-off-prompt-2026-11-03.md) — unresolved dialog regression, verified capture blocking, unsuccessful comparisons and release deferral.
+
+- [Apply pending settings after exit](investigations/pending-settings-idle-2026-11-04.md) — automatic idle application, per-control indicators, shared-host safety and bounded failure retries.

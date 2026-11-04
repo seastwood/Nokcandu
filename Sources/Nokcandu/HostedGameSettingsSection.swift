@@ -10,20 +10,24 @@ struct HostedGameSettingsSection: View {
     var body: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
-                Picker("Graphics", selection: $settings.graphics) {
-                    Text("Same as launcher").tag(GraphicsPreset?.none)
-                    ForEach(GraphicsPreset.allCases) { Text($0.title).tag(Optional($0)) }
-                }.frame(maxWidth: 380)
+                SettingRow(title: "Graphics") {
+                    Picker("Graphics", selection: $settings.graphics) {
+                        Text("Same as launcher").tag(GraphicsPreset?.none)
+                        ForEach(GraphicsPreset.allCases) { Text($0.title).tag(Optional($0)) }
+                    }.labelsHidden().frame(maxWidth: 380)
+                }
                 Text((settings.graphics ?? HostedSettings.graphics(game)).detail).font(.caption).foregroundStyle(.secondary)
                 if game.hosted?.launcher == .ea {
-                    Picker("Window style", selection: Binding(get: { GameWindowStyle.current(settings) }, set: { GameWindowStyle.set($0, in: &settings) })) {
-                        ForEach(GameWindowStyle.allCases) { Text($0.title).tag($0) }
-                    }.frame(maxWidth: 380)
+                    SettingRow(title: "Window style") {
+                        Picker("Window style", selection: Binding(get: { GameWindowStyle.current(settings) }, set: { GameWindowStyle.set($0, in: &settings) })) {
+                            ForEach(GameWindowStyle.allCases) { Text($0.title).tag($0) }
+                        }.labelsHidden().frame(maxWidth: 380)
+                    }
                     Text("For either fullscreen style, select Windowed in the game first. Fullscreen also opens the resizable window in Mac full screen.").font(.caption).foregroundStyle(.secondary)
                 }
-                TextField("Launch options", text: $settings.arguments).font(.body.monospaced())
+                SettingRow(title: "Launch options") { TextField("Launch options", text: $settings.arguments).font(.body.monospaced()) }
                 if let link = game.hosted {
-                    Text("These settings apply only when you start this game from Nokcandu or its Mac app. \(link.launcher.title) keeps its own graphics settings. Saved changes take effect the next time its Windows environment restarts.").font(.caption).foregroundStyle(.secondary)
+                    Text("These settings apply only when you start this game from Nokcandu or its Mac app. \(link.launcher.title) keeps its own graphics settings. Saved changes apply automatically once all programs in its Windows environment close.").font(.caption).foregroundStyle(.secondary)
                     Text(link.exe ?? "Starts through the launcher").font(.caption.monospaced()).textSelection(.enabled)
                 }
                 Button("Save Game Settings") {

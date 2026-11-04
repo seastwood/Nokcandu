@@ -8,14 +8,14 @@ struct PendingSettingsSection: View {
     var body: some View {
         let pending = PendingSettings.entries(for: game)
         if PendingSettings.hasPending(for: game) {
-            SettingsSection(title: "Saved for Next Start") {
+            SettingsSection(title: "Pending Changes") {
                 Text(pending.isEmpty ? "Saved changes need attention. You can discard them to keep your current settings." : Array(Set(pending.map(\.title))).sorted().joined(separator: ", "))
-                Text("These changes are saved. They apply when this game's Windows environment next starts with all its programs closed. Your current session keeps its existing settings.")
+                Text(model.pendingActivities[game.id] == .unknown
+                     ? "Changes are saved. Nokcandu will apply them automatically once it can confirm this Windows environment is idle."
+                     : "Changes are saved and apply automatically when all programs in this Windows environment close. Running games keep their current settings.")
                     .font(.caption).foregroundStyle(.secondary)
-                if !FileManager.default.isExecutableFile(atPath: game.nokcanduState.appendingPathComponent(PendingSettings.helperName).path) {
-                    Text("For older or manually edited launchers, start the game from Nokcandu to apply pending changes.").font(.caption).foregroundStyle(.secondary)
-                }
                 if let error = PendingSettings.lastError(for: game) { Text(error).font(.caption).foregroundStyle(.orange) }
+                Button("Try Applying Now") { model.applyIdleSettings(retry: true) }
                 Button("Discard Pending Changes") {
                     discarding = true
                     Task {

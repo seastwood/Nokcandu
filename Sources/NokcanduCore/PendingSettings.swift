@@ -197,11 +197,6 @@ public enum PendingSettings {
         defer { close(fd) }
         guard flock(fd, LOCK_EX | (waitForApplication ? 0 : LOCK_NB)) == 0 else { return .deferred }
         defer { flock(fd, LOCK_UN) }
-        switch observe(game) {
-        case .active, .unknown: return .deferred
-        case .backgroundOnly: try await stopIdle(game)
-        case .closed: break
-        }
         for _ in 0..<8 {
             let pending = try read(contents)
             if pending.isEmpty { return .applied }
@@ -209,6 +204,13 @@ public enum PendingSettings {
             for entry in pending {
                 let file = directory(contents).appendingPathComponent(entry.id + ".json")
                 guard FileManager.default.fileExists(atPath: file.path) else { continue }
+                // Another launcher may have opened the environment while an earlier
+                // download or settings operation was awaiting completion.
+                switch observe(game) {
+                case .active, .unknown: return .deferred
+                case .backgroundOnly: try await stopIdle(game)
+                case .closed: break
+                }
                 let path = entry.gamePath == "." ? contents.deletingLastPathComponent() : URL(fileURLWithPath: entry.gamePath)
                 if LauncherInstallation.presence(at: path.deletingLastPathComponent()) == .offline { continue }
                 let selected = GameLibrary.inspect(path) ?? GameLibrary.scan().first { identity($0) == entry.identity && WineTools.hostContents(for: $0) == contents }

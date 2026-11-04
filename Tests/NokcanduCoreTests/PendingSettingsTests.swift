@@ -115,6 +115,94 @@ final class PendingSettingsTests: XCTestCase {
 }
 
 extension PendingSettingsTests {
+    func testMonitorAppliesStoppedGameWithoutLaunchingAndClearsControlMarkers() async throws {
+        let f = try LauncherRemovalTests().fixture(); defer { try? FileManager.default.removeItem(at: f.root) }
+        var desired = Performance.settings(for: f.host); desired.vsync.toggle()
+        try PendingSettings.save(.performance(desired), title: "Performance", for: f.host)
+        XCTAssertEqual(PendingSettings.controlTitles(for: PendingSettings.preview(f.host)), ["vsync"])
+        let monitor = PendingSettingsMonitor()
+        let report = await monitor.drain([f.host, f.host], observe: { _ in .closed })
+        XCTAssertEqual(report.applied, [f.host.name]); XCTAssertTrue(report.failures.isEmpty)
+        XCTAssertEqual(Performance.settings(for: f.host), desired)
+        XCTAssertTrue(PendingSettings.controlTitles(for: f.host).isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: f.host.logs.appendingPathComponent("game.lock").path))
+    }
+
+    func testMonitorWaitsForActiveOrUnknownEnvironmentThenDrains() async throws {
+        let f = try LauncherRemovalTests().fixture(); defer { try? FileManager.default.removeItem(at: f.root) }
+        var desired = Performance.Settings(); desired.fpsCounter = true
+        try PendingSettings.save(.performance(desired), title: "Performance", for: f.host)
+        let monitor = PendingSettingsMonitor()
+        for state in [PendingSettings.Activity.active, .unknown] {
+            let report = await monitor.drain([f.host], observe: { _ in state }, apply: { _ in XCTFail("Must wait"); return .applied })
+            XCTAssertEqual(report.activities[f.host.id], state)
+            XCTAssertTrue(report.applied.isEmpty)
+        }
+        let report = await monitor.drain([f.host], observe: { _ in .closed })
+        XCTAssertEqual(report.applied.count, 1)
+        XCTAssertTrue(PendingSettings.entries(for: f.host).isEmpty)
+    }
+
+    func testMonitorFailureRetainsRequestAndDoesNotRetryEveryPoll() async throws {
+        let f = try LauncherRemovalTests().fixture(); defer { try? FileManager.default.removeItem(at: f.root) }
+        try PendingSettings.save(.audioBuffer(20), title: "Audio buffer", for: f.host)
+        let monitor = PendingSettingsMonitor()
+        let first = await monitor.drain([f.host], observe: { _ in .closed }, apply: { _ in throw NokError("Fixture failure") })
+        XCTAssertEqual(first.failures.count, 1)
+        let second = await monitor.drain([f.host], observe: { _ in .closed }, apply: { _ in XCTFail("Should wait for retry"); return .applied })
+        XCTAssertTrue(second.failures.isEmpty)
+        XCTAssertEqual(PendingSettings.entries(for: f.host).count, 1)
+        await monitor.retry()
+        let retry = await monitor.drain([f.host], observe: { _ in .closed }, apply: { _ in throw NokError("Retried") })
+        XCTAssertEqual(retry.failures.count, 1)
+        try PendingSettings.save(.audioBuffer(40), title: "Audio buffer", for: f.host)
+        let newer = await monitor.drain([f.host], observe: { _ in .closed }, apply: { _ in throw NokError("New request") })
+        XCTAssertEqual(newer.failures.count, 1)
+    }
+
+    func testGameReopeningDuringBatchLeavesRemainingRequestsPending() async throws {
+        let f = try LauncherRemovalTests().fixture(); defer { try? FileManager.default.removeItem(at: f.root) }
+        try PendingSettings.save(.audioBuffer(20), title: "Audio buffer", for: f.host)
+        try PendingSettings.save(.graphics(.modern3D), title: "Graphics", for: f.host)
+        var count = 0
+        let result = try await PendingSettings.applyPending(for: f.host, observe: { _ in count == 0 ? .closed : .active }, stopIdle: { _ in XCTFail("Active game must not stop") }, execute: { _, _ in count += 1 })
+        XCTAssertEqual(result, .deferred); XCTAssertEqual(count, 1)
+        XCTAssertEqual(PendingSettings.entries(for: f.host).count, 1)
+    }
+
+    func testMonitorReportsCorruptRequestRatherThanIgnoringIt() async throws {
+        let f = try LauncherRemovalTests().fixture(); defer { try? FileManager.default.removeItem(at: f.root) }
+        let directory = PendingSettings.directory(f.host.contents); try NokPaths.ensure(directory)
+        try Data("broken".utf8).write(to: directory.appendingPathComponent("broken.json"))
+        let report = await PendingSettingsMonitor().drain([f.host], observe: { _ in .closed })
+        XCTAssertEqual(report.failures.count, 1); XCTAssertTrue(PendingSettings.hasPending(for: f.host))
+    }
+
+    func testMonitorCoalescesOverlappingPollsWhileApplying() async throws {
+        let f = try LauncherRemovalTests().fixture(); defer { try? FileManager.default.removeItem(at: f.root) }
+        try PendingSettings.save(.audioBuffer(20), title: "Audio buffer", for: f.host)
+        let monitor = PendingSettingsMonitor()
+        let first = await monitor.drain([f.host], observe: { _ in .closed }, apply: { game in
+            let overlapping = await monitor.drain([game], observe: { _ in .closed }, apply: { _ in XCTFail("Overlapping apply"); return .applied })
+            XCTAssertTrue(overlapping.applied.isEmpty)
+            try PendingSettings.discard(for: game)
+            return .applied
+        })
+        XCTAssertEqual(first.applied, [f.host.name])
+    }
+
+    func testReportedGraphicsAudioAndCompatibilityRequestsMarkTheirOwnControls() throws {
+        let f = try LauncherRemovalTests().fixture(); defer { try? FileManager.default.removeItem(at: f.root) }
+        try PendingSettings.save(.graphics(.modern3D), title: "Graphics", for: f.host)
+        try PendingSettings.save(.audioBuffer(20), title: "Audio Buffer", for: f.host)
+        try PendingSettings.save(.compatibility(.d3d8to9, undo: false), title: "DirectX 8 compatibility", for: f.host)
+        try PendingSettings.save(.compatibility(.directx9Extras, undo: false), title: "DirectX 9 extras", for: f.host)
+        XCTAssertEqual(PendingSettings.controlTitles(for: PendingSettings.preview(f.host)),
+                       ["graphics", "audio buffer", "directx 8 compatibility", "directx 9 extras"])
+    }
+}
+
+extension PendingSettingsTests {
     func testNewerSaveDuringApplicationIsAppliedWithoutLosingIt() async throws {
         let f = try LauncherRemovalTests().fixture(); defer { try? FileManager.default.removeItem(at: f.root) }
         try PendingSettings.save(.audioBuffer(20), title: "Audio buffer", for: f.host)

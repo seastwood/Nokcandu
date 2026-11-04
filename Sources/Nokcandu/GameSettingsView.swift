@@ -98,6 +98,7 @@ struct GameSettingsSection: View {
                         }
                         .padding(.top, 4)
                     }.disclosureGroupStyle(WholeRowDisclosureStyle())
+                    PendingSettingBadge(title: "Advanced: environment variables")
                 }
                 if launcherEdited {
                     Label("The launcher was edited outside Nokcandu. Saving will replace it (the old one is kept so it can be undone).", systemImage: "exclamationmark.triangle")
@@ -137,6 +138,7 @@ struct GameSettingsSection: View {
     func row<C: View>(_ label: String, @ViewBuilder _ content: () -> C) -> some View {
         HStack(alignment: .firstTextBaseline) {
             Text(label).foregroundStyle(.secondary).frame(width: 120, alignment: .leading)
+            PendingSettingBadge(title: label)
             content()
         }
     }
@@ -351,6 +353,7 @@ struct RecipeSettingsSection: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             SettingRow(title: "Launch options") { TextField("Additional game options", text: $draft.arguments).font(.body.monospaced()) }
+            PendingSettingBadge(title: "Advanced environment variables")
             DisclosureGroup("Advanced environment variables") {
                 ForEach($rows) { $row in
                     HStack {
