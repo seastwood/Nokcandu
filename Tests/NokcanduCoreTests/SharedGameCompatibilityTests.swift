@@ -302,4 +302,71 @@ extension SharedGameCompatibilityTests {
         XCTAssertFalse(CompatibilityFixes.isInstalled(.cursorVisibility, for: f.game))
         XCTAssertFalse(FileManager.default.fileExists(atPath: f.game.nokcanduState.appendingPathComponent("cursor-visibility-fix").path))
     }
+
+    /// Shared-launcher profile lifecycle: apply → capture → apply again → Undo in reverse → apply the captured
+    /// profile again, for each launcher whose per-game settings profiles carry. The client's own settings never change.
+    func testSharedLauncherProfileLifecycleIsRepeatableAndUndoesInOrder() async throws {
+        for kind in [Kind.battleNet, .steam] {
+            let f = try fixture(kind); defer { f.clean() }
+            let client = try Data(contentsOf: CustomGameConfig.url(in: f.host.contents))
+            var profile = kind == .battleNet
+                ? GameProfile(title: "Lifecycle", match: .init(battleNetUID: "testgame"), source: "battlenet", rating: .works)
+                : GameProfile(title: "Lifecycle", match: .init(steamAppID: 12345), source: "steam", rating: .works)
+            profile.environment = ["DXVK_HUD": "fps"]
+            if kind == .battleNet { profile.graphics = .dxmt }
+            func environment() -> [String: String] {
+                kind == .battleNet ? BattleNetGraphics.environment(f.game) : (GameLibrary.inspect(f.game.appURL)?.custom?.environment ?? [:])
+            }
+            let original = environment()
+
+            let first = try await Profiles.applyComplete(profile, to: f.game, includeShared: false)
+            XCTAssertEqual(first.issues, [], "\(kind)")
+            XCTAssertEqual(environment()["DXVK_HUD"], "fps", "\(kind)")
+            let captured = Profiles.make(from: try XCTUnwrap(GameLibrary.inspect(f.game.appURL)), rating: .works, notes: nil, install: nil)
+            XCTAssertTrue(captured.problems.isEmpty, "\(kind): \(captured.problems)")
+            XCTAssertEqual(captured.environment?["DXVK_HUD"], "fps", "\(kind)")
+
+            // Applying the same profile again changes nothing and can be undone on its own.
+            let second = try await Profiles.applyComplete(profile, to: try XCTUnwrap(GameLibrary.inspect(f.game.appURL)), includeShared: false)
+            XCTAssertEqual(second.issues, [], "\(kind)")
+            XCTAssertEqual(environment()["DXVK_HUD"], "fps", "\(kind)")
+            try Profiles.undo(second.snapshot)
+            XCTAssertEqual(environment()["DXVK_HUD"], "fps", "\(kind): undoing a repeat keeps the first application")
+            try Profiles.undo(first.snapshot)
+            XCTAssertEqual(environment(), original, "\(kind)")
+            if kind == .battleNet { XCTAssertNil(BattleNetGraphics.choice(f.game)) }
+
+            // The captured profile applies cleanly to the restored game and undoes again.
+            let again = try await Profiles.applyComplete(captured, to: try XCTUnwrap(GameLibrary.inspect(f.game.appURL)), includeShared: false)
+            XCTAssertEqual(again.issues, [], "\(kind)")
+            XCTAssertEqual(environment()["DXVK_HUD"], "fps", "\(kind)")
+            if kind == .battleNet { XCTAssertEqual(BattleNetGraphics.choice(f.game), .dxmt) }
+            try Profiles.undo(again.snapshot)
+            XCTAssertEqual(environment(), original, "\(kind)")
+            XCTAssertEqual(try Data(contentsOf: CustomGameConfig.url(in: f.host.contents)), client, "\(kind): the client is never changed")
+        }
+    }
+
+    /// A launcher moved to another drive keeps a link at its library place; its games' profiles still apply and
+    /// undo through it, and the client's settings stay as they were.
+    func testProfileAppliesAndUndoesAfterTheLauncherMoved() async throws {
+        let f = try fixture(.battleNet); defer { f.clean() }
+        let elsewhere = f.root.appendingPathComponent("Other Drive", isDirectory: true)
+        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        let moved = try GameMover.moveAnchored(f.host, to: elsewhere, library: [f.host, f.game]) { _ in }
+        XCTAssertEqual(moved.deletingLastPathComponent().resolvingSymlinksInPath(), elsewhere.resolvingSymlinksInPath())
+        XCTAssertNotNil(try? FileManager.default.destinationOfSymbolicLink(atPath: f.host.appURL.path), "the launcher keeps a link at its old place")
+        let client = try Data(contentsOf: CustomGameConfig.url(in: moved.appendingPathComponent("Contents")))
+        var profile = GameProfile(title: "Moved launcher", match: .init(battleNetUID: "testgame"), source: "battlenet", rating: .works)
+        profile.graphics = .dxmt; profile.environment = ["DXVK_HUD": "fps"]
+        let game = try XCTUnwrap(GameLibrary.inspect(f.game.appURL))
+        let result = try await Profiles.applyComplete(profile, to: game, includeShared: false)
+        XCTAssertEqual(result.issues, [])
+        XCTAssertEqual(BattleNetGraphics.choice(game), .dxmt)
+        XCTAssertEqual(BattleNetGraphics.environment(game), ["DXVK_HUD": "fps"])
+        try Profiles.undo(result.snapshot)
+        XCTAssertNil(BattleNetGraphics.choice(game))
+        XCTAssertEqual(BattleNetGraphics.environment(game), [:])
+        XCTAssertEqual(try Data(contentsOf: CustomGameConfig.url(in: moved.appendingPathComponent("Contents"))), client)
+    }
 }

@@ -59,7 +59,15 @@ public enum GameFolders {
         while !FileManager.default.fileExists(atPath: probe.path), probe.pathComponents.count > 1 { probe.deleteLastPathComponent() }
         return (try? probe.resourceValues(forKeys: [.volumeLocalizedNameKey]).volumeLocalizedName) ?? "Unknown drive"
     }
+    /// Views ask for this while drawing; a drive is asked at most every 2 s.
+    private static let freeCache = LockedCache<String, (Date, Int64?)>(limit: 64)
     public static func freeSpace(_ u: URL) -> Int64? {
+        if let (at, value) = freeCache[u.path], Date().timeIntervalSince(at) < 2 { return value }
+        let value = measureFreeSpace(u)
+        freeCache[u.path] = (Date(), value)
+        return value
+    }
+    static func measureFreeSpace(_ u: URL) -> Int64? {
         let values = try? u.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey])
         let filesystem = (try? FileManager.default.attributesOfFileSystem(forPath: u.path)[.systemFreeSize]) as? NSNumber
         return [values?.volumeAvailableCapacityForImportantUsage, values?.volumeAvailableCapacity.map(Int64.init), filesystem?.int64Value]
