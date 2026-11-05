@@ -132,6 +132,13 @@ extension GameMover {
             appURL = try moveAnchored(game, to: target, library: library, progress: progress)
             InstallRecords.relocate(from: game.appURL, to: appURL)
             let after = appURL.resolvingSymlinksInPath()
+            // On another drive, store the Wine engine once for all apps there.
+            if EngineShare.volumeRoot(after) != nil {
+                progress("Sharing Wine engine files with other apps on \(Storage.driveName(after))…")
+                if let freed = try? EngineShare.share(app: after), freed > 50_000_000 {
+                    notes.append("Shares its Wine engine files with other apps there (saved \(Storage.format(freed))).")
+                }
+            }
             if let note = RestorePoints.followMove(from: before, to: after, keepOld: request.keepOldRestorePoints) { notes.append(note) }
             game = GameLibrary.inspect(appURL) ?? game
             notes.append("\(game.name) is now on \(GameFolders.volumeName(target)).")
@@ -218,6 +225,10 @@ extension GameMover {
             do { try fm.removeItem(at: real) } catch { progress("The old copy couldn't be removed (\(error.localizedDescription)); you can delete it in Finder.") }
         }
         Discs.prepareMountPoints(support: target.appendingPathComponent("Contents/SharedSupport"))
+        // Launch Services: forget the old copy, know the new one (Spotlight, the Apps launcher, Open With).
+        if real != target.resolvingSymlinksInPath(), !fm.fileExists(atPath: real.path) {
+            _ = try? Shell.run(GameApp.lsregister, ["-u", real.path], timeout: 30)
+        }
         _ = try? Shell.run(GameApp.lsregister, ["-f", target.path], timeout: 30)
         // The library works with real apps (the link is the Applications entry).
         return target.resolvingSymlinksInPath()

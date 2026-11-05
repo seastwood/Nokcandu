@@ -296,7 +296,7 @@ public enum LogRetention {
 
 /// Things Nokcandu can safely free, with how much each frees. Nothing here is a game, a save or a setting.
 public enum SpaceSaver {
-    public enum Kind: String, Sendable { case orphanRestorePoints, ghostApp, rollbackCopy, downloads, logs, exfatOverhead }
+    public enum Kind: String, Sendable { case orphanRestorePoints, ghostApp, rollbackCopy, downloads, logs, exfatOverhead, sharedEngine }
     public struct Suggestion: Identifiable, Hashable, Sendable {
         public var id: String { kind.rawValue + ":" + url.path }
         public var kind: Kind
@@ -328,6 +328,11 @@ public enum SpaceSaver {
             out.append(Suggestion(kind: .rollbackCopy, title: "Previous engine kept for \(g.name)",
                                   detail: "Trying \(g.wineVersion ?? "a new engine") since \(since). Keeping it removes the copy of the old engine" + (bytes < 50_000_000 ? " (shared with the engines cache here, so it costs little)." : "."),
                                   url: EngineUpdate.rollbackDir(g.contents), bytes: bytes, actionTitle: "Keep New Engine", gameID: g.id))
+        }
+        for c in EngineShare.candidates(library: library) {
+            out.append(Suggestion(kind: .sharedEngine, title: "Share Wine engine files on \(Storage.driveName(c.root))",
+                                  detail: "\(c.apps) app\(c.apps == 1 ? "" : "s") there each carry a full copy of the Wine engine. Identical files can be stored once (as on this Mac); nothing else changes. Quit games stored there first.",
+                                  url: c.root, bytes: c.bytes, actionTitle: "Share"))
         }
         let downloads = Storage.size(NokPaths.downloads)
         if downloads > 50_000_000 {

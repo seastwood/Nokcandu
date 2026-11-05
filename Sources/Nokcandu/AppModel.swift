@@ -400,6 +400,7 @@ final class AppModel: ObservableObject {
     private var lastHelperCheck = Date.distantPast
     private var helperCheckNeeded = true
     private var helpersMaintained = false
+    private var unknownStreak = 0
 
     func applyIdleSettings(retry: Bool = false) {
         guard !checkingPending else { return }
@@ -420,11 +421,16 @@ final class AppModel: ObservableObject {
 
     @discardableResult
     private func applyRunStates(_ incoming: [InstalledGame.ID: RunState]) -> Bool {
-        let unavailable = incoming.values.contains(.unknown)
+        // A single overlapping process scan reports "unknown" (it never waits behind another scan): keep the last
+        // known state through one such pass, and only say status is unavailable when it persists.
+        let anyUnknown = incoming.values.contains(.unknown)
+        unknownStreak = anyUnknown ? unknownStreak + 1 : 0
+        let unavailable = unknownStreak >= 3
         if statusUnavailable != unavailable { statusUnavailable = unavailable }
         var s = incoming
         for (id, state) in incoming where state == .unknown {
             if case .launcherRunning = runStates[id] { s[id] = runStates[id] }
+            else if !unavailable, let known = runStates[id], known != .unknown { s[id] = known }
         }
         if s != runStates {
             // A game with Epic cloud saves just quit: upload its newer saves.

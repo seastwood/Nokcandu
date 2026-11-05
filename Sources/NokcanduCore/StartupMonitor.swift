@@ -26,7 +26,10 @@ public enum StartupMonitor {
         }
         if elapsed >= 12 {
             if fresh == nil && !running && !handoff {
-                return .failed("\(name) didn't start. " + detail)
+                // Nothing has started yet. macOS checks an app the first time it opens after its files changed
+                // (a move, an engine update, shared engine files), which can hold the launch for a while.
+                if elapsed >= 60 { return .failed("\(name) didn't start. " + detail) }
+                return .waiting("\(name) is taking a while to start. macOS checks a game the first time it opens after its files changed; this can take up to a minute.")
             }
             return .waiting("\(name) is still starting. Check for macOS permission or store sign-in dialogs. If no game window appears, open Health → Diagnostics to inspect the launch log.")
         }

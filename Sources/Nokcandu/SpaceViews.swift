@@ -38,6 +38,7 @@ struct SpaceSaverList: View {
         case .downloads: "arrow.down.circle"
         case .logs: "doc.text"
         case .exfatOverhead: "externaldrive.badge.exclamationmark"
+        case .sharedEngine: "square.on.square"
         }
     }
 
@@ -70,6 +71,11 @@ struct SpaceSaverList: View {
             }
         case .downloads:
             run { Storage.format(Storage.empty(s.url)) + " freed." }
+        case .sharedEngine:
+            run {
+                let (freed, skipped) = EngineShare.shareAll(on: s.url, library: library)
+                return "Freed \(Storage.format(freed)) on \(Storage.driveName(s.url))." + (skipped.isEmpty ? "" : " Skipped (running): \(skipped.joined(separator: ", ")).")
+            }
         case .logs:
             run { "Cleared " + Storage.format(LogRetention.prune(library)) + " of logs." }
         }

@@ -99,15 +99,24 @@ public enum GamesVolume {
         return library
     }
 
+    /// macOS leaves Spotlight off on disk-image volumes, so games stored there were missing from Spotlight and
+    /// the Apps launcher. Turning it on needs no administrator rights.
+    public static func enableIndexing(_ mount: URL) {
+        guard let status = try? Shell.run("/usr/bin/mdutil", ["-s", mount.path], timeout: 20), status.combined.contains("disabled") else { return }
+        _ = try? Shell.run("/usr/bin/mdutil", ["-i", "on", mount.path], timeout: 60)
+    }
+
     @discardableResult
     public static func attach(_ image: URL) throws -> URL {
-        if let existing = attachedImages()[image.standardizedFileURL.path] { return existing }
+        if let existing = attachedImages()[image.standardizedFileURL.path] { enableIndexing(existing); return existing }
         let r = try Shell.run("/usr/bin/hdiutil", ["attach", image.path, "-noautoopen", "-plist"], timeout: 180)
         guard r.ok, let plist = try? PropertyListSerialization.propertyList(from: Data(r.stdout.utf8), format: nil) as? [String: Any],
               let mount = (plist["system-entities"] as? [[String: Any]] ?? []).compactMap({ $0["mount-point"] as? String }).first else {
             throw NokError("macOS couldn't open \(image.lastPathComponent): \(r.combined.suffix(300))")
         }
-        return URL(fileURLWithPath: mount, isDirectory: true)
+        let url = URL(fileURLWithPath: mount, isDirectory: true)
+        enableIndexing(url)
+        return url
     }
 
     /// Opens every registered games volume whose drive is connected (Nokcandu does this whenever a drive
@@ -115,6 +124,7 @@ public enum GamesVolume {
     @discardableResult
     public static func attachRegistered() -> [URL] {
         let attached = attachedImages()
+        for image in AutoMount.images() { if let m = attached[image.standardizedFileURL.path] { enableIndexing(m) } }
         return AutoMount.images().filter { FileManager.default.fileExists(atPath: $0.path) && attached[$0.standardizedFileURL.path] == nil }
             .compactMap { try? attach($0) }
     }

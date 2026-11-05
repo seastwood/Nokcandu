@@ -125,4 +125,28 @@ final class SpaceManagementTests: XCTestCase {
         XCTAssertFalse(fm.fileExists(atPath: g.logs.appendingPathComponent("old.log").path))
         XCTAssertTrue(fm.fileExists(atPath: g.logs.appendingPathComponent("recent.log").path))
     }
+
+    func testEngineFilesAreSharedOnlyWhenIdentical() throws {
+        let fm = FileManager.default
+        EngineShare.testRoot = root
+        defer { EngineShare.testRoot = nil }
+        func app(_ name: String, special: Bool) throws -> URL {
+            let a = try makeApp(in: apps, name: name)
+            let wine = a.appendingPathComponent("Contents/SharedSupport/wine/lib")
+            try fm.createDirectory(at: wine, withIntermediateDirectories: true)
+            try Data(repeating: 7, count: 300_000).write(to: wine.appendingPathComponent("common.so"))
+            try Data(repeating: special ? 9 : 8, count: 200_000).write(to: wine.appendingPathComponent("driver.so"))
+            try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: wine.appendingPathComponent("common.so").path)
+            return a
+        }
+        let a = try app("EngineA", special: false), b = try app("EngineB", special: true)
+        XCTAssertEqual(try EngineShare.share(app: a), 0, "the first app seeds the drive's shared copies")
+        let freed = try EngineShare.share(app: b)
+        XCTAssertGreaterThanOrEqual(freed, 300_000, "the identical file is now stored once")
+        let common = b.appendingPathComponent("Contents/SharedSupport/wine/lib/common.so")
+        XCTAssertEqual(try Data(contentsOf: common), Data(repeating: 7, count: 300_000))
+        XCTAssertEqual((try fm.attributesOfItem(atPath: common.path)[.posixPermissions] as? NSNumber)?.intValue, 0o755)
+        XCTAssertEqual(try Data(contentsOf: b.appendingPathComponent("Contents/SharedSupport/wine/lib/driver.so")), Data(repeating: 9, count: 200_000),
+                       "a file the game changed keeps its own version")
+    }
 }

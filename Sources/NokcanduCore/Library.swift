@@ -135,12 +135,17 @@ public enum GameLauncher {
         }
         guard let c = WineTools.hostContents(for: g) else { throw NokError("This game has no Windows environment.") }
         let wine = c.appendingPathComponent("SharedSupport/wine/bin/wine").path
-        _ = try? await Shell.runAsync(wine, ["wineboot", "--end-session", "--force"], env: WineTools.environment(contents: c), timeout: 15)
-        for _ in 0..<20 {
+        // Don't wait for the end-session request itself: a game that isn't drawing (in the background, paused)
+        // may never answer it. Programs get 10 s from the request to close; whatever is left is stopped.
+        let env = WineTools.environment(contents: c)
+        let request = Task.detached { _ = try? await Shell.runAsync(wine, ["wineboot", "--end-session", "--force"], env: env, timeout: 15) }
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        for _ in 0..<19 {
             if WineTools.ownedProcesses(contents: c).isEmpty { break }
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
         try await WineTools.stopAll(for: g)
+        request.cancel()
     }
 
     /// Reads the launcher's single-instance lock (Logs/game.lock/pid).

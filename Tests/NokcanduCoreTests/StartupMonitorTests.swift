@@ -13,6 +13,8 @@ final class StartupMonitorTests: XCTestCase {
         let waiting = StartupMonitor.Receipt(startedAt: 1000, phase: "starting", exitCode: 0, pid: 100)
         XCTAssertEqual(check(waiting), .pending)
         if case .waiting = check(waiting, elapsed: 20) {} else { XCTFail("An authorization dialog must not be reported as a failed game") }
+        if case .waiting = check(nil, elapsed: 20) {} else { XCTFail("A launch macOS is still checking must not be reported as failed") }
+        if case .failed = check(nil, elapsed: 61) {} else { XCTFail("A launch that never starts is reported") }
         let old = StartupMonitor.Receipt(startedAt: 900, phase: "exited", exitCode: 1, pid: 100)
         XCTAssertEqual(check(old), .pending)
         let exited = StartupMonitor.Receipt(startedAt: 1000, phase: "exited", exitCode: 0, pid: 100)
