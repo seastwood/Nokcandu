@@ -20,12 +20,17 @@ public actor PendingSettingsMonitor {
         guard !busy else { return Report() }
         busy = true; defer { busy = false }
         var report = Report(), seen = Set<String>()
+        // Usually nothing is queued: one directory listing answers that for every game.
+        let anyQueued = PendingSettings.anyQueued()
         for game in games where game.native == nil {
             guard let host = WineTools.hostContents(for: game) else { continue }
+            let windowPending = WindowedPresentation.needsIdleApply(for: game)
+            guard (anyQueued && PendingSettings.hasPending(for: game)) || windowPending else {
+                if !failed.isEmpty { failed[host.resolvingSymlinksInPath().path] = nil }
+                continue
+            }
             let key = host.resolvingSymlinksInPath().path
             let entries = PendingSettings.entries(for: game)
-            let windowPending = WindowedPresentation.needsIdleApply(for: game)
-            guard PendingSettings.hasPending(for: game) || windowPending else { failed[key] = nil; continue }
             guard seen.insert(key).inserted else { continue }
             let activity = observe(game)
             for peer in games where WineTools.hostContents(for: peer)?.resolvingSymlinksInPath().path == key {

@@ -177,6 +177,9 @@ public enum RawMouse {
 
     /// Lower-cased .exe names in a game's folder (a few levels deep; skips huge data folders quickly).
     static func exeNames(in folder: URL) -> [String] {
+        ExeNameCache.names(in: folder) { scanExeNames(in: folder) }
+    }
+    static func scanExeNames(in folder: URL) -> [String] {
         guard let en = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.isDirectoryKey],
                                                       options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { return [] }
         var out: [String] = []

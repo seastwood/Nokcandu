@@ -31,7 +31,12 @@ public enum HelperActivation: String, Equatable {
     }
     public static func statuses(for games: [InstalledGame]) -> [InstalledGame.ID: HelperActivation] {
         let snapshot = GameLauncher.processStatus()
-        let expectedSHA = RawMouse.bundledLibrary.flatMap { try? Hashing.sha256(file: $0) }
+        let expectedSHA = RawMouse.bundledLibrary.flatMap(FileHashCache.sha256)
+        // Executables of processes that could belong to any Wine environment, looked up once for all hosts.
+        let candidates: [(Int32, String)] = snapshot.rows.compactMap { row in
+            guard row.0 > 1, let path = WineTools.executablePath(row.0), path.contains("/SharedSupport/") else { return nil }
+            return (row.0, path)
+        }
         var hosts: [URL: HelperActivation] = [:], result: [InstalledGame.ID: HelperActivation] = [:]
         for game in games where game.native == nil {
             guard let host = WineTools.hostContents(for: game) else { continue }
@@ -44,9 +49,10 @@ public enum HelperActivation: String, Equatable {
                     if let start = startTime(record.pid), start.0 == record.startSeconds, start.1 == record.startMicros { records.append(record) }
                     else if snapshot.reliable { try? FileManager.default.removeItem(at: file) }
                 }
-                let pids = snapshot.rows.map(\.0).filter { WineTools.owns(pid: $0, contents: host) }
+                let support = WineTools.supportPath(host)
+                let pids = candidates.filter { WineTools.owns(executable: $0.1, support: support) }.map(\.0)
                 var installed = (try? String(contentsOf: folder.appendingPathComponent("helper-build.txt"), encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
-                if expectedSHA == nil || (try? Hashing.sha256(file: folder.appendingPathComponent(RawMouse.dylibName))) != expectedSHA { installed = nil }
+                if expectedSHA == nil || FileHashCache.sha256(folder.appendingPathComponent(RawMouse.dylibName)) != expectedSHA { installed = nil }
                 hosts[host] = assess(expected: RawMouse.bundledBuildID, installed: installed, processes: pids, records: records, reliable: snapshot.reliable, birth: startTime)
             }
             result[game.id] = hosts[host]

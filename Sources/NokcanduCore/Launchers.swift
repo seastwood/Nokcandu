@@ -88,8 +88,11 @@ public enum PCLaunchers {
     }
 
     static func registryBlocks(_ prefix: URL) -> [String] {
-        guard let reg = try? String(contentsOf: prefix.appendingPathComponent("system.reg"), encoding: .utf8) else { return [] }
-        return reg.components(separatedBy: "\n\n")
+        let file = prefix.appendingPathComponent("system.reg")
+        return FileDerivedCache.value(for: file, kind: "blocks") {
+            guard let reg = try? String(contentsOf: file, encoding: .utf8) else { return [String]() }
+            return reg.components(separatedBy: "\n\n")
+        }
     }
     static func value(_ block: String, _ k: String) -> String? {
         guard let line = block.components(separatedBy: "\n").first(where: { $0.hasPrefix("\"\(k)\"=\"") }) else { return nil }
@@ -98,6 +101,9 @@ public enum PCLaunchers {
 
     /// Games installed in the launcher, from what it writes to the Windows registry.
     public static func registeredGames(_ kind: PCLauncher, host: InstalledGame) -> [HostedGame] {
+        FileDerivedCache.value(for: host.prefix.appendingPathComponent("system.reg"), kind: "games-\(kind.rawValue)") { registeredGamesUncached(kind, host: host) }
+    }
+    static func registeredGamesUncached(_ kind: PCLauncher, host: InstalledGame) -> [HostedGame] {
         var out: [HostedGame] = []
         for block in registryBlocks(host.prefix) {
             guard let header = block.components(separatedBy: "\n").first(where: { $0.hasPrefix("[") }) else { continue }

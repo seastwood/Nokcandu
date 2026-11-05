@@ -117,6 +117,14 @@ public enum PendingSettings {
     public static func lastError(for game: InstalledGame) -> String? {
         WineTools.hostContents(for: game).flatMap { try? String(contentsOf: directory($0).appendingPathComponent("last-error.txt"), encoding: .utf8) }
     }
+    /// Whether any game has a saved setting waiting (cheap: lists the queue folders, opens nothing).
+    public static func anyQueued() -> Bool {
+        let fm = FileManager.default
+        guard let folders = try? fm.contentsOfDirectory(atPath: stateRoot.path) else { return false }
+        return folders.contains { folder in
+            ((try? fm.contentsOfDirectory(atPath: stateRoot.appendingPathComponent(folder).path)) ?? []).contains { $0.hasSuffix(".json") }
+        }
+    }
     public static func hasPending(for game: InstalledGame) -> Bool {
         WineTools.hostContents(for: game).map { !files($0).isEmpty } ?? false
     }

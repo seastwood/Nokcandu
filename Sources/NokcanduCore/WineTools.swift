@@ -38,7 +38,7 @@ public enum WineTools {
     public static func hostContents(for g: InstalledGame) -> URL? {
         if g.usesSharedSteam { return SharedSteam.isSetUp ? SharedSteam.contents : nil }
         if let hostApp = g.battleNet?.hostApp ?? g.hosted?.hostApp {
-            let h = URL(fileURLWithPath: hostApp).appendingPathComponent("Contents")
+            let h = URL(fileURLWithPath: hostApp).resolvingSymlinksInPath().appendingPathComponent("Contents")
             return FileManager.default.isExecutableFile(atPath: h.appendingPathComponent("SharedSupport/wine/bin/wine").path) ? h : nil
         }
         let c = g.contents
@@ -116,23 +116,53 @@ public enum WineTools {
         }
     }
 
+    /// `contents`/SharedSupport as a standardized path, computed once per app (URL path building touches the
+    /// file system, and ownership checks run for every process on the Mac several times a minute).
+    private static let supportPaths = LockedCache<String, String>(limit: 512)
+    static func supportPath(_ contents: URL) -> String {
+        if let cached = supportPaths[contents.path] { return cached }
+        // The real place: a launcher moved to another drive is opened through a link, but its programs
+        // report their real paths.
+        let value = contents.resolvingSymlinksInPath().appendingPathComponent("SharedSupport").standardizedFileURL.path
+        supportPaths[contents.path] = value
+        return value
+    }
+
     static func owns(executable path: String, contents: URL) -> Bool {
-        let support = contents.appendingPathComponent("SharedSupport").standardizedFileURL.path
-        let file = URL(fileURLWithPath: path).standardizedFileURL.path
-        if ["wine", "wine64", "wine-preloader", "wine64-preloader", "wineserver"].contains((file as NSString).lastPathComponent),
-           (file as NSString).deletingLastPathComponent == support + "/wine/bin" { return true }
-        if file == support + "/wine/lib/wine/x86_64-unix/wine" { return true }
+        owns(executable: path, support: supportPath(contents))
+    }
+    /// String-only check (no file-system access): is this executable one of the environment's Wine programs?
+    static func owns(executable path: String, support: String) -> Bool {
+        // The kernel reports /private/var/… and /private/tmp/… where URLs say /var/… and /tmp/….
+        let path = !path.hasPrefix(support + "/") && path.hasPrefix("/private/") && !support.hasPrefix("/private/") ? String(path.dropFirst("/private".count)) : path
+        // Cheap rejection first: nearly every process on the Mac lives elsewhere.
+        guard path.hasPrefix(support + "/") else { return false }
+        let file = path.contains("/./") || path.contains("/../") ? URL(fileURLWithPath: path).standardizedFileURL.path : path
+        guard file.hasPrefix(support + "/") else { return false }
+        let rest = file.dropFirst(support.count + 1)
+        if rest.hasPrefix("wine/bin/"), ["wine", "wine64", "wine-preloader", "wine64-preloader", "wineserver"].contains(String(rest.dropFirst("wine/bin/".count))) { return true }
+        if rest == "wine/lib/wine/x86_64-unix/wine" { return true }
         // Wine's loader for the environment's programs, named after the app it belongs to
         // (GameApp/StarCraft.app/Contents/MacOS/StarCraft) or plain "wine".
-        guard file.hasPrefix(support + "/GameApp/") else { return false }
-        let rest = file.dropFirst(support.count + "/GameApp/".count).components(separatedBy: "/")
-        return rest.count == 4 && rest[0].hasSuffix(".app") && rest[1] == "Contents" && rest[2] == "MacOS"
+        guard rest.hasPrefix("GameApp/") else { return false }
+        let parts = rest.dropFirst("GameApp/".count).components(separatedBy: "/")
+        return parts.count == 4 && parts[0].hasSuffix(".app") && parts[1] == "Contents" && parts[2] == "MacOS"
     }
     static func owns(pid: Int32, contents: URL) -> Bool {
-        guard pid > 1, pid != getpid() else { return false }
+        guard pid > 1, pid != getpid(), let path = executablePath(pid) else { return false }
+        return owns(executable: path, support: supportPath(contents))
+    }
+
+    /// A process's executable, briefly cached: one status pass asks about the same few hundred processes for
+    /// every game and launcher. Process ids are handed out sequentially, so one isn't reused within the window.
+    private static let pathCache = LockedCache<Int32, (Date, String?)>(limit: 8192)
+    static func executablePath(_ pid: Int32) -> String? {
+        let now = Date()
+        if let (seen, path) = pathCache[pid], now.timeIntervalSince(seen) < 2 { return path }
         var bytes = [CChar](repeating: 0, count: 4096)
-        guard proc_pidpath(pid, &bytes, UInt32(bytes.count)) > 0 else { return false }
-        return owns(executable: String(cString: bytes), contents: contents)
+        let path = proc_pidpath(pid, &bytes, UInt32(bytes.count)) > 0 ? String(cString: bytes) : nil
+        pathCache[pid] = (now, path)
+        return path
     }
     static func ownedProcesses(contents: URL) -> [Int32] {
         guard let rows = try? Shell.run("/bin/ps", ["-axo", "pid="], timeout: 10), rows.ok else { return [] }

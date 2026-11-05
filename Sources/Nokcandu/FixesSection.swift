@@ -11,11 +11,13 @@ struct FixesSection: View {
     @State private var working = false
     @State private var log: [String] = []
     @State private var confirmUndo = false
+    @State private var sharedEnv = false
+    @State private var usesDirectShow = false
 
     var body: some View {
         SettingsSection(title: "Fixes") {
             SettingRow(title: "Video and music playback",
-                       info: "Adds a movie reader, video decoder and audio decoder (LAV Filters \(CinematicFix.version), open source) to \(CompatibilityFixes.hasSharedEnvironment(game) ? "the shared launcher's" : "this game's") Windows environment, for games whose videos crash or stay black, or whose MP3 music won't play (“Music Error: Can not play file”). Confirmed to fix Warcraft III's cinematics.") {
+                       info: "Adds a movie reader, video decoder and audio decoder (LAV Filters \(CinematicFix.version), open source) to \(sharedEnv ? "the shared launcher's" : "this game's") Windows environment, for games whose videos crash or stay black, or whose MP3 music won't play (“Music Error: Can not play file”). Confirmed to fix Warcraft III's cinematics.") {
                 if working { ProgressView().controlSize(.small) }
                 else if present {
                     InstalledBadge()
@@ -28,7 +30,7 @@ struct FixesSection: View {
                     .fixedSize()
                 }
             }
-            if CinematicFix.likelyUsesDirectShow(game) && !present {
+            if usesDirectShow && !present {
                 SettingNote("This game looks like it plays videos through DirectShow, so it may need this.", warning: true)
             }
             ComponentFixesView(game: game)
@@ -37,8 +39,14 @@ struct FixesSection: View {
                 Text(log.suffix(6).joined(separator: "\n")).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
             }
         }
-        .onAppear { present = CinematicFix.isPresent(for: game) }
-        .confirmationDialog("Remove the cinematic fix from \(CompatibilityFixes.hasSharedEnvironment(game) ? "the shared Windows environment" : game.name)?", isPresented: $confirmUndo) {
+        .task(id: game) {
+            let g = game
+            let r = await Task.detached(priority: .userInitiated) {
+                (CinematicFix.isPresent(for: g), CompatibilityFixes.hasSharedEnvironment(g), CinematicFix.likelyUsesDirectShow(g))
+            }.value
+            present = r.0; sharedEnv = r.1; usesDirectShow = r.2
+        }
+        .confirmationDialog("Remove the cinematic fix from \(sharedEnv ? "the shared Windows environment" : game.name)?", isPresented: $confirmUndo) {
             Button("Remove", role: .destructive) { undo() }
         } message: { Text("Unregisters the three LAV components and moves their folder to the Trash.") }
     }
@@ -104,27 +112,35 @@ private struct ComponentFixesView: View {
     @State private var nativeIPXFrame = 3
     @State private var nativeIPXAdapter = ""
     @State private var nativeIPXAdapters: [NativeIPXNetworking.NetworkAdapter] = []
+    /// Everything the rows show, read from disk off the main thread (these checks inspect programs and
+    /// folders, and doing them while drawing made switching games slow).
+    struct Row: Equatable { var fix: CompatibilityFix; var reason: String?; var recovery: Bool; var update: Bool }
+    @State private var rows: [Row]?
+    @State private var shared = false
+    @State private var programName: String?
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if CompatibilityFixes.hasSharedEnvironment(game) {
+            if rows == nil { HStack { ProgressView().controlSize(.small); Text("Checking fixes…").font(.caption).foregroundStyle(.secondary) } }
+            if shared {
                 SettingRow(title: "Program for fixes", info: "Compatibility fixes belong to this game's registered folder and program. Choosing here does not change what the launcher starts.") {
-                    Text(CompatibilityFixes.programForFixes(game)?.lastPathComponent ?? "Choose a program")
+                    Text(programName ?? "Choose a program")
                         .font(.caption.monospaced()).lineLimit(1)
                     Button("Choose…") { chooseProgramForFixes() }.disabled(working != nil)
                 }
                 SettingNote("Game-specific fixes do not change the shared launcher's graphics or other games. Changes wait until its Windows programs close.")
             }
-            ForEach(CompatibilityFix.allCases.filter { CompatibilityFixes.visible($0, for: game) }) { fix in
+            ForEach(rows ?? [], id: \.fix) { row in
+                let fix = row.fix
                 let on = installed.contains(fix.id)
-                let reason = on ? nil : CompatibilityFixes.unavailable(fix, for: game)
+                let reason = on ? nil : row.reason
                 SettingRow(title: fix.title, info: fix.detail + (reason.map { "\n\n" + $0 } ?? "")) {
                     if working == fix { ProgressView().controlSize(.small) }
                     else {
                         if on {
-                            if CompatibilityFixes.needsRecovery(fix, for: game) { Text("Needs recovery").font(.caption).foregroundStyle(.orange) }
+                            if row.recovery { Text("Needs recovery").font(.caption).foregroundStyle(.orange) }
                             else { InstalledBadge() }
                         }
-                        if on, CompatibilityFixes.needsUpdate(fix, for: game) {
+                        if on, row.update {
                             Button("Update") { run(fix, update: true) }.disabled(working != nil)
                         }
                         Button(on ? "Undo" : (fix == .openUA ? "Apply" : "Install")) { run(fix) }
@@ -169,10 +185,25 @@ private struct ComponentFixesView: View {
         } catch { model.fail(error) }
     }
     func reload() {
-        installed = Set(CompatibilityFixes.installedIDs(for: game))
-        nativeIPXFrame = PendingSettings.nativeFrame(for: game) ?? NativeIPXNetworking.frame(for: game) ?? 3
-        nativeIPXAdapter = PendingSettings.nativeAdapter(for: game) ?? game.custom?.environment?["NOKCANDU_NATIVE_IPX_INTERFACE"] ?? ""
-        nativeIPXAdapters = installed.contains(CompatibilityFix.nativeIPXNetworking.id) ? NativeIPXNetworking.availableAdapters() : []
+        let g = game
+        Task {
+            let r = await Task.detached(priority: .userInitiated) { () -> (Set<String>, Int, String, [NativeIPXNetworking.NetworkAdapter], [Row], Bool, String?) in
+                let installed = Set(CompatibilityFixes.installedIDs(for: g))
+                let frame = PendingSettings.nativeFrame(for: g) ?? NativeIPXNetworking.frame(for: g) ?? 3
+                let adapter = PendingSettings.nativeAdapter(for: g) ?? g.custom?.environment?["NOKCANDU_NATIVE_IPX_INTERFACE"] ?? ""
+                let adapters = installed.contains(CompatibilityFix.nativeIPXNetworking.id) ? NativeIPXNetworking.availableAdapters() : []
+                let rows = CompatibilityFix.allCases.filter { CompatibilityFixes.visible($0, for: g) }.map { fix in
+                    let on = installed.contains(fix.id)
+                    return Row(fix: fix, reason: on ? nil : CompatibilityFixes.unavailable(fix, for: g),
+                               recovery: on && CompatibilityFixes.needsRecovery(fix, for: g), update: on && CompatibilityFixes.needsUpdate(fix, for: g))
+                }
+                let shared = CompatibilityFixes.hasSharedEnvironment(g)
+                return (installed, frame, adapter, adapters, rows, shared, shared ? CompatibilityFixes.programForFixes(g)?.lastPathComponent : nil)
+            }.value
+            guard g == game else { return }
+            installed = r.0; nativeIPXFrame = r.1; nativeIPXAdapter = r.2; nativeIPXAdapters = r.3
+            rows = r.4; shared = r.5; programName = r.6
+        }
     }
     func setNativeAdapter(_ name: String) {
         working = .nativeIPXNetworking

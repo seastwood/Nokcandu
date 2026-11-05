@@ -151,8 +151,16 @@ struct GameSettingsSection: View {
     }
 
     func checkLauncher() {
-        guard let l = game.launcherURL, let sha = try? Hashing.sha256(file: l) else { return }
-        launcherEdited = sha != original.launcherSHA
+        // Compare with the settings on disk, not the page's copy: Nokcandu itself may have just brought the
+        // launcher up to date (after an update), which isn't an outside edit.
+        let g = game
+        Task {
+            launcherEdited = await Task.detached(priority: .userInitiated) { () -> Bool in
+                guard let l = g.launcherURL, let sha = try? Hashing.sha256(file: l),
+                      let saved = CustomGameConfig.load(contents: g.contents)?.launcherSHA else { return false }
+                return sha != saved
+            }.value
+        }
     }
 
     func chooseExe() {

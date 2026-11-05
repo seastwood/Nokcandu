@@ -43,6 +43,9 @@ public enum BattleNet {
 
     /// Blizzard games installed in the Battle.net app, from their Windows uninstall entries.
     public static func registeredGames(host: InstalledGame) -> [BlizzardGame] {
+        FileDerivedCache.value(for: host.prefix.appendingPathComponent("system.reg"), kind: "blizzard") { registeredGamesUncached(host: host) }
+    }
+    static func registeredGamesUncached(host: InstalledGame) -> [BlizzardGame] {
         guard let reg = try? String(contentsOf: host.prefix.appendingPathComponent("system.reg"), encoding: .utf8) else { return [] }
         var out: [BlizzardGame] = []
         for block in reg.components(separatedBy: "\n\n") where block.contains("CurrentVersion\\\\Uninstall\\\\") {
