@@ -203,6 +203,10 @@ public enum Diagnostics {
             }
         }
         c.append(contentsOf: audioDriverChecks(g))
+        for m in ModDependencies.missing(g) { add(.app, "Mod \(m.mod)", .warning, m.message) }
+        if let crash = CrashReports.lastCrash(g) {
+            add(.process, "Last crash (\(crash.date.formatted(date: .abbreviated, time: .shortened)))", .info, crash.title + ". " + crash.evidence)
+        }
         return DiagReport(game: g, checks: c, logs: logs)
     }
 

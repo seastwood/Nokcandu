@@ -150,10 +150,27 @@ public enum GamesVolume {
     public static func eject(_ drive: URL) throws {
         for (path, mount) in attachedImages() where path.hasPrefix(drive.standardizedFileURL.path + "/") {
             let r = try Shell.run("/usr/sbin/diskutil", ["eject", mount.path], timeout: 120)
-            guard r.ok else { throw NokError("\(mount.lastPathComponent) is in use (quit games and launchers stored on it first): \(r.combined.suffix(200))") }
+            guard r.ok else { throw NokError("\(mount.lastPathComponent) is in use" + (dissenter(r.combined).map { " by \($0)" } ?? "") + ". Quit games and launchers stored on it, and anything else using it, then eject again.") }
         }
         let r = try Shell.run("/usr/sbin/diskutil", ["eject", drive.path], timeout: 120)
-        guard r.ok else { throw NokError("macOS couldn't eject \(drive.lastPathComponent): \(r.combined.suffix(200))") }
+        guard r.ok else {
+            if let who = dissenter(r.combined) { throw NokError("\(drive.lastPathComponent) is in use by \(who). Quit it (or close what it has open there), then eject again.") }
+            throw NokError("macOS couldn't eject \(drive.lastPathComponent): \(r.combined.suffix(200))")
+        }
+    }
+
+    /// The program that refused an unmount ("Unmount was dissented by PID 123 (/path/App.app/Contents/MacOS/App)"),
+    /// by its app's name when it's inside one.
+    static func dissenter(_ output: String) -> String? {
+        guard let r = output.range(of: #"dissented by PID \d+ \(([^)]+)\)"#, options: .regularExpression) else { return nil }
+        let match = String(output[r])
+        guard let open = match.firstIndex(of: "("), let close = match.lastIndex(of: ")") else { return nil }
+        let path = String(match[match.index(after: open)..<close])
+        let parts = path.split(separator: "/").map(String.init)
+        // The outermost app in the path (an XPC service inside a framework counts as its framework).
+        if let app = parts.first(where: { $0.hasSuffix(".app") }) { return (app as NSString).deletingPathExtension }
+        if let framework = parts.first(where: { $0.hasSuffix(".framework") }) { return (framework as NSString).deletingPathExtension + " (a macOS service)" }
+        return parts.last
     }
 }
 

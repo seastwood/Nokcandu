@@ -183,4 +183,12 @@ final class SpaceManagementTests: XCTestCase {
         XCTAssertFalse(fm.fileExists(atPath: partial.appendingPathComponent("later.txt").path))
         XCTAssertNil(GameMover.compare(other, partial))
     }
+
+    func testEjectNamesWhatIsUsingTheDrive() {
+        XCTAssertEqual(GamesVolume.dissenter("Unmount was dissented by PID 63502 (/System/Library/Frameworks/Virtualization.framework/Versions/A/XPCServices/com.apple.Virtualization.VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine)\nDissenter parent PPID 1 (/sbin/launchd)"),
+                       "Virtualization (a macOS service)")
+        XCTAssertEqual(GamesVolume.dissenter("Unmount was dissented by PID 5 (/Applications/Steam.app/Contents/MacOS/steam_osx)"), "Steam")
+        XCTAssertEqual(GamesVolume.dissenter("Unmount was dissented by PID 9 (/usr/bin/vim)"), "vim")
+        XCTAssertNil(GamesVolume.dissenter("Volume failed to eject"))
+    }
 }

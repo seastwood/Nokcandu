@@ -101,6 +101,10 @@ struct GameDetailView: View {
                     .padding(12)
                     .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
                 }
+                if game.native == nil {
+                    CrashBanner(game: game, running: running)
+                    ModDependencyBanner(game: game, running: running)
+                }
                 if game.native == nil { PendingSettingsSection(game: game) }
                 if let d = cinematicDiagnosis, !CinematicFix.isPresent(for: game) {
                     CinematicCrashBanner(game: game, diagnosis: d) { fixFromBanner() }

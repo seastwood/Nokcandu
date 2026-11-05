@@ -136,8 +136,8 @@ public enum BattleNet {
             let f = g.appURL.appendingPathComponent("Contents/MacOS/\(CustomGames.launcherName)")
             let want = launcherScript(l)
             guard let current=try? String(contentsOf:f,encoding:.utf8), current != want else { continue }
-            // This exact generated-script migration must not replace hand-edited launchers.
-            guard WineEnvironment.upgradeExports(current) == want else { continue }
+            // Only scripts Nokcandu generated (any earlier version of this template) are replaced, never hand-edited ones.
+            guard WineEnvironment.upgradeExports(current) == want || earlierLauncherScripts(l).contains(current) else { continue }
             if (try? Data(want.utf8).write(to: f, options: .atomic)) != nil {
                 try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: f.path)
             }
@@ -173,6 +173,29 @@ public enum BattleNet {
 
     /// Starts Battle.net (with its own settings) if needed, waits until it has signed in, then asks it
     /// to launch the game.
+    /// Every earlier version of the generated script for this link: older engine exports, before the launcher's
+    /// browser renderer block, and before "close Battle.net with the game" became opt-in (`keep-open` → `close-with-game`).
+    static func earlierLauncherScripts(_ l: BattleNetLink) -> Set<String> {
+        let current = launcherScript(l)
+        let exports = WineEnvironment.exportLine("HC")
+        let browser = BrowserRenderer.launcherBlock(exes: BrowserRenderer.battleNetExes)
+        var out = Set<String>()
+        for e in WineEnvironment.versions("HC") {
+            for withBrowser in [true, false] {
+                for keepOpen in [false, true] {
+                    var s = current.replacingOccurrences(of: exports, with: e)
+                    if !withBrowser { s = s.replacingOccurrences(of: browser + "\n", with: "").replacingOccurrences(of: browser, with: "") }
+                    if keepOpen {
+                        s = s.replacingOccurrences(of: #"[ ! -f "$STATE/close-with-game" ]"#, with: #"[ -f "$STATE/keep-open" ]"#)
+                             .replacingOccurrences(of: #"[ -f "$STATE/close-with-game" ]"#, with: #"[ ! -f "$STATE/keep-open" ]"#)
+                    }
+                    if s != current { out.insert(s) }
+                }
+            }
+        }
+        return out
+    }
+
     public static func launcherScript(_ l: BattleNetLink) -> String {
         let q = CustomGames.shellQuote
         return """

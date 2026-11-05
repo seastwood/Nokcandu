@@ -301,6 +301,8 @@ public enum GameLauncher {
         if game.hosted != nil { PCLaunchers.refreshLaunchers([game]) }
         HelperPatch.refresh([game])
         try LauncherEntry.ensure(game)
+        // Crash reports land in the environment, where Nokcandu can explain them (only while it's closed).
+        if game.native == nil, let host = WineTools.hostContents(for: game) { CrashReports.ensureCapture(contents: host) }
         if game.isSteamHost || game.usesSharedSteam { SharedSteam.refreshHostScriptsIfNeeded() }
         var args = [game.appURL.path]
         if !arguments.isEmpty { args += ["--args"] + arguments }

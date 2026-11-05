@@ -19,7 +19,7 @@ jobs:
       open: ${{ steps.seen.outputs.open }}
       title: ${{ steps.seen.outputs.title }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Newest Wine in Sikarugir's engines
         id: v
         env: { GH_TOKEN: '${{ github.token }}' }
@@ -43,7 +43,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Try the driver patches on it
         id: try
         continue-on-error: true

@@ -11,7 +11,7 @@ jobs:
   release:
     runs-on: xcode-27
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
       - name: Show build environment
         run: |
@@ -64,13 +64,13 @@ jobs:
           echo "NOKCANDU_HARDENED=1" >> "$GITHUB_ENV"
       - name: Nokcandu's Wine Mac driver, as built by the "Wine Mac driver" workflow
         id: driver
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: build/winemac-[0-9]*
           key: winemac-v2-${{ hashFiles('Engine/winemac/**') }}
       - name: Wine source and tools for the driver (only when it must be built here)
         if: steps.driver.outputs.cache-hit != 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: build/winemac-work/*.tar.xz
           key: winemac-downloads-${{ hashFiles('Engine/winemac/checksums/*') }}
@@ -101,7 +101,7 @@ jobs:
         run: ./make-dmg.sh
       - name: Upload test DMG
         if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Nokcandu-test-build
           path: |

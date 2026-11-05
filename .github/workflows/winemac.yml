@@ -12,16 +12,16 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Kept driver for these patches
         id: kept
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: build/winemac-[0-9]*
           key: winemac-v2-${{ hashFiles('Engine/winemac/**') }}
       - name: Wine source and tools (downloads, checksummed)
         if: steps.kept.outputs.cache-hit != 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: build/winemac-work/*.tar.xz
           key: winemac-downloads-${{ hashFiles('Engine/winemac/checksums/*') }}
@@ -37,7 +37,7 @@ jobs:
             strings build/winemac-$V/x86_64-unix/winemac.so | grep -q nokcandu-virtual-display
             nm -gU build/winemac-$V/x86_64-unix/winemac.so | grep -q _macdrv_functions
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: winemac
           path: build/winemac-[0-9]*

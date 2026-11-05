@@ -977,6 +977,21 @@ static bool responsible_for_itself(void) {
     return responsibility_get_pid_responsible_for_pid(getpid()) == getpid();
 }
 
+// The wrapper's own executable (its CFBundleExecutable: the wrapper's name, "wine-game" for one named "wine").
+// Exec that file, not its "wine" link: macOS takes the app's identity (bundle, games category for Game Mode)
+// only when the running file is the bundle's executable; through the link it used the loader's built-in
+// org.winehq.wine identity instead. Falls back to the link for wrappers made before the executable was named.
+static void nokcandu_wrapper_executable(const char *dir, const char *wrapper, char *out, size_t outsize) {
+    char name[NAME_MAX + 1];
+    strlcpy(name, wrapper, sizeof name);
+    size_t n = strlen(name);
+    if (n > 4 && strcmp(name + n - 4, ".app") == 0) name[n - 4] = 0;
+    if (strcmp(name, "wine") == 0) strlcpy(name, "wine-game", sizeof name);
+    snprintf(out, outsize, "%s/%s/Contents/MacOS/%s", dir, wrapper, name);
+    if (access(out, X_OK) == 0) return;
+    snprintf(out, outsize, "%s/%s/Contents/MacOS/wine", dir, wrapper);
+}
+
 static void run_from_game_app_as(bool background);
 static void run_from_game_app(void) { run_from_game_app_as(false); }
 static void run_from_game_app_as(bool background) {
@@ -1024,7 +1039,7 @@ static void run_from_game_app_as(bool background) {
     if (strcmp(want, engine) != 0) return;
     if (!wrapper[0] || strchr(wrapper, '/')) return;
     char target[PATH_MAX];
-    snprintf(target, sizeof target, "%s/%s/Contents/MacOS/wine", dir, wrapper);
+    nokcandu_wrapper_executable(dir, wrapper, target, sizeof target);
     if (access(target, X_OK) != 0) return;
     // Replace this process in place, like exec. It stays in the care of the app that started it, so it
     // keeps that app's privacy permissions (Input Monitoring for raw mouse, the microphone) — making the game
@@ -1068,7 +1083,7 @@ static const char *wine11_wrapper_for(const char *path, char *const argv[], char
     fclose(f);
     if (!wrapper[0]) strlcpy(wrapper, fallback, sizeof wrapper);
     if (!wrapper[0] || strchr(wrapper, '/')) return NULL;
-    snprintf(out, outsize, "%s/%s/Contents/MacOS/wine", dir, wrapper);
+    nokcandu_wrapper_executable(dir, wrapper, out, outsize);
     if (access(out, X_OK) != 0) return NULL;
     return out;
 }

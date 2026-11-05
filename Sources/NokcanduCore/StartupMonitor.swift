@@ -49,8 +49,14 @@ public enum StartupMonitor {
         // A Wine virtual desktop may own the Mac window on behalf of the game.
         let window = !runtime.isEmpty && (runtime.contains { windows.contains($0.pid) } ||
             host.map { h in windows.contains { WineTools.owns(pid: $0, contents: h) } } == true)
-        let running: Bool
+        var running: Bool
         if GameLauncher.runState(of: g) != .notRunning { running = true } else { running = !runtime.isEmpty }
+        // macOS may hold the app's own launcher while it checks changed files (seen for minutes when its online
+        // check is slow): as long as that process exists, the game is still starting.
+        if !running {
+            let entry = g.contents.resolvingSymlinksInPath().appendingPathComponent("MacOS").path + "/"
+            running = GameLauncher.processSnapshot().contains { $0.1.hasPrefix(entry) || $0.1.contains(entry) }
+        }
         let log = g.logs.appendingPathComponent("launch.log")
         var detail = "Open Health → Diagnostics for the launch log."
         if let date = try? log.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,

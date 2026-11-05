@@ -30,7 +30,7 @@ jobs:
           <meta http-equiv="refresh" content="0; url=https://seastwood.github.io/Nokcandu-Profiles/">
           <p>Game profiles moved to <a href="https://seastwood.github.io/Nokcandu-Profiles/">seastwood.github.io/Nokcandu-Profiles</a>.</p>
           HTML
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
         with: { path: public }
-      - uses: actions/deploy-pages@v4
+      - uses: actions/deploy-pages@v5

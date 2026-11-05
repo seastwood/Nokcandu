@@ -221,6 +221,12 @@ final class AppModel: ObservableObject {
             if housekeeping {
                 LogRetention.prune(live)
                 RestorePoints.pruneOld(library: live)
+                // Crash reports for games started outside Nokcandu too (closed environments only, once each).
+                var hosts = Set<String>()
+                for g in live where g.native == nil {
+                    guard let host = WineTools.hostContents(for: g), hosts.insert(host.resolvingSymlinksInPath().path).inserted else { continue }
+                    CrashReports.ensureCapture(contents: host)
+                }
                 let kept = EngineUpdate.autoKeep(live)
                 if !kept.isEmpty {
                     await MainActor.run { self.say("Kept the new engine for \(kept.joined(separator: ", ")) after a week of play and removed the old engine's copy. A restore point from before the change remains.") }
@@ -548,6 +554,11 @@ final class AppModel: ObservableObject {
                     // Never in the way of playing: the game starts on the Mac's screen, and says why.
                     let why = WindowedPresentation.unavailable(for: g) ?? error.localizedDescription
                     await MainActor.run { self.say("\(g.name) is playing on the Mac's screen: \(why)") }
+                }
+                // A mod started from the launch options that's missing a mod it builds on crashes while loading: say so first.
+                if let mod = ModDependencies.launchedMod(arguments: g.custom?.arguments ?? ""),
+                   let missing = ModDependencies.missing(g).first(where: { $0.mod.lowercased() == mod.lowercased() }) {
+                    await MainActor.run { self.say(missing.message) }
                 }
                 await BonjourService.prepareForLaunch(g)
                 await DiscordBridge.prepareForLaunch(g)
