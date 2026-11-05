@@ -203,7 +203,7 @@ struct StorageView: View {
     @EnvironmentObject var model: AppModel
     var embedded = false
     @Environment(\.dismiss) var dismiss
-    @State private var section: StorageInventory.Section = .drives
+    @State private var section: StorageInventory.Section = .reclaim
     @State private var volumes: [Storage.VolumeInfo] = []
     @State private var snapshot: StorageInventory.Snapshot?
     @State private var displayedSection: StorageInventory.Section?
@@ -235,7 +235,17 @@ struct StorageView: View {
                 ForEach(StorageInventory.Section.allCases) { Text($0.title).tag($0) }
             }.pickerStyle(.segmented).padding(.horizontal, 20).padding(.bottom, 12)
             Divider()
-            if section == .drives {
+            if section == .reclaim {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if displayedSection == .reclaim, let snapshot {
+                            SpaceSaverList(suggestions: snapshot.suggestions, busy: cleaning || loading) { cleanup($0) }
+                        } else {
+                            HStack { ProgressView().controlSize(.small); Text("Looking for space to free…").foregroundStyle(.secondary) }
+                        }
+                    }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else if section == .drives {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 18) {
                         GroupBox {
@@ -247,6 +257,7 @@ struct StorageView: View {
                                 }.padding(6)
                             }
                         } label: { Label("Drives", systemImage: "internaldrive").font(.headline) }
+                        GamesVolumesBox(drives: displayedSection == .drives ? snapshot?.drives ?? [] : [], busy: cleaning || loading) { cleanup($0) }
                         GameFoldersBox(refreshToken: refresh)
                     }.padding(20)
                 }
@@ -329,9 +340,8 @@ struct StorageView: View {
             Spacer()
             Text((item.incomplete ? "At least " : "") + Storage.format(item.bytes)).monospacedDigit().foregroundStyle(.secondary)
             if let game = model.games.first(where: { $0.appURL == item.url }),
-               game.native == nil, !game.isSteamHost, !game.usesSharedSteam,
-               game.battleNet == nil, game.hosted == nil, !BattleNet.isHost(game), PCLaunchers.kind(of: game) == nil {
-                Button("Move…") { model.moveToChosenFolder(game) }.fixedSize()
+               game.native == nil, !game.usesSharedSteam, game.battleNet == nil, game.hosted == nil {
+                Button("Move…") { model.movingGame = game }.fixedSize().disabled(model.moving.contains(game.id))
             }
             Button { NSWorkspace.shared.activateFileViewerSelecting([item.url]) } label: { Image(systemName: "magnifyingglass") }
                 .buttonStyle(.borderless).help("Show in Finder")
@@ -689,54 +699,42 @@ struct RemoveGameSection: View {
 struct GameLocationSection: View {
     @EnvironmentObject var model: AppModel
     let game: InstalledGame
+    @State private var where_: (app: String, files: String?)?
 
     var body: some View {
-        let folder = GameFolders.folder(of: game)
         GroupBox {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Storage & Location").font(.body.bold())
-                    Text("App: " + Storage.driveName(game.appURL) + " · " + GameFolderLabel.text(folder))
-                        .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                    if let ext = GameMover.externalFiles(game) {
-                        Text("Game files: \(ext.path)" + (GameMover.missingDrive(game) != nil ? " — drive not connected" : ""))
-                            .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                    if let w = where_ {
+                        Text("App: " + w.app).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                        if let f = w.files { Text("Game files: " + f).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
                     }
-                    if let b = GameMover.blocker(game), b != "Quit the game first.", GameMover.filesBlocker(game).map({ $0 != "Quit the game first." }) ?? false {
-                        Text(b).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    if let status = model.moveStatus[game.id] {
+                        HStack(spacing: 6) { ProgressView().controlSize(.small); Text(status).font(.caption) }
                     } else {
-                        Text("Move it to another folder or drive to free up space. On APFS or Mac OS Extended drives the whole app moves; on ExFAT drives (most USB drives) only the game's files move and the app, Wine runtime and private Windows setup stay on this Mac. Keep the drive connected to play.")
+                        Text("Move the app and the game's files together or separately — for example the app to an APFS drive and the game's files to any drive, ExFAT included. Nothing is removed until its copy has been checked.")
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 Spacer()
-                Button("Show in Finder") { model.reveal(game.appURL) }
-                if [GameMover.blocker(game), GameMover.filesBlocker(game)].contains(where: { $0 == nil || $0 == "Quit the game first." }) {
-                    Menu("Move To") { GameContextMenuMoveItems(game: game) }
-                        .fixedSize()
-                        .disabled(model.moving.contains(game.id))
-                }
+                Button("Show in Finder") { model.reveal(game.appURL.resolvingSymlinksInPath()) }
+                Button("Move…") { model.movingGame = game }
+                    .disabled(model.moving.contains(game.id))
             }
             .padding(6)
         }
-    }
-}
-
-struct GameContextMenuMoveItems: View {
-    @EnvironmentObject var model: AppModel
-    let game: InstalledGame
-    var body: some View {
-        let ok: (String?) -> Bool = { $0 == nil || $0 == "Quit the game first." }
-        let appOK = ok(GameMover.blocker(game)), filesOK = ok(GameMover.filesBlocker(game))
-        ForEach(GameFolders.all.filter { $0 != GameFolders.folder(of: game) }, id: \.self) { f in
-            Button(GameFolderLabel.text(f)) { model.move(game, to: f) }
-                .disabled(!GameFolders.isAvailable(f) || !(GameFolders.holdsApps(f) ? appOK : filesOK))
+        .task(id: "\(game.id)-\(model.libraryRevision)") {
+            let g = game
+            where_ = await Task.detached(priority: .utility) { () -> (String, String?) in
+                let real = g.appURL.resolvingSymlinksInPath()
+                let app = Storage.driveName(real) + " · " + real.deletingLastPathComponent().path.replacingOccurrences(of: NokPaths.home.path, with: "~")
+                let files = GameMover.externalFiles(g).map { ext in
+                    ext.path + (GameMover.missingDrive(g) != nil ? " — drive not connected" : "")
+                }
+                return (app, files)
+            }.value
         }
-        if GameMover.externalFiles(game) != nil {
-            Button("Bring Game Files Back to This Mac") { model.moveFiles(game, to: nil) }
-        }
-        Divider()
-        Button("Other Folder…") { model.moveToChosenFolder(game) }
     }
 }
 
@@ -825,11 +823,11 @@ struct GameStorageSummary: View {
                 Button { measurement += 1 } label: { Image(systemName: "arrow.clockwise").font(.caption) }
                     .buttonStyle(.borderless).help("Recalculate storage size").disabled(usage == nil)
             }
-            if let usage, usage.parts.count > 1 {
+            if let usage, usage.parts.count > 1 || usage.parts.contains(where: { $0.shared > 0 }) {
                 Text(usage.detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }
-        .help("Allocated-size estimate, including separately stored game files and known settings folders. APFS copies can share disk blocks, so removing a game may free less than this estimate. Shared Steam/Battle.net runtime space is counted with its launcher.")
+        .help("Space this game uses on each drive, including separately stored game files and known settings folders. Wine engine files the app shares with other games through APFS clones are stored once and listed separately. Shared Steam/Battle.net runtime space is counted with its launcher.")
         .task(id: "\(game.id)-\(GameMover.externalFiles(game)?.path ?? "local")-\(measurement)") {
             let g = game
             usage = nil

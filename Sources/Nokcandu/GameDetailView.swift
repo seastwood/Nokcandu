@@ -24,8 +24,15 @@ struct GameDetailView: View {
 
     var body: some View {
         if let n = game.native { NativeGameDetail(game: game, native: n) }
-        else { wineBody.environment(\.pendingControlTitles, PendingSettings.controlTitles(for: game)) }
+        else {
+            wineBody.environment(\.pendingControlTitles, pendingTitles)
+                .task(id: "\(game.id)|\(model.libraryRevision)|\(model.pendingActivities[game.id].map { "\($0)" } ?? "")") {
+                    let g = game
+                    pendingTitles = await Task.detached(priority: .userInitiated) { PendingSettings.controlTitles(for: g) }.value
+                }
+        }
     }
+    @State private var pendingTitles = Set<String>()
 
     var wineBody: some View {
         ScrollView {
@@ -95,59 +102,24 @@ struct GameDetailView: View {
                     .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
                 }
                 if game.native == nil { PendingSettingsSection(game: game) }
-                if game.native == nil { GameWineSection(game: game).id("wine-\(game.id)-\(game.wineVersion ?? "")") }
                 if let d = cinematicDiagnosis, !CinematicFix.isPresent(for: game) {
                     CinematicCrashBanner(game: game, diagnosis: d) { fixFromBanner() }
                 }
-                if DisplayController.supports(game) { displaySection }
-                // The resizable window lives in the game's Display section; games without one get it on its own.
-                if game.native == nil, WineTools.hostContents(for: game) != nil,
-                   !(game.custom != nil && game.battleNet == nil && !BattleNet.isHost(game) && !DisplayController.supports(game)) {
-                    ResizableWindowSection(game: game).id("resizable-\(game.id)")
+                Picker("Settings", selection: $tab) {
+                    ForEach(availableTabs) { Label($0.title, systemImage: $0.symbol).tag($0) }
                 }
-                if game.hosted?.exe != nil { HostedGameSettingsSection(game: game).id("hosted-\(game.id)") }
-                if game.custom != nil {
-                    SettingsSection(title: "Graphics") { GraphicsPicker(game: game) }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                Group {
+                    switch currentTab {
+                    case .overview: overviewTab
+                    case .display: displayTab
+                    case .performance: performanceTab
+                    case .controls: controlsTab
+                    case .compatibility: compatibilityTab
+                    case .storage: storageTab
+                    }
                 }
-                if game.custom != nil, game.battleNet == nil, !BattleNet.isHost(game), !DisplayController.supports(game) {
-                    GameResolutionSection(game: game).id("res-\(game.id)-\(game.custom?.displayPixels ?? [])")
-                }
-                if game.custom?.disc != nil { GameDiscsSection(game: game).id("discs-\(game.id)-\(Discs.all(game.custom!).count)") }
-                if game.battleNet != nil { BattleNetGameInfo(game: game) }
-                if game.isSteamHost { SteamGamesSection().id("steamgames-\(model.games.count)") }
-                EngineNotice(game: game).id("engine-\(game.id)")
-                if game.isSteamHost || game.usesSharedSteam { SteamTipsSection() }
-                if BattleNet.isHost(game) { BlizzardGamesSection(host: game).id("bnet-\(game.id)-\(model.games.count)") }
-                if let k = PCLaunchers.kind(of: game) { LauncherGamesSection(host: game, kind: k).id("pcl-\(game.id)-\(model.games.count)") }
-                if game.isSteamHost || BattleNet.isHost(game) || PCLaunchers.kind(of: game) != nil {
-                    LauncherDriveBox(host: game, name: game.isSteamHost ? "Steam" : BattleNet.isHost(game) ? "Battle.net" : PCLaunchers.kind(of: game)!.title)
-                        .id("drives-\(game.id)")
-                }
-                if game.custom != nil || game.isSteamHost || game.hosted?.exe != nil || RecipeSettings.supports(game) {
-                    PerformanceSection(game: game).id("perf-\(game.id)")
-                }
-                if game.battleNet != nil {
-                    SettingsSection(title: "Microphone") { MicrophoneSettingRow(game: game) }
-                }
-                if WineTools.hostContents(for: game) != nil, game.hosted == nil || game.hosted?.exe != nil {
-                    MouseSection(game: game).id("mouse-\(game.id)")
-                }
-                if game.custom != nil {
-                    GameSettingsSection(game: game).id(game.custom)
-                }
-                if RecipeSettings.supports(game) { RecipeSettingsSection(game: game).id("recipe-settings-\(game.id)") }
-                checkSection
-                if !WineTools.places(for: game).isEmpty { FilesToolsSection(game: game) }
-                if WineTools.hostContents(for: game) != nil, game.hosted == nil { FixesSection(game: game).id("\(game.id)-\(fixVersion)") }
-                else if WineTools.hostContents(for: game) != nil {
-                    SettingsSection(title: "Fixes") { PhysXRuntimeRow(game: game).id("physx-\(game.id)") }
-                }
-                if RestorePoints.hostApp(for: game) != nil { RestorePointsSection(game: game).id("restore-\(game.id)-\(fixVersion)-\(model.games.count)") }
-                if game.custom != nil || game.battleNet != nil || game.hosted?.exe != nil || RecipeSettings.supports(game) { ProfilesSection(game: game).id("profiles-\(game.id)") }
-                if game.isManaged { NotesSection(game: game).id(game.id) }
-                aboutSection
-                GameLocationSection(game: game).id("location-\(game.id)")
-                RemoveGameSection(game: game).id("remove-\(game.id)")
             }
             .padding(28)
             .frame(maxWidth: 720, alignment: .leading)
@@ -167,6 +139,113 @@ struct GameDetailView: View {
         } message: {
             Text("Undoes every change Nokcandu made and returns to Fullscreen. Saves, replays, maps, and your other options are not touched.")
         }
+    }
+
+    // MARK: Tabs
+
+    enum Tab: String, CaseIterable, Identifiable {
+        case overview, display, performance, controls, compatibility, storage
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .overview: "Overview"; case .display: "Display"; case .performance: "Performance"
+            case .controls: "Controls"; case .compatibility: "Wine & Fixes"; case .storage: "Storage"
+            }
+        }
+        var symbol: String {
+            switch self {
+            case .overview: "gamecontroller"; case .display: "display"; case .performance: "speedometer"
+            case .controls: "computermouse"; case .compatibility: "wrench.and.screwdriver"; case .storage: "internaldrive"
+            }
+        }
+    }
+    /// The last tab you used is remembered across games.
+    @AppStorage("gameSettingsTab") private var tab: Tab = .overview
+
+    var hasDisplayTab: Bool {
+        DisplayController.supports(game) || hasResizable || game.hosted?.exe != nil || game.custom != nil
+    }
+    var hasResizable: Bool {
+        game.native == nil && WineTools.hostContents(for: game) != nil
+            && !(game.custom != nil && game.battleNet == nil && !BattleNet.isHost(game) && !DisplayController.supports(game))
+    }
+    var hasPerformanceTab: Bool {
+        game.custom != nil || game.isSteamHost || game.hosted?.exe != nil || RecipeSettings.supports(game) || game.battleNet != nil
+    }
+    var hasControlsTab: Bool { WineTools.hostContents(for: game) != nil && (game.hosted == nil || game.hosted?.exe != nil) }
+    var availableTabs: [Tab] {
+        Tab.allCases.filter {
+            switch $0 {
+            case .display: return hasDisplayTab
+            case .performance: return hasPerformanceTab
+            case .controls: return hasControlsTab
+            default: return true
+            }
+        }
+    }
+    var currentTab: Tab { availableTabs.contains(tab) ? tab : .overview }
+
+    @ViewBuilder var overviewTab: some View {
+        if game.custom?.disc != nil { GameDiscsSection(game: game).id("discs-\(game.id)-\(Discs.all(game.custom!).count)") }
+        if game.battleNet != nil { BattleNetGameInfo(game: game) }
+        if game.isSteamHost { SteamGamesSection().id("steamgames-\(model.games.count)") }
+        if BattleNet.isHost(game) { BlizzardGamesSection(host: game).id("bnet-\(game.id)-\(model.games.count)") }
+        if let k = PCLaunchers.kind(of: game) { LauncherGamesSection(host: game, kind: k).id("pcl-\(game.id)-\(model.games.count)") }
+        if game.isSteamHost || game.usesSharedSteam { SteamTipsSection() }
+        if game.isManaged { NotesSection(game: game).id(game.id) }
+        aboutSection
+    }
+
+    @ViewBuilder var displayTab: some View {
+        if DisplayController.supports(game) { displaySection }
+        // The resizable window lives in the game's Display section; games without one get it on its own.
+        if hasResizable { ResizableWindowSection(game: game).id("resizable-\(game.id)") }
+        if game.custom != nil {
+            SettingsSection(title: "Graphics") { GraphicsPicker(game: game) }
+        }
+        if game.custom != nil, game.battleNet == nil, !BattleNet.isHost(game), !DisplayController.supports(game) {
+            GameResolutionSection(game: game).id("res-\(game.id)-\(game.custom?.displayPixels ?? [])")
+        }
+        if game.hosted?.exe != nil { HostedGameSettingsSection(game: game).id("hosted-\(game.id)") }
+    }
+
+    @ViewBuilder var performanceTab: some View {
+        if game.custom != nil || game.isSteamHost || game.hosted?.exe != nil || RecipeSettings.supports(game) {
+            PerformanceSection(game: game).id("perf-\(game.id)")
+        }
+        if game.battleNet != nil {
+            SettingsSection(title: "Microphone") { MicrophoneSettingRow(game: game) }
+        }
+    }
+
+    @ViewBuilder var controlsTab: some View {
+        if hasControlsTab { MouseSection(game: game).id("mouse-\(game.id)") }
+    }
+
+    @ViewBuilder var compatibilityTab: some View {
+        if game.native == nil { GameWineSection(game: game).id("wine-\(game.id)-\(game.wineVersion ?? "")") }
+        EngineNotice(game: game).id("engine-\(game.id)")
+        if game.custom != nil {
+            GameSettingsSection(game: game).id(game.custom)
+        }
+        if RecipeSettings.supports(game) { RecipeSettingsSection(game: game).id("recipe-settings-\(game.id)") }
+        if WineTools.hostContents(for: game) != nil, game.hosted == nil { FixesSection(game: game).id("\(game.id)-\(fixVersion)") }
+        else if WineTools.hostContents(for: game) != nil {
+            SettingsSection(title: "Fixes") { PhysXRuntimeRow(game: game).id("physx-\(game.id)") }
+        }
+        if game.custom != nil || game.battleNet != nil || game.hosted?.exe != nil || RecipeSettings.supports(game) { ProfilesSection(game: game).id("profiles-\(game.id)") }
+        checkSection
+        if !WineTools.places(for: game).isEmpty { FilesToolsSection(game: game) }
+    }
+
+    @ViewBuilder var storageTab: some View {
+        GameLocationSection(game: game).id("location-\(game.id)")
+        if game.isSteamHost || BattleNet.isHost(game) || PCLaunchers.kind(of: game) != nil {
+            LauncherDriveBox(host: game, name: game.isSteamHost ? "Steam" : BattleNet.isHost(game) ? "Battle.net" : PCLaunchers.kind(of: game)!.title)
+                .id("drives-\(game.id)")
+        }
+        if RestorePoints.hostApp(for: game) != nil { RestorePointsSection(game: game).id("restore-\(game.id)-\(fixVersion)-\(model.games.count)") }
+        RemoveGameSection(game: game).id("remove-\(game.id)")
     }
 
     // MARK: Header
