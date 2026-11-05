@@ -296,7 +296,7 @@ public enum LogRetention {
 
 /// Things Nokcandu can safely free, with how much each frees. Nothing here is a game, a save or a setting.
 public enum SpaceSaver {
-    public enum Kind: String, Sendable { case orphanRestorePoints, ghostApp, rollbackCopy, downloads, logs, exfatOverhead, sharedEngine }
+    public enum Kind: String, Sendable { case orphanRestorePoints, ghostApp, rollbackCopy, downloads, logs, exfatOverhead, sharedEngine, interruptedMove }
     public struct Suggestion: Identifiable, Hashable, Sendable {
         public var id: String { kind.rawValue + ":" + url.path }
         public var kind: Kind
@@ -333,6 +333,13 @@ public enum SpaceSaver {
             out.append(Suggestion(kind: .sharedEngine, title: "Share Wine engine files on \(Storage.driveName(c.root))",
                                   detail: "\(c.apps) app\(c.apps == 1 ? "" : "s") there each carry a full copy of the Wine engine. Identical files can be stored once (as on this Mac); nothing else changes. Quit games stored there first.",
                                   url: c.root, bytes: c.bytes, actionTitle: "Share"))
+        }
+        for r in ResumableCopy.interrupted() {
+            let partial = URL(fileURLWithPath: r.partial)
+            let name = URL(fileURLWithPath: r.source).deletingPathExtension().lastPathComponent
+            out.append(Suggestion(kind: .interruptedMove, title: "Unfinished copy of \(name) on \(Storage.driveName(partial))",
+                                  detail: "A move stopped before it finished (\(Storage.format(Storage.allocatedSize(partial))) of \(Storage.format(r.total)) copied). Moving \(name) to the same place again continues it; the original was never touched.",
+                                  url: partial, bytes: Storage.allocatedSize(partial), actionTitle: "Delete"))
         }
         let downloads = Storage.size(NokPaths.downloads)
         if downloads > 50_000_000 {

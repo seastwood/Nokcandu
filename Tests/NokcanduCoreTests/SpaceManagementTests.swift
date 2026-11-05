@@ -149,4 +149,38 @@ final class SpaceManagementTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: b.appendingPathComponent("Contents/SharedSupport/wine/lib/driver.so")), Data(repeating: 9, count: 200_000),
                        "a file the game changed keeps its own version")
     }
+
+    func testInterruptedCopyContinuesWhereItStopped() throws {
+        let fm = FileManager.default
+        ResumableCopy.testRecords = root.appendingPathComponent("records")
+        defer { ResumableCopy.testRecords = nil }
+        let source = root.appendingPathComponent("Source"), partial = root.appendingPathComponent(".Dest.nokcandu-moving")
+        try fm.createDirectory(at: source.appendingPathComponent("data/sub"), withIntermediateDirectories: true)
+        try Data(repeating: 1, count: 300_000).write(to: source.appendingPathComponent("data/big.bin"))
+        try Data("keep".utf8).write(to: source.appendingPathComponent("data/sub/keep.txt"))
+        try Data("later".utf8).write(to: source.appendingPathComponent("later.txt"))
+        try fm.createSymbolicLink(atPath: source.appendingPathComponent("link").path, withDestinationPath: "data/sub")
+        try ResumableCopy.copy(source, into: partial, total: 1, plain: false)
+        XCTAssertNil(GameMover.compare(source, partial))
+        // Simulate an interruption: one file cut off, one never copied, one left over.
+        let keepInode = try fm.attributesOfItem(atPath: partial.appendingPathComponent("data/sub/keep.txt").path)[.systemFileNumber] as? Int
+        try Data(repeating: 1, count: 1000).write(to: partial.appendingPathComponent("data/big.bin"))
+        try fm.removeItem(at: partial.appendingPathComponent("later.txt"))
+        try Data("old".utf8).write(to: partial.appendingPathComponent("gone.txt"))
+        XCTAssertNotNil(ResumableCopy.interrupted(source: source))
+        XCTAssertLessThan(ResumableCopy.remaining(source: source, partial: partial, total: 10_000_000), 10_000_000)
+        try ResumableCopy.copy(source, into: partial, total: 1, plain: false)
+        XCTAssertNil(GameMover.compare(source, partial))
+        XCTAssertFalse(fm.fileExists(atPath: partial.appendingPathComponent("gone.txt").path))
+        XCTAssertEqual(try fm.attributesOfItem(atPath: partial.appendingPathComponent("data/sub/keep.txt").path)[.systemFileNumber] as? Int, keepInode, "Files already copied are kept")
+        ResumableCopy.finished(partial: partial)
+        XCTAssertNil(ResumableCopy.interrupted(source: source))
+        // A partial copy of something else is replaced, not continued.
+        let other = root.appendingPathComponent("Other")
+        try fm.createDirectory(at: other, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: other.appendingPathComponent("x.txt"))
+        try ResumableCopy.copy(other, into: partial, total: 1, plain: true)
+        XCTAssertFalse(fm.fileExists(atPath: partial.appendingPathComponent("later.txt").path))
+        XCTAssertNil(GameMover.compare(other, partial))
+    }
 }

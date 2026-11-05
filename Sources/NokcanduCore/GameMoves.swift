@@ -262,13 +262,13 @@ extension GameMover {
                              progress: @escaping @Sendable (String) -> Void) throws {
         let fm = FileManager.default
         let total = Storage.allocatedSize(source)
-        if let free = GameFolders.freeSpace(dest.deletingLastPathComponent()), free < total + 300_000_000 {
-            throw NokError("Not enough space on \(GameFolders.volumeName(dest.deletingLastPathComponent())): this needs \(Storage.format(total)), \(Storage.format(free)) is free.")
-        }
         let partial = dest.deletingLastPathComponent().appendingPathComponent(".\(dest.lastPathComponent).nokcandu-moving")
-        try? fm.removeItem(at: partial)
+        let need = ResumableCopy.remaining(source: source, partial: partial, total: total)
+        if let free = GameFolders.freeSpace(dest.deletingLastPathComponent()), free < need + 300_000_000 {
+            throw NokError("Not enough space on \(GameFolders.volumeName(dest.deletingLastPathComponent())): this needs \(Storage.format(need)), \(Storage.format(free)) is free.")
+        }
         let done = Locked(false)
-        progress("Copying \(Storage.format(total))…")
+        progress(need < total ? "Continuing an earlier copy (\(Storage.format(total - need)) already there)…" : "Copying \(Storage.format(total))…")
         let watcher = Thread {
             while !done.value {
                 Thread.sleep(forTimeInterval: 3)
@@ -279,15 +279,21 @@ extension GameMover {
         }
         watcher.start()
         defer { done.value = true }
-        let args = plain ? ["--norsrc", "--noextattr", "--noacl", source.path, partial.path] : [source.path, partial.path]
-        let r = try Shell.run("/usr/bin/ditto", args, timeout: 12 * 3600)
+        do { try ResumableCopy.copy(source, into: partial, total: total, plain: plain) }
+        catch {
+            done.value = true
+            throw NokError("Copying stopped, so nothing was moved (the original is untouched). Moving to the same place again continues the copy. \(error.localizedDescription)")
+        }
         done.value = true
-        guard r.ok else { try? fm.removeItem(at: partial); throw NokError("Copying failed, so nothing was moved: \(r.combined.suffix(300))") }
         if plain { try removeCopiedMacMetadata(in: partial) }
         progress("Checking the copy…")
-        if let problem = compare(source, partial) {
-            try? fm.removeItem(at: partial)
-            throw NokError("The copy didn't match the original (\(problem)), so nothing was moved. The original is untouched.")
+        if compare(source, partial) != nil {
+            // Fix whatever differs (a file changed while copying, or one cut off), then check again.
+            try? ResumableCopy.copyMissing(source, into: partial, plain: plain)
+            if let problem = compare(source, partial) {
+                try? ResumableCopy.discard(.init(source: source.path, partial: partial.path, total: total, started: Date()))
+                throw NokError("The copy didn't match the original (\(problem)), so nothing was moved. The original is untouched.")
+            }
         }
         if let link = replacingLink {
             let aside = link.deletingLastPathComponent().appendingPathComponent(".\(link.lastPathComponent).nokcandu-link")
@@ -299,6 +305,7 @@ extension GameMover {
         } else {
             try fm.moveItem(at: partial, to: dest)
         }
+        ResumableCopy.finished(partial: partial)
     }
 
     /// Nil when every regular file in `a` exists in `b` with the same size (links compared by target).

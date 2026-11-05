@@ -14,7 +14,8 @@ struct SpaceSaverList: View {
             Text("Nothing to clean up. Nokcandu also removes old logs, automatic restore points older than a month, and leftovers from moved games by itself.")
                 .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
-        ForEach(suggestions) { s in
+        // A copy that's still running isn't unfinished.
+        ForEach(suggestions.filter { $0.kind != .interruptedMove || model.moving.isEmpty }) { s in
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: icon(s.kind)).foregroundStyle(.secondary).frame(width: 20)
                 VStack(alignment: .leading, spacing: 2) {
@@ -38,6 +39,7 @@ struct SpaceSaverList: View {
         case .downloads: "arrow.down.circle"
         case .logs: "doc.text"
         case .exfatOverhead: "externaldrive.badge.exclamationmark"
+        case .interruptedMove: "arrow.triangle.2.circlepath"
         case .sharedEngine: "square.on.square"
         }
     }
@@ -68,6 +70,11 @@ struct SpaceSaverList: View {
                 guard let g = library.first(where: { $0.id == s.gameID }) else { return "That app isn't in the library." }
                 do { try EngineUpdate.keep(g); return "\(g.name) keeps its new engine; the old copy is gone." }
                 catch { return error.localizedDescription }
+            }
+        case .interruptedMove:
+            run {
+                guard let r = ResumableCopy.interrupted().first(where: { $0.partial == s.url.standardizedFileURL.path }) else { return "Already gone." }
+                do { try ResumableCopy.discard(r); return "Deleted the unfinished copy." } catch { return error.localizedDescription }
             }
         case .downloads:
             run { Storage.format(Storage.empty(s.url)) + " freed." }

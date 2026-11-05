@@ -20,6 +20,7 @@ struct MoveGameSheet: View {
     @State private var appFolders: [URL] = []
     @State private var fileFolders: [URL] = []
     @State private var problem: String?
+    @State private var unfinished: String?
     @State private var contentHeight: CGFloat = 0
     /// Leaves room for the title, summary and buttons inside the main window.
     var maxContentHeight: CGFloat { max(260, (NSApp.mainWindow?.frame.height ?? 720) - 230) }
@@ -40,6 +41,7 @@ struct MoveGameSheet: View {
                 .frame(height: min(max(contentHeight, 120), maxContentHeight))
                 .onPreferenceChange(ContentHeight.self) { contentHeight = $0 }
                 Divider()
+                if let unfinished { SettingNote(unfinished) }
                 Text(summary(plan)).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if let problem { Text(problem).font(.callout).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true) }
                 HStack {
@@ -198,16 +200,22 @@ struct MoveGameSheet: View {
 
     func load() async {
         let g = game, library = model.games
-        let result = await Task.detached(priority: .userInitiated) { () -> (MovePlan, [URL], [URL]) in
+        let result = await Task.detached(priority: .userInitiated) { () -> (MovePlan, [URL], [URL], String?) in
             let plan = GameMover.plan(for: g, library: library)
             let here = plan.appLocation.deletingLastPathComponent().resolvingSymlinksInPath()
             let folders = GameFolders.all.filter(GameFolders.isAvailable)
             let apps = folders.filter { GameFolders.holdsApps($0) && $0.resolvingSymlinksInPath() != here }
             let filesHere = plan.filesExternal ? plan.filesLocation?.deletingLastPathComponent().resolvingSymlinksInPath() : nil
             let files = folders.filter { $0.resolvingSymlinksInPath() != filesHere }
-            return (plan, apps, files)
+            // A move that stopped part way: say where, so moving there again continues it.
+            let stopped = [plan.appLocation, plan.filesLocation].compactMap { $0 }.lazy.compactMap { ResumableCopy.interrupted(source: $0) }.first
+            let note = stopped.map { r -> String in
+                let at = URL(fileURLWithPath: r.partial).deletingLastPathComponent()
+                return "An earlier move to \(Storage.driveName(at)) stopped after \(Storage.format(Storage.allocatedSize(URL(fileURLWithPath: r.partial)))) of \(Storage.format(r.total)). Moving to \(at.path.replacingOccurrences(of: NokPaths.home.path, with: "~")) again continues it."
+            }
+            return (plan, apps, files, note)
         }.value
-        plan = result.0; appFolders = result.1; fileFolders = result.2
+        plan = result.0; appFolders = result.1; fileFolders = result.2; unfinished = result.3
         // Opened from "files waste space on ExFAT": suggest bringing them onto the app's Mac-formatted drive.
         if model.moveSuggestsFilesWithApp == game.id {
             model.moveSuggestsFilesWithApp = nil

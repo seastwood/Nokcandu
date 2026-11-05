@@ -295,12 +295,12 @@ public enum GameMover {
             guard linked != nil else { return inPrefix }
             dest = inPrefix
         }
-        if let free = GameFolders.freeSpace(folder ?? inPrefix.deletingLastPathComponent()), free < need + 200_000_000 {
-            throw NokError("Not enough space: the game's files need \(Storage.format(need)), \(Storage.format(free)) is free.")
-        }
         let staging = dest.deletingLastPathComponent().appendingPathComponent(".\(dest.lastPathComponent).nokcandu-moving")
-        try? fm.removeItem(at: staging)
-        progress("Copying \(Storage.format(need))…")
+        let toCopy = ResumableCopy.remaining(source: current, partial: staging, total: need)
+        if let free = GameFolders.freeSpace(folder ?? inPrefix.deletingLastPathComponent()), free < toCopy + 200_000_000 {
+            throw NokError("Not enough space: the game's files need \(Storage.format(toCopy)), \(Storage.format(free)) is free.")
+        }
+        progress(toCopy < need ? "Continuing an earlier copy (\(Storage.format(need - toCopy)) already there)…" : "Copying \(Storage.format(need))…")
         let done = Locked(false)
         let watcher = Thread {
             while !done.value {
@@ -310,7 +310,17 @@ public enum GameMover {
             }
         }
         watcher.start()
-        do { try copyPlain(current, staging); done.value = true } catch { done.value = true; try? fm.removeItem(at: staging); throw error }
+        do {
+            try ResumableCopy.copy(current, into: staging, total: need, plain: true)
+            done.value = true
+            try removeCopiedMacMetadata(in: staging)
+            if compare(current, staging) != nil { try ResumableCopy.copyMissing(current, into: staging, plain: true) }
+            if let problem = compare(current, staging) { throw NokError("The copy didn't match the original (\(problem)). The original is untouched.") }
+        } catch {
+            done.value = true
+            throw NokError("Copying stopped, so nothing was moved (the original is untouched). Moving to the same place again continues the copy. \(error.localizedDescription)")
+        }
+        defer { ResumableCopy.finished(partial: staging) }
         // Swap: the old link (or folder) goes, the new folder (or link) takes its place.
         if folder == nil {
             let backup = inPrefix.deletingLastPathComponent().appendingPathComponent(".nokcandu-link-" + UUID().uuidString)
