@@ -340,3 +340,15 @@ A shared prefix is not a reason to block all compatibility components. Resolve a
 ## Request platform-specific runners only for platform-specific work (2026-11-04)
 
 A scheduled engine watcher failed before executing any step because GitHub could not supply its hosted ARM Mac. Retrying succeeded. Run version discovery on a general runner and request macOS only for a genuinely needed native build; do not classify runner-capacity failures as product build defects. [Evidence](investigations/ci-pending-monitor-and-refusal-2026-11-04.md).
+
+## Poll cheaply, rarely in the background, and never on the main thread (2026-11-04)
+
+A 3-second status pass that hashed helper libraries and built file URLs for every process on the Mac cost ~25–40% CPU while idle and competed with games. Ownership tests must be string comparisons against a precomputed real path (remember `/private` prefixes and symlinked apps), hashes must be cached by file identity, and expensive passes should run on change events (app launch/quit, drive mount) with slow background polling. Library scans and anything reading per-game files must stay off the main actor; publish values only when they change. [Measurements](investigations/space-efficiency-moves-2026-11-04.md).
+
+## Report clone-aware sizes and bound every safety copy (2026-11-04)
+
+Each Wine app's engine is an APFS clone, so allocated size overstates what a game uses (BF2: 2.9 GB allocated, 12 MB unique). Show unique size and the shared part separately. Restore points, roll-back engines and logs need limits and an owner: restore points cannot cross drives, so a move must relocate or replace them, and orphaned sets must be offered for deletion. ExFAT drives with large clusters can multiply small-file games several times; suggest an APFS volume rather than reformatting. [Details](investigations/space-efficiency-moves-2026-11-04.md).
+
+## A move must update every record that names the old path (2026-11-04)
+
+Saved install progress kept the old app path, so moved games looked unfinished and the installer resumed a stale record; background writers that started before the move recreated a ghost folder at the old path. Moves now relocate install records, maintenance skips games being moved, settings writers refuse to create a missing app, and existing ghosts/records are reconciled. Launchers whose path many records share move with a link left behind instead of rewriting every reference. [Details](investigations/space-efficiency-moves-2026-11-04.md).

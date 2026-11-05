@@ -4,6 +4,7 @@ The project README introduces the app. This folder keeps the implementation know
 
 | Document | What belongs there |
 | --- | --- |
+| [Idle CPU, space management and moves](investigations/space-efficiency-moves-2026-11-04.md) | Measured idle-CPU causes, clone-aware space accounting, restore-point/roll-back/log limits, moved-game install records, split app/files moves, launcher moves and APFS games volumes. |
 | [Development handoff — November 4, 2026](handoffs/development-handoff-2026-11-04.md) | Released work, exact verification, confirmed open issues, prioritized polish, code map and safe continuation checklist. |
 | [Release 0.12.4 verification](investigations/release-0.12.4-2026-11-04.md) | Profile/component release scope, migration, known issues and package verification. |
 | [Fullscreen Spaces input investigation](investigations/fullscreen-space-input-2026-11-03.md) | Deferred BF2 virtual-screen input loss, failed candidate, safe cleanup and evidence needed before resuming. |
