@@ -477,6 +477,8 @@ public enum CustomGames {
             DISC_LABEL=\(shellQuote(d.volumeLabel))
             info() { /usr/sbin/diskutil info -plist "$1" 2>/dev/null | /usr/bin/plutil -extract "$2" raw -o - - 2>/dev/null || true; }
             MOUNT_DIR="$SUPPORT/MountedDisc"
+            # On an APFS games volume the folder is a link to one on the Mac (macOS can't mount an image inside an image).
+            [ -L "$MOUNT_DIR" ] && { /bin/mkdir -p "$(/usr/bin/readlink "$MOUNT_DIR")"; MOUNT_DIR="$(cd "$MOUNT_DIR" && pwd -P)"; }
             if [ -n "$DISC_LABEL" ] && [ "$(info "/Volumes/$DISC_LABEL" VolumeName)" = "$DISC_LABEL" ] && [ "$(info "/Volumes/$DISC_LABEL" MountPoint)" = "/Volumes/$DISC_LABEL" ]; then
              MOUNT_DIR="/Volumes/$DISC_LABEL"
             elif [ "$(info "$MOUNT_DIR" MountPoint)" != "$MOUNT_DIR" ]; then
@@ -501,6 +503,7 @@ public enum CustomGames {
             { [[ "$CUR" =~ ^[0-9]+$ ]] && [ "$CUR" -lt ${#DISC_IMAGES[@]} ]; } || CUR=0
             DISC_IMAGE="$SUPPORT/${DISC_IMAGES[$CUR]}"
             MOUNT_DIR="$SUPPORT/MountedDisc"; [ "$CUR" -gt 0 ] && MOUNT_DIR="$SUPPORT/MountedDisc$((CUR + 1))"
+            [ -L "$MOUNT_DIR" ] && { /bin/mkdir -p "$(/usr/bin/readlink "$MOUNT_DIR")"; MOUNT_DIR="$(cd "$MOUNT_DIR" && pwd -P)"; }
             info() { /usr/sbin/diskutil info -plist "$1" 2>/dev/null | /usr/bin/plutil -extract "$2" raw -o - - 2>/dev/null || true; }
             if [ "$(info "$MOUNT_DIR" MountPoint)" != "$MOUNT_DIR" ]; then
              [ -f "$DISC_IMAGE" ]
@@ -555,13 +558,18 @@ public enum CustomGames {
 
     /// Writes game.json + regenerated launcher through the game's change journal.
     /// Brings unmodified launchers up to date with this version of Nokcandu (edited ones are left alone).
-    public static func upgradeLaunchers(_ games: [InstalledGame]) {
+    /// Returns how many launchers were rewritten (their saved settings changed too).
+    @discardableResult
+    public static func upgradeLaunchers(_ games: [InstalledGame]) -> Int {
+        var changed = 0
         for g in games {
             guard let c = g.custom, let l = g.launcherURL, let sha = try? Hashing.sha256(file: l), sha == c.launcherSHA else { continue }
+            if Hashing.sha256(data: Data(launcherScript(for: c).utf8)) == sha, !BF1942DisplayFix.ownsProgram(for: g) { continue }
             if GameLauncher.runState(of: g) != .notRunning { continue }
             do { try BF1942DisplayFix.refreshMenuCopies(g) } catch { continue }
-            if Hashing.sha256(data: Data(launcherScript(for: c).utf8)) != sha { try? save(c, to: g) }
+            if Hashing.sha256(data: Data(launcherScript(for: c).utf8)) != sha, (try? save(c, to: g)) != nil { changed += 1 }
         }
+        return changed
     }
 
     public static func isValidEnvName(_ k: String) -> Bool {
@@ -576,6 +584,8 @@ public enum CustomGames {
 
     /// `force` rewrites the launcher even if it was edited outside Nokcandu (the old one is kept in the journal).
     public static func save(_ config: CustomGameConfig, to game: InstalledGame, force: Bool = false, allowDisplayProgramChange: Bool = false) throws {
+        // Never write settings into a place the app has moved away from (that leaves an empty "ghost" app).
+        guard AppPresence.exists(game.contents) else { throw NokError("\(game.name) isn't at \(game.appURL.path) any more. Nothing was changed.") }
         if GameLauncher.runState(of: game) != .notRunning { throw NokError("Quit \(game.name) first.") }
         var c = config
         let installed = CompatibilityFixes.installedIDs(for: game)

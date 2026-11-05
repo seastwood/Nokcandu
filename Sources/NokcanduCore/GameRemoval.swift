@@ -75,6 +75,11 @@ public enum GameRemoval {
     public static func items(for g: InstalledGame, library: [InstalledGame] = [], includeGameFiles: Bool = true) -> [Item] {
         let fm = FileManager.default
         var out = [Item(url: g.appURL, what: (g.hosted != nil || g.battleNet != nil || g.usesSharedSteam) ? "Nokcandu app (shortcut and its local settings)" : "The game app (including files and saves inside it)", bytes: size(g.appURL))]
+        // An app on another drive has a link in the standard folder (its Applications entry): that goes too.
+        let anchor = GameMover.anchor(for: g)
+        if (try? fm.destinationOfSymbolicLink(atPath: anchor.path)) != nil, anchor.resolvingSymlinksInPath() == g.appURL.resolvingSymlinksInPath() {
+            out.append(Item(url: anchor, what: "Its link in \(NokPaths.gameAppsFolder.lastPathComponent)", bytes: 0))
+        }
         if includeGameFiles, let external = removableExternalFiles(g, library: library) {
             out.append(Item(url: external, what: "Game files on \(GameFolders.volumeName(external)): \(external.path) (including saves there)", bytes: size(external)))
         }
@@ -159,7 +164,7 @@ public enum GameRemoval {
         // Eject mounted images in this app, never in the shared launcher.
         if let mounts = try? FileManager.default.contentsOfDirectory(at: game.support, includingPropertiesForKeys: nil) {
             for mount in mounts where mount.lastPathComponent.hasPrefix("MountedDisc") {
-                _ = try? Shell.run("/usr/bin/hdiutil", ["detach", mount.path, "-force"], timeout: 60)
+                _ = try? Shell.run("/usr/bin/hdiutil", ["detach", mount.resolvingSymlinksInPath().path, "-force"], timeout: 60)
             }
         }
         var failures: [String] = []

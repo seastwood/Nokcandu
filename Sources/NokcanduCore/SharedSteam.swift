@@ -17,7 +17,11 @@ public enum SharedSteam {
     public static let recipeID = "steam-host"
     static let steamRel = "SharedSupport/prefix/drive_c/Program Files (x86)/Steam"
 
-    public static var appURL: URL { NokPaths.gameAppsFolder.appendingPathComponent(appName) }
+    /// The real app (Steam moved to another drive keeps a link in the standard folder).
+    public static var appURL: URL {
+        let u = NokPaths.gameAppsFolder.appendingPathComponent(appName)
+        return (try? FileManager.default.destinationOfSymbolicLink(atPath: u.path)) != nil ? u.resolvingSymlinksInPath() : u
+    }
     public static var contents: URL { appURL.appendingPathComponent("Contents") }
     public static var steamDir: URL { contents.appendingPathComponent(steamRel) }
     public static var helper: URL { contents.appendingPathComponent("Resources/\(helperName)") }

@@ -41,10 +41,14 @@ public enum GameLibrary {
     public static func scan(folders: [URL] = GameFolders.all) -> [InstalledGame] {
         let fm = FileManager.default
         var found: [InstalledGame] = []
+        // An app moved to another drive keeps a link in the standard folder (so it stays in Applications), and
+        // the folder it moved to may be a library folder too: list each real app once, by its real place.
+        var seen = Set<String>()
         for folder in folders {
             guard let items = try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { continue }
             for app in items where app.pathExtension == "app" {
-                if let g = inspect(app) { found.append(g) }
+                guard let g = inspect(app), seen.insert(g.appURL.resolvingSymlinksInPath().path).inserted else { continue }
+                found.append(g)
             }
         }
         if folders == GameFolders.all {
@@ -55,6 +59,9 @@ public enum GameLibrary {
     }
 
     public static func inspect(_ app: URL) -> InstalledGame? {
+        // Through a link (an app moved to another drive), work with the real app: Nokcandu refuses to write
+        // through links inside apps, and running programs report their real paths.
+        let app = (try? FileManager.default.destinationOfSymbolicLink(atPath: app.path)) != nil ? app.resolvingSymlinksInPath() : app
         let contents = app.appendingPathComponent("Contents")
         guard let info = NSDictionary(contentsOf: contents.appendingPathComponent("Info.plist")) as? [String: Any] else { return nil }
         // Wine-wrapper apps carry SharedSupport/prefix; Steam-library game apps carry only their Nokcandu settings.
@@ -213,18 +220,35 @@ public enum GameLauncher {
             match = { c in c.contains(tail) }
         }
         guard let match, let host = WineTools.hostContents(for: game) else { return nil }
-        for (pid, command) in rows where kill(pid, 0) == 0 && match(command.lowercased()) {
-            if WineTools.owns(pid: pid, contents: host) { return pid }
+        // Cheap tests first (the command text, then whether the program is this environment's Wine), and
+        // the liveness probe only for the few that pass.
+        let support = WineTools.supportPath(host)
+        func ours(_ pid: Int32) -> Bool {
+            guard pid > 1, pid != getpid(), let path = WineTools.executablePath(pid) else { return false }
+            return WineTools.owns(executable: path, support: support) && kill(pid, 0) == 0
         }
+        let lowered = loweredCommands(rows)
+        for (pid, command) in lowered where match(command) && ours(pid) { return pid }
         // A private game may hand off from its configured launcher to another
         // executable. Keep tracking that game's own environment, never another
         // game's similarly named process or a shared store client.
         if hasPrivateGamePrefix(game) {
-            for (pid, command) in rows where kill(pid, 0) == 0 && privateGameCommand(command) {
-                if WineTools.owns(pid: pid, contents: host) { return pid }
-            }
+            for (pid, command) in lowered where privateGameCommand(command) && ours(pid) { return pid }
         }
         return nil
+    }
+
+    /// Lowercased process commands, computed once per process scan rather than once per game.
+    private static let loweredCache = LockedCache<Int, [(Int32, String)]>(limit: 4)
+    static func loweredCommands(_ rows: [(Int32, String)]) -> [(Int32, String)] {
+        var hasher = Hasher()
+        hasher.combine(rows.count)
+        for row in rows { hasher.combine(row.0); hasher.combine(row.1) }
+        let key = hasher.finalize()
+        if let cached = loweredCache[key], cached.count == rows.count, cached.first?.0 == rows.first?.0 { return cached }
+        let lowered = rows.map { ($0.0, $0.1.lowercased()) }
+        loweredCache[key] = lowered
+        return lowered
     }
 
     static func hasPrivateGamePrefix(_ game: InstalledGame) -> Bool {
@@ -268,6 +292,7 @@ public enum GameLauncher {
     /// `arguments` are passed through to the launcher (e.g. ["--windowed"]).
     public static func launch(_ game: InstalledGame, arguments: [String] = []) throws {
         try AppPrivacy.prepare(game)
+        Discs.prepareMountPoints(support: game.support)
         if game.hosted != nil { PCLaunchers.refreshLaunchers([game]) }
         HelperPatch.refresh([game])
         try LauncherEntry.ensure(game)

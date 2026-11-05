@@ -3,16 +3,18 @@ import Foundation
 /// Session-only estimates. Opening Storage never starts every expensive disk walk.
 public actor StorageInventory {
     public static let shared = StorageInventory()
-    public enum Section: String, CaseIterable, Identifiable { case drives, games, appData, leftovers
+    public enum Section: String, CaseIterable, Identifiable { case reclaim, drives, games, appData, leftovers
         public var id: String { rawValue }
         public var title: String {
-            switch self { case .drives: "Drives & folders"; case .games: "Games"; case .appData: "Nokcandu data"; case .leftovers: "Leftovers" }
+            switch self { case .reclaim: "Free Up Space"; case .drives: "Drives & folders"; case .games: "Games"; case .appData: "Nokcandu data"; case .leftovers: "Leftovers" }
         }
     }
     public struct Snapshot {
         public var items: [Storage.Item] = []
         public var leftovers: [GameRemoval.Item] = []
         public var volumes: [Storage.VolumeInfo] = []
+        public var suggestions: [SpaceSaver.Suggestion] = []
+        public var drives: [GamesVolume.Drive] = []
         public var measuredAt: Date = Date()
     }
     struct Key: Hashable { var section: Section; var library: [InstalledGame] }
@@ -25,13 +27,14 @@ public actor StorageInventory {
     public init(lifetime: TimeInterval = 300) { self.lifetime = lifetime }
     public func invalidate() { generation += 1; results.removeAll() }
     public func load(_ section: Section, library: [InstalledGame]) async -> Snapshot {
-        let key = Key(section: section, library: (section == .appData || section == .drives) ? [] : library)
+        let key = Key(section: section, library: (section == .appData) ? [] : library)
         return await value(for: key) {
             switch section {
             case .games: return Snapshot(items: Storage.games(library))
             case .appData: return Snapshot(items: Storage.nokcanduData())
             case .leftovers: return Snapshot(leftovers: GameRemoval.orphans(library: library))
-            case .drives: return Snapshot(volumes: Storage.volumes())
+            case .drives: return Snapshot(volumes: Storage.volumes(), drives: GamesVolume.drives())
+            case .reclaim: return Snapshot(suggestions: SpaceSaver.suggestions(library: library))
             }
         }
     }

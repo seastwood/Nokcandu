@@ -77,6 +77,9 @@ public enum Storage {
             public var url: URL
             public var bytes: Int64?
             public var drive: String
+            /// Of the app's allocated size, how much is APFS clone data shared with Nokcandu's engines cache and
+            /// restore points (stored once on the drive, so not counted in `bytes`).
+            public var shared: Int64 = 0
         }
         public var parts: [Part]
         public var appOnly = false
@@ -89,7 +92,8 @@ public enum Storage {
             return (appOnly ? "App: " : "") + (complete ? "" : "At least ") + Storage.format(bytes) + " · " + (drives.count == 1 ? (drives.first ?? "Unknown drive") : "\(drives.count) drives")
         }
         public var detail: String {
-            var details = parts.map { "\($0.title): " + ($0.bytes.map(Storage.format) ?? "unavailable") + " on \($0.drive)" }
+            var details = parts.map { "\($0.title): " + ($0.bytes.map(Storage.format) ?? "unavailable") + " on \($0.drive)"
+                + ($0.shared > 0 ? " (plus \(Storage.format($0.shared)) of Wine engine shared with other games, stored once)" : "") }
             if let drive = unavailableGameFilesDrive { details.append("Game files: unavailable on " + drive) }
             return details.joined(separator: " · ")
         }
@@ -113,7 +117,8 @@ public enum Storage {
             hosted.append((name, folder))
         }
         if !hosted.isEmpty {
-            var parts = [GameUsage.Part(title: g.isSteamHost ? "Steam" : "Launcher", url: app, bytes: FileManager.default.fileExists(atPath: app.path) ? allocatedSize(app, excluding: hosted.filter { $0.1.path.hasPrefix(app.path + "/") }.map(\.1)) : nil, drive: driveName(app))]
+            let inside = hosted.filter { $0.1.path.hasPrefix(app.path + "/") }.map(\.1)
+            var parts = [sharedAware(GameUsage.Part(title: g.isSteamHost ? "Steam" : "Launcher", url: app, bytes: FileManager.default.fileExists(atPath: app.path) ? allocatedSize(app, excluding: inside) : nil, drive: driveName(app)), excluding: inside)]
             if includingLauncherGames {
                 parts += hosted.map { name, url in GameUsage.Part(title: name, url: url, bytes: FileManager.default.fileExists(atPath: url.path) ? allocatedSize(url) : nil, drive: driveName(url)) }
             }
@@ -140,13 +145,24 @@ public enum Storage {
             }
         }
         var result = GameUsage(parts: roots.map { title, url in
-            GameUsage.Part(title: title, url: url, bytes: FileManager.default.fileExists(atPath: url.path) ? allocatedSize(url) : nil, drive: driveName(url))
+            let part = GameUsage.Part(title: title, url: url, bytes: FileManager.default.fileExists(atPath: url.path) ? allocatedSize(url) : nil, drive: driveName(url))
+            return title.hasPrefix("App") && g.native == nil ? sharedAware(part, excluding: []) : part
         }, appOnly: g.native != nil && g.native?.installFolder == nil)
         if launcherFolder == nil, g.usesSharedSteam || g.battleNet != nil || g.hosted != nil,
            !roots.contains(where: { $0.0 == "Game files" }) {
             result.unavailableGameFilesDrive = g.custom?.steamAppID.flatMap(SharedSteam.offlineDrive) ?? "an unknown drive"
         }
         return result
+    }
+
+    /// A Wine app's engine is an APFS clone of Nokcandu's engines cache (and its restore points clone the app):
+    /// counted in full by Finder for every game, but stored once. Report what the app itself adds.
+    static func sharedAware(_ part: GameUsage.Part, excluding: [URL]) -> GameUsage.Part {
+        guard let allocated = part.bytes, allocated > 100_000_000 else { return part }
+        let unique = size(part.url, excluding: excluding)
+        guard unique < allocated - 50_000_000 else { return part }
+        var p = part; p.bytes = unique; p.shared = allocated - unique
+        return p
     }
 
     /// Private apps can launch a hub/client outside the game's folder. Count their
@@ -200,7 +216,8 @@ public enum Storage {
                 detail = "Launcher & shared Windows environment · " + detail
             }
             if logs > 1_000_000 { detail += " · logs " + format(logs) }
-            return Item(title: game.name, url: game.appURL, bytes: usage.bytes,
+            let bytes = usage.bytes
+            return Item(title: game.name, url: game.appURL, bytes: bytes,
                         detail: detail, incomplete: !usage.complete)
         }.sorted { $0.bytes > $1.bytes }
     }

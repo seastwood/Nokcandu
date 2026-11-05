@@ -15,6 +15,42 @@ public enum Discs {
         support.appendingPathComponent(index == 0 ? "MountedDisc" : "MountedDisc\(index + 1)", isDirectory: true)
     }
 
+    /// macOS refuses to mount a disc image at a folder on a volume that is itself a disk image (an APFS games
+    /// volume): "Permission denied". There each MountedDisc folder becomes a link to a folder on the Mac, which
+    /// works for every launcher and for Nokcandu itself; on an ordinary drive it is a real folder again.
+    public static func prepareMountPoints(support: URL) {
+        let fm = FileManager.default
+        let entries = ((try? fm.contentsOfDirectory(atPath: support.path)) ?? []).filter { $0.hasPrefix("MountedDisc") }
+        guard !entries.isEmpty else { return }
+        let onImage = isOnDiskImage(support)
+        let key = Hashing.sha256(data: Data(support.resolvingSymlinksInPath().path.utf8)).prefix(16)
+        for name in entries {
+            let u = support.appendingPathComponent(name)
+            let link = try? fm.destinationOfSymbolicLink(atPath: u.path)
+            if onImage {
+                if let link { try? fm.createDirectory(atPath: link, withIntermediateDirectories: true); continue }
+                // Only an empty folder that nothing is mounted on.
+                guard ((try? fm.contentsOfDirectory(atPath: u.path)) ?? ["?"]).isEmpty else { continue }
+                let target = NokPaths.support.appendingPathComponent("Disc Mounts/\(key)/\(name)", isDirectory: true)
+                guard (try? fm.createDirectory(at: target, withIntermediateDirectories: true)) != nil,
+                      (try? fm.removeItem(at: u)) != nil else { continue }
+                if (try? fm.createSymbolicLink(at: u, withDestinationURL: target)) == nil { try? fm.createDirectory(at: u, withIntermediateDirectories: true) }
+            } else if link != nil {
+                // Moved back to an ordinary drive: an empty real folder again (the disc, if mounted, stays where it is).
+                let mounted = attached().values.contains { $0.contains(real(u.path)) }
+                guard !mounted, (try? fm.removeItem(at: u)) != nil else { continue }
+                try? fm.createDirectory(at: u, withIntermediateDirectories: true)
+            }
+        }
+    }
+
+    /// The folder is on a volume macOS mounted from a disk image.
+    static func isOnDiskImage(_ url: URL) -> Bool {
+        guard let volume = (try? url.resourceValues(forKeys: [.volumeURLKey]))?.volume?.standardizedFileURL.path,
+              volume != "/" else { return false }
+        return GamesVolume.attachedImages().values.contains { $0.standardizedFileURL.path == volume }
+    }
+
     static func currentFile(_ support: URL) -> URL { support.appendingPathComponent("nokcandu/current-disc") }
 
     /// Which disc is in D: (0-based; the launcher uses the same file).

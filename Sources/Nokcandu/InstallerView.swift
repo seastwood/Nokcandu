@@ -22,7 +22,11 @@ final class InstallerModel: ObservableObject {
             let app = URL(fileURLWithPath: s.targetApp)
             let complete = FileManager.default.fileExists(atPath: app.appendingPathComponent("Contents/Info.plist").path)
                 && GameLibrary.inspect(app)?.launcherURL != nil
-            return !complete
+            // Moved to another library folder by an older Nokcandu (its record still has the old place).
+            let movedAway = !FileManager.default.fileExists(atPath: app.appendingPathComponent("Contents/Info.plist").path)
+                && GameFolders.all.contains { $0 != app.deletingLastPathComponent().standardizedFileURL
+                    && FileManager.default.fileExists(atPath: $0.appendingPathComponent(app.lastPathComponent + "/Contents/Info.plist").path) }
+            return !complete && !movedAway
         }
     }
     @Published var exeCandidates: [CustomGames.ExeCandidate] = []

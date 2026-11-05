@@ -76,6 +76,8 @@ public enum GameMicrophone {
             } else { defaults[host] = blocked }
         }
         for (host, blocked) in defaults {
+            // An app that moved away while this ran must not be recreated as an empty folder.
+            guard AppPresence.exists(host) else { continue }
             let directory = host.appendingPathComponent("SharedSupport/nokcandu")
             try NokPaths.ensure(directory)
             let values = [("microphone-live", "1\n"), (policyFile, blocked ? "1\n" : "0\n"),

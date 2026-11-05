@@ -21,7 +21,7 @@ public struct RestorePoint: Identifiable, Hashable, Sendable, Codable {
 
 public enum RestorePoints {
     /// How many automatic restore points to keep per app (ones you take yourself are kept until you delete them).
-    public static let keepAutomatic = 5
+    public static let keepAutomatic = 3
     /// Off while unit tests run (their throwaway apps don't need restore points).
     static var automaticEnabled = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil
         && NSClassFromString("XCTestCase") == nil
@@ -34,7 +34,9 @@ public enum RestorePoints {
     }
 
     public static func root(for app: URL) -> URL {
-        app.deletingLastPathComponent().appendingPathComponent(folderName, isDirectory: true)
+        // A launcher moved to another drive keeps a link at its old place: its points live with the real app.
+        let app = app.resolvingSymlinksInPath()
+        return app.deletingLastPathComponent().appendingPathComponent(folderName, isDirectory: true)
             .appendingPathComponent(app.deletingPathExtension().lastPathComponent, isDirectory: true)
     }
 
@@ -70,6 +72,7 @@ public enum RestorePoints {
     @discardableResult
     public static func create(app: URL, reason: String, automatic: Bool) throws -> RestorePoint? {
         let fm = FileManager.default
+        let app = app.resolvingSymlinksInPath()
         let existing = list(app: app)
         if automatic, let last = existing.first, Date().timeIntervalSince(last.created) < 120 { return nil }
         let r = root(for: app)
@@ -110,6 +113,7 @@ public enum RestorePoints {
     /// so a restore can be undone too.
     public static func restore(_ p: RestorePoint, app: URL) throws {
         let fm = FileManager.default
+        let app = app.resolvingSymlinksInPath()
         if let g = GameLibrary.inspect(app), GameLauncher.runState(of: g) != .notRunning {
             throw NokError("Quit \(g.name) first.")
         }

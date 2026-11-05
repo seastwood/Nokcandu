@@ -218,9 +218,17 @@ public enum GameMover {
 
     /// Copies a folder without Mac-only extras (keeps ExFAT drives free of "._" files).
     public static func copyPlain(_ from: URL, _ to: URL) throws {
-        let r = try Shell.run("/usr/bin/ditto", ["--norsrc", "--noextattr", "--noacl", from.path, to.path], timeout: 6 * 3600)
-        guard r.ok else { throw NokError("Copying failed: \(r.combined.suffix(300))") }
+        let r = try Shell.run("/usr/bin/ditto", ["--norsrc", "--noextattr", "--noacl", from.path, to.path], timeout: 12 * 3600)
+        if !r.ok {
+            // ditto can fail on ExFAT setting details it can't store ("Invalid argument"); a plain copy without
+            // extended attributes stores the same files.
+            try? FileManager.default.removeItem(at: to)
+            let plain = try Shell.run("/bin/cp", ["-R", "-X", from.path, to.path], timeout: 12 * 3600)
+            guard plain.ok else { throw NokError("Copying failed: \(r.combined.suffix(200)) \(plain.combined.suffix(200))") }
+        }
         try removeCopiedMacMetadata(in: to)
+        // Nothing is removed from the original unless every file arrived whole.
+        if let problem = compare(from, to) { throw NokError("The copy didn't match the original (\(problem)). The original is untouched.") }
     }
 
     /// Called only on a newly created copy. Some Windows engines scan every filename and crash
@@ -293,7 +301,16 @@ public enum GameMover {
         let staging = dest.deletingLastPathComponent().appendingPathComponent(".\(dest.lastPathComponent).nokcandu-moving")
         try? fm.removeItem(at: staging)
         progress("Copying \(Storage.format(need))…")
-        do { try copyPlain(current, staging) } catch { try? fm.removeItem(at: staging); throw error }
+        let done = Locked(false)
+        let watcher = Thread {
+            while !done.value {
+                Thread.sleep(forTimeInterval: 3)
+                if done.value { break }
+                progress("Copying \(Storage.format(min(Storage.allocatedSize(staging), need))) of \(Storage.format(need))…")
+            }
+        }
+        watcher.start()
+        do { try copyPlain(current, staging); done.value = true } catch { done.value = true; try? fm.removeItem(at: staging); throw error }
         // Swap: the old link (or folder) goes, the new folder (or link) takes its place.
         if folder == nil {
             let backup = inPrefix.deletingLastPathComponent().appendingPathComponent(".nokcandu-link-" + UUID().uuidString)
@@ -332,7 +349,7 @@ public enum GameMover {
         // Disc images stay mounted inside the app; eject them so the copy doesn't include their contents.
         if let mounts = try? fm.contentsOfDirectory(at: g.support, includingPropertiesForKeys: nil) {
             for m in mounts where m.lastPathComponent.hasPrefix("MountedDisc") {
-                _ = try? Shell.run("/usr/bin/hdiutil", ["detach", m.path, "-force"], timeout: 60)
+                _ = try? Shell.run("/usr/bin/hdiutil", ["detach", m.resolvingSymlinksInPath().path, "-force"], timeout: 60)
             }
         }
         let sameDrive = volumeID(g.appURL) != nil && volumeID(g.appURL) == volumeID(dest)
@@ -340,20 +357,9 @@ public enum GameMover {
             progress("Moving…")
             try fm.moveItem(at: g.appURL, to: target)
         } else {
-            let need = Storage.allocatedSize(g.appURL)
-            if let free = GameFolders.freeSpace(dest), free < need + 500_000_000 {
-                throw NokError("Not enough space on \(GameFolders.volumeName(dest)): \(g.name) needs \(Storage.format(need)), \(Storage.format(free)) is free.")
-            }
-            progress("Copying \(Storage.format(need)) to \(GameFolders.volumeName(dest))…")
-            let partial = dest.appendingPathComponent(".\(g.appURL.lastPathComponent).nokcandu-moving")
-            try? fm.removeItem(at: partial)
-            do {
-                try fm.copyItem(at: g.appURL, to: partial)
-                try fm.moveItem(at: partial, to: target)
-            } catch {
-                try? fm.removeItem(at: partial)
-                throw NokError("Copying \(g.name) failed, so it was left where it was: \(error.localizedDescription)")
-            }
+            // Copied through a hidden partial name and checked file by file before anything is removed.
+            do { try copyVerified(g.appURL, to: target, progress: progress) }
+            catch { throw NokError("Copying \(g.name) failed, so it was left where it was: \(error.localizedDescription)") }
         }
         progress("Updating paths inside the game…")
         do { try fixPaths(in: target, from: g.appURL) }
@@ -449,6 +455,11 @@ public enum LibraryOrganizer {
     public static func isLauncher(_ g: InstalledGame) -> Bool { g.isSteamHost || BattleNet.isHost(g) || PCLaunchers.kind(of: g) != nil }
 
     public static func subtitle(_ g: InstalledGame) -> String? { load().subtitles?[key(g)] }
+    /// Every game's subtitle from one read of the saved list.
+    public static func subtitles(for games: [InstalledGame]) -> [InstalledGame.ID: String] {
+        let saved = load().subtitles ?? [:]
+        return Dictionary(games.compactMap { g in saved[key(g)].map { (g.id, $0) } }, uniquingKeysWith: { a, _ in a })
+    }
     public static func nameOverride(_ g: InstalledGame) -> String? { load().names?[key(g)] }
 
     /// The game's real title, for matching it with profiles, fixes and anti-cheat data — unaffected by renaming.

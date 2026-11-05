@@ -140,7 +140,7 @@ struct LibraryView: View {
                 }
             }
             .overlay {
-                if model.games.isEmpty {
+                if model.libraryLoaded && model.games.isEmpty {
                     ContentUnavailableView("No games yet", systemImage: "gamecontroller",
                                            description: Text("Install a game or set up Steam with the buttons below. Game apps live in \(NokPaths.gameAppsFolder.path.replacingOccurrences(of: NokPaths.home.path, with: "~"))."))
                 }
@@ -179,6 +179,7 @@ struct LibraryView: View {
             if model.showInstaller { openWindow(id: "installer"); model.showInstaller = false }
         }
         .sheet(item: $model.renaming) { g in RenameGameSheet(game: g).environmentObject(model) }
+        .sheet(item: $model.movingGame) { g in MoveGameSheet(game: g).environmentObject(model) }
         .alert("Quit \(model.quitting?.name ?? "the game")?", isPresented: Binding(get: { model.quitting != nil }, set: { if !$0 { model.quitting = nil } }),
                presenting: model.quitting) { g in
             Button("Quit", role: .destructive) { model.quit(g); model.quitting = nil }
@@ -241,8 +242,8 @@ struct GameContextMenu: View {
         }
         Button("Rename…") { model.renaming = game }
         Button("Show in Finder") { model.reveal(game.appURL) }
-        if [GameMover.blocker(game), GameMover.filesBlocker(game)].contains(where: { $0 == nil || $0 == "Quit the game first." }) {
-            Menu("Move To") { GameContextMenuMoveItems(game: game) }
+        if game.native == nil {
+            Button("Move…") { model.movingGame = game }.disabled(model.moving.contains(game.id))
         }
     }
 }
@@ -266,7 +267,7 @@ struct GameRow: View {
     var subtitle: String {
         if case .launcherRunning = state { return "Running" }
         if state == .unknown { return "Status unavailable" }
-        if model.moving.contains(game.id) { return "Moving…" }
+        if model.moving.contains(game.id) { return model.moveStatus[game.id] ?? "Moving…" }
         if let d = model.missingDrive[game.id] { return "Connect \(d) to play" }
         if let u = model.updating[game.id] { return "Updating" + (u.progress.map { " · \($0.label)" } ?? "…") }
         if model.storeUpdates[game.id] != nil { return "Update available" }
