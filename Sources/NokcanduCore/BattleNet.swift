@@ -11,8 +11,17 @@ public struct BattleNetLink: Codable, Hashable {
     public static let fileName = "battlenet-game.json"
     static func url(_ contents: URL) -> URL { contents.appendingPathComponent("SharedSupport/nokcandu/\(fileName)") }
     static func load(contents: URL) -> BattleNetLink? {
-        (try? Data(contentsOf: url(contents))).flatMap { try? JSONDecoder().decode(BattleNetLink.self, from: $0) }
+        guard var link = (try? Data(contentsOf: url(contents))).flatMap({ try? JSONDecoder().decode(BattleNetLink.self, from: $0) }) else { return nil }
+        // Links made before a product's launch code was known used its uid in capitals ("PROMETHEUS"), which Battle.net
+        // ignores (it opens without starting the game). Known products always use their real code.
+        if let known = BattleNet.codes[link.uid.lowercased()], link.code != known, link.code == link.uid.uppercased() {
+            link.code = known
+            try? JSONEncoder().encode(link).write(to: url(contents), options: .atomic)
+        }
+        return link
     }
+    /// Overwatch 2 (product uid "prometheus", launch code "Pro").
+    public var isOverwatch: Bool { uid.lowercased() == "prometheus" || code == "Pro" }
 }
 
 public enum BattleNet {
@@ -27,7 +36,8 @@ public enum BattleNet {
 
     /// Battle.net product uids → `--exec="launch …"` codes (unknown ones fall back to the uid in capitals).
     static let codes: [String: String] = [
-        "osi": "OSI", "s1": "S1", "s2": "S2", "w3": "W3", "d3": "D3", "fenris": "Fen", "pro": "Pro",
+        // Uninstall entries carry the product uid ("prometheus" is Overwatch, "heroes" Heroes of the Storm, "diablo3" Diablo III).
+        "osi": "OSI", "s1": "S1", "s2": "S2", "w3": "W3", "d3": "D3", "diablo3": "D3", "fenris": "Fen", "pro": "Pro", "prometheus": "Pro", "heroes": "Hero",
         "hs_beta": "WTCG", "wow": "WoW", "wow_classic": "WoWC", "hero": "Hero", "odin": "ODIN", "viper": "VIPR",
         "lazarus": "LAZR", "zeus": "ZEUS", "fore": "FORE", "auks": "AUKS", "spot": "SPOT", "rtro": "RTRO",
         "w1r": "W1R", "w2r": "W2R", "anbs": "ANBS", "gryphon": "GRY", "aqua": "AQUA",
@@ -180,6 +190,11 @@ public enum BattleNet {
         let exports = WineEnvironment.exportLine("HC")
         let browser = BrowserRenderer.launcherBlock(exes: BrowserRenderer.battleNetExes)
         var out = Set<String>()
+        if l.code != l.uid.uppercased() {
+            var stale = l; stale.code = l.uid.uppercased()
+            out.insert(launcherScript(stale))
+            out.formUnion(earlierLauncherScripts(stale))
+        }
         for e in WineEnvironment.versions("HC") {
             for withBrowser in [true, false] {
                 for keepOpen in [false, true] {

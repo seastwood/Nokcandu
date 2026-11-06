@@ -74,7 +74,7 @@ struct BattleNetGameInfo: View {
             }
             .padding(6)
         } label: { Text("Battle.net").font(.headline) }
-        if game.battleNet?.code == "Pro" { OverwatchSetupSection(game: game) }
+        if game.battleNet?.isOverwatch == true { OverwatchSetupSection(game: game) }
         if let h = BattleNetGraphics.host(of: game, in: model.games) {
             SettingsSection(title: "Graphics") {
                 SettingRow(title: "Graphics",

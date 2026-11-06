@@ -67,4 +67,34 @@ final class BattleNetTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: stale.appURL.appendingPathComponent("Contents/MacOS/\(CustomGames.launcherName)"), encoding: .utf8), current)
         XCTAssertEqual(try String(contentsOf: edited.appURL.appendingPathComponent("Contents/MacOS/\(CustomGames.launcherName)"), encoding: .utf8), old + "echo mine\n")
     }
+
+    func testOverwatchUsesItsLaunchCodeAndOldLinksAreRepaired() throws {
+        XCTAssertEqual(BattleNet.code(for: "prometheus"), "Pro")
+        XCTAssertEqual(BattleNet.code(for: "heroes"), "Hero")
+        XCTAssertEqual(BattleNet.code(for: "diablo3"), "D3")
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("bnet-ow-\(UUID().uuidString.prefix(6))")
+        defer { try? fm.removeItem(at: root) }
+        let contents = root.appendingPathComponent("Overwatch.app/Contents")
+        try NokPaths.ensure(contents.appendingPathComponent("SharedSupport/nokcandu"))
+        try NokPaths.ensure(contents.appendingPathComponent("MacOS"))
+        let stale = BattleNetLink(hostApp: root.appendingPathComponent("Battle.net.app").path, uid: "prometheus", code: "PROMETHEUS", name: "Overwatch")
+        try JSONEncoder().encode(stale).write(to: BattleNetLink.url(contents))
+        let launcher = contents.appendingPathComponent("MacOS/\(CustomGames.launcherName)")
+        try BattleNet.launcherScript(stale).write(to: launcher, atomically: true, encoding: .utf8)
+
+        let link = try XCTUnwrap(BattleNetLink.load(contents: contents))
+        XCTAssertEqual(link.code, "Pro")
+        XCTAssertTrue(link.isOverwatch)
+        XCTAssertEqual(BattleNetLink.load(contents: contents)?.code, "Pro", "the repaired link is saved")
+        var g = InstalledGame(appURL: root.appendingPathComponent("Overwatch.app"), name: "Overwatch"); g.battleNet = link
+        BattleNet.refreshLaunchers([g])
+        XCTAssertEqual(try String(contentsOf: launcher, encoding: .utf8), BattleNet.launcherScript(link))
+        XCTAssertTrue(BattleNet.launcherScript(link).contains("CODE=Pro") || BattleNet.launcherScript(link).contains("CODE='Pro'"))
+
+        // A product Nokcandu doesn't know keeps the uid it was given.
+        let unknown = BattleNetLink(hostApp: "/x", uid: "newgame", code: "NEWGAME", name: "New")
+        try JSONEncoder().encode(unknown).write(to: BattleNetLink.url(contents))
+        XCTAssertEqual(BattleNetLink.load(contents: contents)?.code, "NEWGAME")
+    }
 }
