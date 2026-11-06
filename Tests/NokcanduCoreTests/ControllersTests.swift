@@ -169,3 +169,42 @@ final class LaunchServicesCleanupTests: XCTestCase {
         XCTAssertTrue(SystemIntegration.isTesting)
     }
 }
+
+final class SharedLauncherKeysTests: XCTestCase {
+    func testGamesInsideALauncherCanHaveTheirOwnKeys() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nok-routes-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let host = root.appendingPathComponent("Battle.net.app/Contents")
+        let wine = host.appendingPathComponent("SharedSupport/wine/bin/wine")
+        try FileManager.default.createDirectory(at: wine.deletingLastPathComponent(), withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: wine.path, contents: Data(), attributes: [.posixPermissions: 0o755])
+        try NokPaths.ensure(KeyRemap.folder(host))
+        try "battle.net.exe\tBattle.net\noverwatch.exe\tOverwatch\nd2r.exe\tDiablo II Resurrected\n".write(to: KeyRemap.folder(host).appendingPathComponent("app-names.tsv"), atomically: true, encoding: .utf8)
+        func game(_ name: String, uid: String) -> InstalledGame {
+            var g = InstalledGame(appURL: root.appendingPathComponent("\(name).app"), name: name)
+            g.battleNet = BattleNetLink(hostApp: root.appendingPathComponent("Battle.net.app").path, uid: uid, code: "X", name: name)
+            return g
+        }
+        let ow = game("Overwatch", uid: "prometheus"), d2 = game("Diablo II Resurrected", uid: "osi")
+        XCTAssertEqual(KeyRemap.choice(contents: ow.contents, shared: true), .sameAsLauncher, "games start on the launcher's keys")
+        XCTAssertEqual(KeyRemap.refreshRoutes([ow, d2]), 0)
+
+        try KeyRemap.set(.own, contents: ow.contents, own: [KeyRemap.Mapping(from: 63, to: 59)])
+        KeyRemap.refreshRoutes([ow, d2])
+        let routes = try String(contentsOf: KeyRemap.routesFile(host), encoding: .utf8)
+        XCTAssertEqual(routes, "overwatch.exe\t" + KeyRemap.file(ow.contents).path + "\n")
+        XCTAssertEqual(KeyRemap.load(contents: ow.contents), [KeyRemap.Mapping(from: 63, to: 59)])
+
+        // A default layout doesn't touch a game using the launcher's keys.
+        let lf = root.appendingPathComponent("layouts.json"), df = root.appendingPathComponent("default")
+        let l = KeyRemap.Layout(name: "L", mappings: [KeyRemap.Mapping(from: 61, to: 62)])
+        try KeyRemap.store(l, environments: [host], shared: [ow.contents, d2.contents], file: lf, defaultFile: df)
+        try KeyRemap.setDefault(l, environments: [host], shared: [ow.contents, d2.contents], file: df, layoutsFile: lf)
+        XCTAssertEqual(KeyRemap.load(contents: d2.contents), [])
+        XCTAssertEqual(KeyRemap.load(contents: host), l.mappings, "the launcher itself follows the default")
+
+        try KeyRemap.set(.sameAsLauncher, contents: ow.contents)
+        KeyRemap.refreshRoutes([ow, d2])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: KeyRemap.routesFile(host).path))
+    }
+}

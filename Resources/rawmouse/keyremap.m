@@ -13,6 +13,8 @@
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
+#include <crt_externs.h>
+#include "program-input-settings.h"
 extern char **environ;
 
 static char key_remap_path[PATH_MAX], key_marker_path[PATH_MAX];
@@ -98,6 +100,14 @@ static void install_key_remap(const char *folder) {
     const char *home = getenv("HOME");
     if (!folder || !home) return;
     snprintf(key_remap_path, sizeof key_remap_path, "%s/key-remap", folder);
+    // A game inside a shared launcher (Steam, Battle.net…) may have keys of its own: key-remap.tsv routes its
+    // programs to them.
+    int argc = *_NSGetArgc(); char **argv = *_NSGetArgv();
+    if (argc > 1) {
+        char routes[PATH_MAX], own[PATH_MAX];
+        snprintf(routes, sizeof routes, "%s/key-remap.tsv", folder);
+        if (nokcandu_program_input(routes, argv[1], own, sizeof own)) strlcpy(key_remap_path, own, sizeof key_remap_path);
+    }
     snprintf(key_marker_path, sizeof key_marker_path, "%s/Library/Application Support/Nokcandu/key-remap-active", home);
     key_q = dispatch_queue_create("nokcandu.keyremap", DISPATCH_QUEUE_SERIAL);
     NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;

@@ -117,7 +117,14 @@ public enum KeyRemap {
         /// Keys of its own, not shared.
         case own
         case layout(String)
+        /// A game inside a shared launcher (Steam, Battle.net…) that uses the launcher's keys.
+        case sameAsLauncher
     }
+
+    /// Games inside a shared launcher keep their own choice in their own app; the launcher's is the fallback.
+    public static func isShared(_ g: InstalledGame) -> Bool { g.usesSharedSteam || g.battleNet != nil || g.hosted != nil }
+    /// Where this game's own keys live: its own app for games inside a launcher, else its Windows environment.
+    public static func gameContents(for g: InstalledGame) -> URL? { isShared(g) ? g.contents : contents(for: g) }
 
     public static var layoutsFile: URL { NokPaths.support.appendingPathComponent("key-layouts.json") }
     public static var defaultFile: URL { NokPaths.support.appendingPathComponent("key-layout-default") }
@@ -140,12 +147,14 @@ public enum KeyRemap {
         return (all ?? layouts(file: lf)).first { $0.id == id }
     }
 
-    public static func choice(contents: URL) -> Choice {
+    public static func choice(contents: URL, shared: Bool = false) -> Choice {
         guard let raw = (try? String(contentsOf: layoutFile(contents), encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            if shared { return .sameAsLauncher }
             // Keys set before layouts existed are this game's own.
             return FileManager.default.fileExists(atPath: file(contents).path) ? .own : .followDefault
         }
         switch raw {
+        case "launcher": return .sameAsLauncher
         case "default": return .followDefault
         case "none": return .normal
         case "own": return .own
@@ -162,6 +171,8 @@ public enum KeyRemap {
         case .normal: tag = "none"; keys = []
         case .own: tag = "own"; keys = own
         case .layout(let id): tag = id; keys = layouts(file: lf).first { $0.id == id }?.mappings ?? []
+        case .sameAsLauncher:
+            try? FileManager.default.removeItem(at: layoutFile(contents)); try save([], contents: contents); return
         }
         try Data((tag + "\n").utf8).write(to: layoutFile(contents), options: .atomic)
         try save(keys, contents: contents)
@@ -173,12 +184,13 @@ public enum KeyRemap {
     /// Writes each environment's keys again from its layout or the default (after a layout or the default changed,
     /// and at start for games added since). Returns how many changed.
     @discardableResult
-    public static func refresh(environments: [URL], file lf: URL = layoutsFile, defaultFile df: URL = defaultFile) -> Int {
+    public static func refresh(environments: [URL], shared: [URL] = [], file lf: URL = layoutsFile, defaultFile df: URL = defaultFile) -> Int {
         let all = layouts(file: lf), fallback = defaultLayout(layouts: all, file: df, layoutsFile: lf)?.mappings ?? []
+        let sharedSet = Set(shared)
         var n = 0
-        for c in Set(environments) {
+        for c in Set(environments).union(sharedSet) {
             let want: [Mapping]
-            switch choice(contents: c) {
+            switch choice(contents: c, shared: sharedSet.contains(c)) {
             case .followDefault:
                 want = fallback
                 // Recorded, so keys written here aren't mistaken later for keys of its own.
@@ -187,7 +199,7 @@ public enum KeyRemap {
                 }
             case .layout(let id): want = all.first { $0.id == id }?.mappings ?? fallback
             case .normal: want = []
-            case .own: continue
+            case .own, .sameAsLauncher: continue
             }
             if load(contents: c) != want { try? save(want, contents: c); n += 1 }
         }
@@ -196,36 +208,70 @@ public enum KeyRemap {
 
     /// Saves a new or edited layout and updates every environment using it (directly or as the default).
     @discardableResult
-    public static func store(_ layout: Layout, environments: [URL], file: URL = layoutsFile, defaultFile df: URL = defaultFile) throws -> Int {
+    public static func store(_ layout: Layout, environments: [URL], shared: [URL] = [], file: URL = layoutsFile, defaultFile df: URL = defaultFile) throws -> Int {
         var all = layouts(file: file)
         if let i = all.firstIndex(where: { $0.id == layout.id }) { all[i] = layout } else { all.append(layout) }
         try saveLayouts(all, file: file)
-        return refresh(environments: environments, file: file, defaultFile: df)
+        return refresh(environments: environments, shared: shared, file: file, defaultFile: df)
     }
 
     /// Makes a layout the default for every game that hasn't been given keys of its own (nil: no default).
-    public static func setDefault(_ layout: Layout?, environments: [URL], file df: URL = defaultFile, layoutsFile lf: URL = layoutsFile) throws {
+    public static func setDefault(_ layout: Layout?, environments: [URL], shared: [URL] = [], file df: URL = defaultFile, layoutsFile lf: URL = layoutsFile) throws {
         if let layout {
             try NokPaths.ensure(df.deletingLastPathComponent())
             try Data((layout.id + "\n").utf8).write(to: df, options: .atomic)
         } else {
             try? FileManager.default.removeItem(at: df)
         }
-        refresh(environments: environments, file: lf, defaultFile: df)
+        refresh(environments: environments, shared: shared, file: lf, defaultFile: df)
     }
 
     /// Removes a layout. Games that used it keep its keys as their own; if it was the default, there's none.
-    public static func delete(_ layout: Layout, environments: [URL], file: URL = layoutsFile, defaultFile df: URL = defaultFile) throws {
+    public static func delete(_ layout: Layout, environments: [URL], shared: [URL] = [], file: URL = layoutsFile, defaultFile df: URL = defaultFile) throws {
         try saveLayouts(layouts(file: file).filter { $0.id != layout.id }, file: file)
-        for c in Set(environments) where choice(contents: c) == .layout(layout.id) {
+        for c in Set(environments).union(shared) where choice(contents: c, shared: shared.contains(c)) == .layout(layout.id) {
             try set(.own, contents: c, own: layout.mappings, file: file, defaultFile: df)
         }
-        if defaultLayoutID(file: df) == layout.id { try setDefault(nil, environments: environments, file: df, layoutsFile: file) }
+        if defaultLayoutID(file: df) == layout.id { try setDefault(nil, environments: environments, shared: shared, file: df, layoutsFile: file) }
     }
 
-    /// The Windows environments of these games (each once).
+    /// The Windows environments of these games (each once), and the own folders of games inside launchers.
     public static func environments(_ games: [InstalledGame]) -> [URL] {
         Array(Set(games.compactMap { $0.native == nil ? contents(for: $0) : nil }))
+    }
+    /// The own folders of games inside launchers (where their keys live when they don't use the launcher's).
+    public static func sharedFolders(_ games: [InstalledGame]) -> [URL] { games.filter(isShared).map(\.contents) }
+
+    // MARK: Games inside shared launchers
+
+    static func routesFile(_ host: URL) -> URL { folder(host).appendingPathComponent("key-remap.tsv") }
+
+    /// For each launcher, which of its programs use a game's own keys: "program.exe<TAB>/…/Game.app/…/key-remap",
+    /// from the launcher's list of each game's programs (app-names.tsv). The helper in each program reads it.
+    @discardableResult
+    public static func refreshRoutes(_ games: [InstalledGame]) -> Int {
+        func key(_ s: String) -> String { s.lowercased().filter { $0.isLetter || $0.isNumber } }
+        var changed = 0
+        var byHost: [URL: [InstalledGame]] = [:]
+        for g in games where isShared(g) { if let h = contents(for: g) { byHost[h, default: []].append(g) } }
+        for (host, members) in byHost {
+            let names = (try? String(contentsOf: folder(host).appendingPathComponent("app-names.tsv"), encoding: .utf8)) ?? ""
+            var lines: [String] = []
+            for line in names.split(separator: "\n") {
+                let parts = line.split(separator: "\t", maxSplits: 1).map(String.init)
+                guard parts.count == 2, let g = members.first(where: { key($0.name) == key(parts[1]) }),
+                      choice(contents: g.contents, shared: true) != .sameAsLauncher else { continue }
+                lines.append(parts[0] + "\t" + file(g.contents).path)
+            }
+            let text = lines.sorted().joined(separator: "\n") + (lines.isEmpty ? "" : "\n")
+            let f = routesFile(host)
+            if lines.isEmpty {
+                if FileManager.default.fileExists(atPath: f.path) { try? FileManager.default.removeItem(at: f); changed += 1 }
+            } else if (try? String(contentsOf: f, encoding: .utf8)) != text {
+                try? NokPaths.ensure(folder(host)); try? Data(text.utf8).write(to: f, options: .atomic); changed += 1
+            }
+        }
+        return changed
     }
 
     // MARK: A keyboard left remapped
