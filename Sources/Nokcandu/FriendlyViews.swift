@@ -183,6 +183,7 @@ struct GameSummarySection: View {
         var storage: String = ""
         var lastPlayed: Date?
         var rawMouse: Bool?
+        var memoryPeak: UInt64?
     }
     @State private var facts = Facts()
 
@@ -194,6 +195,12 @@ struct GameSummarySection: View {
             if let m = facts.rawMouse { fact("Raw mouse", m ? "On" : "Off", tab: .controls) }
             SettingRow(title: "Last played") {
                 Text(facts.lastPlayed.map { $0.formatted(.relative(presentation: .named)) } ?? "Not yet").foregroundStyle(.secondary)
+            }
+            if let peak = facts.memoryPeak {
+                SettingRow(title: "Memory") {
+                    Text("Up to \(MemoryWatch.gigabytes(peak)) last time").foregroundStyle(.secondary)
+                        .help("The most memory the game's program used in its last session, of this Mac's \(MemoryWatch.gigabytes(MemoryWatch.physicalMemory)).")
+                }
             }
             SettingRow(title: "Last run") {
                 if let c = lastCrash {
@@ -239,6 +246,7 @@ struct GameSummarySection: View {
         f.storage = Storage.driveName(app)
         if let files = GameMover.externalFiles(g) { f.storage += " · game files on \(Storage.driveName(files.resolvingSymlinksInPath()))" }
         f.lastPlayed = LibraryOrganizer.lastPlayed(g)
+        f.memoryPeak = MemoryWatch.last(g)?.peak
         if g.native == nil, WineTools.hostContents(for: g) != nil { f.rawMouse = RawMouse.settings(for: g).enabled }
         return f
     }

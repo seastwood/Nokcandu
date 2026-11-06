@@ -22,15 +22,23 @@ struct GameDetailView: View {
     @State private var crash: CrashReports.Explanation?
     @State private var missingMods: [ModDependencies.Missing] = []
     @State private var showCrashReport = false
+    @State private var memory: (session: MemoryWatch.Session, advice: MemoryWatch.Advice)?
+    @State private var applyingLowMemory = false
     var crashDismissedKey: String { "crashDismissed." + game.id }
+    var memoryDismissedKey: String { "memoryDismissed." + game.id }
 
     func loadNotices() async {
         guard game.native == nil, !running else { return }
         let g = game
         let dismissed = UserDefaults.standard.double(forKey: crashDismissedKey)
         let since = dismissed > 0 ? Date(timeIntervalSince1970: dismissed + 1) : nil
-        let (c, m) = await Task.detached(priority: .utility) { (CrashReports.lastCrash(g, since: since), ModDependencies.missing(g)) }.value
+        let memoryDismissed = UserDefaults.standard.double(forKey: memoryDismissedKey)
+        let (c, m, mem) = await Task.detached(priority: .utility) {
+            (CrashReports.lastCrash(g, since: since), ModDependencies.missing(g),
+             MemoryWatch.last(g).flatMap { s in MemoryWatch.advice(g, session: s).map { (s, $0) } })
+        }.value
         crash = c; missingMods = m
+        memory = mem.flatMap { $0.0.started.timeIntervalSince1970 > memoryDismissed ? (session: $0.0, advice: $0.1) : nil }
     }
 
     /// Everything on this page that needs attention, most important first.
@@ -60,6 +68,16 @@ struct GameDetailView: View {
                     ForEach(h.suggested) { p in Button("Use \(p.title)") { switchGraphics(p) }.buttonStyle(.borderedProminent) }
                 })))
         }
+        if let mem = memory {
+            items.append(AttentionItem(id: "memory", view: AnyView(
+                NoticeCard(symbol: "memorychip", tint: .orange, title: mem.advice.title, detail: mem.advice.detail,
+                           evidence: "Last run " + mem.session.updated.formatted(date: .abbreviated, time: .shortened)) {
+                    if mem.advice.offersLowMemoryDXMT {
+                        Button("Use Low-memory DXMT") { useLowMemoryDXMT() }.buttonStyle(.borderedProminent).disabled(running || applyingLowMemory)
+                    }
+                    Button("Dismiss") { UserDefaults.standard.set(mem.session.started.timeIntervalSince1970, forKey: memoryDismissedKey); memory = nil }
+                })))
+        }
         if let d = cinematicDiagnosis, !CinematicFix.isPresent(for: game) {
             items.append(AttentionItem(id: "cinematic", view: AnyView(CinematicCrashBanner(game: game, diagnosis: d) { fixFromBanner() })))
         }
@@ -70,6 +88,19 @@ struct GameDetailView: View {
                            detail: w.detail + " Based on areweanticheatyet.com (Linux/Steam Deck reports) — your results on a Mac may differ.") { EmptyView() })))
         }
         return items
+    }
+
+    func useLowMemoryDXMT() {
+        applyingLowMemory = true
+        let g = game
+        Task {
+            do {
+                try await CompatibilityFixes.install(.dxmtLowMemory, for: g) { line in Task { @MainActor in model.say(line) } }
+                model.say("\(g.name) uses Low-memory DXMT from its next start. Undo is in Fixes.")
+                memory = nil
+            } catch { model.fail(error) }
+            applyingLowMemory = false; model.refresh()
+        }
     }
 
     var running: Bool { if case .launcherRunning = model.runStates[game.id] ?? .notRunning { return true }; return false }

@@ -390,6 +390,9 @@ final class AppModel: ObservableObject {
             let states = await Task.detached(priority: .utility) {
                 HotCorners.recoverIfStale()
                 var states = GameLauncher.runStates(of: snapshot)
+                for game in snapshot where game.native == nil {
+                    if case .launcherRunning = states[game.id] ?? .notRunning { MemoryWatch.sample(game) }
+                }
                 if snapshot.contains(where: { $0.native != nil }) {
                     let running = NSWorkspace.shared.runningApplications
                     let apps = running.compactMap { app -> (URL, Int32)? in

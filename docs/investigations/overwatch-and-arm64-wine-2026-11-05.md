@@ -24,3 +24,9 @@ Changes so Nokcandu can take an ARM engine as soon as one ships:
 - RuntimeManager refuses an ARM engine whose arch doesn't match its asset name, or one combined with an Intel-only template.
 
 Still needed when an ARM engine exists: an ARM Sikarugir template (wrapper, MoltenVK, DXMT/D3DMetal ARM builds), an ARM build of the winemac window driver used by the resizable window, an ARM build of Nokcandu's native IPX module, and a real end-to-end test. Rosetta stays required in Setup while the tested default engine is Intel.
+
+## Follow-up (2026-11-06)
+
+- Overwatch's Battle.net uninstall entry uses uid `prometheus`; its launch code is `Pro`. The fallback (uid in capitals) made Battle.net open without starting the game and hid Overwatch Setup. Fixed with real codes for `prometheus`, `heroes`, `diablo3`; stale links and generated launchers are repaired on load. Verified: Overwatch.exe starts from its Nokcandu entry within 10 s and stays up.
+- MemoryWatch samples the game's own program (`proc_pid_rusage` physical footprint) during the normal status pass. Overwatch at the main menu, default graphics: 3.1 GB peak. A session counts as heavy at ≥45% of RAM and ≥4 GB.
+- Open: a crash capture in the shared Battle.net prefix (03:43) contained only winedbg's usage text after attaching, i.e. the event-handle argument wasn't accepted. Not reproduced; the report parser ignores it.
