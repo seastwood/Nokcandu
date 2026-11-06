@@ -1,0 +1,26 @@
+--- a/dlls/winemac.drv/cocoa_window.m	2026-11-06 21:56:02.804040752 +0000
++++ b/dlls/winemac.drv/cocoa_window.m	2026-11-06 21:56:02.814040752 +0000
+@@ -1372,6 +1372,8 @@
+                 host.magnificationFilter = kCAFilterLinear;
+                 host.minificationFilter = kCAFilterLinear;
+                 host.backgroundColor = CGColorGetConstantColor(kCGColorBlack);
++                /* Opaque: the window server needn't composite anything behind the game. */
++                host.opaque = YES;
+                 _presentLayer = [[WineMetalLayer layer] retain];
+                 _presentLayer.delegate = self;
+                 _presentLayer.device = _device;
+@@ -1447,7 +1449,13 @@
+         _presentLayer.position = host.geometryFlipped ? CGPointMake(0, 0) : CGPointMake(0, NSHeight(self.bounds));
+         if (host.geometryFlipped) _presentLayer.anchorPoint = CGPointMake(0, 0);
+         _presentLayer.affineTransform = CGAffineTransformMakeScale(s, s);
+-        _presentLayer.magnificationFilter = (s != 1) ? kCAFilterLinear : kCAFilterNearest;
++        /* One game pixel to one screen pixel (a game at the display's own resolution, Retina included): no
++           filtering, so the picture is sharp and the window server can pass it straight through. */
++        {
++            double backing = w.backingScaleFactor > 0 ? w.backingScaleFactor : 1;
++            BOOL exact = fabs(s * backing - 1) < 0.0005;
++            _presentLayer.magnificationFilter = (exact || s == 1) ? kCAFilterNearest : kCAFilterLinear;
++        }
+         _presentLayer.minificationFilter = _presentLayer.magnificationFilter;
+         [CATransaction commit];
+     }
