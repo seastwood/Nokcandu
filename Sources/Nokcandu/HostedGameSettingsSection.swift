@@ -9,27 +9,25 @@ struct HostedGameSettingsSection: View {
     @State private var busy = false
     @State private var styleEdited = false
     var body: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 10) {
+        SettingsSection(title: "Game Settings", info: game.hosted.map { "These settings apply only when you start this game from Nokcandu or its Mac app. \($0.launcher.title) keeps its own graphics settings. Saved changes apply automatically once all programs in its Windows environment close." }) {
                 SettingRow(title: "Graphics") {
                     Picker("Graphics", selection: $settings.graphics) {
                         Text("Same as launcher").tag(GraphicsPreset?.none)
                         ForEach(GraphicsPreset.allCases) { Text($0.title).tag(Optional($0)) }
-                    }.labelsHidden().frame(maxWidth: 380)
+                    }.labelsHidden().frame(width: settingControlWidth)
                 }
-                Text((settings.graphics ?? HostedSettings.graphics(game)).detail).font(.caption).foregroundStyle(.secondary)
+                SettingNote((settings.graphics ?? HostedSettings.graphics(game)).detail)
                 if game.hosted?.launcher == .ea {
                     SettingRow(title: "Window style") {
                         Picker("Window style", selection: Binding(get: { !styleEdited && CompatibilityFixes.isEnabled(.borderless, for: game) ? (settings.macFullScreen == true ? .fullScreen : .borderless) : GameWindowStyle.current(settings) }, set: { styleEdited = true; GameWindowStyle.set($0, in: &settings) })) {
                             ForEach(GameWindowStyle.allCases) { Text($0.title).tag($0) }
-                        }.labelsHidden().frame(maxWidth: 380)
+                        }.labelsHidden().frame(width: settingControlWidth)
                     }
-                    Text("For either fullscreen style, select Windowed in the game first. Fullscreen also opens the resizable window in Mac full screen.").font(.caption).foregroundStyle(.secondary)
+                    SettingNote("For either fullscreen style, select Windowed in the game first. Fullscreen also opens the resizable window in Mac full screen.")
                 }
                 SettingRow(title: "Launch options") { TextField("Launch options", text: $settings.arguments).font(.body.monospaced()) }
                 if let link = game.hosted {
-                    Text("These settings apply only when you start this game from Nokcandu or its Mac app. \(link.launcher.title) keeps its own graphics settings. Saved changes apply automatically once all programs in its Windows environment close.").font(.caption).foregroundStyle(.secondary)
-                    Text(link.exe ?? "Starts through the launcher").font(.caption.monospaced()).textSelection(.enabled)
+                    Text(link.exe ?? "Starts through the launcher").font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
                 }
                 Button("Save Game Settings") {
                     var value = settings
@@ -41,7 +39,7 @@ struct HostedGameSettingsSection: View {
                         var value = settings; value.graphics = .classic3D; value.borderless = nil
                         model.changeSetting(for: game, title: "BC2 Display Settings", success: "BC2 uses fullscreen at the desktop size with DirectX 9.", change: .bc2(undo: false, resolution: BC2DisplaySettings.desktop, settings: value), completion: { saved in if saved { settings = value } })
                     }
-                    Text("Recommended: BC2’s own fullscreen mode at your current desktop size. Avoids the menu-pointer offset caused by resizing its window.").font(.caption).foregroundStyle(.secondary)
+                    SettingNote("Recommended: BC2’s own fullscreen mode at your current desktop size. Avoids the menu-pointer offset caused by resizing its window.")
                     Button("Undo BC2 Display Settings") {
                         model.changeSetting(for: game, title: "BC2 Display Settings", success: "BC2 display changes undone; later edits were kept.", change: .bc2(undo: true, resolution: nil, settings: nil))
                     }.disabled(BC2DisplaySettings.resolution(game) == nil)
@@ -57,10 +55,9 @@ struct HostedGameSettingsSection: View {
                             busy = false
                         }
                     }.disabled(busy)
-                    Text("Restart closes all EA games. Use it if EA reports a crashed background service or cannot quit.").font(.caption).foregroundStyle(.secondary)
+                    SettingNote("Restart closes all EA games. Use it if EA reports a crashed background service or cannot quit.")
                 }
-            }.padding(6)
-        } label: { Text("Game Settings").font(.headline) }
+        }
         .onAppear { settings = PendingSettings.hosted(for: game) ?? HostedSettings.load(game) }
     }
 }

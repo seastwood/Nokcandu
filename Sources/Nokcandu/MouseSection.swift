@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import GameController
 import NokcanduCore
 
@@ -49,6 +50,9 @@ struct MouseSection: View {
             }
             if enabled, let s = status {
                 SettingNote("Last run: \(s)")
+                if s.contains(RawMouse.inputMonitoringNote) {
+                    Button("Open Input Monitoring Settings…") { NSWorkspace.shared.open(RawMouse.inputMonitoringSettings) }
+                }
             }
         }
         .onAppear(perform: load)

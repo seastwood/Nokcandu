@@ -17,12 +17,11 @@ struct RestorePointsSection: View {
     var shared: Bool { host.map { $0.standardizedFileURL != game.appURL.standardizedFileURL } ?? false }
 
     var body: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(shared
-                     ? "\(game.name) runs inside \(hostName), so its restore points cover \(hostName) and every game in it."
-                     : "Nokcandu takes one automatically before fixes, recommended setups and engine changes (the newest \(RestorePoints.keepAutomatic) are kept). They use almost no space until the game changes. Game files on another drive aren't included.")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        SettingsSection(title: "Restore Points",
+                        info: shared
+                            ? "\(game.name) runs inside \(hostName), so its restore points cover \(hostName) and every game in it. Restore puts the whole app back as it was."
+                            : "Nokcandu takes one automatically before fixes, recommended setups and engine changes (the newest \(RestorePoints.keepAutomatic) are kept). They use almost no space until the game changes. Game files on another drive aren't included.") {
+                if shared { SettingNote("Covers \(hostName) and every game in it.") }
                 if points.isEmpty {
                     Text("No restore points yet.").font(.callout).foregroundStyle(.secondary)
                 }
@@ -44,10 +43,8 @@ struct RestorePointsSection: View {
                     Button("Take Restore Point Now") { take() }.disabled(busy || host == nil)
                     if busy { ProgressView().controlSize(.small) }
                 }
-            }
-            .padding(6).frame(maxWidth: .infinity, alignment: .leading)
-        } label: { Text("Restore Points").font(.headline) }
-        .onAppear(perform: reload)
+        }
+        .task(id: game.id) { reload() }
         .confirmationDialog("Restore \(hostName) to \(restoring?.created.formatted(date: .abbreviated, time: .shortened) ?? "")?",
                             isPresented: Binding(get: { restoring != nil }, set: { if !$0 { restoring = nil } })) {
             Button("Restore") { if let p = restoring { restore(p) }; restoring = nil }
@@ -57,10 +54,12 @@ struct RestorePointsSection: View {
         }
     }
 
+    /// Listing and sizing read the drive, so both happen off the main thread.
     func reload() {
-        points = RestorePoints.list(for: game)
-        let ps = points
+        let g = game
         Task.detached(priority: .utility) {
+            let ps = RestorePoints.list(for: g)
+            await MainActor.run { points = ps }
             let s = Dictionary(uniqueKeysWithValues: ps.map { ($0.id, RestorePoints.size($0)) })
             await MainActor.run { sizes = s }
         }

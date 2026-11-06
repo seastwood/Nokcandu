@@ -22,8 +22,7 @@ struct NotesSection: View {
     var shown: [GameNote] { notes.filter { filter == nil || $0.kind == filter } }
 
     var body: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 10) {
+        SettingsSection(title: "Notes", info: "Your notes about this game: what worked, what didn't, links. Kept even if you reinstall or remove the game. A note can carry the setup it was written with, to restore later.") {
                 // New note
                 VStack(alignment: .leading, spacing: 6) {
                     Picker("", selection: $newKind) {
@@ -80,14 +79,6 @@ struct NotesSection: View {
                     }
                     ForEach(shown) { n in noteRow(n) }
                 }
-            }
-            .padding(6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        } label: {
-            HStack {
-                Text("Notes").font(.headline)
-                Text("Kept even if you reinstall or remove the game").font(.caption).foregroundStyle(.secondary)
-            }
         }
         .onAppear { notes = GameNotes.load(for: game) }
         .confirmationDialog("Restore the setup from \(restoring?.created.formatted(date: .abbreviated, time: .shortened) ?? "")?",

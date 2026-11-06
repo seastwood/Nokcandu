@@ -202,16 +202,22 @@ public enum RawMouse {
         return summary(notes)
     }
 
+    public static let inputMonitoringNote = "macOS hasn't allowed Input Monitoring for this game's app, so the fallback mouse path was used. Turn it on in System Settings → Privacy & Security → Input Monitoring (moving a game to another drive asks again)"
+    public static let inputMonitoringSettings = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")!
+
     /// One plain sentence about the most recent run (notes since the last "installed" line).
     static func summary(_ all: [String]) -> String? {
         guard !all.isEmpty else { return nil }
         let run = all.lastIndex { $0.hasPrefix("installed") }.map { Array(all[$0...]) } ?? all
         if let bad = run.last(where: { $0.contains("staying off") }) { return "not used — \(bad)" }
+        // The hardware path needs Input Monitoring; without it the helper falls back to the GameController path.
+        let fallback = run.contains { $0.hasPrefix("reading the mouse hardware directly failed") }
+            ? ". " + inputMonitoringNote : ""
         let aims = run.filter { $0 == "aiming: raw mouse on" }.count
         if aims > 0 {
-            return "working — took over the mouse \(aims) time\(aims == 1 ? "" : "s") while aiming (menus and other apps get the normal pointer back)"
+            return "working — took over the mouse \(aims) time\(aims == 1 ? "" : "s") while aiming (menus and other apps get the normal pointer back)" + fallback
         }
-        if run.contains(where: { $0.hasPrefix("ready") }) { return "ready, but the game never captured the mouse for aiming" }
-        return "loaded, waiting for the first mouse move"
+        if run.contains(where: { $0.hasPrefix("ready") }) { return "ready, but the game never captured the mouse for aiming" + fallback }
+        return "loaded, waiting for the first mouse move" + fallback
     }
 }
