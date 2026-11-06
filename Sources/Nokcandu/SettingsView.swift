@@ -40,6 +40,9 @@ struct GeneralSettings: View {
                 Toggle("Ask before quitting a game", isOn: Binding(get: { !model.quitWithoutAsking }, set: { model.quitWithoutAsking = !$0 }))
                 Text("Quitting a game loses unsaved progress. Launchers with no game running in them always quit without asking.")
                     .font(.caption).foregroundStyle(.secondary)
+                Toggle("Mac notifications while Nokcandu is in the background", isOn: Binding(get: { Notifier.enabled }, set: { Notifier.enabled = $0; model.objectWillChange.send() }))
+                Text("When a store game is added, a game doesn't start, or a game is running low on memory. Click one to open that game.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Discord") {
                 Toggle("Show what you're playing in Discord", isOn: Binding(get: { DiscordBridge.enabled }, set: { DiscordBridge.enabled = $0; discordTick += 1 }))

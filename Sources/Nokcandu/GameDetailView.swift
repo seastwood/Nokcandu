@@ -24,6 +24,10 @@ struct GameDetailView: View {
     @State private var showCrashReport = false
     @State private var memory: (session: MemoryWatch.Session, advice: MemoryWatch.Advice)?
     @State private var applyingLowMemory = false
+    @State private var setup: GameSetups.Setup?
+    @State private var applyingSetup = false
+    @State private var crashPattern: String?
+    @State private var confirmResetAll = false
     var crashDismissedKey: String { "crashDismissed." + game.id }
     var memoryDismissedKey: String { "memoryDismissed." + game.id }
 
@@ -33,21 +37,30 @@ struct GameDetailView: View {
         let dismissed = UserDefaults.standard.double(forKey: crashDismissedKey)
         let since = dismissed > 0 ? Date(timeIntervalSince1970: dismissed + 1) : nil
         let memoryDismissed = UserDefaults.standard.double(forKey: memoryDismissedKey)
-        let (c, m, mem) = await Task.detached(priority: .utility) {
+        let (c, m, mem, su, pattern) = await Task.detached(priority: .utility) {
             (CrashReports.lastCrash(g, since: since), ModDependencies.missing(g),
-             MemoryWatch.last(g).flatMap { s in MemoryWatch.advice(g, session: s).map { (s, $0) } })
+             MemoryWatch.last(g).flatMap { s in MemoryWatch.advice(g, session: s).map { (s, $0) } },
+             GameSetups.pending(g), CrashReports.pattern(CrashReports.history(g)))
         }.value
-        crash = c; missingMods = m
+        crash = c; missingMods = m; setup = su; crashPattern = pattern
         memory = mem.flatMap { $0.0.started.timeIntervalSince1970 > memoryDismissed ? (session: $0.0, advice: $0.1) : nil }
     }
 
     /// Everything on this page that needs attention, most important first.
     var attentionItems: [AttentionItem] {
         var items: [AttentionItem] = []
+        if let problem = model.launchProblems[game.id], !running {
+            items.append(AttentionItem(id: "stalled", view: AnyView(
+                NoticeCard(symbol: "hourglass", tint: .orange, title: "\(game.name) hasn't started", detail: problem + " If nothing is waiting there, try again.") {
+                    Button("Try Again") { model.play(game) }.buttonStyle(.borderedProminent)
+                    if let host = launcherHost { Button("Show \(StartupMonitor.storeName(game))") { model.selection = host.id } }
+                    Button("Dismiss") { model.launchProblems.removeValue(forKey: game.id) }.buttonStyle(.link)
+                })))
+        }
         if let c = crash {
             items.append(AttentionItem(id: "crash", view: AnyView(
                 NoticeCard(symbol: c.missingMod != nil ? "puzzlepiece.extension" : "exclamationmark.octagon", tint: .red, title: c.title, detail: c.detail,
-                           evidence: c.evidence + " · " + c.date.formatted(date: .abbreviated, time: .shortened)) {
+                           evidence: c.evidence + " · " + c.date.formatted(date: .abbreviated, time: .shortened) + (crashPattern.map { " · " + $0 } ?? "")) {
                     Button("Show Report") { showCrashReport = true }
                     Button("Dismiss") { UserDefaults.standard.set(c.date.timeIntervalSince1970, forKey: crashDismissedKey); crash = nil }
                 }
@@ -66,6 +79,16 @@ struct GameDetailView: View {
                 NoticeCard(symbol: "display.trianglebadge.exclamationmark", tint: .orange, title: h.title, detail: h.detail, evidence: h.evidence) {
                     if let a = h.addArguments { Button("Add \(a)") { addArguments(a) }.buttonStyle(.borderedProminent) }
                     ForEach(h.suggested) { p in Button("Use \(p.title)") { switchGraphics(p) }.buttonStyle(.borderedProminent) }
+                })))
+        }
+        if let su = setup {
+            items.append(AttentionItem(id: "setup", view: AnyView(
+                NoticeCard(symbol: "wand.and.stars", tint: .purple, title: su.title, detail: su.detail) {
+                    if applyingSetup { ProgressView().controlSize(.small) }
+                    else {
+                        Button(su.button) { applySetup(su) }.buttonStyle(.borderedProminent).disabled(running)
+                        Button("Not Now") { GameSetups.dismiss(game); setup = nil }.buttonStyle(.link)
+                    }
                 })))
         }
         if let mem = memory {
@@ -88,6 +111,38 @@ struct GameDetailView: View {
                            detail: w.detail + " Based on areweanticheatyet.com (Linux/Steam Deck reports) — your results on a Mac may differ.") { EmptyView() })))
         }
         return items
+    }
+
+    var launcherHost: InstalledGame? {
+        guard let contents = WineTools.hostContents(for: game), contents != game.contents else { return nil }
+        return model.games.first { $0.contents.standardizedFileURL == contents.standardizedFileURL }
+    }
+
+    func applySetup(_ su: GameSetups.Setup) {
+        applyingSetup = true
+        let g = game, games = model.games
+        Task {
+            do {
+                try await GameSetups.apply(su.kind, to: g, games: games) { line in Task { @MainActor in model.say(line) } }
+                model.say("Applied the recommended setup to \(g.name). Press Play to try it.")
+                setup = nil
+            } catch { model.fail(error) }
+            applyingSetup = false; model.refresh()
+        }
+    }
+
+    func resetToRecommended() {
+        busy = true
+        let g = game, games = model.games
+        Task {
+            do {
+                let skipped = try await GameSetups.resetToRecommended(g, games: games) { line in Task { @MainActor in model.say(line) } }
+                model.say(skipped.isEmpty ? "\(g.name) is back to its recommended setup. A restore point has your earlier settings."
+                                          : "\(g.name) was reset. Skipped: " + skipped.joined(separator: " "))
+            } catch { model.fail(error) }
+            busy = false; model.refresh()
+            await loadNotices()
+        }
     }
 
     func useLowMemoryDXMT() {
@@ -181,6 +236,11 @@ struct GameDetailView: View {
             Button("Repair") { runRepair() }
         } message: {
             Text("Checks and restores the engine, launcher, Windows folders and settings the game needs. Anything replaced goes to the Trash or can be undone. Saves and game content aren't touched.")
+        }
+        .confirmationDialog("Reset \(game.name) to its recommended setup?", isPresented: $confirmResetAll) {
+            Button("Reset to Recommended", role: .destructive, action: resetToRecommended)
+        } message: {
+            Text("Takes a restore point, undoes every fix Nokcandu installed, and applies the recommended setup again (including suggestions you chose Not Now for). Saves, game files and the game's own options aren't touched; Restore Points brings your current settings back.")
         }
         .confirmationDialog("Reset \(game.name) to its tested settings?", isPresented: $confirmReset) {
             Button("Reset", role: .destructive, action: reset)
@@ -305,7 +365,7 @@ struct GameDetailView: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(game.name).font(.largeTitle.bold())
-                    Button { model.renaming = game } label: { Image(systemName: "pencil") }
+                    Button { model.renaming = game } label: { Image(systemName: "pencil") }.accessibilityLabel("Rename \(game.name)").help("Rename")
                         .buttonStyle(.borderless).help("Rename this game or give it a subtitle")
                 }
                 if let r = game.recipe {
@@ -388,12 +448,17 @@ struct GameDetailView: View {
                         }
                     } label: { Label("Check Game", systemImage: "stethoscope") }
                     .disabled(checking || running)
-                    Button("Settings Backups…") { showSettingsBackups = true }
                     Button { showDiagnostics = true } label: { Label("Diagnostics…", systemImage: "list.bullet.clipboard") }
                     Button { showReport = true } label: { Label("Report a Problem…", systemImage: "exclamationmark.bubble") }
+                    if checking || repairing || busy { ProgressView().controlSize(.small) }
+                }
+                HStack {
                     Button { confirmRepair = true } label: { Label("Repair…", systemImage: "wrench.and.screwdriver") }
                         .disabled(running || repairing || !game.isManaged)
-                    if checking || repairing { ProgressView().controlSize(.small) }
+                    Button { confirmResetAll = true } label: { Label("Reset to Recommended…", systemImage: "arrow.counterclockwise") }
+                        .disabled(running || busy || repairing)
+                        .help("Undo every fix and apply the recommended setup again, with a restore point first.")
+                    Button("Settings Backups…") { showSettingsBackups = true }
                 }
                 if let missing = GameDataSpec.forGame(game)?.missingEssentials, !missing.isEmpty {
                     Label("The game's settings folder in Documents is missing \(missing.joined(separator: ", ")). Repair can put it back.", systemImage: "exclamationmark.triangle.fill")
@@ -579,7 +644,7 @@ struct NativeGameDetail: View {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(alignment: .firstTextBaseline) {
                             Text(game.name).font(.largeTitle.bold())
-                            Button { model.renaming = game } label: { Image(systemName: "pencil") }.buttonStyle(.borderless)
+                            Button { model.renaming = game } label: { Image(systemName: "pencil") }.accessibilityLabel("Rename \(game.name)").help("Rename").buttonStyle(.borderless)
                         }
                         GameStorageSummary(game: game)
                         Text(native.store.map { "Mac version from \($0.store.title)" } ?? "Mac game — runs natively, no Wine").foregroundStyle(.secondary)

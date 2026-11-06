@@ -108,4 +108,32 @@ final class CrashReportTests: XCTestCase {
         XCTAssertFalse(CrashReports.ensureCapture(contents: contents), "applying again changes nothing")
         XCTAssertTrue(FileManager.default.fileExists(atPath: prefix.appendingPathComponent("drive_c/nokcandu").path))
     }
+
+    func testReportsAreKeptAsHistoryAndRepeatsAreNamed() throws {
+        let contents = root.appendingPathComponent("Game.app/Contents")
+        let report = CrashReports.reportURL(prefix: contents.appendingPathComponent("SharedSupport/prefix"))
+        try FileManager.default.createDirectory(at: report.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let fm = FileManager.default
+        for (i, when) in [1_800_000_000.0, 1_800_000_600.0].enumerated() {
+            try Self.fhsw.write(to: report, atomically: true, encoding: .utf8)
+            try fm.setAttributes([.modificationDate: Date(timeIntervalSince1970: when)], ofItemAtPath: report.path)
+            CrashReports.archive(contents: contents)
+            CrashReports.archive(contents: contents)
+            XCTAssertEqual(try fm.contentsOfDirectory(atPath: CrashReports.historyFolder(contents).path).count, i + 1)
+        }
+        try "Usage: winedbg …".write(to: report, atomically: true, encoding: .utf8)
+        CrashReports.archive(contents: contents)
+        XCTAssertEqual(try fm.contentsOfDirectory(atPath: CrashReports.historyFolder(contents).path).count, 2, "reports without a crash aren't kept")
+
+        let wine = contents.appendingPathComponent("SharedSupport/wine/bin/wine")
+        try FileManager.default.createDirectory(at: wine.deletingLastPathComponent(), withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: wine.path, contents: Data(), attributes: [.posixPermissions: 0o755])
+        let g = InstalledGame(appURL: root.appendingPathComponent("Game.app"), name: "Game")
+        let history = CrashReports.history(g)
+        XCTAssertEqual(history.count, 2)
+        XCTAssertGreaterThan(history[0].date, history[1].date, "newest first")
+        XCTAssertEqual(CrashReports.pattern(history, now: Date(timeIntervalSince1970: 1_800_001_000)), "Crashed 2 times in the last week, the same way each time.")
+        XCTAssertNil(CrashReports.pattern(Array(history.prefix(1)), now: Date(timeIntervalSince1970: 1_800_001_000)))
+        XCTAssertNil(CrashReports.pattern(history, now: Date(timeIntervalSince1970: 1_800_000_000 + 30 * 86_400)))
+    }
 }

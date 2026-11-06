@@ -39,4 +39,23 @@ final class StartupMonitorTests: XCTestCase {
         XCTAssertTrue(StuckGames.programs(of: game).contains(BF1942DisplayFix.copyName.lowercased()))
         XCTAssertTrue(StuckGames.programs(of: game).contains(BF1942DisplayFix.restartCopyName.lowercased()))
     }
+
+    func testStoreClientThatNeverStartsTheGameIsReported() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nok-stall-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        var g = InstalledGame(appURL: root.appendingPathComponent("Overwatch.app"), name: "Overwatch")
+        g.battleNet = BattleNetLink(hostApp: root.appendingPathComponent("Battle.net.app").path, uid: "prometheus", code: "Pro", name: "Overwatch")
+        try FileManager.default.createDirectory(at: g.logs, withIntermediateDirectories: true)
+        let since = Date().addingTimeInterval(-200)
+        let receipt = StartupMonitor.Receipt(startedAt: since.timeIntervalSince1970 + 1, phase: "exited", exitCode: 0, pid: 99_999)
+        let file = g.logs.appendingPathComponent("launcher-status.json")
+        try JSONEncoder().encode(receipt).write(to: file)
+
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-30)], ofItemAtPath: file.path)
+        if case .stalled = StartupMonitor.observe(g, since: since, elapsed: 200) { XCTFail("too soon after the hand-off") }
+
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-120)], ofItemAtPath: file.path)
+        XCTAssertEqual(StartupMonitor.observe(g, since: since, elapsed: 200),
+                       .stalled("Battle.net is open but hasn't started Overwatch. It may be updating the game or waiting for you in its window (an update, a sign-in or its own Play button)."))
+    }
 }

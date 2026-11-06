@@ -39,6 +39,9 @@ final class AppModel: ObservableObject {
     @Published var unseenErrors = 0
     /// What a game that is starting is doing ("Starting Windows…"), shown under Play.
     @Published var launchStages: [String: String] = [:]
+    /// Games whose store client opened but didn't start them (cleared on the next Play or when the game runs).
+    @Published var launchProblems: [String: String] = [:]
+    @Published var showWhatsNew = false
     @Published var librarySearch = ""
     @Published var focusSearch = false
     @Published var libraryFilter: LibraryFilter = .all
@@ -92,6 +95,8 @@ final class AppModel: ObservableObject {
 
     init() {
         SharedSteam.refreshHostScriptsIfNeeded()
+        Notifier.shared.start { [weak self] id in self?.selection = id }
+        showWhatsNew = !showWelcome && WhatsNew.shouldShow()
         refresh()
         installer.onLibraryReady = { [weak self] in self?.refresh() }
         interruptedDownloads = StoreJobs.all()
@@ -277,7 +282,10 @@ final class AppModel: ObservableObject {
             if !result.added.isEmpty {
                 await StorageInventory.shared.invalidate()
                 refresh()
-                say("Added \(result.added.count) installed store game\(result.added.count == 1 ? "" : "s") to your game list.")
+                let names = result.added.map { $0.deletingPathExtension().lastPathComponent }
+                let text = names.count <= 3 ? "Added \(ListFormatter.localizedString(byJoining: names)) to your game list." : "Added \(names.count) installed store games to your game list."
+                say(text, game: names.count == 1 ? result.added[0].path : nil)
+                Notifier.post(title: names.count == 1 ? "\(names[0]) is ready to play" : "New games in Nokcandu", body: text, gameID: names.count == 1 ? result.added[0].path : nil)
             }
             if !result.errors.isEmpty, result.errors != lastStoreDiscoveryErrors {
                 fail(NokError(result.errors.joined(separator: "\n")))
@@ -390,9 +398,12 @@ final class AppModel: ObservableObject {
             let states = await Task.detached(priority: .utility) {
                 HotCorners.recoverIfStale()
                 var states = GameLauncher.runStates(of: snapshot)
+                var heavy: [(InstalledGame, MemoryWatch.Session)] = []
                 for game in snapshot where game.native == nil {
-                    if case .launcherRunning = states[game.id] ?? .notRunning { MemoryWatch.sample(game) }
+                    if case .launcherRunning = states[game.id] ?? .notRunning, let s = MemoryWatch.sample(game), MemoryWatch.isHeavy(s) { heavy.append((game, s)) }
                 }
+                // Crash reports are kept per environment (one stat each when nothing changed).
+                for contents in Set(snapshot.compactMap { $0.native == nil ? WineTools.hostContents(for: $0) : nil }) { CrashReports.archive(contents: contents) }
                 if snapshot.contains(where: { $0.native != nil }) {
                     let running = NSWorkspace.shared.runningApplications
                     let apps = running.compactMap { app -> (URL, Int32)? in
@@ -404,8 +415,13 @@ final class AppModel: ObservableObject {
                             .map { .launcherRunning(pid: $0.1) } ?? .notRunning
                     }
                 }
-                return (states, checkHelpers ? HelperActivation.statuses(for: snapshot) : previousHelpers)
+                return (states, checkHelpers ? HelperActivation.statuses(for: snapshot) : previousHelpers, heavy)
             }.value
+            for (game, session) in states.2 where memoryWarned.insert("\(game.id)#\(session.pid)").inserted {
+                let text = "\(game.name) is using \(MemoryWatch.gigabytes(session.peak)) of this Mac's \(MemoryWatch.gigabytes(MemoryWatch.physicalMemory)) memory. Closing other apps helps; its page has more after you quit."
+                say(text, game: game.id)
+                Notifier.post(title: "\(game.name) is low on memory", body: text, gameID: game.id)
+            }
             refreshingRunStates = false
             guard revision == libraryRevision else { helperCheckNeeded = true; refreshRunStates(); return }
             if checkHelpers { lastHelperCheck = Date(); helperCheckNeeded = false }
@@ -418,6 +434,7 @@ final class AppModel: ObservableObject {
             applyIdleSettings()
         }
     }
+    private var memoryWarned = Set<String>()
     private var lastHelperCheck = Date.distantPast
     private var helperCheckNeeded = true
     private var helpersMaintained = false
@@ -462,6 +479,7 @@ final class AppModel: ObservableObject {
                     }
                 }
             }
+            for (id, state) in s { if case .launcherRunning = state, launchProblems[id] != nil { launchProblems.removeValue(forKey: id) } }
             runStates = s
             // Something just started or stopped: if Steam is closed now, bring its helper up to date
             // (it can only be replaced while Steam isn't running).
@@ -493,6 +511,7 @@ final class AppModel: ObservableObject {
 
     func play(_ g: InstalledGame) {
         if let m = GameMover.missingDrive(g) { fail(NokError(m)); return }
+        launchProblems.removeValue(forKey: g.id)
         // Resizable window: each game has its own choice; a launcher running with another one restarts.
         Task {
             do {
@@ -629,6 +648,11 @@ final class AppModel: ObservableObject {
                 case .opened: return
                 case .failed(let message): fail(NokError(message)); refreshRunStates(); return
                 case .waiting(let message): if !warned { say(message); warned = true }
+                case .stalled(let message):
+                    launchProblems[game.id] = message
+                    say(message, game: game.id)
+                    Notifier.post(title: "\(game.name) hasn't started", body: message, gameID: game.id)
+                    return
                 case .pending: break
                 }
             }
@@ -828,7 +852,9 @@ final class AppModel: ObservableObject {
         say("Stopped \(j.game.title)'s download and moved its files to the Trash.")
     }
 
-    func say(_ text: String) { banner = Banner(text: text, isError: false); remember(text, isError: false) }
+    func say(_ text: String) { say(text, game: nil) }
+    /// A message about one game: its line in Recent Activity gets a Show button.
+    func say(_ text: String, game: String?) { banner = Banner(text: text, isError: false); remember(text, isError: false, game: game) }
     func fail(_ error: Error) { banner = Banner(text: error.localizedDescription, isError: true); remember(error.localizedDescription, isError: true) }
 
     // MARK: Recent activity (messages stay readable after their banner fades)
@@ -838,11 +864,12 @@ final class AppModel: ObservableObject {
         var date = Date()
         var text: String
         var isError: Bool
+        var game: String? = nil
     }
-    private func remember(_ text: String, isError: Bool) {
+    private func remember(_ text: String, isError: Bool, game: String? = nil) {
         // Progress lines ("Starting X…") repeat a lot; keep only the newest of the same text.
         activity.removeAll { $0.text == text }
-        activity.insert(Activity(text: text, isError: isError), at: 0)
+        activity.insert(Activity(text: text, isError: isError, game: game), at: 0)
         if activity.count > 30 { activity.removeLast(activity.count - 30) }
         if isError { unseenErrors += 1 }
     }

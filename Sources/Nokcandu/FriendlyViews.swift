@@ -16,6 +16,7 @@ struct ActivityButton: View {
                     if model.unseenErrors > 0 { Circle().fill(.red).frame(width: 7, height: 7).offset(x: 3, y: -2) }
                 }
         }
+        .accessibilityLabel(model.unseenErrors > 0 ? "Recent activity, \(model.unseenErrors) problem\(model.unseenErrors == 1 ? "" : "s")" : "Recent activity")
         .help(model.unseenErrors > 0 ? "Recent activity — \(model.unseenErrors) problem\(model.unseenErrors == 1 ? "" : "s")" : "Recent activity")
         .popover(isPresented: $shown, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 0) {
@@ -40,7 +41,12 @@ struct ActivityButton: View {
                                         Text(a.text).font(.callout).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
                                         Text(a.date.formatted(date: .omitted, time: .shortened)).font(.caption2).foregroundStyle(.secondary)
                                     }
+                                    Spacer(minLength: 0)
+                                    if let id = a.game, model.games.contains(where: { $0.id == id }) {
+                                        Button("Show") { model.selection = id; shown = false }.buttonStyle(.link).font(.callout)
+                                    }
                                 }
+                                .accessibilityElement(children: .combine)
                             }
                         }
                         .padding(12)
@@ -106,6 +112,7 @@ struct LaunchProgressLine: View {
             ProgressView().controlSize(.small)
             Text(text).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
+        .accessibilityElement(children: .combine)
         .transition(.opacity)
     }
 }
@@ -152,9 +159,9 @@ struct NoticeCard<Actions: View>: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: symbol).foregroundStyle(tint).font(.title3)
+            Image(systemName: symbol).foregroundStyle(tint).font(.title3).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.body.bold())
+                Text(title).font(.body.bold()).accessibilityAddTraits(.isHeader)
                 Text(detail).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if let evidence {
                     Text(evidence).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(2).textSelection(.enabled)
@@ -232,6 +239,8 @@ struct GameSummarySection: View {
             }
             .buttonStyle(.plain)
             .help("Change in \(tab.title)")
+            .accessibilityLabel("\(title): \(value)")
+            .accessibilityHint("Opens \(tab.title)")
         }
     }
 

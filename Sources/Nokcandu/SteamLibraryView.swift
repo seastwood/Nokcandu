@@ -130,7 +130,7 @@ struct SteamLibraryView: View {
                 Spacer()
                 if SharedSteam.isSetUp {
                     Button { try? SharedSteam.openSteam() } label: { Label("Open Steam", systemImage: "arrow.up.forward.app") }
-                    Button { m.refresh() } label: { Image(systemName: "arrow.clockwise") }
+                    Button { m.refresh() } label: { Image(systemName: "arrow.clockwise") }.accessibilityLabel("Refresh")
                 }
             }
             .padding()

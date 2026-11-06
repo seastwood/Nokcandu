@@ -52,6 +52,63 @@ public enum CrashReports {
         public var missingMod: ModDependencies.Missing?
     }
 
+    // MARK: History
+
+    /// Each Windows environment keeps its last reports (Wine writes one file per crash, so a newer crash would
+    /// replace an older one): SharedSupport/nokcandu/crashes/<time>.txt, newest 12.
+    static func historyFolder(_ contents: URL) -> URL { contents.appendingPathComponent("SharedSupport/nokcandu/crashes", isDirectory: true) }
+    static let keepReports = 12
+    private static let archived = LockedCache<String, Date>(limit: 256)
+
+    /// Copies the environment's current report into its history, once. Cheap when nothing changed (one stat).
+    public static func archive(contents: URL) {
+        let url = reportURL(prefix: contents.appendingPathComponent("SharedSupport/prefix"))
+        guard let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
+              archived[contents.path] != date else { return }
+        archived[contents.path] = date
+        let folder = historyFolder(contents)
+        let name = String(format: "%.0f.txt", date.timeIntervalSince1970)
+        let target = folder.appendingPathComponent(name)
+        guard !FileManager.default.fileExists(atPath: target.path),
+              let data = try? Data(contentsOf: url), !data.isEmpty, data.count < 4_000_000,
+              Report(String(decoding: data, as: UTF8.self)) != nil else { return }
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try? data.write(to: target, options: .atomic)
+        let old = ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []).filter { $0.hasSuffix(".txt") }.sorted(by: >).dropFirst(keepReports)
+        for f in old { try? FileManager.default.removeItem(at: folder.appendingPathComponent(f)) }
+    }
+
+    /// This game's crashes, newest first (its archived reports plus the current one).
+    public static func history(_ g: InstalledGame) -> [Explanation] {
+        guard let contents = WineTools.hostContents(for: g) else { return [] }
+        archive(contents: contents)
+        let folder = historyFolder(contents)
+        let mods = ModDependencies.missing(g)
+        return ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []).filter { $0.hasSuffix(".txt") }.sorted(by: >)
+            .compactMap { name -> Explanation? in
+                guard let seconds = Double(name.dropLast(4)),
+                      let data = try? Data(contentsOf: folder.appendingPathComponent(name)) else { return nil }
+                let text = String(decoding: data, as: UTF8.self)
+                guard let parsed = Report(text), belongs(parsed, to: g) else { return nil }
+                return explain(parsed, text: text, date: Date(timeIntervalSince1970: seconds), mods: mods, arguments: g.custom?.arguments ?? "")
+            }
+    }
+
+    /// "Crashed 3 times in the last week", when it's more than once.
+    public static func pattern(_ history: [Explanation], now: Date = Date()) -> String? {
+        let week = history.filter { now.timeIntervalSince($0.date) < 7 * 86_400 }
+        guard week.count > 1 else { return nil }
+        let same = Set(week.map(\.title)).count == 1
+        return "Crashed \(week.count) times in the last week" + (same ? ", the same way each time." : ".")
+    }
+
+    static func belongs(_ parsed: Report, to g: InstalledGame) -> Bool {
+        // In a shared launcher's environment, only crashes of this game's own program belong to it.
+        guard g.usesSharedSteam || g.battleNet != nil || g.hosted != nil else { return true }
+        guard let program = CompatibilityFixes.programForFixes(g)?.lastPathComponent.lowercased() else { return false }
+        return parsed.process?.lowercased().hasSuffix(program) == true
+    }
+
     /// The newest report for this game since `since` (default: any), explained.
     public static func lastCrash(_ g: InstalledGame, since: Date? = nil) -> Explanation? {
         guard let contents = WineTools.hostContents(for: g) else { return nil }
@@ -60,12 +117,8 @@ public enum CrashReports {
               since.map({ date >= $0 }) ?? true,
               let data = try? Data(contentsOf: url), !data.isEmpty, data.count < 4_000_000 else { return nil }
         let text = String(decoding: data, as: UTF8.self)
-        guard let parsed = Report(text) else { return nil }
-        // In a shared launcher's environment, only crashes of this game's own program belong to it.
-        if g.usesSharedSteam || g.battleNet != nil || g.hosted != nil {
-            guard let program = CompatibilityFixes.programForFixes(g)?.lastPathComponent.lowercased(),
-                  parsed.process?.lowercased().hasSuffix(program) == true else { return nil }
-        }
+        guard let parsed = Report(text), belongs(parsed, to: g) else { return nil }
+        archive(contents: contents)
         return explain(parsed, text: text, date: date, mods: ModDependencies.missing(g), arguments: g.custom?.arguments ?? "")
     }
 

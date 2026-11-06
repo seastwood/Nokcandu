@@ -183,7 +183,7 @@ struct UpdatesView: View {
             } else if let c = cur, c < newest {
                 Button("Try \(newest.description)") { tryEngine(g) }.disabled(busy != nil || running)
                     .help(running ? "Quit it first." : "Switches this app to the newest engine; you can roll back.")
-                Button { hold(g, true) } label: { Image(systemName: "pin") }.buttonStyle(.borderless)
+                Button { hold(g, true) } label: { Image(systemName: "pin") }.accessibilityLabel("Keep \(g.name) on its current engine").buttonStyle(.borderless)
                     .help("Keep \(g.name) on its current engine (for a game that plays well as it is).")
             } else if cur != nil {
                 Text("Up to date").font(.caption).foregroundStyle(.secondary)

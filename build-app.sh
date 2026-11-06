@@ -141,6 +141,8 @@ done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns" || echo "warning: icon not built"
 
 VERSION="$(tr -d '[:space:]' < VERSION)"
+# What's New: this version's release notes, shown once after an update.
+[ -f "release-notes/v$VERSION.md" ] && cp "release-notes/v$VERSION.md" "$APP/Contents/Resources/WhatsNew.md"
 BUILD_NUMBER="${BUILD_NUMBER:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

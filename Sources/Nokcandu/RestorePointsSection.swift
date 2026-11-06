@@ -35,7 +35,7 @@ struct RestorePointsSection: View {
                         }
                         Spacer()
                         Button("Restore…") { restoring = p }.disabled(busy)
-                        Button { delete(p) } label: { Image(systemName: "trash") }.buttonStyle(.borderless).disabled(busy)
+                        Button { delete(p) } label: { Image(systemName: "trash") }.accessibilityLabel("Delete restore point").help("Delete this restore point").buttonStyle(.borderless).disabled(busy)
                             .help("Delete this restore point")
                     }
                 }

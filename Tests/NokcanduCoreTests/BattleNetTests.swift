@@ -97,4 +97,17 @@ final class BattleNetTests: XCTestCase {
         try JSONEncoder().encode(unknown).write(to: BattleNetLink.url(contents))
         XCTAssertEqual(BattleNetLink.load(contents: contents)?.code, "NEWGAME")
     }
+
+    func testKnownGameSetupsAreOfferedUntilDismissed() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nok-setups-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        var ow = InstalledGame(appURL: root.appendingPathComponent("Overwatch.app"), name: "Overwatch")
+        ow.battleNet = BattleNetLink(hostApp: root.appendingPathComponent("Battle.net.app").path, uid: "prometheus", code: "Pro", name: "Overwatch")
+        XCTAssertEqual(GameSetups.pending(ow)?.kind, .overwatch)
+        GameSetups.dismiss(ow)
+        XCTAssertNil(GameSetups.pending(ow))
+        GameSetups.undismiss(ow)
+        XCTAssertEqual(GameSetups.pending(ow)?.kind, .overwatch)
+        XCTAssertNil(GameSetups.pending(InstalledGame(appURL: root.appendingPathComponent("Other.app"), name: "Other")))
+    }
 }

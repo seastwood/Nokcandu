@@ -411,11 +411,15 @@ struct OverwatchSetupSection: View {
             SettingRow(title: "Graphics: DXMT") { status(usesDXMT) }
             SettingRow(title: "Low-memory DXMT") { status(lowMemory) }
             SettingNote("In Overwatch's video settings keep DirectX 11 and set the frame limit high. The first matches stutter while shaders are prepared; each one is prepared once and kept.")
-            HStack {
-                Button(usesDXMT && lowMemory ? "Set Up" : "Use Recommended Setup") { apply() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(working || (usesDXMT && lowMemory))
-                if working { ProgressView().controlSize(.small) }
+            if usesDXMT && lowMemory {
+                Label("Set up. Undo either one in Graphics or Fixes.", systemImage: "checkmark.circle").font(.callout).foregroundStyle(.secondary)
+            } else {
+                HStack {
+                    Button("Use Recommended Setup") { apply() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(working)
+                    if working { ProgressView().controlSize(.small) }
+                }
             }
         }
         .id(tick)
@@ -431,11 +435,7 @@ struct OverwatchSetupSection: View {
         let g = game, games = model.games
         Task {
             do {
-                if BattleNetGraphics.choice(g) != .dxmt { try BattleNetGraphics.set(.dxmt, for: g, games: games) }
-                let fresh = GameLibrary.inspect(g.appURL) ?? g
-                if !CompatibilityFixes.isInstalled(.dxmtLowMemory, for: fresh) {
-                    try await CompatibilityFixes.install(.dxmtLowMemory, for: fresh) { line in Task { @MainActor in model.say(line) } }
-                }
+                try await GameSetups.apply(.overwatch, to: g, games: games) { line in Task { @MainActor in model.say(line) } }
                 model.say("Overwatch 2 uses DXMT with the low-memory build. Press Play to try it.")
             } catch { model.fail(error) }
             working = false; tick += 1; model.refresh()

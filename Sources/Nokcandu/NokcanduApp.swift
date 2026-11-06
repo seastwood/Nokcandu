@@ -31,6 +31,7 @@ struct NokcanduApp: App {
                 GameCommands(model: model)
             }
             CommandGroup(after: .help) {
+                Button("What's New in Nokcandu") { model.showWhatsNew = true }
                 Button("Report a Problem…") { model.showReport = true }
             }
         }
@@ -134,6 +135,7 @@ struct LibraryView: View {
                     }
                     .menuIndicator(.hidden)
                     .help("Sort games")
+                    .accessibilityLabel("Sort games")
                 }
                 ToolbarItem(placement: .automatic) {
                     Menu {
@@ -146,6 +148,7 @@ struct LibraryView: View {
                     }
                     .menuIndicator(.hidden)
                     .help(model.libraryFilter == .all ? "Show only some games" : "Showing: \(model.libraryFilter.title)")
+                    .accessibilityLabel(model.libraryFilter == .all ? "Filter games" : "Filter games, showing \(model.libraryFilter.title)")
                 }
                 ToolbarItem(placement: .automatic) { ActivityButton() }
                 ToolbarItem(placement: .automatic) {
@@ -213,6 +216,7 @@ struct LibraryView: View {
         .sheet(isPresented: $model.showWelcome) {
             WelcomeView().environmentObject(model)
         }
+        .sheet(isPresented: $model.showWhatsNew) { WhatsNewView() }
         .sheet(isPresented: $model.showProfiles) {
             ProfilesView(focusNumber: model.profileFocus).environmentObject(model)
         }

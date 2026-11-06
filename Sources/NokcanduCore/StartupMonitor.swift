@@ -13,6 +13,8 @@ public enum StartupMonitor {
         case opened
         case failed(String)
         case waiting(String)
+        /// The store client was asked to start the game, but the game hasn't appeared.
+        case stalled(String)
     }
     static func evaluate(name: String, receipt: Receipt?, since: Date, elapsed: TimeInterval,
                          running: Bool, window: Bool, handoff: Bool, detail: String) -> Observation {
@@ -71,9 +73,28 @@ public enum StartupMonitor {
                 detail = String(line.prefix(400)) + " " + detail
             }
         }
+        let handoff = g.usesSharedSteam || g.hosted != nil || g.battleNet != nil
+        if handoff, !window, !running, let r = receipt, r.startedAt >= since.timeIntervalSince1970 - 0.5, r.phase == "exited", r.exitCode == 0,
+           let exited = (try? g.logs.appendingPathComponent("launcher-status.json").resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
+           Date().timeIntervalSince(exited) >= stallSeconds {
+            return .stalled(stalledMessage(g))
+        }
         return evaluate(name: g.name, receipt: receipt, since: since, elapsed: elapsed, running: running,
                         window: window, handoff: g.usesSharedSteam || g.hosted != nil || g.battleNet != nil || g.isSteamHost,
                         detail: detail)
+    }
+
+    /// How long after its launcher handed the game to the store client a game may take to appear.
+    static let stallSeconds: TimeInterval = 90
+
+    public static func storeName(_ g: InstalledGame) -> String {
+        if g.battleNet != nil { return "Battle.net" }
+        if g.usesSharedSteam { return "Steam" }
+        if let link = g.hosted { return link.launcher.title }
+        return "The launcher"
+    }
+    static func stalledMessage(_ g: InstalledGame) -> String {
+        "\(storeName(g)) is open but hasn't started \(g.name). It may be updating the game or waiting for you in its window (an update, a sign-in or its own Play button)."
     }
 
     /// What a starting game is doing right now, in words, for the progress line under Play.

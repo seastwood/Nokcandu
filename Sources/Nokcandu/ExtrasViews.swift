@@ -343,7 +343,7 @@ struct StorageView: View {
                game.native == nil, !game.usesSharedSteam, game.battleNet == nil, game.hosted == nil {
                 Button("Move…") { model.movingGame = game }.fixedSize().disabled(model.moving.contains(game.id))
             }
-            Button { NSWorkspace.shared.activateFileViewerSelecting([item.url]) } label: { Image(systemName: "magnifyingglass") }
+            Button { NSWorkspace.shared.activateFileViewerSelecting([item.url]) } label: { Image(systemName: "magnifyingglass") }.accessibilityLabel("Show in Finder")
                 .buttonStyle(.borderless).help("Show in Finder")
         }
     }
@@ -820,7 +820,7 @@ struct GameStorageSummary: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Label(usage?.summary ?? "Measuring storage…", systemImage: "internaldrive").font(.callout).foregroundStyle(.secondary)
-                Button { measurement += 1 } label: { Image(systemName: "arrow.clockwise").font(.caption) }
+                Button { measurement += 1 } label: { Image(systemName: "arrow.clockwise").font(.caption) }.accessibilityLabel("Recalculate storage size")
                     .buttonStyle(.borderless).help("Recalculate storage size").disabled(usage == nil)
             }
             if let usage, usage.parts.count > 1 || usage.parts.contains(where: { $0.shared > 0 }) {
