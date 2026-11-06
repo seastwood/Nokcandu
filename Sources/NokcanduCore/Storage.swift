@@ -222,16 +222,41 @@ public enum Storage {
         }.sorted { $0.bytes > $1.bytes }
     }
 
-    public static func nokcanduData() -> [Item] {
+    public static func nokcanduData(games: [InstalledGame] = []) -> [Item] {
         let s = NokPaths.support
+        // Each engine on its own line, with what needs it.
+        let usage = RuntimeManager.usage(games: games)
+        var engines: [Item] = RuntimeManager.cachedRuntimes().sorted { $0.id < $1.id }.map { m in
+            let title = "Engine: " + (EngineVersion(versionString: m.wineVersion)?.description ?? m.wineVersion) + " (template \(m.template))"
+            return Item(title: title, url: RuntimeManager.folder(for: m.id), bytes: size(RuntimeManager.folder(for: m.id)),
+                        detail: (usage[m.id] ?? RuntimeManager.Usage()).summary)
+        }
+        if engines.isEmpty { engines = [Item(title: "Engines cache", url: NokPaths.runtimes, bytes: size(NokPaths.runtimes), detail: "Verified Wine engines new games are copied from")] }
+        let versions = AppRollback.root
         let parts: [(String, URL, String)] = [
-            ("Engines cache", NokPaths.runtimes, "Verified Wine engines new games are copied from"),
+            ("Earlier Nokcandu versions", versions, "The newest \(AppRollback.keepVersions) kept so you can go back to one (Settings → Updates)"),
             ("Downloads", NokPaths.downloads, "Installers and engine downloads (safe to empty)"),
             ("Work folder", s.appendingPathComponent("Work"), "Leftovers from interrupted jobs (safe to empty)"),
             ("Backups & undo history", NokPaths.backups, "Files Nokcandu replaced, kept so changes can be undone"),
             ("Diagnostics reports", NokPaths.diagnostics, ""),
         ]
-        return parts.map { Item(title: $0.0, url: $0.1, bytes: size($0.1), detail: $0.2) }
+        return engines + parts.map { Item(title: $0.0, url: $0.1, bytes: size($0.1), detail: $0.2) }
+    }
+
+    /// Work-folder items from jobs that finished or were interrupted more than a day ago (a disk image still
+    /// mounted there is left alone). Called at start. Returns bytes freed.
+    @discardableResult
+    public static func cleanStaleWork(now: Date = Date()) -> Int64 {
+        let work = NokPaths.support.appendingPathComponent("Work")
+        let mounted = Set((FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: nil, options: []) ?? []).map { $0.standardizedFileURL.path })
+        var freed: Int64 = 0
+        for f in (try? FileManager.default.contentsOfDirectory(at: work, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [] {
+            let date = (try? f.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? now
+            guard now.timeIntervalSince(date) > 86_400, !mounted.contains(where: { $0 == f.standardizedFileURL.path || $0.hasPrefix(f.standardizedFileURL.path + "/") }) else { continue }
+            let b = size(f)
+            if (try? FileManager.default.removeItem(at: f)) != nil { freed += b }
+        }
+        return freed
     }
 
     public static func volumes() -> [VolumeInfo] {

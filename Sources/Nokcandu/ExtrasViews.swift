@@ -285,6 +285,13 @@ struct StorageView: View {
                                 if section == .appData {
                                     if ["Downloads", "Work folder"].contains(item.title) {
                                         Button("Empty") { cleanup { Storage.format(Storage.empty(item.url)) + " freed." } }.disabled(item.bytes == 0 || cleaning || loading)
+                                    } else if item.title.hasPrefix("Engine: ") {
+                                        let id = item.url.lastPathComponent, games = model.games
+                                        let name = String(item.title.dropFirst(8)), bytes = item.bytes
+                                        Button("Remove") {
+                                            cleanup { do { try RuntimeManager.remove(id, games: games); return "Removed \(name), freeing \(Storage.format(bytes))." } catch { return error.localizedDescription } }
+                                        }.disabled(cleaning || loading || !item.detail.hasPrefix("Not used"))
+                                        .help(item.detail.hasPrefix("Not used") ? "No game needs this engine." : "Still needed: " + item.detail)
                                     } else if item.title == "Engines cache" {
                                         Button("Remove Unused") {
                                             let games = model.games

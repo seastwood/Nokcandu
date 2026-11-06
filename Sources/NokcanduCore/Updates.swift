@@ -316,6 +316,44 @@ extension RuntimeManager {
         }
     }
 
+    /// Who needs a cached engine: games using it, games that can roll back to it, and why Nokcandu keeps it.
+    public struct Usage: Sendable {
+        public var users: [String] = []
+        public var rollback: [String] = []
+        /// Kept because it's the tested engine, the default for new games, or an unfinished install's choice.
+        public var keptFor: String?
+        public var unused: Bool { users.isEmpty && rollback.isEmpty && keptFor == nil }
+        public var summary: String {
+            var parts: [String] = []
+            if !users.isEmpty { parts.append("Used by " + ListFormatter.localizedString(byJoining: users)) }
+            if !rollback.isEmpty { parts.append("kept so " + ListFormatter.localizedString(byJoining: rollback) + " can roll back") }
+            if let keptFor { parts.append(keptFor) }
+            return parts.isEmpty ? "Not used by any game — safe to remove" : parts.joined(separator: "; ")
+        }
+    }
+
+    public static func usage(games: [InstalledGame]) -> [String: Usage] {
+        var out: [String: Usage] = [:]
+        for g in games {
+            guard let st = EngineUpdate.state(for: g) else { continue }
+            out[st.runtimeID, default: Usage()].users.append(g.name)
+            if let prev = st.previousRuntimeID, prev != st.runtimeID { out[prev, default: Usage()].rollback.append(g.name) }
+        }
+        let defaultID = WineSelection.spec(for: WineSelection.defaultEngine()).id
+        for id in WineSelection.protectedRuntimeIDs(defaultEngine: WineSelection.defaultEngine(), installs: InstallExecutor.savedInstalls()) {
+            out[id, default: Usage()].keptFor = id == defaultID ? "the engine new games use" : id == RecipeCatalog.sikarugirWine10.id ? "the tested engine Nokcandu's recipes use" : "chosen for an unfinished installation"
+        }
+        if out[RecipeCatalog.sikarugirWine10.id]?.keptFor == nil { out[RecipeCatalog.sikarugirWine10.id, default: Usage()].keptFor = "the tested engine Nokcandu's recipes use" }
+        for g in games { for e in PendingSettings.entries(for: g) { if case .wine(let id) = e.change { out[id, default: Usage()].keptFor = "waiting to be applied to \(g.name)" } } }
+        return out
+    }
+
+    /// Removes one cached engine, only if nothing needs it.
+    public static func remove(_ id: String, games: [InstalledGame]) throws {
+        guard usage(games: games)[id]?.unused ?? true else { throw NokError("That engine is still needed (\(usage(games: games)[id]!.summary)).") }
+        try FileManager.default.removeItem(at: folder(for: id))
+    }
+
     /// Removes cached runtimes no game uses (keeps the tested one). Returns bytes freed (approximate).
     public static func removeUnused(games: [InstalledGame]) -> [String] {
         let inUse = Set(games.compactMap { EngineUpdate.state(for: $0)?.runtimeID } + [RecipeCatalog.sikarugirWine10.id])

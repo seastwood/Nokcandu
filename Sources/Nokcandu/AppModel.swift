@@ -255,7 +255,7 @@ final class AppModel: ObservableObject {
             if StoreAccounts.refreshIcons(live) { await MainActor.run { self.games = GameLibrary.scan() } }
             HotCorners.recoverIfStale()
             let migratedLaunchers = HelperPatch.refresh(live)
-            SystemIntegration.cleanLaunchServices(); KeyRemap.refresh(environments: KeyRemap.environments(live)); RawMouse.refreshLibraries(live); Performance.refreshEnvFiles(live); BattleNet.refreshLaunchers(live); PCLaunchers.refreshLaunchers(live); BattleNet.refreshSteamLaunchers(live); AudioBuffer.fixMicrophones(live); WindowedPresentation.refresh(live)
+            SystemIntegration.cleanLaunchServices(); Storage.cleanStaleWork(); KeyRemap.refresh(environments: KeyRemap.environments(live)); RawMouse.refreshLibraries(live); Performance.refreshEnvFiles(live); BattleNet.refreshLaunchers(live); PCLaunchers.refreshLaunchers(live); BattleNet.refreshSteamLaunchers(live); AudioBuffer.fixMicrophones(live); WindowedPresentation.refresh(live)
             // Helper files may have just been brought up to date: re-check what each app has installed.
             await MainActor.run { self.helpersMaintained = true; self.helperCheckNeeded = true; self.refreshRunStates() }
             if !migratedLaunchers.isEmpty || upgraded > 0 {

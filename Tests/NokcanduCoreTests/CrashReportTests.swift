@@ -135,5 +135,6 @@ final class CrashReportTests: XCTestCase {
         XCTAssertEqual(CrashReports.pattern(history, now: Date(timeIntervalSince1970: 1_800_001_000)), "Crashed 2 times in the last week, the same way each time.")
         XCTAssertNil(CrashReports.pattern(Array(history.prefix(1)), now: Date(timeIntervalSince1970: 1_800_001_000)))
         XCTAssertNil(CrashReports.pattern(history, now: Date(timeIntervalSince1970: 1_800_000_000 + 30 * 86_400)))
+        XCTAssertEqual(CrashReports.lastCrash(g)?.date, history[0].date, "an empty newest report doesn't hide the last real crash")
     }
 }

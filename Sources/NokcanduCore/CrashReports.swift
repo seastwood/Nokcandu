@@ -113,13 +113,18 @@ public enum CrashReports {
     public static func lastCrash(_ g: InstalledGame, since: Date? = nil) -> Explanation? {
         guard let contents = WineTools.hostContents(for: g) else { return nil }
         let url = reportURL(prefix: contents.appendingPathComponent("SharedSupport/prefix"))
-        guard let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
-              since.map({ date >= $0 }) ?? true,
-              let data = try? Data(contentsOf: url), !data.isEmpty, data.count < 4_000_000 else { return nil }
-        let text = String(decoding: data, as: UTF8.self)
-        guard let parsed = Report(text), belongs(parsed, to: g) else { return nil }
-        archive(contents: contents)
-        return explain(parsed, text: text, date: date, mods: ModDependencies.missing(g), arguments: g.custom?.arguments ?? "")
+        if let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
+           since.map({ date >= $0 }) ?? true,
+           let data = try? Data(contentsOf: url), !data.isEmpty, data.count < 4_000_000 {
+            let text = String(decoding: data, as: UTF8.self)
+            if let parsed = Report(text), belongs(parsed, to: g) {
+                archive(contents: contents)
+                return explain(parsed, text: text, date: date, mods: ModDependencies.missing(g), arguments: g.custom?.arguments ?? "")
+            }
+        }
+        // The newest report has no crash in it (the debugger couldn't attach) or is another program's in a shared
+        // launcher: this game's newest kept report still counts.
+        return history(g).first { r in since.map { r.date >= $0 } ?? true }
     }
 
     /// The parts of a winedbg report that matter.

@@ -27,11 +27,11 @@ public actor StorageInventory {
     public init(lifetime: TimeInterval = 300) { self.lifetime = lifetime }
     public func invalidate() { generation += 1; results.removeAll() }
     public func load(_ section: Section, library: [InstalledGame]) async -> Snapshot {
-        let key = Key(section: section, library: (section == .appData) ? [] : library)
+        let key = Key(section: section, library: library)
         return await value(for: key) {
             switch section {
             case .games: return Snapshot(items: Storage.games(library))
-            case .appData: return Snapshot(items: Storage.nokcanduData())
+            case .appData: return Snapshot(items: Storage.nokcanduData(games: library))
             case .leftovers: return Snapshot(leftovers: GameRemoval.orphans(library: library))
             case .drives: return Snapshot(volumes: Storage.volumes(), drives: GamesVolume.drives())
             case .reclaim: return Snapshot(suggestions: SpaceSaver.suggestions(library: library))
