@@ -135,6 +135,12 @@ public enum KeyRemap {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config/karabiner/karabiner.json")
     }
 
+    /// Karabiner-Elements is installed (its settings can stay behind after it's removed, so the app itself is checked).
+    public static var karabinerInstalled: Bool {
+        ["/Applications/Karabiner-Elements.app", NSHomeDirectory() + "/Applications/Karabiner-Elements.app"]
+            .contains { FileManager.default.fileExists(atPath: $0) }
+    }
+
     public static func karabinerProfiles(_ url: URL = karabinerConfig) -> [KarabinerProfile] {
         guard let data = try? Data(contentsOf: url),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

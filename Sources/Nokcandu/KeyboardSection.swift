@@ -57,7 +57,7 @@ struct KeyboardSection: View {
 
     func load() {
         if let c = contents { mappings = KeyRemap.load(contents: c) }
-        profiles = KeyRemap.karabinerProfiles()
+        profiles = KeyRemap.karabinerInstalled ? KeyRemap.karabinerProfiles() : []
     }
     func save() {
         guard let c = contents else { return }
