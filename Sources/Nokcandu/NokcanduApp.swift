@@ -217,6 +217,13 @@ struct LibraryView: View {
             WelcomeView().environmentObject(model)
         }
         .sheet(isPresented: $model.showWhatsNew) { WhatsNewView() }
+        .alert("Found games on your drives", isPresented: Binding(get: { !model.foundFolders.isEmpty && !model.showWelcome && !model.showWhatsNew }, set: { if !$0 && !model.foundFolders.isEmpty { model.declineFoundFolders() } })) {
+            Button("Add Them") { model.addFoundFolders() }
+            Button("Not Now", role: .cancel) { model.declineFoundFolders() }
+        } message: {
+            Text(model.foundFolders.map { "\($0.games) game\($0.games == 1 ? "" : "s") in \($0.url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))" }.joined(separator: "\n")
+                 + "\n\nThese were made with Nokcandu. Adding them uses them where they are — nothing is copied.")
+        }
         .sheet(isPresented: $model.showProfiles) {
             ProfilesView(focusNumber: model.profileFocus).environmentObject(model)
         }

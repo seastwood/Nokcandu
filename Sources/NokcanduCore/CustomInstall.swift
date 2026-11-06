@@ -184,6 +184,37 @@ public enum CustomInstall {
                 ctx.log("Using existing files without copying: \(src.path). They will be kept when this app is removed.")
                 return
             }
+            // A copy can go to a folder of your choice (another drive, say): the game's C: folder then links to it.
+            if let chosen = ctx.input("copyDestination"), !chosen.isEmpty {
+                let folder = URL(fileURLWithPath: chosen, isDirectory: true)
+                if let p = GameFolders.problem(with: folder) { throw NokError(p) }
+                var target = folder.appendingPathComponent(dst.lastPathComponent, isDirectory: true)
+                var n = 2
+                while fm.fileExists(atPath: target.path) { target = folder.appendingPathComponent("\(dst.lastPathComponent) \(n)", isDirectory: true); n += 1 }
+                let sourcePath = src.resolvingSymlinksInPath().path
+                guard !target.path.hasPrefix(sourcePath + "/"), !sourcePath.hasPrefix(target.resolvingSymlinksInPath().path + "/") else {
+                    throw NokError("Choose a copy destination outside the game's folder.")
+                }
+                if let free = GameFolders.freeSpace(folder), free < Storage.allocatedSize(src) {
+                    throw NokError("\(GameFolders.volumeName(folder)) doesn't have room for a copy (\(Storage.format(Storage.allocatedSize(src))) needed, \(Storage.format(free)) free).")
+                }
+                ctx.log("Copying \(src.path) to \(folder.path)…")
+                let staging = folder.appendingPathComponent(".nok-import-" + UUID().uuidString)
+                defer { try? fm.removeItem(at: staging) }
+                if GameFolders.holdsApps(folder) && Storage.sameVolume(src, folder) { try fm.cloneItem(at: src, to: staging) }
+                else { try GameMover.copyPlain(src, staging) }
+                try GameMover.removeCopiedMacMetadata(in: staging)
+                try fm.moveItem(at: staging, to: target)
+                if let _ = try? fm.destinationOfSymbolicLink(atPath: dst.path) { try fm.removeItem(at: dst) }
+                else if fm.fileExists(atPath: dst.path), (try fm.contentsOfDirectory(atPath: dst.path)).isEmpty { try fm.removeItem(at: dst) }
+                try fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try fm.createSymbolicLink(atPath: dst.path, withDestinationPath: target.path)
+                ctx.log("Copied to \(target.path).")
+                if let bottle = ctx.input("bottle.path") {
+                    Bottles.importUserData(from: URL(fileURLWithPath: bottle), into: ctx.prefix, log: ctx.log)
+                }
+                return
+            }
             ctx.log("Copying \(src.path)…")
             let target = dst.resolvingSymlinksInPath()
             let sourcePath = src.resolvingSymlinksInPath().path

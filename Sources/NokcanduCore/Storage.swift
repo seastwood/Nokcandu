@@ -27,6 +27,14 @@ public enum Storage {
     }
     /// Allocated file blocks, including blocks shared with APFS clones. This
     /// describes an app's contents and copy capacity, rather than deletion savings.
+    /// Both on the same volume (so a copy can be an instant APFS clone).
+    public static func sameVolume(_ a: URL, _ b: URL) -> Bool {
+        let k: Set<URLResourceKey> = [.volumeIdentifierKey]
+        guard let x = (try? a.resourceValues(forKeys: k))?.volumeIdentifier as? NSObject,
+              let y = (try? b.resourceValues(forKeys: k))?.volumeIdentifier as? NSObject else { return false }
+        return x.isEqual(y)
+    }
+
     public static func allocatedSize(_ url: URL, excluding: [URL] = []) -> Int64 {
         measure(url, excluding: excluding, privateOnly: false)
     }

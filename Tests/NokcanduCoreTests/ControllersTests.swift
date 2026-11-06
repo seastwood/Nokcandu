@@ -208,3 +208,27 @@ final class SharedLauncherKeysTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: KeyRemap.routesFile(host).path))
     }
 }
+
+final class LibraryDiscoveryTests: XCTestCase {
+    func testFoldersOfGameAppsAreFoundWithoutTheLibraryOnes() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nok-disc-\(UUID().uuidString)").resolvingSymlinksInPath()
+        defer { try? FileManager.default.removeItem(at: root) }
+        func app(_ path: String) throws {
+            let c = root.appendingPathComponent(path).appendingPathComponent("Contents")
+            try FileManager.default.createDirectory(at: c.appendingPathComponent("SharedSupport/prefix"), withIntermediateDirectories: true)
+            try (["CFBundleName": "G"] as NSDictionary).write(to: c.appendingPathComponent("Info.plist"))
+        }
+        try app("Drive/Nokcandu Games/A.app"); try app("Drive/Nokcandu Games/B.app")
+        try app("Drive/Old/Deep/C.app")
+        try app("Drive/.Nokcandu Restore Points/X/D.app")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("Drive/Other.app/Contents"), withIntermediateDirectories: true)   // not a game
+        let found = LibraryDiscovery.folders(in: root.appendingPathComponent("Drive"), depth: 3, known: [])
+        XCTAssertEqual(found.map(\.folder.lastPathComponent), ["Nokcandu Games", "Deep"])
+        XCTAssertEqual(found.map(\.games), [2, 1])
+        let known = LibraryDiscovery.folders(in: root.appendingPathComponent("Drive"), depth: 3, known: [root.appendingPathComponent("Drive/Nokcandu Games")])
+        XCTAssertEqual(known.map(\.folder.lastPathComponent), ["Deep"])
+        let inLibrary = LibraryDiscovery.folders(in: root.appendingPathComponent("Drive"), depth: 3, known: [],
+                                                 library: [root.appendingPathComponent("Drive/Old/Deep/C.app").path])
+        XCTAssertEqual(inLibrary.map(\.folder.lastPathComponent), ["Nokcandu Games"])
+    }
+}

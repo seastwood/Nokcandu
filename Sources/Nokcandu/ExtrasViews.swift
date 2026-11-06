@@ -785,7 +785,11 @@ struct GameFoldersBox: View {
                     Text("Steam, Battle.net and their games stay in the standard folder (pick a drive in their own settings instead). Other games can live anywhere — move one from its page or by right-clicking it. On ExFAT drives only the game's files are stored; the app, Wine runtime and private Windows setup stay on this Mac.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     Spacer()
-                    Button("Add Folder…", action: add)
+                    VStack(alignment: .trailing) {
+                        Button("Add Folder…", action: add)
+                        Button("Find Games in a Folder…", action: find)
+                            .help("Looks through a folder or drive for games made with Nokcandu (after reinstalling Nokcandu, or games copied from another Mac) and adds the folders that hold them. Nothing is copied.")
+                    }
                 }
             }.padding(6)
         } label: { Label("Game Folders", systemImage: "folder").font(.headline) }
@@ -807,6 +811,25 @@ struct GameFoldersBox: View {
         }
     }
     func reload() { revision += 1; model.refresh() }
+    func find() {
+        let p = NSOpenPanel()
+        p.canChooseDirectories = true; p.canChooseFiles = false
+        p.directoryURL = URL(fileURLWithPath: "/Volumes")
+        p.prompt = "Find Games"
+        p.message = "Choose a folder or drive to look through for games made with Nokcandu."
+        guard p.runModal() == .OK, let root = p.url else { return }
+        let library = model.games
+        Task {
+            let found = await Task.detached(priority: .userInitiated) {
+                LibraryDiscovery.folders(in: root, depth: 4, library: Set(library.map { $0.appURL.resolvingSymlinksInPath().standardizedFileURL.path }))
+            }.value
+            if found.isEmpty { model.say("No games made with Nokcandu were found in \(root.lastPathComponent) that aren't already in your library."); return }
+            LibraryDiscovery.add(found.map(\.folder))
+            let n = found.reduce(0) { $0 + $1.games }
+            model.say("Added \(n) game\(n == 1 ? "" : "s") from \(found.count) folder\(found.count == 1 ? "" : "s"). Nothing was copied.")
+            reload()
+        }
+    }
     func add() {
         error = nil
         let panel = NSOpenPanel()

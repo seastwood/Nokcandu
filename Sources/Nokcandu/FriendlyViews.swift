@@ -253,7 +253,14 @@ struct GameSummarySection: View {
         if g.native == nil, let v = g.wineVersion { f.engine = EngineVersion(versionString: v)?.description ?? v }
         let app = g.appURL.resolvingSymlinksInPath()
         f.storage = Storage.driveName(app)
-        if let files = GameMover.externalFiles(g) { f.storage += " · game files on \(Storage.driveName(files.resolvingSymlinksInPath()))" }
+        if let files = GameMover.externalFiles(g) {
+            let real = files.resolvingSymlinksInPath()
+            if FileManager.default.fileExists(atPath: g.support.appendingPathComponent("referenced-game-folder.txt").path) {
+                f.storage += " · uses “\(real.lastPathComponent)” where it is, on \(Storage.driveName(real))"
+            } else {
+                f.storage += " · game files on \(Storage.driveName(real))"
+            }
+        }
         f.lastPlayed = LibraryOrganizer.lastPlayed(g)
         f.memoryPeak = MemoryWatch.last(g)?.peak
         if g.native == nil, WineTools.hostContents(for: g) != nil { f.rawMouse = RawMouse.settings(for: g).enabled }

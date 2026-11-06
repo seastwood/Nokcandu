@@ -170,6 +170,9 @@ struct InstallerView: View {
     @EnvironmentObject var app: AppModel
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var m: InstallerModel
+    @State private var pickedFolder: URL?
+    @State private var copyFolder = false
+    @State private var copyTo: URL?          // nil: inside the game's app
     @State private var steamUser = ""
     @State private var steamAppID = ""
     @State private var newName = ""
@@ -583,14 +586,39 @@ struct InstallerView: View {
                 }
             }
         case .folder:
-            Button("Choose Game Folder…") {
-                if let u = pick(folder: true, types: []) { m.setInput("folderMode", "copy"); m.setInput("folderPath", u.path); m.continueInstall() }
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Button(pickedFolder == nil ? "Choose Game Folder…" : "Choose Another Folder…") {
+                        if let u = pick(folder: true, types: []) { pickedFolder = u }
+                    }
+                    if let f = pickedFolder {
+                        Text(f.path.replacingOccurrences(of: NokPaths.home.path, with: "~")).font(.callout).foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                    }
+                }
+                if let f = pickedFolder {
+                    Picker("Game files", selection: $copyFolder) {
+                        Text("Use it where it is").tag(false)
+                        Text("Copy it").tag(true)
+                    }
+                    .pickerStyle(.radioGroup)
+                    if copyFolder {
+                        CopyDestinationPicker(destination: $copyTo, source: f)
+                        Text("The copy is the game's own: fixes, settings and mods change the copy, and it's removed with the game. The original stays as it is.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text("Nothing is copied and no extra space is used. The game runs from this folder, so fixes, settings and mods change files in it; it's kept if you remove the game. Its drive must be connected to play.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    Button("Add Game") {
+                        m.setInput("folderMode", copyFolder ? "copy" : "existing")
+                        m.setInput("folderPath", f.path)
+                        m.setInput("copyDestination", copyFolder ? (copyTo?.path ?? "") : "")
+                        m.continueInstall()
+                    }
+                    .buttonStyle(.borderedProminent).disabled(m.running)
+                }
             }
-            Button("Use Existing Folder Without Copying…") {
-                if let u = pick(folder: true, types: []) { m.setInput("folderMode", "existing"); m.setInput("folderPath", u.path); m.continueInstall() }
-            }
-            .disabled(m.running)
-            Text("Existing files stay in that folder and are kept if you remove this game. Its drive must be connected to play.").font(.caption).foregroundStyle(.secondary)
         case .steam:
             HStack {
                 TextField("Steam account name", text: $steamUser).frame(maxWidth: 180)
@@ -928,5 +956,49 @@ struct InstallationShortcut: View {
             }
             .help(m.running ? "Installation is continuing. Open its progress window." : "Return to the installation's next step.")
         }
+    }
+}
+
+
+/// Where a copied game folder goes: inside the game's app (on the drive the app is on), a library folder, or any folder.
+struct CopyDestinationPicker: View {
+    @Binding var destination: URL?
+    let source: URL
+    @State private var folders = GameFolders.all
+    @State private var custom: [URL] = []
+    @State private var size: Int64?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Picker("Copy to", selection: Binding(get: { destination?.standardizedFileURL.path ?? "" }, set: choose)) {
+                Text("Inside the game's app").tag("")
+                ForEach(folders + custom, id: \.self) { f in
+                    Text(GameFolderLabel.text(f)).tag(f.standardizedFileURL.path).disabled(!GameFolders.isAvailable(f))
+                }
+                Divider()
+                Text("Other Folder…").tag("/__other__")
+            }
+            .frame(maxWidth: 420)
+            let place = destination ?? GameFolders.installFolder
+            let free = GameFolders.freeSpace(place)
+            Text([size.map { "Needs \(Storage.format($0))" }, free.map { "\(GameFolders.volumeName(place)) has \(Storage.format($0)) free" }].compactMap { $0 }.joined(separator: " · "))
+                .font(.caption).foregroundStyle(size != nil && free != nil && size! > free! ? .orange : .secondary)
+        }
+        .task(id: source) {
+            let s = source
+            size = await Task.detached(priority: .utility) { Storage.allocatedSize(s) }.value
+        }
+    }
+
+    func choose(_ path: String) {
+        if path.isEmpty { destination = nil; return }
+        guard path == "/__other__" else { destination = URL(fileURLWithPath: path, isDirectory: true); return }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true
+        panel.prompt = "Copy Here"
+        panel.message = "Choose where to copy the game's folder."
+        guard panel.runModal() == .OK, let picked = panel.url else { return }
+        if !(folders + custom).contains(picked.standardizedFileURL) { custom.append(picked.standardizedFileURL) }
+        destination = picked.standardizedFileURL
     }
 }

@@ -122,7 +122,10 @@ final class AppModel: ObservableObject {
                 Task { @MainActor in
                     self?.refresh()
                     // A drive holding a games volume was connected: open the volume too.
-                    if n.name == NSWorkspace.didMountNotification { Task.detached(priority: .utility) { GamesVolume.attachRegistered() } }
+                    if n.name == NSWorkspace.didMountNotification {
+                        Task.detached(priority: .utility) { GamesVolume.attachRegistered() }
+                        self?.discoverLibraries()
+                    }
                 }
             }
         }
@@ -200,12 +203,46 @@ final class AppModel: ObservableObject {
             if gameDrives != scanned.1.drives { gameDrives = scanned.1.drives }
             games = scanned.0
             // First run with an empty library: the welcome shows the ways to add games.
+            let firstLoad = !libraryLoaded
             if !libraryLoaded, games.isEmpty, !UserDefaults.standard.bool(forKey: "welcomeDone") { showWelcome = true }
             libraryLoaded = true
+            if firstLoad { discoverLibraries() }
             didRefresh()
         }
     }
     @Published var libraryLoaded = false
+
+    // MARK: Games Nokcandu made, found on connected drives
+
+    struct FoundFolder: Identifiable, Equatable { var id: String { url.path }; var url: URL; var games: Int }
+    /// Folders holding Nokcandu games that aren't in the library (after reinstalling Nokcandu, or a drive of
+    /// games from another Mac). Offered once each.
+    @Published var foundFolders: [FoundFolder] = []
+    private var discovering = false
+    func discoverLibraries() {
+        guard !discovering else { return }
+        discovering = true
+        let library = games
+        Task {
+            let found = await Task.detached(priority: .utility) {
+                LibraryDiscovery.notDeclined(LibraryDiscovery.onConnectedDrives(library: library))
+            }.value
+            discovering = false
+            let list = found.map { FoundFolder(url: $0.folder, games: $0.games) }
+            if !list.isEmpty, list != foundFolders { foundFolders = list }
+        }
+    }
+    func addFoundFolders() {
+        let n = foundFolders.reduce(0) { $0 + $1.games }
+        LibraryDiscovery.add(foundFolders.map(\.url))
+        foundFolders = []
+        refresh()
+        say("Added \(n) game\(n == 1 ? "" : "s") from your drives. Nothing was copied; they play from where they are.")
+    }
+    func declineFoundFolders() {
+        LibraryDiscovery.decline(foundFolders.map(\.url))
+        foundFolders = []
+    }
     private var libraryExtras = LibraryExtras()
 
     private func didRefresh() {
