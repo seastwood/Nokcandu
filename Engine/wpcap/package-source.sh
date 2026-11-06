@@ -28,5 +28,5 @@ COPYING.LIB and the source headers contain the applicable license/notices.
 TXT
 packetSourceOutput="build/Nokcandu-native-ipx-source-$packetVersion.tar.gz"
 tar -czf "$packetSourceOutput" -C "$packetSourceStage" .
-shasum -a 256 "$packetSourceOutput" > "$packetSourceOutput.sha256"
+(cd "$(dirname "$packetSourceOutput")" && shasum -a 256 "$(basename "$packetSourceOutput")") > "$packetSourceOutput.sha256"
 echo "Packaged $packetSourceOutput"

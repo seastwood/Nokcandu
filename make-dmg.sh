@@ -37,5 +37,6 @@ if [ -n "${NOTARY_APPLE_ID:-}" ] && [ -n "${NOTARY_TEAM_ID:-}" ] && [ -n "${NOTA
   xcrun notarytool submit "$DMG" --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD" --wait
   xcrun stapler staple "$DMG"
 fi
-shasum -a 256 "$DMG" | tee "$DMG.sha256"
+# File name only, so `shasum -c` works beside the download.
+(cd "$(dirname "$DMG")" && shasum -a 256 "$(basename "$DMG")") | tee "$DMG.sha256"
 echo "Packaged $(pwd)/$DMG"
