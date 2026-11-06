@@ -17,7 +17,7 @@ struct KeyboardSection: View {
     }
 
     var body: some View {
-        SettingsSection(title: "Keyboard", info: "Make a key act as another key while the game is in front — for example fn as Control, or Right Option as Right Control. Switching to another app, or quitting the game, puts your keyboard back, so you don't need a system-wide remapper like Karabiner-Elements for games. Remapped keys are real keys to macOS too: fn as Control holds like Control and doesn't open fn's shortcuts. If Karabiner also remaps these keys, turn that off while playing so keys aren't remapped twice.\n\n\(scope) Changes apply while playing.") {
+        SettingsSection(title: "Keyboard", info: "Make a key act as another key while the game is in front — for example fn as Control, or Right Option as Right Control. Switching to another app, or quitting the game, puts your keyboard back. Remapped keys are real keys to macOS too: fn as Control holds like Control and doesn't open fn's shortcuts.\n\n\(scope) Changes apply while playing.") {
             if mappings.isEmpty {
                 Text("No keys remapped.").font(.callout).foregroundStyle(.secondary)
             }

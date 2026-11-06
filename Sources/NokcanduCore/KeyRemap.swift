@@ -1,6 +1,6 @@
 import Foundation
 
-/// Per-game key remapping (instead of a system-wide remapper like Karabiner-Elements). While the game is in front,
+/// Per-game key remapping. While the game is in front,
 /// Nokcandu's helper inside it swaps the chosen keys with macOS's own keyboard remapping (hidutil), and puts the
 /// keyboard back when you switch away or the game quits. Kept per Windows environment ("key-remap" in its state
 /// folder, beside the helper), like raw mouse capture. Keys are stored as HID usages (page 7 keyboard keys, and
