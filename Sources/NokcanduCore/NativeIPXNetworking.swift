@@ -23,7 +23,9 @@ public enum NativeIPXNetworking {
         guard let version = WindowedPresentation.engineVersion(host: g.contents), version.major == 11, version.minor == 0,
               let root = resource else { return nil }
         let module = root.appendingPathComponent("11.0")
-        return moduleFiles.allSatisfy { FileManager.default.fileExists(atPath: module.appendingPathComponent($0).path) } ? module : nil
+        // The packet module is built for the engine's processor (an ARM engine needs an aarch64-unix build).
+        let layout = EngineLayout(contents: g.contents)
+        return moduleFiles.map(layout.relative).allSatisfy { FileManager.default.fileExists(atPath: module.appendingPathComponent($0).path) } ? module : nil
     }
     public static func supports(_ g: InstalledGame) -> Bool { IPXNetworking.supports(g) && module(for: g) != nil }
     static func directory(_ g: InstalledGame) -> URL { g.nokcanduState.appendingPathComponent("native-ipx") }

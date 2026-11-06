@@ -826,7 +826,7 @@ static void watch_settings(void) {
 static void image_added(const struct mach_header *mh, __unused intptr_t slide) {
     Dl_info info;
     static bool seen;
-    if (seen || !dladdr(mh, &info) || !info.dli_fname || !strstr(info.dli_fname, "/x86_64-unix/winemac.so")) return;
+    if (seen || !dladdr(mh, &info) || !info.dli_fname || (!strstr(info.dli_fname, "/x86_64-unix/winemac.so") && !strstr(info.dli_fname, "/aarch64-unix/winemac.so"))) return;
     seen = true;
     // winemac registers its classes and starts Cocoa after loading; the main queue runs once Cocoa does.
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -1055,7 +1055,8 @@ static void run_from_game_app_as(bool background) {
 // bundle: its own name in the Dock, its icon, and Game Mode.
 static const char *wine11_wrapper_for(const char *path, char *const argv[], char *out, size_t outsize) {
     if (!getenv("SikarugirAppWine11") || getenv("NOKCANDU_NO_GAME_APP") || !path || !argv || !argv[0] || !argv[1]) return NULL;
-    if (!strstr(path, "/x86_64-unix/wine") || strstr(path, "/GameApp/")) return NULL;
+    // The engine's real loader, on Intel (x86_64-unix) or Apple silicon (aarch64-unix) engines.
+    if ((!strstr(path, "/x86_64-unix/wine") && !strstr(path, "/aarch64-unix/wine")) || strstr(path, "/GameApp/")) return NULL;
     const char *slash = strrchr(path, '/');
     if (!slash || strcmp(slash + 1, "wine")) return NULL;
     if (argv[1][0] == '-' || nokcandu_background_program(argv[1])) return NULL;

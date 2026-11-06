@@ -8,6 +8,7 @@ public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable, Senda
     case shaderCompiler47 = "shader-compiler-47", ubisoftBrowser = "ubisoft-browser"
     case directx9Extras = "directx9-extras", d3d8to9, borderless, cursorVisibility = "cursor-visibility", openUA = "openua-display", bundledVC = "bundled-vc-runtime", crossProcessWindows = "cross-process-windows"
     case ipxNetworking = "ipx-networking", nativeIPXNetworking = "native-ipx-networking"
+    case dxmtLowMemory = "dxmt-low-memory"
     public var id: String { rawValue }
     public var title: String {
         switch self {
@@ -23,6 +24,7 @@ public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable, Senda
         case .d3d8to9: "DirectX 8 compatibility"
         case .borderless: "Fullscreen (Borderless)"
         case .cursorVisibility: "Hide stray Mac pointer"
+        case .dxmtLowMemory: "Low-memory DXMT (Overwatch build)"
         }
     }
     public var detail: String {
@@ -38,6 +40,7 @@ public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable, Senda
         case .directx9Extras: "Downloads Microsoft's shader libraries (d3dx9_43 and d3dcompiler_43) for missing effects or crashes while loading a match."
         case .d3d8to9: "Downloads d3d8to9 1.16.0 and uses the bundled compatibility renderer. Try this when Older 3D games has visual glitches. For 32-bit DirectX 8 games."
         case .borderless: "Makes the game's window fill its screen without changing the Mac's display mode. Select Windowed inside the game first."
+        case .dxmtLowMemory: "Downloads a DXMT \(DXMTLowMemory.version) build tuned for Overwatch 2 (NerRobDog's fork, LGPL 2.1, checked against its published checksum) and uses it for this game only. It frees each shader's parsed form once it's compiled, which cut Overwatch 2's memory from about 13 GB to about 4 GB on a 16 GB Mac and removed killcam and respawn stutter. Other games keep the standard DXMT. Requires DXMT graphics; restart afterward. Undo returns to the standard DXMT."
         case .cursorVisibility: "Experimental. Try this if the Mac arrow stays visible during gameplay. Follows the game's cursor visibility requests without changing mouse input. Works with Raw Mouse Capture off. Restart the game after installing or undoing."
         }
     }
@@ -180,6 +183,7 @@ public enum CompatibilityFixes {
         }
         if fix == .bundledVC, bundledVCRules(g).isEmpty { return "No matching Visual C++ libraries were found beside this program." }
         if fix == .crossProcessWindows, g.custom?.graphics != .dxmt { return "Choose Metal for DirectX 10–11 (DXMT) first." }
+        if fix == .dxmtLowMemory, g.custom?.graphics != .dxmt { return "Choose Metal for DirectX 10–11 (DXMT) first." }
         if fix == .openUA, !OpenUASettings.supports(g) { return "Only available for OpenUA (UA_source.exe) with its game data and NUCLEUS.INI." }
         if fix == .cursorVisibility, BF1942DisplayFix.supports(g) {
             return "Temporarily unavailable for BF1942 because it can flicker. Leave it off; Fullscreen (Borderless) handles the mouse movement area separately."
@@ -401,6 +405,10 @@ public enum CompatibilityFixes {
             applied = ["d3dcompiler_47": "n,b"]
         case .bundledVC: applied = bundledVCRules(g)
         case .crossProcessWindows: appliedEnv = ["DXMT_ALLOW_CROSS_PROCESS_SWAPCHAIN": "1"]
+        case .dxmtLowMemory:
+            let folder = exe.deletingLastPathComponent().appendingPathComponent(DXMTLowMemory.folderName, isDirectory: true)
+            files = try await DXMTLowMemory.files(into: folder, work: work, log: log)
+            appliedEnv = ["WINEDLLPATH_DXMT": folder.appendingPathComponent("wine").path]
         case .openUA:
             files = try OpenUASettings.plannedFiles(for: g)
         case .directx9Extras:

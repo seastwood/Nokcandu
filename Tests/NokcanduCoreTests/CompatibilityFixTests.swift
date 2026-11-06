@@ -213,4 +213,24 @@ final class CompatibilityFixTests: XCTestCase {
         XCTAssertFalse(CompatibilityFixes.isInstalled(.directx9Extras, for: g))
     }
 
+
+    func testLowMemoryDXMTTakesOnlyLibrariesFromKnownArchitectures() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("dxmt-pack-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: root) }
+        let pack = root.appendingPathComponent("dxmt-ow2-pack")
+        for (arch, name) in [("x86_64-windows", "d3d11.dll"), ("x86_64-windows", "dxgi.dll"), ("x86_64-unix", "winemetal.so"),
+                             ("aarch64-unix", "winemetal.so"), ("i386-windows", "d3d11.dll"), ("x86_64-windows", "notes.txt"), ("bin", "evil.dll")] {
+            try fm.createDirectory(at: pack.appendingPathComponent(arch), withIntermediateDirectories: true)
+            try Data(name.utf8).write(to: pack.appendingPathComponent("\(arch)/\(name)"))
+        }
+        try fm.createSymbolicLink(atPath: pack.appendingPathComponent("x86_64-windows/d3d10core.dll").path, withDestinationPath: "/etc/hosts")
+        let dest = root.appendingPathComponent("game/nokcandu-dxmt-low-memory")
+        let files = try DXMTLowMemory.plannedFiles(from: pack, into: dest)
+        let names = Set(files.keys.map { $0.path.replacingOccurrences(of: dest.path + "/", with: "") })
+        XCTAssertEqual(names, ["wine/x86_64-windows/d3d11.dll", "wine/x86_64-windows/dxgi.dll", "wine/x86_64-unix/winemetal.so",
+                               "wine/aarch64-unix/winemetal.so", "wine/i386-windows/d3d11.dll"])
+        try fm.removeItem(at: pack.appendingPathComponent("x86_64-unix/winemetal.so"))
+        XCTAssertThrowsError(try DXMTLowMemory.plannedFiles(from: pack, into: dest))
+    }
 }

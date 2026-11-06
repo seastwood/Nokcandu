@@ -72,6 +72,27 @@ public enum WineSelection {
            ([host] + peers).contains(where: { $0.custom?.environment?[NativeIPXNetworking.flag] == "1" }) {
             return "Native IPX is enabled in this Windows environment and requires Wine 11.0. Turn Native IPX off before choosing \(target)."
         }
+        if target.isARM, let problem = armProblem(target, games: [host] + peers) { return problem }
+        return nil
+    }
+
+    /// An Apple silicon (ARM) engine runs Intel Windows programs only through an x86 emulator it ships with
+    /// (FEX: ARM64EC for 64-bit, WoW64 for 32-bit). Checked against the downloaded engine; before download, nothing
+    /// is known, so 32-bit games wait until the engine is on this Mac and shows it can run them.
+    static func armProblem(_ target: EngineVersion, games: [InstalledGame]) -> String? {
+        let id = spec(for: target).id
+        let layout = RuntimeManager.isCached(id: id) ? EngineLayout(contents: RuntimeManager.folder(for: id).appendingPathComponent("Contents")) : nil
+        let bits = games.compactMap { g -> Bool? in
+            g.custom?.is64Bit ?? CompatibilityFixes.programForFixes(g).flatMap { PEFile.inspect($0)?.is64Bit }
+        }
+        if bits.contains(false), layout?.runs32BitX86 != true {
+            return layout == nil
+                ? "\(target) hasn't been downloaded yet, so Nokcandu can't confirm it runs 32-bit Windows games, and this environment has one. Download it from Updates first."
+                : "\(target) can't run 32-bit Windows games yet (it has no 32-bit x86 emulator), and this environment has one."
+        }
+        if let layout, !layout.runs64BitX86 {
+            return "\(target) has no x86 emulator (FEX), so it can't run Intel Windows programs."
+        }
         return nil
     }
     static func protectedRuntimeIDs(defaultEngine: EngineVersion, installs: [InstallState]) -> Set<String> {

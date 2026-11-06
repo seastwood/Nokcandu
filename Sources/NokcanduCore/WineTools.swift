@@ -141,7 +141,7 @@ public enum WineTools {
         guard file.hasPrefix(support + "/") else { return false }
         let rest = file.dropFirst(support.count + 1)
         if rest.hasPrefix("wine/bin/"), ["wine", "wine64", "wine-preloader", "wine64-preloader", "wineserver"].contains(String(rest.dropFirst("wine/bin/".count))) { return true }
-        if rest == "wine/lib/wine/x86_64-unix/wine" { return true }
+        if EngineLayout.loaderSuffixes.contains(String(rest)) { return true }
         // Wine's loader for the environment's programs, named after the app it belongs to
         // (GameApp/StarCraft.app/Contents/MacOS/StarCraft) or plain "wine".
         guard rest.hasPrefix("GameApp/") else { return false }

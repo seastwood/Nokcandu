@@ -94,8 +94,9 @@ public enum GameApp {
         // Wine 11: ntdll re-execs the engine's real loader (lib/wine/x86_64-unix/wine), so that's the program macOS
         // sees. The wrapper holds a copy of it instead (with ntdll.so beside it), and the helper library sends that
         // re-exec to the wrapper's copy — the game then runs from inside an app bundle (name, icon, Game Mode).
-        let modern = (WindowedPresentation.engineVersion(host: h)?.major ?? 10) >= 11
-        let loaderSource = modern ? support.appendingPathComponent("wine/lib/wine/x86_64-unix/wine") : wine
+        // Wine 11 and every ARM engine re-execute the real loader (lib/wine/<arch>-unix/wine).
+        let modern = (WindowedPresentation.engineVersion(host: h)?.major ?? 10) >= 11 || EngineLayout(contents: h).arch == .arm64
+        let loaderSource = modern ? EngineLayout(contents: h).loader : wine
         guard fm.isExecutableFile(atPath: wine.path), let engine = engineStamp(wine) else { return }
         let dir = support.appendingPathComponent(folderName, isDirectory: true)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -153,7 +154,7 @@ public enum GameApp {
         var links = [("MacOS/wineserver", "../../../../wine/bin/wineserver"), ("lib", "../../../wine/lib"),
                      ("share", "../../../wine/share"), ("bin", "MacOS")]
         // The real loader loads ntdll.so from its own folder.
-        if realLoader { links.append(("MacOS/ntdll.so", "../../../../wine/lib/wine/x86_64-unix/ntdll.so")) }
+        if realLoader { links.append(("MacOS/ntdll.so", "../../../../wine/lib/wine/\(wine.deletingLastPathComponent().lastPathComponent)/ntdll.so")) }
         for (path, target) in links {
             let u = c.appendingPathComponent(path)
             if (try? fm.destinationOfSymbolicLink(atPath: u.path)) != target {

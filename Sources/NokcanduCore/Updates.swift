@@ -5,14 +5,21 @@ import Foundation
 /// A Sikarugir Wine engine version, e.g. WS12WineSikarugir11.0_1 = "wine sikarugir 11.0 (revision 1)".
 public struct EngineVersion: Comparable, Hashable, Codable, CustomStringConvertible {
     public var major: Int, minor: Int, revision: Int
+    /// nil: an Intel (x86_64) engine, as every engine so far. .arm64: a native Apple silicon engine.
+    public var arch: EngineLayout.Arch? = nil
 
-    public init(major: Int, minor: Int, revision: Int) { self.major = major; self.minor = minor; self.revision = revision }
+    public init(major: Int, minor: Int, revision: Int, arch: EngineLayout.Arch? = nil) {
+        self.major = major; self.minor = minor; self.revision = revision; self.arch = arch == .x86_64 ? nil : arch
+    }
 
     /// From a release asset name like "WS12WineSikarugir11.0_1.tar.xz" (other engine families are ignored).
+    /// A native Apple silicon build is expected to carry an "arm64" or "aarch64" suffix ("…11.0_1_arm64.tar.xz").
     public init?(assetName: String) {
-        guard let m = assetName.firstMatch(of: #/^WS12WineSikarugir(\d+)\.(\d+)(?:_(\d+))?\.tar\.xz$/#) else { return nil }
+        guard let m = assetName.firstMatch(of: #/^WS12WineSikarugir(\d+)\.(\d+)(?:_(\d+))?(?:[_-](arm64|aarch64|ARM64))?\.tar\.xz$/#) else { return nil }
         major = Int(m.1)!; minor = Int(m.2)!; revision = m.3.flatMap { Int($0) } ?? 0
+        arch = m.4 == nil ? nil : .arm64
     }
+    public var isARM: Bool { arch == .arm64 }
 
     /// From an engine's version file: "wine sikarugir 10.0 (revision 8)" or "wine sikarugir 10.0".
     public init?(versionString: String) {
@@ -20,12 +27,15 @@ public struct EngineVersion: Comparable, Hashable, Codable, CustomStringConverti
         major = Int(m.1)!; minor = Int(m.2)!; revision = m.3.flatMap { Int($0) } ?? 0
     }
 
-    public var tag: String { "\(major).\(minor)" + (revision > 0 ? "_\(revision)" : "") }
+    public var tag: String { "\(major).\(minor)" + (revision > 0 ? "_\(revision)" : "") + (isARM ? "_arm64" : "") }
     public var engineName: String { "WS12WineSikarugir" + tag }
     public var versionString: String { "wine sikarugir \(major).\(minor)" + (revision > 0 ? " (revision \(revision))" : "") }
-    public var description: String { "Wine \(major).\(minor)" + (revision > 0 ? " r\(revision)" : "") }
+    public var description: String { "Wine \(major).\(minor)" + (revision > 0 ? " r\(revision)" : "") + (isARM ? " (Apple silicon, experimental)" : "") }
 
-    public static func < (a: Self, b: Self) -> Bool { (a.major, a.minor, a.revision) < (b.major, b.minor, b.revision) }
+    /// Same Wine version: Intel builds sort above ARM ones, which stay a manual, experimental choice.
+    public static func < (a: Self, b: Self) -> Bool {
+        (a.major, a.minor, a.revision, a.isARM ? 0 : 1) < (b.major, b.minor, b.revision, b.isARM ? 0 : 1)
+    }
 
     /// The engine Nokcandu's recipes were validated with.
     public static let tested = EngineVersion(versionString: RecipeCatalog.sikarugirWine10.wineVersionString)!
@@ -68,9 +78,15 @@ public struct UpdateCatalog: Codable {
     /// Engine builds that run natively on Apple silicon (none exist yet; watched for macOS 28).
     public var nativeEngines: [String]
 
+    /// Newest Intel engine: what updates move games to. Apple silicon engines are chosen per game, by hand,
+    /// until they run 32-bit games, the window driver and the graphics translators like Intel engines do.
     public var latestEngine: (version: EngineVersion, asset: ReleaseAsset)? {
         engines.compactMap { a in EngineVersion(assetName: a.name).map { ($0, a) } }
-            .filter { $0.1.sha256 != nil }.max { $0.0 < $1.0 }
+            .filter { $0.1.sha256 != nil && !$0.0.isARM }.max { $0.0 < $1.0 }
+    }
+    /// Native Apple silicon engines with a published checksum.
+    public var armEngines: [EngineVersion] {
+        engines.filter { $0.sha256 != nil }.compactMap { EngineVersion(assetName: $0.name) }.filter(\.isARM).sorted(by: >)
     }
     public var latestTemplate: (version: TemplateVersion, asset: ReleaseAsset)? {
         templates.compactMap { a in TemplateVersion(assetName: a.name).map { ($0, a) } }
@@ -206,6 +222,10 @@ extension RuntimeManager {
         try fm.moveItem(at: bundle, to: staging.appendingPathComponent("Contents/SharedSupport/wine"))
 
         // Template parts
+        let engineArch = EngineLayout(wine: staging.appendingPathComponent("Contents/SharedSupport/wine")).arch
+        if engine.isARM != (engineArch == .arm64) {
+            throw NokError("The downloaded engine is built for \(engineArch.title), not what its name says. Nothing changed.")
+        }
         if let donor = cachedRuntimes().first(where: { TemplateVersion(string: $0.template) == template }) {
             log("Reusing graphics/wrapper files from template \(template).")
             for p in templateParts {
@@ -230,6 +250,10 @@ extension RuntimeManager {
             }
         }
         _ = try? Shell.run("/usr/bin/xattr", ["-dr", "com.apple.quarantine", staging.path])
+        // An Apple silicon engine can only load Apple silicon libraries (Vulkan, graphics translators).
+        if engineArch == .arm64, let lib = intelOnlyLibrary(in: staging.appendingPathComponent("Contents/Frameworks")) {
+            throw NokError("\(engine) is built for Apple silicon, but template \(template)'s libraries are Intel-only (\(lib)). It needs an Apple silicon template, which isn't published yet. Nothing changed.")
+        }
 
         let wineSHA = try Hashing.sha256(file: staging.appendingPathComponent("Contents/SharedSupport/wine/bin/wine"))
         let m = RuntimeManifest(id: id, engine: engine.engineName, wineVersion: engine.versionString, template: "Sikarugir \(template)",
@@ -245,6 +269,18 @@ extension RuntimeManager {
         try await runSelfTest(id: id, log: log)
         log("\(engine) with template \(template) is ready.")
         return id
+    }
+
+    /// The first top-level library in a Frameworks folder without an arm64 slice (nil: all have one, or none found).
+    static func intelOnlyLibrary(in frameworks: URL) -> String? {
+        let fm = FileManager.default
+        for name in ((try? fm.contentsOfDirectory(atPath: frameworks.path)) ?? []).sorted() where name.hasSuffix(".dylib") {
+            let url = frameworks.appendingPathComponent(name)
+            guard (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true,
+                  let archs = MacCompat.architectures(url) else { continue }
+            if !archs.contains("arm64") && !archs.contains("arm64e") { return name }
+        }
+        return nil
     }
 
     /// Runs `cmd /c ver` with this runtime in a throwaway Windows environment. A runtime that can't run a

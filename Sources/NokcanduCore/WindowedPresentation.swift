@@ -61,6 +61,8 @@ public enum WindowedPresentation {
     /// The driver for this engine (nil when Nokcandu has none for its Wine version, or when the engine's Wine
     /// server numbers its requests differently from the Wine source the driver was built from).
     static func bundled(host h: URL) -> URL? {
+        // Nokcandu's driver is built for Intel engines; ARM engines keep their own driver until there's an ARM build.
+        guard EngineLayout(contents: h).arch == .x86_64 else { return nil }
         guard let d = engineVersion(host: h).flatMap({ bundledDrivers["\($0.major).\($0.minor)"] }) else { return nil }
         return serverRequestsMatch(driver: d, host: h) ? d : nil
     }
@@ -246,6 +248,7 @@ public enum WindowedPresentation {
         if g.native != nil { return "Mac games use their own windows." }
         guard let h = WineTools.hostContents(for: g) else { return "This game has no Windows environment." }
         if bundled == nil { return "This copy of Nokcandu doesn't include its Wine Mac driver." }
+        if EngineLayout(contents: h).arch == .arm64 { return "The resizable window isn't available for Apple silicon (ARM) Wine engines yet. The game plays on the Mac's screen." }
         switch engineState(host: h) {
         case .unsupported:
             let v = engineVersion(host: h).map { "Wine \($0.major).\($0.minor)" } ?? "This game's engine"

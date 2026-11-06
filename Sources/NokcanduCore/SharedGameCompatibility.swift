@@ -96,7 +96,8 @@ enum SharedGameCompatibility {
         case .bf1942SoftwareAudio where !BF1942AudioFix.supports(g): return "BF1942's active-player sound settings could not be identified."
         case .openUA where !OpenUASettings.supports(g): return "Requires OpenUA's program, NUCLEUS.INI and game data."
         case .bundledVC where CompatibilityFixes.bundledVCRules(g).isEmpty: return "No matching Visual C++ libraries were found beside this game."
-        case .crossProcessWindows where config.graphics != .dxmt: return "Choose Metal for DirectX 10–11 (DXMT) for this game first."
+        case .crossProcessWindows where config.graphics != .dxmt, .dxmtLowMemory where config.graphics != .dxmt:
+            return "Choose Metal for DirectX 10–11 (DXMT) for this game first."
         case .cursorVisibility where BF1942DisplayFix.folder(g) != nil: return "Temporarily unavailable for BF1942 because it can flicker."
         case .d3d8to9:
             guard CompatibilityFixes.directX8Program(g) != nil else { return "Requires a 32-bit game or one identifiable adjacent 32-bit DirectX 8 program." }

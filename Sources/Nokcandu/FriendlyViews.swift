@@ -228,7 +228,7 @@ struct GameSummarySection: View {
         }
     }
 
-    static func load(_ g: InstalledGame) -> Facts {
+    nonisolated static func load(_ g: InstalledGame) -> Facts {
         var f = Facts()
         if g.battleNet != nil { f.graphics = BattleNetGraphics.choice(g)?.title ?? "Same as Battle.net" }
         else if g.hosted != nil { f.graphics = HostedSettings.graphics(g).title }

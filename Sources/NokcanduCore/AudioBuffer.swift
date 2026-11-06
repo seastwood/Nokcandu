@@ -12,7 +12,7 @@ public enum AudioBuffer {
     public static let choices = [10, 20, 40]          // ms
 
     static func driver(_ host: URL) -> URL {
-        host.appendingPathComponent("SharedSupport/wine/lib/wine/x86_64-unix/winecoreaudio.so")
+        EngineLayout(contents: host).unixLibrary("winecoreaudio.so")
     }
     static func original(_ host: URL) -> URL {
         host.appendingPathComponent("SharedSupport/nokcandu/winecoreaudio.so.original")

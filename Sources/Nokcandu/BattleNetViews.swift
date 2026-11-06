@@ -74,6 +74,7 @@ struct BattleNetGameInfo: View {
             }
             .padding(6)
         } label: { Text("Battle.net").font(.headline) }
+        if game.battleNet?.code == "Pro" { OverwatchSetupSection(game: game) }
         if let h = BattleNetGraphics.host(of: game, in: model.games) {
             SettingsSection(title: "Graphics") {
                 SettingRow(title: "Graphics",
@@ -391,5 +392,53 @@ struct LauncherDriveBox: View {
             drives = Drives.list(for: host)
             message = "\(letter): is now \(u.path). " + String(format: howTo, "\(letter):") + " If \(name) is open, quit and reopen it first."
         } catch { message = error.localizedDescription }
+    }
+}
+
+
+/// Overwatch 2: the setup that runs it best here — DXMT graphics and the low-memory DXMT build.
+struct OverwatchSetupSection: View {
+    @EnvironmentObject var model: AppModel
+    let game: InstalledGame
+    @State private var working = false
+    @State private var tick = 0
+
+    var usesDXMT: Bool { BattleNetGraphics.choice(game) == .dxmt }
+    var lowMemory: Bool { CompatibilityFixes.isInstalled(.dxmtLowMemory, for: game) }
+
+    var body: some View {
+        SettingsSection(title: "Overwatch 2", info: "Overwatch 2 runs best with DXMT (Metal for DirectX 10–11) and the low-memory DXMT build, which keeps the game at about 4 GB instead of about 13 GB on a 16 GB Mac and removes killcam and respawn stutter. Blizzard doesn't support Overwatch on a Mac; nothing here modifies the game or its anti-cheat.") {
+            SettingRow(title: "Graphics: DXMT") { status(usesDXMT) }
+            SettingRow(title: "Low-memory DXMT") { status(lowMemory) }
+            SettingNote("In Overwatch's video settings keep DirectX 11 and set the frame limit high. The first matches stutter while shaders are prepared; each one is prepared once and kept.")
+            HStack {
+                Button(usesDXMT && lowMemory ? "Set Up" : "Use Recommended Setup") { apply() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(working || (usesDXMT && lowMemory))
+                if working { ProgressView().controlSize(.small) }
+            }
+        }
+        .id(tick)
+    }
+
+    func status(_ ok: Bool) -> some View {
+        Label(ok ? "On" : "Off", systemImage: ok ? "checkmark.circle.fill" : "circle")
+            .foregroundStyle(ok ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary))
+    }
+
+    func apply() {
+        working = true
+        let g = game, games = model.games
+        Task {
+            do {
+                if BattleNetGraphics.choice(g) != .dxmt { try BattleNetGraphics.set(.dxmt, for: g, games: games) }
+                let fresh = GameLibrary.inspect(g.appURL) ?? g
+                if !CompatibilityFixes.isInstalled(.dxmtLowMemory, for: fresh) {
+                    try await CompatibilityFixes.install(.dxmtLowMemory, for: fresh) { line in Task { @MainActor in model.say(line) } }
+                }
+                model.say("Overwatch 2 uses DXMT with the low-memory build. Press Play to try it.")
+            } catch { model.fail(error) }
+            working = false; tick += 1; model.refresh()
+        }
     }
 }
