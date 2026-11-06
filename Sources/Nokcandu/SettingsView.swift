@@ -37,6 +37,9 @@ struct GeneralSettings: View {
                 }
                 Text("Drag games in the sidebar to put them in your own order; right-click a game to add it to Favorites.")
                     .font(.caption).foregroundStyle(.secondary)
+                Toggle("Ask before quitting a game", isOn: Binding(get: { !model.quitWithoutAsking }, set: { model.quitWithoutAsking = !$0 }))
+                Text("Quitting a game loses unsaved progress. Launchers with no game running in them always quit without asking.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Discord") {
                 Toggle("Show what you're playing in Discord", isOn: Binding(get: { DiscordBridge.enabled }, set: { DiscordBridge.enabled = $0; discordTick += 1 }))

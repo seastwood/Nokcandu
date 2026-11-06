@@ -19,6 +19,58 @@ struct GameDetailView: View {
     @State private var cinematicDiagnosis: CinematicFix.Diagnosis?
     @State private var graphicsHint: GraphicsHint?
     @State private var fixVersion = 0
+    @State private var crash: CrashReports.Explanation?
+    @State private var missingMods: [ModDependencies.Missing] = []
+    @State private var showCrashReport = false
+    var crashDismissedKey: String { "crashDismissed." + game.id }
+
+    func loadNotices() async {
+        guard game.native == nil, !running else { return }
+        let g = game
+        let dismissed = UserDefaults.standard.double(forKey: crashDismissedKey)
+        let since = dismissed > 0 ? Date(timeIntervalSince1970: dismissed + 1) : nil
+        let (c, m) = await Task.detached(priority: .utility) { (CrashReports.lastCrash(g, since: since), ModDependencies.missing(g)) }.value
+        crash = c; missingMods = m
+    }
+
+    /// Everything on this page that needs attention, most important first.
+    var attentionItems: [AttentionItem] {
+        var items: [AttentionItem] = []
+        if let c = crash {
+            items.append(AttentionItem(id: "crash", view: AnyView(
+                NoticeCard(symbol: c.missingMod != nil ? "puzzlepiece.extension" : "exclamationmark.octagon", tint: .red, title: c.title, detail: c.detail,
+                           evidence: c.evidence + " · " + c.date.formatted(date: .abbreviated, time: .shortened)) {
+                    Button("Show Report") { showCrashReport = true }
+                    Button("Dismiss") { UserDefaults.standard.set(c.date.timeIntervalSince1970, forKey: crashDismissedKey); crash = nil }
+                }
+                .sheet(isPresented: $showCrashReport) { CrashReportSheet(game: game, crash: c) })))
+        }
+        for m in missingMods where crash?.missingMod != m {
+            items.append(AttentionItem(id: "mod-" + m.mod, view: AnyView(
+                NoticeCard(symbol: "puzzlepiece.extension", tint: .orange, title: "\(m.mod) is missing a mod it needs", detail: m.message) {
+                    if let root = ModDependencies.gameRoot(game) {
+                        Button("Show Mods Folder") { model.reveal(ModDependencies.child(of: root, named: "Mods") ?? root) }
+                    }
+                })))
+        }
+        if let h = graphicsHint {
+            items.append(AttentionItem(id: "graphics", view: AnyView(
+                NoticeCard(symbol: "display.trianglebadge.exclamationmark", tint: .orange, title: h.title, detail: h.detail, evidence: h.evidence) {
+                    if let a = h.addArguments { Button("Add \(a)") { addArguments(a) }.buttonStyle(.borderedProminent) }
+                    ForEach(h.suggested) { p in Button("Use \(p.title)") { switchGraphics(p) }.buttonStyle(.borderedProminent) }
+                })))
+        }
+        if let d = cinematicDiagnosis, !CinematicFix.isPresent(for: game) {
+            items.append(AttentionItem(id: "cinematic", view: AnyView(CinematicCrashBanner(game: game, diagnosis: d) { fixFromBanner() })))
+        }
+        if let w = AntiCheat.warning(for: game), !game.isSteamHost, !LibraryOrganizer.isLauncher(game) {
+            items.append(AttentionItem(id: "anticheat", view: AnyView(
+                NoticeCard(symbol: w.verdict == .blocked ? "xmark.shield" : "exclamationmark.shield", tint: w.verdict == .blocked ? .red : .orange,
+                           title: w.verdict == .blocked ? "Anti-cheat blocks online play" : "Anti-cheat may affect online play",
+                           detail: w.detail + " Based on areweanticheatyet.com (Linux/Steam Deck reports) — your results on a Mac may differ.") { EmptyView() })))
+        }
+        return items
+    }
 
     var running: Bool { if case .launcherRunning = model.runStates[game.id] ?? .notRunning { return true }; return false }
 
@@ -44,19 +96,7 @@ struct GameDetailView: View {
                 if model.statusUnavailable {
                     SettingNote("Game status is temporarily unavailable. The last known status is kept; changes that require a closed game will wait for a reliable check.", warning: true)
                 }
-                if let w = AntiCheat.warning(for: game), !game.isSteamHost, !LibraryOrganizer.isLauncher(game) {
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: w.verdict == .blocked ? "xmark.shield" : "exclamationmark.shield")
-                            .foregroundStyle(w.verdict == .blocked ? .red : .orange).font(.title3)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(w.verdict == .blocked ? "Anti-cheat blocks online play" : "Anti-cheat may affect online play").font(.body.bold())
-                            Text(w.detail).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                            Text("Based on areweanticheatyet.com (Linux/Steam Deck reports) — your results on a Mac may differ.").font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(12)
-                    .background((w.verdict == .blocked ? Color.red : Color.orange).opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
-                }
+                AttentionArea(items: attentionItems).id("attention-\(game.id)-\(attentionItems.count)")
                 if let u = model.updating[game.id] {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Updating \(game.name)…").font(.body.bold())
@@ -80,35 +120,7 @@ struct GameDetailView: View {
                 if game.custom != nil, !LibraryOrganizer.isLauncher(game) {
                     SuggestionsBanner(game: game).id("suggest-\(game.id)")
                 }
-                if let h = graphicsHint {
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: "display.trianglebadge.exclamationmark").foregroundStyle(.orange).font(.title3)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(h.title).font(.body.bold())
-                            Text(h.detail).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                            Text(h.evidence).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(2).textSelection(.enabled)
-                        }
-                        Spacer()
-                        VStack(alignment: .trailing) {
-                            if let a = h.addArguments {
-                                Button("Add \(a)") { addArguments(a) }.buttonStyle(.borderedProminent)
-                            }
-                            ForEach(h.suggested) { p in
-                                Button("Use \(p.title)") { switchGraphics(p) }.buttonStyle(.borderedProminent)
-                            }
-                        }
-                    }
-                    .padding(12)
-                    .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
-                }
-                if game.native == nil {
-                    CrashBanner(game: game, running: running)
-                    ModDependencyBanner(game: game, running: running)
-                }
                 if game.native == nil { PendingSettingsSection(game: game) }
-                if let d = cinematicDiagnosis, !CinematicFix.isPresent(for: game) {
-                    CinematicCrashBanner(game: game, diagnosis: d) { fixFromBanner() }
-                }
                 Picker("Settings", selection: $tab) {
                     ForEach(availableTabs) { Label($0.title, systemImage: $0.symbol).tag($0) }
                 }
@@ -129,6 +141,7 @@ struct GameDetailView: View {
             .frame(maxWidth: 720, alignment: .leading)
         }
         .onAppear { reloadDisplay(); cinematicDiagnosis = CinematicFix.diagnoseLastRun(game); graphicsHint = CrashHints.diagnose(game) }
+        .task(id: "\(game.id)-\(running)") { await loadNotices() }
         .onChange(of: running) { if !running { cinematicDiagnosis = CinematicFix.diagnoseLastRun(game); graphicsHint = CrashHints.diagnose(game) } }
         .sheet(isPresented: $showDiagnostics) { DiagnosticsView(game: game) }
         .sheet(isPresented: $showReport) { ReportProblemView(game: game) }
@@ -190,6 +203,7 @@ struct GameDetailView: View {
     var currentTab: Tab { availableTabs.contains(tab) ? tab : .overview }
 
     @ViewBuilder var overviewTab: some View {
+        if game.native == nil { GameSummarySection(game: game, lastCrash: crash, showDiagnostics: { showDiagnostics = true }) }
         if game.custom?.disc != nil { GameDiscsSection(game: game).id("discs-\(game.id)-\(Discs.all(game.custom!).count)") }
         if game.battleNet != nil { BattleNetGameInfo(game: game) }
         if game.isSteamHost { SteamGamesSection().id("steamgames-\(model.games.count)") }
@@ -278,14 +292,16 @@ struct GameDetailView: View {
                     .disabled(running && !game.isSteamHost)
                     if game.isSteamHost {
                         Button("Steam Library…") { model.showSteamLibrary = true }
-                        if running { Button("Quit Steam…", role: .destructive) { model.quitting = game }.controlSize(.large) }
+                        if running { Button("Quit Steam…", role: .destructive) { model.requestQuit(game) }.controlSize(.large) }
                     } else if running {
-                        Button("Quit…", role: .destructive) { model.quitting = game }.controlSize(.large)
+                        Button("Quit…", role: .destructive) { model.requestQuit(game) }.controlSize(.large)
                     }
                 }
                 .padding(.top, 4)
+                if let stage = model.launchStages[game.id] { LaunchProgressLine(text: stage) }
             }
         }
+        .animation(.easeInOut(duration: 0.2), value: model.launchStages[game.id])
     }
 
     // MARK: Display (milestone 2)
@@ -544,7 +560,7 @@ struct NativeGameDetail: View {
                         HStack {
                             Button { model.play(game) } label: { Label(running ? "Running" : "Play", systemImage: "play.fill").frame(minWidth: 90) }
                                 .buttonStyle(.borderedProminent).controlSize(.large).disabled(running)
-                            if running { Button("Quit…", role: .destructive) { model.quitting = game }.controlSize(.large) }
+                            if running { Button("Quit…", role: .destructive) { model.requestQuit(game) }.controlSize(.large) }
                             Button("Show in Finder") { model.reveal(game.appURL) }
                         }
                         .padding(.top, 4)

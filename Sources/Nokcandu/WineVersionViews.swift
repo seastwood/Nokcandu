@@ -68,7 +68,7 @@ struct GameWineSection: View {
 
     var body: some View {
         if let host {
-            SettingsSection(title: "Wine") {
+            SettingsSection(title: "Wine", info: "Wine is the engine that runs Windows programs on the Mac. Each game keeps the version it was set up with until you choose another; Roll Back returns to the previous one. Game files and saves aren't affected.") {
                 HStack {
                     WineVersionMenu(selection: Binding(get: { shownTag }, set: { selected = $0 }))
                         .disabled(working || info == nil)

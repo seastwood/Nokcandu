@@ -75,4 +75,27 @@ public enum StartupMonitor {
                         window: window, handoff: g.usesSharedSteam || g.hosted != nil || g.battleNet != nil || g.isSteamHost,
                         detail: detail)
     }
+
+    /// What a starting game is doing right now, in words, for the progress line under Play.
+    /// nil once there's nothing to say (the window is open, or nothing is starting).
+    public static func stage(_ g: InstalledGame, since: Date, elapsed: TimeInterval) -> String? {
+        let receipt = (try? Data(contentsOf: g.logs.appendingPathComponent("launcher-status.json")))
+            .flatMap { try? JSONDecoder().decode(Receipt.self, from: $0) }
+            .flatMap { $0.startedAt >= since.timeIntervalSince1970 - 0.5 ? $0 : nil }
+        let snapshot = GameLauncher.processSnapshot()
+        let entry = g.contents.resolvingSymlinksInPath().appendingPathComponent("MacOS").path + "/"
+        let launcherAlive = snapshot.contains { $0.1.contains(entry) }
+        let host = WineTools.hostContents(for: g)
+        let windowsUp = host.map { !WineTools.ownedProcesses(contents: $0).isEmpty } ?? false
+        let gameUp = !StuckGames.running(g).isEmpty
+        if gameUp { return "Starting \(g.name)…" }
+        if receipt == nil {
+            if launcherAlive && elapsed > 5 { return "macOS is checking \(g.name) before it opens (this can take a while the first time after a change)…" }
+            return "Opening \(g.name)…"
+        }
+        if g.battleNet != nil { return windowsUp ? "Waiting for Battle.net to start the game (sign in if it asks)…" : "Starting Battle.net…" }
+        if g.usesSharedSteam { return windowsUp ? "Waiting for Steam to start the game (sign in if it asks)…" : "Starting Steam…" }
+        if let link = g.hosted { return windowsUp ? "Waiting for \(link.launcher.title) to start the game…" : "Starting \(link.launcher.title)…" }
+        return windowsUp ? "Starting Windows programs…" : "Starting Windows…"
+    }
 }

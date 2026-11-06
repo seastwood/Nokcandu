@@ -42,20 +42,50 @@ struct WelcomeView: View {
             if !log.isEmpty {
                 Text(log.suffix(4).joined(separator: "\n")).font(.caption.monospaced()).foregroundStyle(.secondary)
             }
+            if ready {
+                Divider()
+                Text("Add your first game").font(.headline)
+                choice("opticaldisc", "From a disc or installer", "Insert a disc, or choose an .iso or a setup program. Nokcandu runs the installer and turns the game into its own Mac app.") {
+                    dismiss(); model.showInstaller = true
+                }
+                choice("bag", "From a store", "Steam, Battle.net, EA, Ubisoft, GOG or Epic: set up the store once, and each game you install in it gets its own Mac app.") {
+                    dismiss(); model.openStores()
+                }
+                choice("folder", "A game you already have", "A game folder on this Mac or a drive (it stays where it is), a game from another Wine app, or a Mac game.") {
+                    dismiss(); model.showInstaller = true
+                }
+                Text("The first time a game needs something — a drive, the mouse for raw input, the microphone — macOS asks once for that game. Allow it, or change it later in System Settings → Privacy & Security.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
             Divider()
             Text("Only use games you own. Nokcandu isn't affiliated with Microsoft, Valve, Blizzard or Apple. Games with kernel anti-cheat generally can't run under Wine.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
                 Spacer()
-                if ready {
-                    Button("Set Up Steam") { dismiss(); model.installerStartsSteamHost = true; model.showInstaller = true }
-                    Button("Add a Game…") { dismiss(); model.showInstaller = true }.buttonStyle(.borderedProminent)
-                }
                 Button(ready ? "Done" : "Later") { dismiss() }.keyboardShortcut(.cancelAction)
             }
         }
         .padding(24)
         .frame(width: 560)
+        .onDisappear { if ready { UserDefaults.standard.set(true, forKey: "welcomeDone") } }
+    }
+
+    func choice(_ symbol: String, _ title: String, _ detail: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: symbol).font(.title2).frame(width: 30).foregroundStyle(.tint)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.body.bold())
+                    Text(detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.leading)
+                }
+                Spacer()
+                Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+            }
+            .padding(10)
+            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     var logger: @Sendable (String) -> Void { { line in Task { @MainActor in log.append(line) } } }

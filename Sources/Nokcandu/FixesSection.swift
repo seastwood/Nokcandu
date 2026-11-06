@@ -15,7 +15,7 @@ struct FixesSection: View {
     @State private var usesDirectShow = false
 
     var body: some View {
-        SettingsSection(title: "Fixes") {
+        SettingsSection(title: "Fixes", info: "Optional add-ons for specific problems: missing video or music playback, graphics glitches, crashes while loading, multiplayer. Each one says what it solves, installs only into this game's Windows environment and has its own Undo.") {
             SettingRow(title: "Video and music playback",
                        info: "Adds a movie reader, video decoder and audio decoder (LAV Filters \(CinematicFix.version), open source) to \(sharedEnv ? "the shared launcher's" : "this game's") Windows environment, for games whose videos crash or stay black, or whose MP3 music won't play (“Music Error: Can not play file”). Confirmed to fix Warcraft III's cinematics.") {
                 if working { ProgressView().controlSize(.small) }

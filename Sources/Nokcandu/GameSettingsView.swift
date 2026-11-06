@@ -38,8 +38,7 @@ struct GameSettingsSection: View {
     var invalidKeys: [String] { envRows.map(\.key).filter { !$0.isEmpty && !CustomGames.isValidEnvName($0) } }
 
     var body: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 12) {
+        SettingsSection(title: "Settings", info: "How Nokcandu starts this game: the Windows program Play opens, the options passed to it, and its disc image. Saving writes the game's launcher again (the small start-up script that opens Wine and the game).") {
                 row("Name") {
                     TextField("Name", text: $draft.name).frame(maxWidth: 320)
                 }
@@ -60,6 +59,7 @@ struct GameSettingsSection: View {
                         }
                     }
                     Text(draft.exe).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+                    SettingNote("The Windows program Play starts. Choose another if the game has a separate launcher or a fixed copy of its program.")
                 }
                 row("Launch options") {
                     TextField(isSteam ? "e.g. -novid -console" : "e.g. -window -opengl -nosound", text: $draft.arguments)
@@ -112,11 +112,9 @@ struct GameSettingsSection: View {
                     Spacer()
                     Button("Rebuild Launcher") { save(force: true, always: true) }
                         .help("Regenerates the launcher from these settings.")
+                    InfoButton("Rebuild Launcher writes the game's start-up script again from these settings. Use it if the game stopped starting after an update or a change made outside Nokcandu. Settings, saves and fixes stay as they are.")
                 }
-            }
-            .padding(6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        } label: { Text("Settings").font(.headline) }
+        }
         .onAppear(perform: checkLauncher)
         .confirmationDialog("Change \(game.name)'s program?", isPresented: Binding(get: { fixesToRedo != nil }, set: { if !$0 { fixesToRedo = nil } })) {
             Button("Change Program") { changeProgram() }

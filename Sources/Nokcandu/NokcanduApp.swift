@@ -27,6 +27,9 @@ struct NokcanduApp: App {
                 Button("Updates…") { model.showUpdates = true }.keyboardShortcut("u", modifiers: [.command, .shift])
                 Button("Setup Checklist…") { model.showWelcome = true }
             }
+            CommandMenu("Game") {
+                GameCommands(model: model)
+            }
             CommandGroup(after: .help) {
                 Button("Report a Problem…") { model.showReport = true }
             }
@@ -71,14 +74,15 @@ struct LibraryView: View {
     var body: some View {
         NavigationSplitView {
             List(selection: $model.selection) {
-                if !model.favoriteGames.isEmpty {
+                if !model.favoriteGames.filter(model.matchesLibrary).isEmpty {
                     Section("Favorites") {
-                        ForEach(model.favoriteGames) { g in row(g) }
+                        ForEach(model.favoriteGames.filter(model.matchesLibrary)) { g in row(g) }
                     }
                 }
                 Section {
-                    ForEach(model.sortedGames) { g in row(g) }
+                    ForEach(model.sortedGames.filter(model.matchesLibrary)) { g in row(g) }
                         .onMove { model.moveGames(from: $0, to: $1) }
+                        .moveDisabled(filtering)
                 } header: {
                     Text("Games")
                 }
@@ -98,9 +102,9 @@ struct LibraryView: View {
                         }
                     }
                 }
-                if !model.launcherApps.isEmpty {
+                if !model.launcherApps.filter(model.matchesLibrary).isEmpty {
                     Section("Launchers") {
-                        ForEach(model.launcherApps) { g in row(g) }
+                        ForEach(model.launcherApps.filter(model.matchesLibrary)) { g in row(g) }
                     }
                 }
             }
@@ -112,6 +116,8 @@ struct LibraryView: View {
                 guard let id = ids.first, let g = model.games.first(where: { $0.id == id }) else { return }
                 if !model.isRunning(g) || g.isSteamHost { model.play(g) }
             }
+            .searchable(text: $model.librarySearch, placement: .sidebar, prompt: "Search games")
+            .modifier(SearchFocusModifier(request: $model.focusSearch))
             .navigationSplitViewColumnWidth(min: 220, ideal: 250)
             .modifier(SoftTopEdge())
             .toolbar {
@@ -130,6 +136,19 @@ struct LibraryView: View {
                     .help("Sort games")
                 }
                 ToolbarItem(placement: .automatic) {
+                    Menu {
+                        Picker("Show", selection: $model.libraryFilter) {
+                            ForEach([AppModel.LibraryFilter.all, .running, .windows, .mac, .steam, .battleNet] + model.driveFilters) { Text($0.title).tag($0) }
+                        }
+                        .pickerStyle(.inline)
+                    } label: {
+                        Image(systemName: model.libraryFilter == .all ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+                    }
+                    .menuIndicator(.hidden)
+                    .help(model.libraryFilter == .all ? "Show only some games" : "Showing: \(model.libraryFilter.title)")
+                }
+                ToolbarItem(placement: .automatic) { ActivityButton() }
+                ToolbarItem(placement: .automatic) {
                     SettingsLink {
                         Image(systemName: "gearshape")
                             .overlay(alignment: .topTrailing) {
@@ -140,7 +159,9 @@ struct LibraryView: View {
                 }
             }
             .overlay {
-                if model.libraryLoaded && model.games.isEmpty {
+                if filtering && model.games.allSatisfy({ !model.matchesLibrary($0) }) {
+                    ContentUnavailableView.search(text: model.librarySearch)
+                } else if model.libraryLoaded && model.games.isEmpty {
                     ContentUnavailableView("No games yet", systemImage: "gamecontroller",
                                            description: Text("Install a game or set up Steam with the buttons below. Game apps live in \(NokPaths.gameAppsFolder.path.replacingOccurrences(of: NokPaths.home.path, with: "~"))."))
                 }
@@ -183,9 +204,10 @@ struct LibraryView: View {
         .alert("Quit \(model.quitting?.name ?? "the game")?", isPresented: Binding(get: { model.quitting != nil }, set: { if !$0 { model.quitting = nil } }),
                presenting: model.quitting) { g in
             Button("Quit", role: .destructive) { model.quit(g); model.quitting = nil }
+            Button("Always Quit Without Asking") { model.quitWithoutAsking = true; model.quit(g); model.quitting = nil }
             Button("Cancel", role: .cancel) { model.quitting = nil }
         } message: { g in
-            Text(g.native != nil ? "Unsaved progress may be lost." : GameLauncher.quitScope(g))
+            Text((g.native != nil ? "Unsaved progress may be lost." : GameLauncher.quitScope(g)) + " You can turn asking back on in Settings → General.")
         }
         .sheet(isPresented: $model.showReport) { ReportProblemView(game: model.selectedGame).environmentObject(model) }
         .sheet(isPresented: $model.showWelcome) {
@@ -217,6 +239,7 @@ struct LibraryView: View {
 }
 
 extension LibraryView {
+    var filtering: Bool { !model.librarySearch.isEmpty || model.libraryFilter != .all }
     func row(_ g: InstalledGame) -> some View {
         GameRow(game: g, state: model.runStates[g.id] ?? .notRunning)
             .tag(g.id)
@@ -230,7 +253,7 @@ struct GameContextMenu: View {
     var body: some View {
         if model.isRunning(game) {
             if game.isSteamHost { Button("Show Steam") { model.play(game) } }
-            Button("Quit…") { model.quitting = game }
+            Button("Quit…") { model.requestQuit(game) }
             Divider()
         } else {
             Button(game.isSteamHost ? "Open Steam" : "Play") { model.play(game) }

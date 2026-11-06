@@ -35,6 +35,15 @@ final class AppModel: ObservableObject {
     /// Game waiting for Quit to be confirmed.
     @Published var quitting: InstalledGame?
     @Published var banner: Banner?
+    @Published var activity: [Activity] = []
+    @Published var unseenErrors = 0
+    /// What a game that is starting is doing ("Starting Windows…"), shown under Play.
+    @Published var launchStages: [String: String] = [:]
+    @Published var librarySearch = ""
+    @Published var focusSearch = false
+    @Published var libraryFilter: LibraryFilter = .all
+    /// Which drive each game's app is on (filled with the library scan).
+    @Published var gameDrives: [String: String] = [:]
     /// The app owns the session so closing its window cannot discard a running task.
     let installer = InstallerModel()
     @Published var showInstaller = false
@@ -183,7 +192,10 @@ final class AppModel: ObservableObject {
             scanningLibrary = false
             if rescanRequested { rescanRequested = false; refresh(); return }
             libraryExtras = scanned.1
+            if gameDrives != scanned.1.drives { gameDrives = scanned.1.drives }
             games = scanned.0
+            // First run with an empty library: the welcome shows the ways to add games.
+            if !libraryLoaded, games.isEmpty, !UserDefaults.standard.bool(forKey: "welcomeDone") { showWelcome = true }
             libraryLoaded = true
             didRefresh()
         }
@@ -535,6 +547,7 @@ final class AppModel: ObservableObject {
 
     private func launch(_ g: InstalledGame, extra: [String]) {
         say("Starting \(g.name)…")
+        if g.native == nil { launchStages[g.id] = "Getting \(g.name) ready…" }
         ActivationHandoff.expect(g)
         Task {
             let r = await Task.detached(priority: .userInitiated) { () -> Result<Void, Error> in
@@ -585,7 +598,7 @@ final class AppModel: ObservableObject {
                     return .success(())
                 } catch { return .failure(error) }
             }.value
-            if case .failure(let e) = r { fail(e) }
+            if case .failure(let e) = r { fail(e); launchStages.removeValue(forKey: g.id) }
             if sortMode == .recent { reorganize() }
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             refreshRunStates()
@@ -597,7 +610,7 @@ final class AppModel: ObservableObject {
         let token = UUID(); startupObservers[game.id] = token
         Task {
             var warned = false
-            defer { if startupObservers[game.id] == token { startupObservers.removeValue(forKey: game.id) } }
+            defer { if startupObservers[game.id] == token { startupObservers.removeValue(forKey: game.id); launchStages.removeValue(forKey: game.id) } }
             while startupObservers[game.id] == token {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 guard startupObservers[game.id] == token else { return }
@@ -605,6 +618,10 @@ final class AppModel: ObservableObject {
                 let observation = await Task.detached(priority: .utility) {
                     StartupMonitor.observe(game, since: since, elapsed: elapsed)
                 }.value
+                let stage = await Task.detached(priority: .utility) { StartupMonitor.stage(game, since: since, elapsed: elapsed) }.value
+                if case .opened = observation { launchStages.removeValue(forKey: game.id) }
+                else if case .failed = observation { launchStages.removeValue(forKey: game.id) }
+                else if launchStages[game.id] != stage { launchStages[game.id] = stage }
                 switch observation {
                 case .opened: return
                 case .failed(let message): fail(NokError(message)); refreshRunStates(); return
@@ -808,8 +825,70 @@ final class AppModel: ObservableObject {
         say("Stopped \(j.game.title)'s download and moved its files to the Trash.")
     }
 
-    func say(_ text: String) { banner = Banner(text: text, isError: false) }
-    func fail(_ error: Error) { banner = Banner(text: error.localizedDescription, isError: true) }
+    func say(_ text: String) { banner = Banner(text: text, isError: false); remember(text, isError: false) }
+    func fail(_ error: Error) { banner = Banner(text: error.localizedDescription, isError: true); remember(error.localizedDescription, isError: true) }
+
+    // MARK: Recent activity (messages stay readable after their banner fades)
+
+    struct Activity: Identifiable, Equatable {
+        let id = UUID()
+        var date = Date()
+        var text: String
+        var isError: Bool
+    }
+    private func remember(_ text: String, isError: Bool) {
+        // Progress lines ("Starting X…") repeat a lot; keep only the newest of the same text.
+        activity.removeAll { $0.text == text }
+        activity.insert(Activity(text: text, isError: isError), at: 0)
+        if activity.count > 30 { activity.removeLast(activity.count - 30) }
+        if isError { unseenErrors += 1 }
+    }
+
+    // MARK: Quit
+
+    /// Quit without the confirmation (Settings → General, or "Always Quit Without Asking").
+    var quitWithoutAsking: Bool {
+        get { UserDefaults.standard.bool(forKey: "quitWithoutAsking") }
+        set { UserDefaults.standard.set(newValue, forKey: "quitWithoutAsking"); objectWillChange.send() }
+    }
+    /// Asks first, unless asking was turned off or nothing can be lost (a launcher with no game running in it).
+    func requestQuit(_ g: InstalledGame) {
+        if quitWithoutAsking || (LibraryOrganizer.isLauncher(g) && !gamesRunning(in: g)) { quit(g) } else { quitting = g }
+    }
+    func gamesRunning(in host: InstalledGame) -> Bool {
+        let hostPath = host.appURL.resolvingSymlinksInPath().path
+        return games.contains { g in
+            g.id != host.id && isRunning(g) && WineTools.hostContents(for: g)?.deletingLastPathComponent().resolvingSymlinksInPath().path == hostPath
+        }
+    }
+
+    // MARK: Library search and filters
+
+    enum LibraryFilter: Hashable, Identifiable {
+        case all, running, windows, mac, steam, battleNet, drive(String)
+        var id: String { title }
+        var title: String {
+            switch self {
+            case .all: "All Games"; case .running: "Running"; case .windows: "Windows Games"; case .mac: "Mac Games"
+            case .steam: "Steam"; case .battleNet: "Battle.net"; case .drive(let d): "On \(d)"
+            }
+        }
+    }
+    func matchesLibrary(_ g: InstalledGame) -> Bool {
+        let q = librarySearch.trimmingCharacters(in: .whitespaces)
+        if !q.isEmpty, !g.name.localizedCaseInsensitiveContains(q), !(subtitles[g.id] ?? "").localizedCaseInsensitiveContains(q) { return false }
+        switch libraryFilter {
+        case .all: return true
+        case .running: return isRunning(g)
+        case .windows: return g.native == nil
+        case .mac: return g.native != nil
+        case .steam: return g.usesSharedSteam || g.isSteamHost
+        case .battleNet: return g.battleNet != nil || BattleNet.isHost(g)
+        case .drive(let d): return gameDrives[g.id] == d
+        }
+    }
+    /// Drive names the library's games are stored on (for the filter menu).
+    var driveFilters: [LibraryFilter] { Array(Set(gameDrives.values)).sorted().map { .drive($0) } }
 
     func reveal(_ url: URL) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
 }
@@ -824,8 +903,10 @@ extension InstalledGame {
 /// Library details that need the file system, gathered with the scan off the main thread.
 struct LibraryExtras {
     var offline: [(name: String, drive: String)] = []
+    var drives: [String: String] = [:]
     static func load(_ games: [InstalledGame]) -> LibraryExtras {
         var seen = Set<String>()
-        return LibraryExtras(offline: (GameLibrary.offlineLinkedApps() + GameFolders.offlineGames() + NativeGames.missing()).filter { seen.insert($0.name).inserted })
+        return LibraryExtras(offline: (GameLibrary.offlineLinkedApps() + GameFolders.offlineGames() + NativeGames.missing()).filter { seen.insert($0.name).inserted },
+                             drives: Dictionary(games.map { ($0.id, Storage.driveName($0.appURL.resolvingSymlinksInPath())) }, uniquingKeysWith: { a, _ in a }))
     }
 }
