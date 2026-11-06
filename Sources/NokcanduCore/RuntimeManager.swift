@@ -89,7 +89,7 @@ public enum RuntimeManager {
                                        template: recipe.runtime.template, importedFrom: app.appURL.path, importedAt: Date(),
                                        verifiedHashes: verified, licenses: licenseRecords)
         try ChangeJournal.encoder.encode(manifest).write(to: staging.appendingPathComponent("manifest.json"))
-        if fm.fileExists(atPath: dest.path) { try fm.trashItem(at: dest, resultingItemURL: nil) }
+        if fm.fileExists(atPath: dest.path) { try SystemIntegration.trash(dest) }
         try fm.moveItem(at: staging, to: dest)
         log("Runtime \(recipe.runtime.id) cached and verified.")
     }

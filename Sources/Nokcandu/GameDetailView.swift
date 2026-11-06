@@ -137,7 +137,7 @@ struct GameDetailView: View {
         Task {
             do {
                 let skipped = try await GameSetups.resetToRecommended(g, games: games) { line in Task { @MainActor in model.say(line) } }
-                model.say(skipped.isEmpty ? "\(g.name) is back to its recommended setup. A restore point has your earlier settings."
+                model.say(skipped.isEmpty ? "\(g.name) is back to its recommended setup." + (RestorePoints.automaticChosen ? " A restore point has your earlier settings." : "")
                                           : "\(g.name) was reset. Skipped: " + skipped.joined(separator: " "))
             } catch { model.fail(error) }
             busy = false; model.refresh()
@@ -240,7 +240,7 @@ struct GameDetailView: View {
         .confirmationDialog("Reset \(game.name) to its recommended setup?", isPresented: $confirmResetAll) {
             Button("Reset to Recommended", role: .destructive, action: resetToRecommended)
         } message: {
-            Text("Takes a restore point, undoes every fix Nokcandu installed, and applies the recommended setup again (including suggestions you chose Not Now for). Saves, game files and the game's own options aren't touched; Restore Points brings your current settings back.")
+            Text((RestorePoints.automaticChosen ? "Takes a restore point, undoes" : "Undoes") + " every fix Nokcandu installed, and applies the recommended setup again (including suggestions you chose Not Now for). Saves, game files and the game's own options aren't touched." + (RestorePoints.automaticChosen ? " Restore Points brings your current settings back." : ""))
         }
         .confirmationDialog("Reset \(game.name) to its tested settings?", isPresented: $confirmReset) {
             Button("Reset", role: .destructive, action: reset)
@@ -461,7 +461,7 @@ struct GameDetailView: View {
                         .disabled(running || repairing || !game.isManaged)
                     Button { confirmResetAll = true } label: { Label("Reset to Recommended…", systemImage: "arrow.counterclockwise") }
                         .disabled(running || busy || repairing)
-                        .help("Undo every fix and apply the recommended setup again, with a restore point first.")
+                        .help("Undo every fix and apply the recommended setup again.")
                     Button("Settings Backups…") { showSettingsBackups = true }
                 }
                 if let missing = GameDataSpec.forGame(game)?.missingEssentials, !missing.isEmpty {

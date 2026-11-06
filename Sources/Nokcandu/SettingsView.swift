@@ -43,6 +43,9 @@ struct GeneralSettings: View {
                 Toggle("Mac notifications while Nokcandu is in the background", isOn: Binding(get: { Notifier.enabled }, set: { Notifier.enabled = $0; model.objectWillChange.send() }))
                 Text("When a store game is added, a game doesn't start, or a game is running low on memory. Click one to open that game.")
                     .font(.caption).foregroundStyle(.secondary)
+                Toggle("Take a restore point before big changes", isOn: Binding(get: { RestorePoints.automaticChosen }, set: { RestorePoints.automaticChosen = $0; model.objectWillChange.send() }))
+                Text("Before a fix, an engine change or Reset to Recommended, keeps one copy of the game's Windows environment to go back to (the newest replaces the last). Off by default: those changes have their own Undo, and you can take a restore point yourself any time in a game's Storage tab.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Discord") {
                 Toggle("Show what you're playing in Discord", isOn: Binding(get: { DiscordBridge.enabled }, set: { DiscordBridge.enabled = $0; discordTick += 1 }))

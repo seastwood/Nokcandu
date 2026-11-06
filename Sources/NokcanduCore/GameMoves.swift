@@ -227,9 +227,9 @@ extension GameMover {
         Discs.prepareMountPoints(support: target.appendingPathComponent("Contents/SharedSupport"))
         // Launch Services: forget the old copy, know the new one (Spotlight, the Apps launcher, Open With).
         if real != target.resolvingSymlinksInPath(), !fm.fileExists(atPath: real.path) {
-            _ = try? Shell.run(GameApp.lsregister, ["-u", real.path], timeout: 30)
+            SystemIntegration.unregister(real)
         }
-        _ = try? Shell.run(GameApp.lsregister, ["-f", target.path], timeout: 30)
+        SystemIntegration.register(target)
         // The library works with real apps (the link is the Applications entry).
         return target.resolvingSymlinksInPath()
     }

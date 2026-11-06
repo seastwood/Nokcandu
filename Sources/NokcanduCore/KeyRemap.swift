@@ -61,7 +61,7 @@ public enum KeyRemap {
     static let nothingUsage: UInt64 = 0x7_0000_0000
 
     /// One remap: `from` acts as `to` (nil: does nothing).
-    public struct Mapping: Hashable, Identifiable, Sendable {
+    public struct Mapping: Hashable, Identifiable, Sendable, Codable {
         public var from: Int
         public var to: Int?
         public var id: Int { from }
@@ -94,6 +94,138 @@ public enum KeyRemap {
             let dst = x.to.flatMap { hidUsages[$0] } ?? nothingUsage
             return String(format: "0x%llx 0x%llx", src, dst)
         }.joined(separator: "\n") + (m.isEmpty ? "" : "\n")
+    }
+
+    // MARK: Layouts shared by games
+
+    /// A named set of remaps that any number of games can use ("Voidlink keys"). Editing it changes every game
+    /// using it. Kept in Application Support/Nokcandu/key-layouts.json. One layout can be the default: every game
+    /// that hasn't been given keys of its own follows it.
+    public struct Layout: Codable, Hashable, Identifiable, Sendable {
+        public var id: String
+        public var name: String
+        public var mappings: [Mapping]
+        public init(id: String = UUID().uuidString, name: String, mappings: [Mapping]) { self.id = id; self.name = name; self.mappings = mappings }
+    }
+
+    /// What a Windows environment's keys follow ("key-layout" in its state folder; its keys are in "key-remap").
+    public enum Choice: Equatable, Sendable {
+        /// The default layout, whatever it is (and normal keys while there's none). Every game starts here.
+        case followDefault
+        /// Normal keys, even when there's a default layout.
+        case normal
+        /// Keys of its own, not shared.
+        case own
+        case layout(String)
+    }
+
+    public static var layoutsFile: URL { NokPaths.support.appendingPathComponent("key-layouts.json") }
+    public static var defaultFile: URL { NokPaths.support.appendingPathComponent("key-layout-default") }
+    static func layoutFile(_ contents: URL) -> URL { folder(contents).appendingPathComponent("key-layout") }
+
+    public static func layouts(file: URL = layoutsFile) -> [Layout] {
+        (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode([Layout].self, from: $0) } ?? []
+    }
+    static func saveLayouts(_ l: [Layout], file: URL = layoutsFile) throws {
+        try NokPaths.ensure(file.deletingLastPathComponent())
+        let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try enc.encode(l.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }).write(to: file, options: .atomic)
+    }
+
+    public static func defaultLayoutID(file: URL = defaultFile) -> String? {
+        (try? String(contentsOf: file, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    }
+    public static func defaultLayout(layouts all: [Layout]? = nil, file: URL = defaultFile, layoutsFile lf: URL = layoutsFile) -> Layout? {
+        guard let id = defaultLayoutID(file: file) else { return nil }
+        return (all ?? layouts(file: lf)).first { $0.id == id }
+    }
+
+    public static func choice(contents: URL) -> Choice {
+        guard let raw = (try? String(contentsOf: layoutFile(contents), encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            // Keys set before layouts existed are this game's own.
+            return FileManager.default.fileExists(atPath: file(contents).path) ? .own : .followDefault
+        }
+        switch raw {
+        case "default": return .followDefault
+        case "none": return .normal
+        case "own": return .own
+        default: return .layout(raw)
+        }
+    }
+
+    /// Sets what this environment's keys follow and writes the keys the helper reads.
+    public static func set(_ c: Choice, contents: URL, own: [Mapping] = [], file lf: URL = layoutsFile, defaultFile df: URL = defaultFile) throws {
+        try NokPaths.ensure(folder(contents))
+        let tag: String, keys: [Mapping]
+        switch c {
+        case .followDefault: tag = "default"; keys = defaultLayout(file: df, layoutsFile: lf)?.mappings ?? []
+        case .normal: tag = "none"; keys = []
+        case .own: tag = "own"; keys = own
+        case .layout(let id): tag = id; keys = layouts(file: lf).first { $0.id == id }?.mappings ?? []
+        }
+        try Data((tag + "\n").utf8).write(to: layoutFile(contents), options: .atomic)
+        try save(keys, contents: contents)
+    }
+
+    /// The keys an environment has now.
+    public static func keys(contents: URL) -> [Mapping] { load(contents: contents) }
+
+    /// Writes each environment's keys again from its layout or the default (after a layout or the default changed,
+    /// and at start for games added since). Returns how many changed.
+    @discardableResult
+    public static func refresh(environments: [URL], file lf: URL = layoutsFile, defaultFile df: URL = defaultFile) -> Int {
+        let all = layouts(file: lf), fallback = defaultLayout(layouts: all, file: df, layoutsFile: lf)?.mappings ?? []
+        var n = 0
+        for c in Set(environments) {
+            let want: [Mapping]
+            switch choice(contents: c) {
+            case .followDefault:
+                want = fallback
+                // Recorded, so keys written here aren't mistaken later for keys of its own.
+                if !FileManager.default.fileExists(atPath: layoutFile(c).path) {
+                    try? NokPaths.ensure(folder(c)); try? Data("default\n".utf8).write(to: layoutFile(c), options: .atomic)
+                }
+            case .layout(let id): want = all.first { $0.id == id }?.mappings ?? fallback
+            case .normal: want = []
+            case .own: continue
+            }
+            if load(contents: c) != want { try? save(want, contents: c); n += 1 }
+        }
+        return n
+    }
+
+    /// Saves a new or edited layout and updates every environment using it (directly or as the default).
+    @discardableResult
+    public static func store(_ layout: Layout, environments: [URL], file: URL = layoutsFile, defaultFile df: URL = defaultFile) throws -> Int {
+        var all = layouts(file: file)
+        if let i = all.firstIndex(where: { $0.id == layout.id }) { all[i] = layout } else { all.append(layout) }
+        try saveLayouts(all, file: file)
+        return refresh(environments: environments, file: file, defaultFile: df)
+    }
+
+    /// Makes a layout the default for every game that hasn't been given keys of its own (nil: no default).
+    public static func setDefault(_ layout: Layout?, environments: [URL], file df: URL = defaultFile, layoutsFile lf: URL = layoutsFile) throws {
+        if let layout {
+            try NokPaths.ensure(df.deletingLastPathComponent())
+            try Data((layout.id + "\n").utf8).write(to: df, options: .atomic)
+        } else {
+            try? FileManager.default.removeItem(at: df)
+        }
+        refresh(environments: environments, file: lf, defaultFile: df)
+    }
+
+    /// Removes a layout. Games that used it keep its keys as their own; if it was the default, there's none.
+    public static func delete(_ layout: Layout, environments: [URL], file: URL = layoutsFile, defaultFile df: URL = defaultFile) throws {
+        try saveLayouts(layouts(file: file).filter { $0.id != layout.id }, file: file)
+        for c in Set(environments) where choice(contents: c) == .layout(layout.id) {
+            try set(.own, contents: c, own: layout.mappings, file: file, defaultFile: df)
+        }
+        if defaultLayoutID(file: df) == layout.id { try setDefault(nil, environments: environments, file: df, layoutsFile: file) }
+    }
+
+    /// The Windows environments of these games (each once).
+    public static func environments(_ games: [InstalledGame]) -> [URL] {
+        Array(Set(games.compactMap { $0.native == nil ? contents(for: $0) : nil }))
     }
 
     // MARK: A keyboard left remapped
@@ -170,3 +302,5 @@ public enum KeyRemap {
         }
     }
 }
+
+private extension String { var nilIfEmpty: String? { isEmpty ? nil : self } }

@@ -142,7 +142,7 @@ public enum GameRemoval {
                               expectedFolder: FolderChoice? = nil) throws -> [String] {
         try StoreGameDiscovery.preservingRemovalIntent(for: game, library: library, at: StoreGameDiscovery.stateURL) {
             try remove(game, library: library, mode: mode, expectedFolder: expectedFolder, trash: {
-                try FileManager.default.trashItem(at: $0, resultingItemURL: nil)
+                try SystemIntegration.trash($0)
             })
         }
     }
@@ -212,6 +212,6 @@ public enum GameRemoval {
     }
 
     public static func clean(_ items: [Item]) -> Int {
-        items.filter { (try? FileManager.default.trashItem(at: $0.url, resultingItemURL: nil)) != nil }.count
+        items.filter { (try? SystemIntegration.trash($0.url)) != nil }.count
     }
 }

@@ -118,7 +118,7 @@ public enum CinematicFix {
             let r = try Shell.run("/usr/bin/ditto", ["-x", "-k", zip.path, unpack.path])
             guard r.ok else { throw NokError("Couldn't unpack LAV Filters: \(r.combined)") }
             let dest = folder(h, a)
-            if fm.fileExists(atPath: dest.path) { try fm.trashItem(at: dest, resultingItemURL: nil) }
+            if fm.fileExists(atPath: dest.path) { try SystemIntegration.trash(dest) }
             try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
             try fm.copyItem(at: unpack, to: dest)
             // 3. Register the three filters with Windows (regsvr32), like LAV's own install_*.bat.
@@ -167,7 +167,7 @@ public enum CinematicFix {
                 log("Unregistering \(f) (\(a.title))…")
                 _ = try? await Shell.runAsync(wine, [a.regsvr32, "/u", "/s", winPath], cwd: folder(h, a), env: env, timeout: 120)
             }
-            try fm.trashItem(at: folder(h, a), resultingItemURL: nil)
+            try SystemIntegration.trash(folder(h, a))
         }
         _ = try? await Shell.runAsync(h.appendingPathComponent("SharedSupport/wine/bin/wineserver").path, ["-w"], env: env, timeout: 60)
         try? fm.removeItem(at: stateURL(h))

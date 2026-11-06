@@ -373,7 +373,7 @@ public enum BF1942DisplayFix {
                     try NokPaths.ensure(file.url.deletingLastPathComponent())
                     try before.write(to: file.url, options: .atomic)
                 } else if FileManager.default.fileExists(atPath: file.url.path) {
-                    try FileManager.default.trashItem(at: file.url, resultingItemURL: nil)
+                    try SystemIntegration.trash(file.url)
                 }
             }
             started = false

@@ -172,7 +172,7 @@ public final class ChangeJournal {
                     _ = try fm.replaceItemAt(url, withItemAt: tmp)
                     report.restored.append(path)
                 } else if fm.fileExists(atPath: path) || (try? fm.destinationOfSymbolicLink(atPath: path)) != nil {
-                    try fm.trashItem(at: url, resultingItemURL: nil)
+                    try SystemIntegration.trash(url)
                     report.removed.append(path)
                 }
             } catch {

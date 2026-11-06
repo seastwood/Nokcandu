@@ -99,7 +99,7 @@ public enum GhostApps {
     /// Moves ghosts to the Trash. Returns how many.
     @discardableResult
     public static func clean(library: [InstalledGame]) -> Int {
-        find(library: library, confirmedOnly: true).filter { (try? FileManager.default.trashItem(at: $0, resultingItemURL: nil)) != nil }.count
+        find(library: library, confirmedOnly: true).filter { (try? SystemIntegration.trash($0)) != nil }.count
     }
 }
 

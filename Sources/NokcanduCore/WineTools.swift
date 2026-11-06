@@ -286,7 +286,7 @@ extension CustomGames {
         if let old = oldDisc, old != c.disc?.imageName {
             // Unmount the old disc so the next launch mounts the new one.
             _ = try? Shell.run("/usr/bin/hdiutil", ["detach", g.support.appendingPathComponent("MountedDisc").path, "-quiet"])
-            try? FileManager.default.trashItem(at: g.support.appendingPathComponent(old), resultingItemURL: nil)
+            try? SystemIntegration.trash(g.support.appendingPathComponent(old))
         }
     }
 }

@@ -88,8 +88,18 @@ public enum AppRollback {
                 try Data(command.utf8).write(to: file)
                 try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
             }
+            prune(in: archiveRoot, keeping: entry.id)
             return entry
         } catch { try? FileManager.default.removeItem(at: folder); throw error }
+    }
+
+    /// Earlier versions kept to go back to. Each is a whole copy of Nokcandu, so only the newest few are kept.
+    public static let keepVersions = 3
+
+    /// Removes recovery copies beyond the newest `keepVersions` (never the one just made).
+    static func prune(in archiveRoot: URL, keeping current: UUID) {
+        let old = saved(in: archiveRoot).filter { $0.id != current }.dropFirst(keepVersions - 1)
+        for entry in old { try? FileManager.default.removeItem(at: entry.folder(in: archiveRoot)) }
     }
 
     static func copy(_ source: URL, to destination: URL) throws {

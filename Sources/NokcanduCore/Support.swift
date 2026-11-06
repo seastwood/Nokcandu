@@ -20,10 +20,13 @@ public enum NokPaths {
         return home.appendingPathComponent("Applications/Nokcandu Games", isDirectory: true)
     }
     public static var support: URL {
+        // Unit tests make throwaway games: their records and backups stay out of the real Application Support.
+        if SystemIntegration.isTesting { return testSupport }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? home.appendingPathComponent("Library/Application Support")
         return base.appendingPathComponent("Nokcandu", isDirectory: true)
     }
+    static let testSupport = FileManager.default.temporaryDirectory.appendingPathComponent("nokcandu-tests-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
     public static var backups: URL { support.appendingPathComponent("Backups", isDirectory: true) }
     public static var journals: URL { support.appendingPathComponent("Journals", isDirectory: true) }
     public static var diagnostics: URL { support.appendingPathComponent("Diagnostics", isDirectory: true) }

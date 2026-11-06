@@ -21,7 +21,7 @@ public struct RestorePoint: Identifiable, Hashable, Sendable, Codable {
 
 public enum RestorePoints {
     /// How many automatic restore points to keep per app (ones you take yourself are kept until you delete them).
-    public static let keepAutomatic = 3
+    public static let keepAutomatic = 1
     /// Off while unit tests run (their throwaway apps don't need restore points).
     static var automaticEnabled = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil
         && NSClassFromString("XCTestCase") == nil
@@ -94,8 +94,15 @@ public enum RestorePoints {
     }
 
     /// Before a risky change: take an automatic restore point if possible. Never stops the change.
+    /// Automatic restore points (before fixes, engine changes, Reset to Recommended) are off unless chosen in
+    /// Settings: each is a copy of the whole Windows environment, and the changes they'd cover have their own Undo.
+    public static var automaticChosen: Bool {
+        get { UserDefaults.standard.bool(forKey: "automaticRestorePoints") }
+        set { UserDefaults.standard.set(newValue, forKey: "automaticRestorePoints") }
+    }
+
     public static func before(_ g: InstalledGame, _ reason: String, log: (@Sendable (String) -> Void)? = nil) {
-        guard automaticEnabled, let app = hostApp(for: g) else { return }
+        guard automaticEnabled, automaticChosen, let app = hostApp(for: g) else { return }
         do { if try create(app: app, reason: reason, automatic: true) != nil { log?("Took a restore point.") } }
         catch { log?("No restore point: \(error.localizedDescription)") }
     }

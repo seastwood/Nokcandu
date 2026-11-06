@@ -143,7 +143,7 @@ public enum GamesVolume {
             guard r.ok else { throw NokError("\(mount.lastPathComponent) is in use: \(r.combined.suffix(200))") }
         }
         AutoMount.unregister(image)
-        try fm.trashItem(at: image, resultingItemURL: nil)
+        try SystemIntegration.trash(image)
     }
 
     /// Ejects a drive safely: closes the games volumes stored on it first (macOS refuses otherwise).

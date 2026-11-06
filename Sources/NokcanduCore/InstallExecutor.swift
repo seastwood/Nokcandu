@@ -325,14 +325,14 @@ public final class InstallExecutor: @unchecked Sendable {
                 }
             }
             do {
-                try FileManager.default.trashItem(at: ctx.targetApp, resultingItemURL: nil)
+                try SystemIntegration.trash(ctx.targetApp)
                 lines.append("Moved \(ctx.targetApp.lastPathComponent) to the Trash.")
             } catch {
                 lines.append("Could not move the new app to the Trash: \(error.localizedDescription). Its setup progress was kept so you can retry.")
                 return lines.joined(separator: "\n")
             }
         }
-        try? FileManager.default.trashItem(at: ctx.workDir, resultingItemURL: nil)
+        try? SystemIntegration.trash(ctx.workDir)
         return lines.joined(separator: "\n")
     }
 }

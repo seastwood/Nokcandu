@@ -27,7 +27,7 @@ public enum GameApp {
     static var useSystemTools = true
 
     static func remove(_ app: URL) {
-        if useSystemTools { _ = try? Shell.run(lsregister, ["-u", app.path], timeout: 30) }
+        if useSystemTools { SystemIntegration.unregister(app) }
         try? FileManager.default.removeItem(at: app)
     }
 
@@ -184,7 +184,7 @@ public enum GameApp {
         if changed && useSystemTools {
             _ = try? Shell.run("/usr/bin/codesign", ["--force", "--sign", "-", app.path], timeout: 60)
             // Register it, so macOS (the Games app, Game Mode) knows the app's name and icon.
-            _ = try? Shell.run(lsregister, ["-f", app.path], timeout: 30)
+            SystemIntegration.register(app)
         }
         // Capture the signed bytes, not the unsigned engine source. Legacy wrappers
         // are adopted only after signature verification (or fixture-only tool suppression).

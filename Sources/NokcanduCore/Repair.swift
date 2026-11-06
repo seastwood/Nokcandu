@@ -183,7 +183,7 @@ public enum Repair {
                     let src = RuntimeManager.folder(for: u.runtimeID).appendingPathComponent("Contents")
                     for c in RuntimeManager.components {
                         let dst = g.contents.appendingPathComponent(c)
-                        if fm.fileExists(atPath: dst.path) { try fm.trashItem(at: dst, resultingItemURL: nil) }
+                        if fm.fileExists(atPath: dst.path) { try SystemIntegration.trash(dst) }
                         try fm.cloneItem(at: src.appendingPathComponent(c), to: dst)
                     }
                     add("Game engine", .fixed, "Restored \(u.engine) from Nokcandu's verified copy (old files are in the Trash).")
@@ -192,7 +192,7 @@ public enum Repair {
                 do {
                     for c in RuntimeManager.components {
                         let u = g.contents.appendingPathComponent(c)
-                        if fm.fileExists(atPath: u.path) { try fm.trashItem(at: u, resultingItemURL: nil) }
+                        if fm.fileExists(atPath: u.path) { try SystemIntegration.trash(u) }
                     }
                     try RuntimeManager.install(spec, into: g.contents)
                     add("Game engine", .fixed, "Restored the tested Wine engine and graphics files from Nokcandu's verified copy (old files are in the Trash).")

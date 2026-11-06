@@ -93,3 +93,79 @@ final class ControllerKindTests: XCTestCase {
         XCTAssertEqual(Controllers.describe(wheel, mode: .xbox, steam: false), "As itself: its own axes and buttons, for games with wheel support.")
     }
 }
+
+final class KeyLayoutTests: XCTestCase {
+    func testLayoutsDefaultsAndGamesWithTheirOwnKeys() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nok-layout-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lf = root.appendingPathComponent("key-layouts.json"), df = root.appendingPathComponent("key-layout-default")
+        let a = root.appendingPathComponent("A.app/Contents"), b = root.appendingPathComponent("B.app/Contents")
+        let c = root.appendingPathComponent("C.app/Contents"), d = root.appendingPathComponent("D.app/Contents")
+        let all = [a, b, c, d]
+        let voidlink = KeyRemap.Layout(name: "Voidlink", mappings: [KeyRemap.Mapping(from: 63, to: 59)])
+        var racing = KeyRemap.Layout(name: "Racing", mappings: [KeyRemap.Mapping(from: 61, to: 62)])
+        try KeyRemap.store(voidlink, environments: all, file: lf, defaultFile: df)
+        try KeyRemap.store(racing, environments: all, file: lf, defaultFile: df)
+        XCTAssertEqual(KeyRemap.choice(contents: a), .followDefault, "every game starts on the default")
+
+        try KeyRemap.set(.layout(racing.id), contents: b, file: lf, defaultFile: df)
+        try KeyRemap.set(.own, contents: c, own: [KeyRemap.Mapping(from: 0, to: nil)], file: lf, defaultFile: df)
+        try KeyRemap.set(.normal, contents: d, file: lf, defaultFile: df)
+        try KeyRemap.setDefault(voidlink, environments: all, file: df, layoutsFile: lf)
+        XCTAssertEqual(KeyRemap.load(contents: a), voidlink.mappings, "the default reaches games following it")
+        XCTAssertEqual(KeyRemap.load(contents: b), racing.mappings, "a game's own choice isn't overridden")
+        XCTAssertEqual(KeyRemap.load(contents: c), [KeyRemap.Mapping(from: 0, to: nil)])
+        XCTAssertEqual(KeyRemap.load(contents: d), [], "normal keys stay normal")
+
+        racing.mappings.append(KeyRemap.Mapping(from: 58, to: 59))
+        try KeyRemap.store(racing, environments: all, file: lf, defaultFile: df)
+        XCTAssertEqual(KeyRemap.load(contents: b), racing.mappings, "editing a layout reaches every game using it")
+
+        try KeyRemap.delete(voidlink, environments: all, file: lf, defaultFile: df)
+        XCTAssertNil(KeyRemap.defaultLayoutID(file: df))
+        XCTAssertEqual(KeyRemap.load(contents: a), [], "no default: normal keys")
+        try KeyRemap.delete(racing, environments: all, file: lf, defaultFile: df)
+        XCTAssertEqual(KeyRemap.choice(contents: b), .own)
+        XCTAssertEqual(KeyRemap.load(contents: b), racing.mappings, "keys stay after their layout is deleted")
+    }
+}
+
+final class LaunchServicesCleanupTests: XCTestCase {
+    func testOnlyStaleNokcanduRecordsAreRemoved() {
+        let dump = """
+        path:                       /Users/me/Applications/Sikarugir/Battlefield 2.app/Contents/SharedSupport/GameApp/Battlefield 2.app (0x4044)
+        identifier:                 local.nokcandu.game.battlefield-2
+        --------------------------------------------------------------------------------
+        path:                       /Volumes/Games/Nokcandu Games/Battlefield 2.app/Contents/SharedSupport/GameApp/Battlefield 2.app (0x7ec8)
+        identifier:                 local.nokcandu.game.battlefield-2
+        --------------------------------------------------------------------------------
+        path:                       /private/var/folders/x/T/profile-display-1.app/Contents/SharedSupport/GameApp/Profile display test.app (0x1)
+        identifier:                 local.nokcandu.game.profile-display-test
+        --------------------------------------------------------------------------------
+        path:                       /Users/me/.Trash/Battlefield 1942™.app (0x2)
+        identifier:                 local.nokcandu.ea.battlefield-1942
+        --------------------------------------------------------------------------------
+        path:                       /Applications/Sikarugir/.Nokcandu Restore Points/Worms/2026/App/Contents/Configure.app (0x3)
+        identifier:                 com.sikarugir.configure
+        --------------------------------------------------------------------------------
+        path:                       /Users/me/Applications/Sikarugir/Gone.app (0x4)
+        identifier:                 local.nokcandu.gone
+        --------------------------------------------------------------------------------
+        path:                       /Applications/Safari.app (0x5)
+        identifier:                 com.apple.Safari
+        """
+        let records = SystemIntegration.records(dump: dump)
+        XCTAssertEqual(records.count, 7)
+        let stale = SystemIntegration.stale(records, exists: { !$0.contains("Gone") }, resolve: { p in
+            p.replacingOccurrences(of: "/Users/me/Applications/Sikarugir/Battlefield 2.app", with: "/Volumes/Games/Nokcandu Games/Battlefield 2.app")
+        }).map(\.path)
+        XCTAssertEqual(stale, [
+            "/Users/me/Applications/Sikarugir/Battlefield 2.app/Contents/SharedSupport/GameApp/Battlefield 2.app",
+            "/private/var/folders/x/T/profile-display-1.app/Contents/SharedSupport/GameApp/Profile display test.app",
+            "/Users/me/.Trash/Battlefield 1942™.app",
+            "/Applications/Sikarugir/.Nokcandu Restore Points/Worms/2026/App/Contents/Configure.app",
+            "/Users/me/Applications/Sikarugir/Gone.app",
+        ])
+        XCTAssertTrue(SystemIntegration.isTesting)
+    }
+}

@@ -78,7 +78,7 @@ public enum MyProfiles {
 
     /// Moves it to the Trash (recoverable).
     public static func delete(_ item: MyProfile) throws {
-        try FileManager.default.trashItem(at: url(item.id), resultingItemURL: nil)
+        try SystemIntegration.trash(url(item.id))
         NotificationCenter.default.post(name: changed, object: nil)
     }
 

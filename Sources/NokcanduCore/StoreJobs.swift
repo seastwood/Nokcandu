@@ -52,6 +52,6 @@ public enum StoreJobs {
     public static func discard(_ job: StoreJob) {
         remove(job.id)
         let dest = gameFolder(job)
-        if FileManager.default.fileExists(atPath: dest.path) { try? FileManager.default.trashItem(at: dest, resultingItemURL: nil) }
+        if FileManager.default.fileExists(atPath: dest.path) { try? SystemIntegration.trash(dest) }
     }
 }

@@ -79,7 +79,7 @@ public enum LauncherEntry {
             try NokPaths.ensure(game.nokcanduState)
             try JSONEncoder().encode(state).write(to: marker, options: .atomic)
             try installed.write(to: plist, options: .atomic)
-            _ = try? Shell.run(GameApp.lsregister, ["-f", game.appURL.path], timeout: 30)
+            SystemIntegration.register(game.appURL)
         } catch {
             guard changed else { throw error }
             try? before.write(to: plist, options: .atomic)
