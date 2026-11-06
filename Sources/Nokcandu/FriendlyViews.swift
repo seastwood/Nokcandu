@@ -80,6 +80,7 @@ struct GameCommands: View {
                 .disabled(game == nil || game?.native != nil)
         }
         Divider()
+        Button("Change Several Games…") { model.showSeveralGames = true }
         Button("Search Games") { model.focusSearch = true }
             .keyboardShortcut("f", modifiers: .command)
     }

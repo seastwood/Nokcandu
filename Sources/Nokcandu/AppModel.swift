@@ -42,6 +42,7 @@ final class AppModel: ObservableObject {
     /// Games whose store client opened but didn't start them (cleared on the next Play or when the game runs).
     @Published var launchProblems: [String: String] = [:]
     @Published var showWhatsNew = false
+    @Published var showSeveralGames = false
     @Published var librarySearch = ""
     @Published var focusSearch = false
     @Published var libraryFilter: LibraryFilter = .all
@@ -212,6 +213,27 @@ final class AppModel: ObservableObject {
     }
     @Published var libraryLoaded = false
 
+    // MARK: Drag and drop
+
+    @Published var droppedFolder: URL?
+    func handleDrop(_ urls: [URL]) {
+        switch DropToAdd.classify(urls) {
+        case .installer(let u):
+            installer.startCustom(name: DropToAdd.name(for: u), source: .installer, library: games, inputs: ["installerPath": u.path])
+            showInstaller = true
+        case .discs(let list):
+            installer.startCustom(name: DropToAdd.name(for: list[0]), source: .disc, library: games,
+                                  inputs: ["isoPaths": list.map(\.path).joined(separator: "\n"), "isoPath": list[0].path])
+            showInstaller = true
+        case .gameFolder(let u): droppedFolder = u
+        case .nokcanduGames(let folders):
+            let n = LibraryDiscovery.add(folders)
+            refresh()
+            say(n > 0 ? "Added the games in \(folders.map(\.lastPathComponent).joined(separator: ", ")). Nothing was copied." : "Those games are already in your library.")
+        case .unknown(let why): fail(NokError(why))
+        }
+    }
+
     // MARK: Games Nokcandu made, found on connected drives
 
     struct FoundFolder: Identifiable, Equatable { var id: String { url.path }; var url: URL; var games: Int }
@@ -367,6 +389,9 @@ final class AppModel: ObservableObject {
                     return outcome
                 }.value
                 refresh()
+                if let tab = ChangeHistoryTabs.tab(for: change) {     // fixes note themselves
+                    ChangeHistory.note(game, "Changed \(title.lowercased())" + (outcome == .deferred ? " (applies when idle)" : ""), undo: .setting(tab))
+                }
                 if outcome == .deferred {
                     let name = WineSelection.host(for: game, in: games)?.name ?? game.name
                     say("Saved \(title.lowercased()). It will apply automatically when \(name)'s Windows environment is idle.")

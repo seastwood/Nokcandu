@@ -28,6 +28,7 @@ struct GameDetailView: View {
     @State private var applyingSetup = false
     @State private var crashPattern: String?
     @State private var folderChanges: OriginalFiles.Changes?
+    @State private var showDoctor = false
     @State private var confirmResetAll = false
     var crashDismissedKey: String { "crashDismissed." + game.id }
     var memoryDismissedKey: String { "memoryDismissed." + game.id }
@@ -220,6 +221,16 @@ struct GameDetailView: View {
                     SuggestionsBanner(game: game).id("suggest-\(game.id)")
                 }
                 if game.native == nil { PendingSettingsSection(game: game) }
+                HStack {
+                    SettingSearchField(available: availableTabs, tab: $tab).frame(maxWidth: 360)
+                    Spacer()
+                    Picker("View", selection: $simple) {
+                        Text("Simple").tag(true)
+                        Text("Advanced").tag(false)
+                    }
+                    .pickerStyle(.segmented).labelsHidden().fixedSize()
+                    .help("Simple shows the settings most games need; Advanced shows everything (Wine, fixes, performance, Windows tools).")
+                }
                 Picker("Settings", selection: $tab) {
                     ForEach(availableTabs) { Label($0.title, systemImage: $0.symbol).tag($0) }
                 }
@@ -282,6 +293,8 @@ struct GameDetailView: View {
     }
     /// The last tab you used is remembered across games.
     @AppStorage("gameSettingsTab") private var tab: Tab = .overview
+    /// Simple hides Wine & Fixes and Performance (graphics mode moves to Overview). Remembered for every game.
+    @AppStorage("gamePageSimple") private var simple = false
 
     var hasDisplayTab: Bool {
         DisplayController.supports(game) || hasResizable || game.hosted?.exe != nil || game.custom != nil
@@ -300,20 +313,27 @@ struct GameDetailView: View {
             case .display: return hasDisplayTab
             case .performance: return hasPerformanceTab
             case .controls: return hasControlsTab
+            case .compatibility: return !simple || game.native != nil
             default: return true
             }
-        }
+        }.filter { !(simple && $0 == .performance) }
     }
     var currentTab: Tab { availableTabs.contains(tab) ? tab : .overview }
 
     @ViewBuilder var overviewTab: some View {
         if game.native == nil { GameSummarySection(game: game, lastCrash: crash, showDiagnostics: { showDiagnostics = true }) }
+        if simple, game.native == nil, game.custom != nil, !LibraryOrganizer.isLauncher(game) {
+            SettingsSection(title: "Graphics", info: "How the game's DirectX reaches the Mac. Switch to Advanced (top of this page) for fixes, the Wine version and Windows tools.") {
+                GraphicsPicker(game: game) { model.refresh() }.id("simple-graphics-\(game.id)-\(model.libraryRevision)")
+            }
+        }
         if game.custom?.disc != nil { GameDiscsSection(game: game).id("discs-\(game.id)-\(Discs.all(game.custom!).count)") }
         if game.battleNet != nil { BattleNetGameInfo(game: game) }
         if game.isSteamHost { SteamGamesSection().id("steamgames-\(model.games.count)") }
         if BattleNet.isHost(game) { BlizzardGamesSection(host: game).id("bnet-\(game.id)-\(model.games.count)") }
         if let k = PCLaunchers.kind(of: game) { LauncherGamesSection(host: game, kind: k).id("pcl-\(game.id)-\(model.games.count)") }
         if game.isSteamHost || game.usesSharedSteam { SteamTipsSection() }
+        if game.native == nil { ChangeHistorySection(game: game).id("history-\(game.id)") }
         if game.isManaged { NotesSection(game: game).id(game.id) }
         aboutSection
     }
@@ -405,8 +425,13 @@ struct GameDetailView: View {
                     } else if running {
                         Button("Quit…", role: .destructive) { model.requestQuit(game) }.controlSize(.large)
                     }
+                    if !game.isSteamHost {
+                        Button("Won't start?") { showDoctor = true }.buttonStyle(.link)
+                            .help("Goes through what usually stops a game from starting, repairs what it can, and tells you what to do.")
+                    }
                 }
                 .padding(.top, 4)
+                .sheet(isPresented: $showDoctor) { LaunchDoctorSheet(game: game).environmentObject(model) }
                 if let stage = model.launchStages[game.id] { LaunchProgressLine(text: stage) }
             }
         }

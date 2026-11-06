@@ -84,7 +84,9 @@ struct GameControllersSection: View {
         Task {
             let r = await Task.detached(priority: .userInitiated) { Result { try Controllers.set(m, contents: c) } }.value
             switch r {
-            case .success: mode = m; model.say("Controllers reach games \(m == .automatic ? "automatically" : m.title.lowercased()) from the next start.")
+            case .success:
+                ChangeHistory.note(game, "Controllers: \(m.title.lowercased())", undo: .setting(GameDetailView.Tab.controls.rawValue))
+                mode = m; model.say("Controllers reach games \(m == .automatic ? "automatically" : m.title.lowercased()) from the next start.")
             case .failure(let e): model.fail(e)
             }
             working = false

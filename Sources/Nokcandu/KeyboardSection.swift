@@ -169,7 +169,18 @@ struct KeyboardSection: View {
     func choose(_ t: String) {
         guard let c = contents else { return }
         let new: KeyRemap.Choice = t == "default" ? .followDefault : t == "none" ? .normal : t == "own" ? .own : t == "launcher" ? .sameAsLauncher : .layout(t)
-        do { try KeyRemap.set(new, contents: c, own: KeyRemap.load(contents: c)) } catch { model.fail(error) }
+        do {
+            try KeyRemap.set(new, contents: c, own: KeyRemap.load(contents: c))
+            let label: String
+            switch new {
+            case .followDefault: label = "the default layout"
+            case .normal: label = "normal keys"
+            case .own: label = "keys of its own"
+            case .sameAsLauncher: label = "\(launcher)'s keys"
+            case .layout(let id): label = layouts.first { $0.id == id }.map { "the \($0.name) layout" } ?? "a layout"
+            }
+            ChangeHistory.note(game, "Keys: \(label)", undo: .setting(GameDetailView.Tab.controls.rawValue))
+        } catch { model.fail(error) }
         routes()
         load()
     }

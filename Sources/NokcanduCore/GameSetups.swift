@@ -32,6 +32,7 @@ public enum GameSetups {
     }
 
     public static func apply(_ kind: Kind, to g: InstalledGame, games: [InstalledGame], log: @escaping @Sendable (String) -> Void) async throws {
+        defer { ChangeHistory.note(g, kind == .overwatch ? "Applied the recommended Overwatch 2 setup" : "Applied the recommended Battlefield 1942 setup", undo: .setting("compatibility")) }
         switch kind {
         case .overwatch:
             if BattleNetGraphics.choice(g) != .dxmt { try BattleNetGraphics.set(.dxmt, for: g, games: games) }
@@ -57,6 +58,7 @@ public enum GameSetups {
     /// Returns what couldn't be applied.
     public static func resetToRecommended(_ g: InstalledGame, games: [InstalledGame], log: @escaping @Sendable (String) -> Void) async throws -> [String] {
         RestorePoints.before(g, "Before Reset to Recommended", log: log)
+        ChangeHistory.note(g, "Reset to the recommended setup", undo: .setting("storage"))
         for fix in CompatibilityFix.allCases where CompatibilityFixes.isInstalled(fix, for: g) {
             log("Undoing \(fix.title)…")
             try CompatibilityFixes.undo(fix, for: GameLibrary.inspect(g.appURL) ?? g, log: log)

@@ -308,6 +308,7 @@ public enum CompatibilityFixes {
         let g = fresh(game)
         try begin(g); defer { end(g) }
         try await installReserved(fix, for: g, log: log)
+        ChangeHistory.note(game, "Installed \(fix.title)", undo: .fix(fix.rawValue))
     }
     static func installReserved(_ fix: CompatibilityFix, for g: InstalledGame, log: @escaping @Sendable (String) -> Void) async throws {
         if SharedGameCompatibility.isShared(g) { try await SharedGameCompatibility.install(fix, for: g, log: log); return }
@@ -495,6 +496,7 @@ public enum CompatibilityFixes {
         let g = fresh(game)
         try begin(g); defer { end(g) }
         try undoReserved(fix, for: g, log: log)
+        ChangeHistory.note(game, "Removed \(fix.title)")
     }
     static func undoReserved(_ fix: CompatibilityFix, for g: InstalledGame, log: @escaping @Sendable (String) -> Void) throws {
         if SharedGameCompatibility.isShared(g) { try SharedGameCompatibility.undo(fix, for: g, log: log); return }

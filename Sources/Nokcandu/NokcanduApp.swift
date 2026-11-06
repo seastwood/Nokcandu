@@ -6,10 +6,11 @@ import NokcanduCore
 struct NokcanduApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var model = AppModel()
+    @AppStorage(MenuBarSetting.key) private var menuBarMenu = true
     init() { ListCache.installImageCache() }      // store artwork loads once, not on every visit
 
     var body: some Scene {
-        WindowGroup("Nokcandu") {
+        WindowGroup("Nokcandu", id: "library") {
             LibraryView()
                 .environmentObject(model)
                 .onOpenURL { url in model.openURL(url) }
@@ -38,6 +39,9 @@ struct NokcanduApp: App {
         Settings {
             SettingsView().environmentObject(model)
         }
+        MenuBarExtra("Nokcandu", systemImage: "gamecontroller", isInserted: $menuBarMenu) {
+            MenuBarMenu().environmentObject(model)
+        }
         Window("Game Installation", id: "installer") {
             InstallerView(m: model.installer).environmentObject(model)
                 .handlesExternalEvents(preferring: [], allowing: [])
@@ -59,7 +63,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
     }
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    /// With the menu bar menu on, Nokcandu keeps running after its window closes (the menu brings it back).
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !MenuBarSetting.on }
 }
 
 struct LibraryView: View {
@@ -217,6 +222,19 @@ struct LibraryView: View {
             WelcomeView().environmentObject(model)
         }
         .sheet(isPresented: $model.showWhatsNew) { WhatsNewView() }
+        .sheet(isPresented: $model.showSeveralGames) { SeveralGamesSheet().environmentObject(model) }
+        .sheet(item: Binding(get: { model.droppedFolder.map(DroppedFolder.init) }, set: { model.droppedFolder = $0?.url })) { d in
+            DropFolderSheet(folder: d.url).environmentObject(model)
+        }
+        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+            let group = DispatchGroup(); var urls: [URL] = []; let lock = NSLock()
+            for p in providers {
+                group.enter()
+                _ = p.loadObject(ofClass: URL.self) { u, _ in if let u { lock.lock(); urls.append(u); lock.unlock() }; group.leave() }
+            }
+            group.notify(queue: .main) { model.handleDrop(urls) }
+            return true
+        }
         .alert("Found games on your drives", isPresented: Binding(get: { !model.foundFolders.isEmpty && !model.showWelcome && !model.showWhatsNew }, set: { if !$0 && !model.foundFolders.isEmpty { model.declineFoundFolders() } })) {
             Button("Add Them") { model.addFoundFolders() }
             Button("Not Now", role: .cancel) { model.declineFoundFolders() }
@@ -461,3 +479,5 @@ private struct NoTitlebarSeparator: NSViewRepresentable {
         }
     }
 }
+
+struct DroppedFolder: Identifiable { var url: URL; var id: String { url.path } }
