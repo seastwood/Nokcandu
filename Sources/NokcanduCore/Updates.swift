@@ -106,7 +106,7 @@ public enum Updates {
 
     public static var isStale: Bool { (cached()?.checkedAt).map { Date().timeIntervalSince($0) > 86_400 } ?? true }
 
-    struct GHRelease: Decodable { var tag_name: String; var assets: [GHAsset] }
+    struct GHRelease: Decodable { var tag_name: String; var assets: [GHAsset]; var prerelease: Bool? = nil }
     struct GHAsset: Decodable { var name: String; var size: Int64; var browser_download_url: URL; var digest: String?; var updated_at: Date? }
 
     static func releases(_ repo: String, perPage: Int = 5) async throws -> [GHRelease] {

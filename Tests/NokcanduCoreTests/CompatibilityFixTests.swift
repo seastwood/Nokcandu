@@ -233,4 +233,25 @@ final class CompatibilityFixTests: XCTestCase {
         try fm.removeItem(at: pack.appendingPathComponent("x86_64-unix/winemetal.so"))
         XCTAssertThrowsError(try DXMTLowMemory.plannedFiles(from: pack, into: dest))
     }
+
+    func testLowMemoryDXMTFollowsNewestVerifiedOverwatchRelease() throws {
+        let json = #"""
+        [{"tag_name":"v0.81-ow2-0.1","prerelease":true,"assets":[{"name":"dxmt-ow2-pack-v0.3.tar.gz","size":1,"browser_download_url":"https://example.com/pre","digest":"sha256:AA"}]},
+         {"tag_name":"v0.80-ow2-0.3","assets":[{"name":"dxmt-ow2-pack-v0.3.tar.gz","size":1,"browser_download_url":"https://example.com/nodigest"}]},
+         {"tag_name":"v0.80-ow2-0.2","assets":[{"name":"notes.txt","size":1,"browser_download_url":"https://example.com/n","digest":"sha256:bb"},
+                                             {"name":"dxmt-ow2-pack-v0.2.tar.gz","size":1,"browser_download_url":"https://example.com/ok","digest":"sha256:CC"}]},
+         {"tag_name":"v0.80","assets":[]}]
+        """#
+        let releases = try JSONDecoder().decode([Updates.GHRelease].self, from: Data(json.utf8))
+        XCTAssertEqual(DXMTLowMemory.newest(from: releases),
+                       DXMTLowMemory.Release(tag: "v0.80-ow2-0.2", assetName: "dxmt-ow2-pack-v0.2.tar.gz", url: "https://example.com/ok", sha256: "cc"))
+        XCTAssertNil(DXMTLowMemory.newest(from: []))
+
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nok-dxmtroot-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("renamed-pack/x86_64-windows"), withIntermediateDirectories: true)
+        XCTAssertEqual(DXMTLowMemory.packageRoot(root).lastPathComponent, "renamed-pack")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("i386-windows"), withIntermediateDirectories: true)
+        XCTAssertEqual(DXMTLowMemory.packageRoot(root), root)
+    }
 }
