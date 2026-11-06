@@ -203,7 +203,7 @@ struct ControllersSection: View {
             }
             ForEach(pads, id: \.self) { p in Label(p, systemImage: "gamecontroller.fill") }
         } header: { Text("Controllers") } footer: {
-            Text("Xbox, PlayStation and Switch Pro controllers work in most Windows games that support controllers — Windows games see them as standard game controllers. If a game ignores yours, check its own controls settings.")
+            Text("Xbox, PlayStation, Switch and other controllers work in Windows games that support controllers. Whether a game sees a controller as itself (gyro, touchpad, every button) or as an Xbox controller is chosen per game in its Controls tab.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .onAppear(perform: reload)

@@ -214,6 +214,23 @@ enum RegistryText {
         return WineRegistry.decode(String(raw.dropFirst().dropLast()))
     }
 
+    /// Removes `name` under `key`, if present. Returns true when something changed.
+    static func remove(_ file: URL, key: String, name: String) throws -> Bool {
+        let text = String(decoding: try Data(contentsOf: file), as: UTF8.self)
+        var lines = text.components(separatedBy: "\n")
+        let header = "[" + key.lowercased() + "]"
+        let valuePrefix = "\"" + name.lowercased() + "\"="
+        guard let h = lines.firstIndex(where: { $0.lowercased().hasPrefix(header) }) else { return false }
+        var end = h + 1
+        while end < lines.count, !lines[end].hasPrefix("[") { end += 1 }
+        guard let v = (h + 1..<end).first(where: { lines[$0].lowercased().hasPrefix(valuePrefix) }) else { return false }
+        lines.remove(at: v)
+        let tmp = file.deletingLastPathComponent().appendingPathComponent(".\(file.lastPathComponent).nokcandu")
+        try Data(lines.joined(separator: "\n").utf8).write(to: tmp, options: .atomic)
+        _ = try FileManager.default.replaceItemAt(file, withItemAt: tmp)
+        return true
+    }
+
     /// Sets `name` under `key` (written with doubled backslashes, as in the file). `allow` sees the current string
     /// value (nil when absent) and decides whether to replace it. Preserves everything else in the file.
     static func set(_ file: URL, key: String, name: String, value: String, allow: (String?) -> Bool) throws -> Bool {
