@@ -518,6 +518,19 @@ final class AppModel: ObservableObject {
                 }
             }
             for (id, state) in s { if case .launcherRunning = state, launchProblems[id] != nil { launchProblems.removeValue(forKey: id) } }
+            // A game that uses your folder where it is just quit: did it change anything there?
+            for g in games where OriginalFiles.isProtected(g) {
+                if case .launcherRunning = runStates[g.id] ?? .notRunning, case .notRunning = s[g.id] ?? .notRunning {
+                    Task.detached(priority: .utility) {
+                        if let c = OriginalFiles.checkForChanges(g) {
+                            await MainActor.run {
+                                self.say("\(g.name) \(c.summary) in your folder. Open its page to keep or undo this choice.", game: g.id)
+                                self.libraryRevision += 1
+                            }
+                        }
+                    }
+                }
+            }
             runStates = s
             // Something just started or stopped: if Steam is closed now, bring its helper up to date
             // (it can only be replaced while Steam isn't running).
@@ -651,6 +664,8 @@ final class AppModel: ObservableObject {
                         await MainActor.run { self.say("Downloaded \(g.name)'s newer cloud save. Starting…") }
                     }
                 }
+                // A game using your folder where it is: remember the folder as it is before the game first runs.
+                if OriginalFiles.isProtected(g), !OriginalFiles.hasRecord(g) { OriginalFiles.record(g) }
                 let started = Date()
                 do {
                     try GameLauncher.launch(g, arguments: launchArgs)

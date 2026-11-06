@@ -329,6 +329,7 @@ public enum CompatibilityFixes {
             }
         }
         var (files, applied, appliedEnv) = try await payload(fix, for: g, log: log)
+        try OriginalFiles.check(g, writing: Array(files.keys), action: fix.title)
         // Downloads happen before mutation; recheck because the user could have started the game.
         try requireClosed(fresh(g))
         guard CustomGameConfig.load(contents: g.contents) == g.custom else { throw NokError("Game settings changed during download. Try again.") }

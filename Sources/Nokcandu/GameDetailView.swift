@@ -27,6 +27,7 @@ struct GameDetailView: View {
     @State private var setup: GameSetups.Setup?
     @State private var applyingSetup = false
     @State private var crashPattern: String?
+    @State private var folderChanges: OriginalFiles.Changes?
     @State private var confirmResetAll = false
     var crashDismissedKey: String { "crashDismissed." + game.id }
     var memoryDismissedKey: String { "memoryDismissed." + game.id }
@@ -43,6 +44,7 @@ struct GameDetailView: View {
              GameSetups.pending(g), CrashReports.pattern(CrashReports.history(g)))
         }.value
         crash = c; missingMods = m; setup = su; crashPattern = pattern
+        folderChanges = await Task.detached(priority: .utility) { OriginalFiles.isProtected(g) ? OriginalFiles.lastChanges(g) : nil }.value
         memory = mem.flatMap { $0.0.started.timeIntervalSince1970 > memoryDismissed ? (session: $0.0, advice: $0.1) : nil }
     }
 
@@ -79,6 +81,17 @@ struct GameDetailView: View {
                 NoticeCard(symbol: "display.trianglebadge.exclamationmark", tint: .orange, title: h.title, detail: h.detail, evidence: h.evidence) {
                     if let a = h.addArguments { Button("Add \(a)") { addArguments(a) }.buttonStyle(.borderedProminent) }
                     ForEach(h.suggested) { p in Button("Use \(p.title)") { switchGraphics(p) }.buttonStyle(.borderedProminent) }
+                })))
+        }
+        if let fc = folderChanges, let folder = OriginalFiles.folder(game) {
+            items.append(AttentionItem(id: "original-folder", view: AnyView(
+                NoticeCard(symbol: "exclamationmark.triangle", tint: .orange, title: "\(game.name) changed files in your folder",
+                           detail: "It \(fc.summary) in “\(folder.lastPathComponent)”, which it uses where it is. Games often save settings or progress beside their program. If you want this folder kept exactly as it was, stop here and add the game again as a copy (Add a Game → Existing game folder → Copy it); a copy on the same drive is instant.",
+                           evidence: fc.examples.joined(separator: ", ") + (fc.count > 3 ? " and \(fc.count - 3) more" : "")) {
+                    Button("Show Folder") { model.reveal(folder) }
+                    Button("That's Fine") { let g = game; Task.detached { OriginalFiles.record(g) }; folderChanges = nil }
+                        .help("Keeps watching, from how the folder is now.")
+                    Button("Stop Watching") { OriginalFiles.setAllowChanges(true, for: game); folderChanges = nil }.buttonStyle(.link)
                 })))
         }
         if let su = setup {
@@ -353,6 +366,7 @@ struct GameDetailView: View {
 
     @ViewBuilder var storageTab: some View {
         GameLocationSection(game: game).id("location-\(game.id)")
+        if let folder = OriginalFiles.folder(game) { OriginalFolderSection(game: game, folder: folder).id("original-\(game.id)") }
         if game.isSteamHost || BattleNet.isHost(game) || PCLaunchers.kind(of: game) != nil {
             LauncherDriveBox(host: game, name: game.isSteamHost ? "Steam" : BattleNet.isHost(game) ? "Battle.net" : PCLaunchers.kind(of: game)!.title)
                 .id("drives-\(game.id)")
@@ -834,5 +848,29 @@ struct SuggestionsBanner: View {
             out.append("Use \(o.hasPrefix("n") ? "the game's own" : o.isEmpty ? "no" : "Wine's") \(d).dll")
         }
         return out
+    }
+}
+
+
+/// Storage → Your Folder: a game that uses your own folder where it is, and whether Nokcandu keeps it unchanged.
+struct OriginalFolderSection: View {
+    @EnvironmentObject var model: AppModel
+    let game: InstalledGame
+    let folder: URL
+    @State private var protected = true
+
+    var body: some View {
+        SettingsSection(title: "Your Folder", info: "This game runs from your own folder instead of a copy, so nothing was copied and no extra space is used. With “Keep my folder unchanged” on, Nokcandu won't put fixes or settings into it, and after each session it tells you if the game itself changed files there (many games save settings beside their program).") {
+            SettingRow(title: "Folder") {
+                Text(folder.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                Button("Show") { model.reveal(folder) }.buttonStyle(.link)
+            }
+            SettingToggle(title: "Keep my folder unchanged",
+                          info: "On: fixes that would put files in this folder are refused, and changes the game makes are reported after it quits. Off: Nokcandu can change files here like in a copy (fixes keep their own Undo).",
+                          isOn: Binding(get: { protected }, set: { on in protected = on; OriginalFiles.setAllowChanges(!on, for: game) }))
+            SettingNote("Removing the game from Nokcandu leaves this folder where it is.")
+        }
+        .onAppear { protected = OriginalFiles.isProtected(game) }
     }
 }

@@ -232,3 +232,41 @@ final class LibraryDiscoveryTests: XCTestCase {
         XCTAssertEqual(inLibrary.map(\.folder.lastPathComponent), ["Nokcandu Games"])
     }
 }
+
+final class OriginalFilesTests: XCTestCase {
+    func testYourFolderIsKeptAndChangesAreReported() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nok-orig-\(UUID().uuidString)").resolvingSymlinksInPath()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("My Games/Old Game")
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent("Data"), withIntermediateDirectories: true)
+        try Data("exe".utf8).write(to: folder.appendingPathComponent("game.exe"))
+        try Data("cfg".utf8).write(to: folder.appendingPathComponent("Data/settings.cfg"))
+        let g = InstalledGame(appURL: root.appendingPathComponent("Old Game.app"), name: "Old Game")
+        try FileManager.default.createDirectory(at: g.support, withIntermediateDirectories: true)
+        XCTAssertNil(OriginalFiles.folder(g))
+        XCTAssertNoThrow(try OriginalFiles.check(g, writing: [folder.appendingPathComponent("d3d8.dll")], action: "A fix"), "copies aren't protected")
+
+        try folder.path.write(to: OriginalFiles.markerURL(g), atomically: true, encoding: .utf8)
+        XCTAssertTrue(OriginalFiles.isProtected(g))
+        // Writes reached through the game's C: link still count.
+        let link = root.appendingPathComponent("drive_c_Games")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: folder)
+        XCTAssertThrowsError(try OriginalFiles.check(g, writing: [link.appendingPathComponent("d3d8.dll")], action: "DirectX 8 compatibility"))
+        XCTAssertNoThrow(try OriginalFiles.check(g, writing: [root.appendingPathComponent("elsewhere.dll")], action: "A fix"))
+
+        OriginalFiles.record(g)
+        XCTAssertNil(OriginalFiles.checkForChanges(g), "nothing changed yet")
+        try Data("cfg2!".utf8).write(to: folder.appendingPathComponent("Data/settings.cfg"))
+        try Data("save".utf8).write(to: folder.appendingPathComponent("save1.sav"))
+        let c = try XCTUnwrap(OriginalFiles.checkForChanges(g))
+        XCTAssertEqual(c.changed, ["Data/settings.cfg"]); XCTAssertEqual(c.added, ["save1.sav"]); XCTAssertEqual(c.removed, [])
+        XCTAssertEqual(c.summary, "changed 1 file, added 1")
+        XCTAssertEqual(OriginalFiles.lastChanges(g)?.added, c.added)
+
+        OriginalFiles.record(g)          // "That's Fine"
+        XCTAssertNil(OriginalFiles.lastChanges(g))
+        OriginalFiles.setAllowChanges(true, for: g)
+        XCTAssertFalse(OriginalFiles.isProtected(g))
+        XCTAssertNoThrow(try OriginalFiles.check(g, writing: [link.appendingPathComponent("d3d8.dll")], action: "A fix"))
+    }
+}

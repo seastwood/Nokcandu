@@ -245,6 +245,7 @@ public enum BF1942DisplayFix {
     public static func applyRecommendedSetup(to game: InstalledGame,
                                             log: @escaping @Sendable (String) -> Void) async throws {
         var g = CompatibilityFixes.fresh(game)
+        try OriginalFiles.check(g, action: "Battlefield 1942's recommended setup")
         guard supports(g), menuUnavailable(for: g) == nil else {
             throw NokError("Choose a verified standalone Battlefield 1942 installation first.")
         }
@@ -276,6 +277,7 @@ public enum BF1942DisplayFix {
     public static func apply(to game: InstalledGame, size: [Int] = [1280, 800], recommended: Bool, includePresentation: Bool = true,
                              log: @escaping @Sendable (String) -> Void) async throws {
         let g = CompatibilityFixes.fresh(game)
+        try OriginalFiles.check(g, action: "Battlefield 1942's display settings")
         try CompatibilityFixes.begin(g); defer { CompatibilityFixes.end(g) }
         try CompatibilityFixes.requireClosed(g)
         guard let root = folder(g), var c = g.custom else { throw NokError("Choose a standalone BF1942 installation first.") }

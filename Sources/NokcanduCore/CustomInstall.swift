@@ -182,6 +182,7 @@ public enum CustomInstall {
                 try fm.createSymbolicLink(atPath: dst.path, withDestinationPath: src.path)
                 try src.path.write(to: ctx.support.appendingPathComponent("referenced-game-folder.txt"), atomically: true, encoding: .utf8)
                 ctx.log("Using existing files without copying: \(src.path). They will be kept when this app is removed.")
+                if let g = GameLibrary.inspect(ctx.targetApp) { OriginalFiles.record(g) }
                 return
             }
             // A copy can go to a folder of your choice (another drive, say): the game's C: folder then links to it.

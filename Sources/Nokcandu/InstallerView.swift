@@ -607,7 +607,7 @@ struct InstallerView: View {
                         Text("The copy is the game's own: fixes, settings and mods change the copy, and it's removed with the game. The original stays as it is.")
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     } else {
-                        Text("Nothing is copied and no extra space is used. The game runs from this folder, so fixes, settings and mods change files in it; it's kept if you remove the game. Its drive must be connected to play.")
+                        Text("Nothing is copied and no extra space is used. Nokcandu keeps this folder unchanged: fixes that would change it are refused, and if the game itself changes files there (many save settings beside their program), you're told after it quits. The folder is kept if you remove the game; its drive must be connected to play. Tip: a copy to a folder on the same Mac drive is instant and uses no extra space until the game changes something.")
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                     Button("Add Game") {
