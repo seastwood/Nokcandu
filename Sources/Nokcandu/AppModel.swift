@@ -455,6 +455,7 @@ final class AppModel: ObservableObject {
                 }
                 return (states, checkHelpers ? HelperActivation.statuses(for: snapshot) : previousHelpers, heavy)
             }.value
+            if runStates.values.contains(where: { if case .launcherRunning = $0 { return true }; return false }) { warnAboutPower() }
             for (game, session) in states.2 where memoryWarned.insert("\(game.id)#\(session.pid)").inserted {
                 let text = "\(game.name) is using \(MemoryWatch.gigabytes(session.peak)) of this Mac's \(MemoryWatch.gigabytes(MemoryWatch.physicalMemory)) memory. Closing other apps helps; its page has more after you quit."
                 say(text, game: game.id)
@@ -473,6 +474,19 @@ final class AppModel: ObservableObject {
         }
     }
     private var memoryWarned = Set<String>()
+    private var powerWarned = Set<String>()
+    /// Low Power Mode or a hot Mac slows games down; say so once each per launch of Nokcandu while something plays.
+    private func warnAboutPower() {
+        let info = ProcessInfo.processInfo
+        if info.isLowPowerModeEnabled, powerWarned.insert("low").inserted {
+            say("Low Power Mode is on, so games run slower. Turn it off in Control Center (Battery) for full speed.")
+        }
+        if info.thermalState == .serious || info.thermalState == .critical, powerWarned.insert("hot").inserted {
+            let text = "Your Mac is running hot, so macOS is slowing it down. A frame-rate limit (game page → Performance) or lower graphics settings keep games smoother and cooler."
+            say(text)
+            Notifier.post(title: "Your Mac is running hot", body: text, gameID: nil)
+        }
+    }
     private var lastHelperCheck = Date.distantPast
     private var helperCheckNeeded = true
     private var helpersMaintained = false

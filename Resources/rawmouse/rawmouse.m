@@ -823,6 +823,7 @@ static void watch_settings(void) {
 #include "cursor-visibility.m"
 #include "borderless-confinement.m"
 #include "keyremap.m"
+#include "priorities.m"
 
 static void image_added(const struct mach_header *mh, __unused intptr_t slide) {
     Dl_info info;
@@ -839,6 +840,7 @@ static void image_added(const struct mach_header *mh, __unused intptr_t slide) {
         guard_hot_corners();
         hook_metal_layer();
         if (atomic_load(&raw_enabled)) install();
+        if (is_game_app() && !this_is_launcher()) prio_watch_game_front();
         {   // per-environment key remapping (key-remap next to this library)
             Dl_info me;
             if (dladdr((const void *)install_key_remap, &me) && me.dli_fname) {
@@ -1126,12 +1128,14 @@ __attribute__((constructor)) static void start(void) {
             nokcandu_configure_program_fixes(argv[1], dirname(library));
         }
     }
+    if (argc > 1 && launcher_program(argv[1])) prio_watch_as_launcher();
     if (argc > 1 && nokcandu_background_program(argv[1])) {
         helper_enabled = false;
         if (responsible_for_itself()) run_from_game_app_as(true);
         return;
     }
     run_from_game_app();
+    if (is_game_app() && !this_is_launcher()) prio_game_process();
     const char *s = getenv("NOKCANDU_RAW_MOUSE_SCALE");
     if (s && atof(s) > 0.01 && atof(s) < 20) scale = atof(s);
     bool per_game_input = false;

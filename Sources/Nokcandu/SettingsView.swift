@@ -43,6 +43,15 @@ struct GeneralSettings: View {
                 Toggle("Mac notifications while Nokcandu is in the background", isOn: Binding(get: { Notifier.enabled }, set: { Notifier.enabled = $0; model.objectWillChange.send() }))
                 Text("When a store game is added, a game doesn't start, or a game is running low on memory. Click one to open that game.")
                     .font(.caption).foregroundStyle(.secondary)
+                Toggle("Lower store apps' priority while a game is in front", isOn: Binding(
+                    get: { !FileManager.default.fileExists(atPath: NokPaths.support.appendingPathComponent("launchers-normal-priority").path) },
+                    set: { on in
+                        let f = NokPaths.support.appendingPathComponent("launchers-normal-priority")
+                        if on { try? FileManager.default.removeItem(at: f) } else { try? NokPaths.ensure(NokPaths.support); FileManager.default.createFile(atPath: f.path, contents: Data()) }
+                        model.objectWillChange.send()
+                    }))
+                Text("Steam, Battle.net, the EA app and Ubisoft Connect keep running (downloads, sign-in, friends) but stop competing with the game for the processor until you switch to them. Games also ask macOS for its fastest cores.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Toggle("Take a restore point before big changes", isOn: Binding(get: { RestorePoints.automaticChosen }, set: { RestorePoints.automaticChosen = $0; model.objectWillChange.send() }))
                 Text("Before a fix, an engine change or Reset to Recommended, keeps one copy of the game's Windows environment to go back to (the newest replaces the last). Off by default: those changes have their own Undo, and you can take a restore point yourself any time in a game's Storage tab.")
                     .font(.caption).foregroundStyle(.secondary)
