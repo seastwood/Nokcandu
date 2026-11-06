@@ -49,7 +49,7 @@ struct GameControllersSection: View {
                 SettingNote("No controller connected. Plug one in or turn it on (Bluetooth controllers pair in System Settings → Bluetooth).")
             } else {
                 ForEach(connected) { c in
-                    SettingRow(title: c.name) {
+                    SettingRow(title: c.name + (c.kind == .gamepad ? "" : " · " + c.kind.title)) {
                         Text(Controllers.describe(c, mode: mode, steam: steam))
                             .font(.callout).foregroundStyle(c.isGamepad ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
                             .fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.trailing)

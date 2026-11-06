@@ -822,6 +822,7 @@ static void watch_settings(void) {
 
 #include "cursor-visibility.m"
 #include "borderless-confinement.m"
+#include "keyremap.m"
 
 static void image_added(const struct mach_header *mh, __unused intptr_t slide) {
     Dl_info info;
@@ -838,6 +839,13 @@ static void image_added(const struct mach_header *mh, __unused intptr_t slide) {
         guard_hot_corners();
         hook_metal_layer();
         if (atomic_load(&raw_enabled)) install();
+        {   // per-environment key remapping (key-remap next to this library)
+            Dl_info me;
+            if (dladdr((const void *)install_key_remap, &me) && me.dli_fname) {
+                char path[PATH_MAX]; strlcpy(path, me.dli_fname, sizeof path);
+                install_key_remap(dirname(path));
+            }
+        }
         watch_settings();
     });
 }

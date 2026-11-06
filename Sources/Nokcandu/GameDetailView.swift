@@ -330,6 +330,7 @@ struct GameDetailView: View {
     @ViewBuilder var controlsTab: some View {
         if hasControlsTab {
             MouseSection(game: game).id("mouse-\(game.id)")
+            KeyboardSection(game: game).id("keyboard-\(game.id)")
             GameControllersSection(game: game).id("controllers-\(game.id)")
         }
     }

@@ -397,6 +397,7 @@ final class AppModel: ObservableObject {
         Task {
             let states = await Task.detached(priority: .utility) {
                 HotCorners.recoverIfStale()
+                KeyRemap.recoverIfStale()
                 var states = GameLauncher.runStates(of: snapshot)
                 var heavy: [(InstalledGame, MemoryWatch.Session)] = []
                 for game in snapshot where game.native == nil {

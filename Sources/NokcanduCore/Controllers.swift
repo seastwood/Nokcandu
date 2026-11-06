@@ -112,7 +112,11 @@ public enum Controllers {
         /// It reports itself as a joystick or gamepad. Wine's Mac controller driver only takes those
         /// (the original Steam Controller presents keyboard, mouse and a Valve-specific interface instead).
         public var isGamepad: Bool
+        /// Its primary usage page (1 generic desktop, 2 simulation controls).
+        public var usagePage: Int = 1
+        public var usage: Int = 0
         public var family: Family? { Family.of(vendorID: vendorID) }
+        public var kind: Kind { Controllers.kind(vendorID: vendorID, productID: productID, usagePage: usagePage, usage: usage) }
         public var hasMotion: Bool {
             switch family {
             case .nintendo: return [0x2006, 0x2007, 0x2009, 0x200E, 0x2066, 0x2067, 0x2069].contains(productID)
@@ -124,6 +128,35 @@ public enum Controllers {
         public var ids: String { String(format: "%04X:%04X", vendorID, productID) }
     }
 
+    public enum Kind: String, Sendable {
+        case gamepad, wheel, flight, joystick
+        public var title: String {
+            switch self { case .gamepad: "Controller"; case .wheel: "Racing wheel or pedals"; case .flight: "Flight controls"; case .joystick: "Joystick" }
+        }
+        public var symbol: String {
+            switch self { case .gamepad: "gamecontroller"; case .wheel: "steeringwheel"; case .flight: "airplane"; case .joystick: "arcade.stick" }
+        }
+    }
+
+    /// Racing and flight gear makers (and the wheel/flight ranges of makers that also sell other things).
+    static let wheelMakers: Set<Int> = [0x0EB7 /* Fanatec */, 0x346E /* Moza */, 0x3670 /* Simagic */, 0x3416 /* Cammus */, 0x16D0 /* Simucube */, 0x30B7 /* Heusinkveld */, 0x1DD2 /* Leo Bodnar */]
+    static let flightMakers: Set<Int> = [0x231D /* VKB */, 0x3344 /* Virpil */, 0x294B /* Honeycomb */, 0x4098 /* WinWing */, 0x068E /* CH Products */, 0x06A3 /* Saitek */, 0x0738 /* Mad Catz */, 0x10F5 /* Turtle Beach */]
+    static let logitechWheels: Set<Int> = [0xC294, 0xC295, 0xC298, 0xC299, 0xC29A, 0xC29B, 0xC24F, 0xC260, 0xC261, 0xC262, 0xC266, 0xC267, 0xC26D, 0xC26E, 0xC268, 0xC272]
+    static let logitechFlight: Set<Int> = [0xC215, 0xC21A, 0xC21C, 0xC287, 0xC286, 0x0A38, 0xC2AB, 0xC2A8, 0xC2A9]
+
+    static func kind(vendorID v: Int, productID p: Int, usagePage: Int, usage: Int) -> Kind {
+        if wheelMakers.contains(v) { return .wheel }
+        if flightMakers.contains(v) { return .flight }
+        if v == 0x046D { if logitechWheels.contains(p) { return .wheel }; if logitechFlight.contains(p) { return .flight } }
+        if v == 0x044F {                                    // Thrustmaster: wheels are B6xx, flight sticks/throttles/pedals the rest
+            if (0xB650...0xB6FF).contains(p) && ![0xB679, 0xB687].contains(p) { return .wheel }
+            return usage == kHIDUsage_GD_GamePad ? .gamepad : .flight
+        }
+        if usagePage == 2 { return usage == 0x02 ? .wheel : .flight }       // simulation controls: automobile / flight…
+        if usage == kHIDUsage_GD_Joystick || usage == kHIDUsage_GD_MultiAxisController { return .joystick }
+        return .gamepad
+    }
+
     /// Game controllers connected to this Mac (reads their descriptions; nothing is opened).
     public static func connected() -> [Connected] {
         let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
@@ -132,6 +165,7 @@ public enum Controllers {
             [kIOHIDDeviceUsagePageKey: kHIDPage_GenericDesktop, kIOHIDDeviceUsageKey: kHIDUsage_GD_Joystick],
             [kIOHIDDeviceUsagePageKey: kHIDPage_GenericDesktop, kIOHIDDeviceUsageKey: kHIDUsage_GD_MultiAxisController],
             [kIOHIDVendorIDKey: Family.valve.vendorID],
+            [kIOHIDDeviceUsagePageKey: 0x02],                                // simulation controls (some pedals, yokes, panels)
         ]
         IOHIDManagerSetDeviceMatchingMultiple(manager, matches as CFArray)
         guard let set = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> else { return [] }
@@ -140,10 +174,12 @@ public enum Controllers {
         var byDevice: [String: Connected] = [:]
         for d in set {
             let page = int(d, kIOHIDPrimaryUsagePageKey), usage = int(d, kIOHIDPrimaryUsageKey)
-            let gamepad = page == kHIDPage_GenericDesktop && (usage == kHIDUsage_GD_GamePad || usage == kHIDUsage_GD_Joystick)
+            // What Wine takes on the Mac: generic-desktop gamepads and joysticks (and multi-axis controllers, through SDL).
+            let gamepad = page == kHIDPage_GenericDesktop && (usage == kHIDUsage_GD_GamePad || usage == kHIDUsage_GD_Joystick || usage == kHIDUsage_GD_MultiAxisController)
             let transport = str(d, kIOHIDTransportKey)?.lowercased() ?? ""
             let c = Connected(name: str(d, kIOHIDProductKey) ?? "Controller", vendorID: int(d, kIOHIDVendorIDKey), productID: int(d, kIOHIDProductIDKey),
-                              location: int(d, kIOHIDLocationIDKey), bluetooth: transport.contains("bluetooth"), isGamepad: gamepad)
+                              location: int(d, kIOHIDLocationIDKey), bluetooth: transport.contains("bluetooth"), isGamepad: gamepad,
+                              usagePage: page, usage: usage)
             // One physical controller can show several interfaces (the Steam Controller's keyboard and mouse); keep one.
             let key = "\(c.vendorID):\(c.productID):\(c.location)"
             if let existing = byDevice[key], existing.isGamepad || !c.isGamepad { continue }
@@ -155,7 +191,11 @@ public enum Controllers {
     /// How this controller reaches Windows programs here, in words.
     public static func describe(_ c: Connected, mode: Mode, steam: Bool) -> String {
         guard c.isGamepad else {
-            return "Not seen by Windows programs yet: Wine on the Mac only takes controllers that present themselves as gamepads."
+            return "Not seen by Windows programs yet: Wine on the Mac only takes devices that present themselves as gamepads or joysticks."
+        }
+        if c.family == nil, c.kind != .gamepad {
+            // Wheels, pedals and flight gear keep their own axes and buttons (Wine passes many through as the real device).
+            return "As itself: its own axes and buttons, for games with \(c.kind == .wheel ? "wheel" : "joystick") support."
         }
         if passesThrough(c.family, mode: mode, steam: steam) {
             return "As itself" + (c.hasMotion ? ", with gyro" : "") + (steam ? ". Steam Input handles it; set it up in Steam's controller settings." : ". Only games that support this controller can use it.")
