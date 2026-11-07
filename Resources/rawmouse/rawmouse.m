@@ -514,8 +514,19 @@ static BOOL swap(Class c, const char *sel, IMP mine, IMP *orig) {
     return YES;
 }
 
+// The mouse hardware readers, only for raw mouse capture (a controller profile alone needs just the event layout).
+static bool raw_input_started;
+static void start_raw_input(void) {
+    if (raw_input_started || !atomic_load(&raw_enabled)) return;
+    raw_input_started = true;
+    start_hid();
+    for (GCMouse *m in GCMouse.mice) watch_mouse(m);
+    [NSNotificationCenter.defaultCenter addObserverForName:GCMouseDidConnectNotification object:nil
+        queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { watch_mouse(n.object); }];
+}
+
 static void install(void) {
-    if (installed) return;
+    if (installed) { start_raw_input(); return; }
     Class app = objc_getClass("WineApplicationController"), queue = objc_getClass("WineEventQueue");
     Ivar iv = app ? class_getInstanceVariable(app, "clientWantsCursorHidden") : NULL;
     if (!app || !queue || !iv || !objc_getClass("WineWindow") ||
@@ -533,10 +544,7 @@ static void install(void) {
     swap(queue, "postEvent:", (IMP)my_postEvent, &orig_postEvent);
 
     installed = YES;
-    start_hid();
-    for (GCMouse *m in GCMouse.mice) watch_mouse(m);
-    [NSNotificationCenter.defaultCenter addObserverForName:GCMouseDidConnectNotification object:nil
-        queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { watch_mouse(n.object); }];
+    start_raw_input();
     [NSNotificationCenter.defaultCenter addObserverForName:NSApplicationDidResignActiveNotification object:nil
         queue:NSOperationQueue.mainQueue usingBlock:^(__unused NSNotification *n) { update_aiming(controller()); }];
     // The game hides/shows its cursor without moving the mouse, so re-check the aiming state often.
@@ -798,7 +806,7 @@ static void apply_raw_settings(bool on, double sc, bool sm, bool announce) {
     });
     frame_sync_off = !(settings_frame_sync || frame_sync_env);
     atomic_store(&raw_enabled, on);
-    if (on && !installed) install();
+    if (on) install();
     if (announce) note(@"raw mouse capture %@ (speed %.2f, smooth %@, once per frame %@)", on ? @"on" : @"off", sc, sm ? @"on" : @"off", frame_sync_off ? @"off" : @"on");
     if (was && !on) update_aiming(controller());        // hand the pointer back right away
 }
@@ -840,8 +848,6 @@ static void image_added(const struct mach_header *mh, __unused intptr_t slide) {
         watch_display(app_name());
         guard_hot_corners();
         hook_metal_layer();
-        if (atomic_load(&raw_enabled)) install();
-        if (is_game_app() && !this_is_launcher()) prio_watch_game_front();
         {   // per-environment key remapping (key-remap next to this library)
             Dl_info me;
             if (dladdr((const void *)install_key_remap, &me) && me.dli_fname) {
@@ -851,6 +857,11 @@ static void image_added(const struct mach_header *mh, __unused intptr_t slide) {
                 install_pad_game(dirname(path));
             }
         }
+        // Raw mouse capture, or a controller profile (its movement goes into Wine's event queue, which needs
+        // winemac's event layout learned the same way).
+        struct stat pad_st;
+        if (atomic_load(&raw_enabled) || (pad_map_path[0] && stat(pad_map_path, &pad_st) == 0)) install();
+        if (is_game_app() && !this_is_launcher()) prio_watch_game_front();
         watch_settings();
     });
 }

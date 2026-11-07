@@ -43,6 +43,12 @@ final class AppModel: ObservableObject {
     @Published var launchProblems: [String: String] = [:]
     @Published var showWhatsNew = false
     @Published var showSeveralGames = false
+    enum SidebarTab: String { case games, profiles }
+    @Published var sidebarTab: SidebarTab = SidebarTab(rawValue: UserDefaults.standard.string(forKey: "sidebarTab") ?? "") ?? .games {
+        didSet { UserDefaults.standard.set(sidebarTab.rawValue, forKey: "sidebarTab") }
+    }
+    /// Selected in the Profiles tab: "pad:<id>", "keys:<id>" or "mac".
+    @Published var profileSelection: String? = "mac"
     @Published var librarySearch = ""
     @Published var focusSearch = false
     @Published var libraryFilter: LibraryFilter = .all
@@ -208,6 +214,7 @@ final class AppModel: ObservableObject {
             if !libraryLoaded, games.isEmpty, !UserDefaults.standard.bool(forKey: "welcomeDone") { showWelcome = true }
             libraryLoaded = true
             MacGameKeys.shared.start(games: games)
+            DesktopPad.shared.games = games
             DesktopPad.shared.start()
             if firstLoad { discoverLibraries() }
             didRefresh()

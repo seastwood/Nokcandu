@@ -29,6 +29,8 @@ struct GameControllersSection: View {
 
         Automatic: as itself in Steam (Steam Input takes care of it); elsewhere PlayStation controllers as themselves and others as Xbox controllers.
 
+        Not at all: Windows programs don't see controllers or joysticks — for games played with a controller profile that turns buttons into keys and mouse.
+
         \(scope) Takes effect the next time the game or launcher starts.
         """
     }
@@ -44,8 +46,8 @@ struct GameControllersSection: View {
                 .labelsHidden().frame(width: 280)
                 .disabled(working || running)
             }
-            if let c = contents, PadProfiles.inUse(contents: c) {
-                SettingNote("A controller profile is on here, so controllers reach games as an Xbox controller through it (from the next start of \(steam ? "Steam" : "the game")).\(steam ? " Turn off Steam Input for the game (its Properties → Controller) so Steam doesn't remap the controller as well." : "")")
+            if let g = KeyRemap.gameContents(for: game), PadProfiles.effective(contents: g, shared: KeyRemap.isShared(game)) != nil, mode != .hidden {
+                SettingNote("This game uses a controller profile, and still sees the controller itself too. If it reacts to both, choose “Not at all (profiles only)”.\(steam ? " Turn off Steam Input for the game (its Properties → Controller) so Steam doesn't remap the controller as well." : "")")
             }
             if running { SettingNote("Quit the game\(steam || game.battleNet != nil || game.hosted != nil ? " and its launcher" : "") to change this.") }
             if connected.isEmpty {

@@ -326,6 +326,13 @@ static void pad_mouse_move(int dx, int dy) {
     if (pad_post_relative(dx, dy)) { pad_moves_relative++; return; }
     pad_moves_warp++;
     CGPoint p = pad_cursor(); p.x += dx; p.y += dy;
+    NSWindow *kw = NSApp.keyWindow;
+    if (kw) {           // stay inside the game's window (Mac screen coordinates are y-down here)
+        CGFloat top = NSMaxY(NSScreen.screens.firstObject.frame);
+        NSRect f = [kw contentRectForFrameRect:kw.frame];
+        p.x = fmin(fmax(p.x, NSMinX(f) + 1), NSMaxX(f) - 2);
+        p.y = fmin(fmax(p.y, top - NSMaxY(f) + 1), top - NSMinY(f) - 2);
+    }
     bool drag = pad_buttons_down[0] || pad_buttons_down[1];
     CGEventRef cg = CGEventCreateMouseEvent(NULL, drag ? (pad_buttons_down[0] ? kCGEventLeftMouseDragged : kCGEventRightMouseDragged) : kCGEventMouseMoved,
                                             p, pad_buttons_down[1] && !pad_buttons_down[0] ? kCGMouseButtonRight : kCGMouseButtonLeft);
@@ -362,9 +369,12 @@ static void pad_write_active(bool active) {
     fclose(f);
     rename(tmp, pad_active_path);
 }
+// Nokcandu sends a profile's mouse movement here while this game is in front. Profiles inside Wine's controller
+// driver (pad-active) are only used when "pad-driver" is present next to this library.
+static char pad_driver_flag[PATH_MAX];
 static void pad_activate(void) {
     struct stat st;
-    if (stat(pad_map_path, &st) != 0) { pad_write_active(false); return; }
+    bool driver = stat(pad_driver_flag, &st) == 0 && stat(pad_map_path, &st) == 0;
     if (pad_listen < 0) {
         char path[104]; pad_socket_path(getpid(), path, sizeof path);
         unlink(path);
@@ -392,7 +402,7 @@ static void pad_activate(void) {
             atexit_b(^{ unlink(sockpath); });
         } else if (s >= 0) close(s);
     }
-    pad_write_active(true);
+    pad_write_active(driver);
 }
 static void pad_resign(void) {
     pad_release_local();
@@ -406,6 +416,7 @@ static void install_pad_game(const char *folder) {
     if (!folder) return;
     snprintf(pad_map_path, sizeof pad_map_path, "%s/pad-map", folder);
     snprintf(pad_active_path, sizeof pad_active_path, "%s/pad-active", folder);
+    snprintf(pad_driver_flag, sizeof pad_driver_flag, "%s/pad-driver", folder);
     // A game inside a shared launcher may have a profile of its own: pad-map.tsv routes its programs to it.
     int argc = *_NSGetArgc(); char **argv = *_NSGetArgv();
     if (argc > 1) {

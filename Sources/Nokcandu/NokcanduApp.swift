@@ -84,55 +84,95 @@ struct LibraryView: View {
         openSettings()
     }
 
+    @ViewBuilder var gamesList: some View {
+        List(selection: $model.selection) {
+            if !model.favoriteGames.filter(model.matchesLibrary).isEmpty {
+                Section("Favorites") {
+                    ForEach(model.favoriteGames.filter(model.matchesLibrary)) { g in row(g) }
+                }
+            }
+            Section {
+                ForEach(model.sortedGames.filter(model.matchesLibrary)) { g in row(g) }
+                    .onMove { model.moveGames(from: $0, to: $1) }
+                    .moveDisabled(filtering)
+            } header: {
+                Text("Games")
+            }
+            if !model.offlineApps.isEmpty {
+                Section("Drive not connected") {
+                    ForEach(model.offlineApps.indices, id: \.self) { i in
+                        let o = model.offlineApps[i]
+                        HStack(spacing: 10) {
+                            Image(systemName: "externaldrive.badge.xmark").font(.title2).foregroundStyle(.orange).frame(width: 32, height: 32)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(o.name).font(.headline).foregroundStyle(.secondary)
+                                Text("Connect \(o.drive) to play").font(.caption).foregroundStyle(.orange)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                        .selectionDisabled()
+                    }
+                }
+            }
+            if !model.launcherApps.filter(model.matchesLibrary).isEmpty {
+                Section("Launchers") {
+                    ForEach(model.launcherApps.filter(model.matchesLibrary)) { g in row(g) }
+                }
+            }
+        }
+        // The list's own primary action: double-click (or Return) plays, without the extra tap
+        // recognizer that delayed or swallowed single clicks on rows.
+        .contextMenu(forSelectionType: InstalledGame.ID.self) { ids in
+            if let id = ids.first, let g = model.games.first(where: { $0.id == id }) { GameContextMenu(game: g) }
+        } primaryAction: { ids in
+            guard let id = ids.first, let g = model.games.first(where: { $0.id == id }) else { return }
+            if !model.isRunning(g) || g.isSteamHost { model.play(g) }
+        }
+        .searchable(text: $model.librarySearch, placement: .sidebar, prompt: "Search games")
+        .modifier(SearchFocusModifier(request: $model.focusSearch))
+        .modifier(SoftTopEdge())
+        .overlay {
+            if filtering && model.games.allSatisfy({ !model.matchesLibrary($0) }) {
+                ContentUnavailableView.search(text: model.librarySearch)
+            } else if model.libraryLoaded && model.games.isEmpty {
+                ContentUnavailableView("No games yet", systemImage: "gamecontroller",
+                                       description: Text("Install a game or set up Steam with the buttons below. Game apps live in \(NokPaths.gameAppsFolder.path.replacingOccurrences(of: NokPaths.home.path, with: "~"))."))
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            VStack(alignment: .leading, spacing: 8) {
+                Button { model.openStores() } label: {
+                    Label("Game Stores…", systemImage: "bag")
+                }
+                InstallationShortcut(m: model.installer) { model.showInstaller = true }
+                Button { model.showInstaller = true } label: {
+                    Label("Add a Game…", systemImage: "plus.circle")
+                }
+                Button { model.profileFocus = nil; model.showProfiles = true } label: {
+                    Label("Game Profiles…", systemImage: "square.stack.3d.up")
+                }
+            }
+            .buttonStyle(.borderless)
+            .labelStyle(AlignedIconLabelStyle())
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
     var body: some View {
         NavigationSplitView {
-            List(selection: $model.selection) {
-                if !model.favoriteGames.filter(model.matchesLibrary).isEmpty {
-                    Section("Favorites") {
-                        ForEach(model.favoriteGames.filter(model.matchesLibrary)) { g in row(g) }
-                    }
-                }
-                Section {
-                    ForEach(model.sortedGames.filter(model.matchesLibrary)) { g in row(g) }
-                        .onMove { model.moveGames(from: $0, to: $1) }
-                        .moveDisabled(filtering)
-                } header: {
-                    Text("Games")
-                }
-                if !model.offlineApps.isEmpty {
-                    Section("Drive not connected") {
-                        ForEach(model.offlineApps.indices, id: \.self) { i in
-                            let o = model.offlineApps[i]
-                            HStack(spacing: 10) {
-                                Image(systemName: "externaldrive.badge.xmark").font(.title2).foregroundStyle(.orange).frame(width: 32, height: 32)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(o.name).font(.headline).foregroundStyle(.secondary)
-                                    Text("Connect \(o.drive) to play").font(.caption).foregroundStyle(.orange)
-                                }
-                            }
-                            .padding(.vertical, 2)
-                            .selectionDisabled()
-                        }
-                    }
-                }
-                if !model.launcherApps.filter(model.matchesLibrary).isEmpty {
-                    Section("Launchers") {
-                        ForEach(model.launcherApps.filter(model.matchesLibrary)) { g in row(g) }
-                    }
-                }
+            Group {
+                if model.sidebarTab == .profiles { ProfilesSidebar() } else { gamesList }
             }
-            // The list's own primary action: double-click (or Return) plays, without the extra tap
-            // recognizer that delayed or swallowed single clicks on rows.
-            .contextMenu(forSelectionType: InstalledGame.ID.self) { ids in
-                if let id = ids.first, let g = model.games.first(where: { $0.id == id }) { GameContextMenu(game: g) }
-            } primaryAction: { ids in
-                guard let id = ids.first, let g = model.games.first(where: { $0.id == id }) else { return }
-                if !model.isRunning(g) || g.isSteamHost { model.play(g) }
+            .safeAreaInset(edge: .top) {
+                Picker("Show", selection: $model.sidebarTab) {
+                    Text("Games").tag(AppModel.SidebarTab.games)
+                    Text("Profiles").tag(AppModel.SidebarTab.profiles)
+                }
+                .pickerStyle(.segmented).labelsHidden()
+                .padding(.horizontal, 10).padding(.vertical, 6)
             }
-            .searchable(text: $model.librarySearch, placement: .sidebar, prompt: "Search games")
-            .modifier(SearchFocusModifier(request: $model.focusSearch))
             .navigationSplitViewColumnWidth(min: 236, ideal: 260)
-            .modifier(SoftTopEdge())
             .toolbar {
                 if #available(macOS 26.0, *) { ToolbarSpacer(.flexible) }
                 // Sort and filter share one button so the sidebar's buttons all fit when it's narrow.
@@ -165,34 +205,10 @@ struct LibraryView: View {
                     .help(model.updateCount > 0 ? "Settings — \(model.updateCount) update\(model.updateCount == 1 ? "" : "s") available" : "Settings")
                 }
             }
-            .overlay {
-                if filtering && model.games.allSatisfy({ !model.matchesLibrary($0) }) {
-                    ContentUnavailableView.search(text: model.librarySearch)
-                } else if model.libraryLoaded && model.games.isEmpty {
-                    ContentUnavailableView("No games yet", systemImage: "gamecontroller",
-                                           description: Text("Install a game or set up Steam with the buttons below. Game apps live in \(NokPaths.gameAppsFolder.path.replacingOccurrences(of: NokPaths.home.path, with: "~"))."))
-                }
-            }
-            .safeAreaInset(edge: .bottom) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Button { model.openStores() } label: {
-                        Label("Game Stores…", systemImage: "bag")
-                    }
-                    InstallationShortcut(m: model.installer) { model.showInstaller = true }
-                    Button { model.showInstaller = true } label: {
-                        Label("Add a Game…", systemImage: "plus.circle")
-                    }
-                    Button { model.profileFocus = nil; model.showProfiles = true } label: {
-                        Label("Game Profiles…", systemImage: "square.stack.3d.up")
-                    }
-                }
-                .buttonStyle(.borderless)
-                .labelStyle(AlignedIconLabelStyle())
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
         } detail: {
-            if let g = model.selectedGame {
+            if model.sidebarTab == .profiles {
+                ProfilesTabDetail()
+            } else if let g = model.selectedGame {
                 GameDetailView(game: g).id(g.id)
             } else {
                 ContentUnavailableView("Choose a game", systemImage: "gamecontroller")

@@ -172,6 +172,12 @@ public enum PadProfiles {
         /// Keys: up, down, left, right (Mac key codes; W S A D).
         public var keys = [13, 1, 0, 2]
         public var invertY = false
+        /// Left/right and up/down speed, 1 = as set (stored only when changed, so older profiles still read).
+        public var xScale: Double?
+        public var yScale: Double?
+        /// Mouse: extra speed while held at the edge (0.5 = up to 1.5×), and how long it takes to get there.
+        public var edgeBoost: Double?
+        public var edgeBoostTime: Double?
         public init(mode: StickMode = .stick) { self.mode = mode }
     }
 
@@ -201,6 +207,13 @@ public enum PadProfiles {
         public var stickFullSpeed = 300.0
         public var stickMinimum = 0.1
         public var autoCalibrate = true
+        public var xScale: Double?
+        public var yScale: Double?
+        /// How much turning (yaw) and tilting (roll) move left and right (1 = fully). Unset: from `turn`.
+        public var yawAmount: Double?
+        public var rollAmount: Double?
+        public var yaw: Double { yawAmount ?? (turn == .roll ? 0 : 1) }
+        public var roll: Double { rollAmount ?? (turn == .yaw ? 0 : 1) }
         public init(output: GyroOutput = .off) { self.output = output }
     }
     public struct Triggers: Codable, Hashable, Sendable {
@@ -281,7 +294,7 @@ public enum PadProfiles {
         var lines = ["nokpad 1"]
         let g = m.gyro
         let gout: String = { switch g.output { case .off: "off"; case .mouse: "mouse"; case .leftStick: "lstick"; case .rightStick: "rstick" } }()
-        lines.append("gyro out=\(gout) on=\(g.startsOn ? 1 : 0) min=\(n(g.sensitivity)) max=\(n(g.fastSensitivity ?? g.sensitivity)) lo=\(n(g.slowSpeed)) hi=\(n(g.fastSpeed)) smooth=\(n(g.smoothing)) tight=\(n(g.tightening)) invx=\(g.invertX ? 1 : 0) invy=\(g.invertY ? 1 : 0) yaw=\(g.turn.rawValue) stickfull=\(n(g.stickFullSpeed)) stickmin=\(n(g.stickMinimum)) cal=\(g.autoCalibrate ? "auto" : "off")")
+        lines.append("gyro out=\(gout) on=\(g.startsOn ? 1 : 0) min=\(n(g.sensitivity)) max=\(n(g.fastSensitivity ?? g.sensitivity)) lo=\(n(g.slowSpeed)) hi=\(n(g.fastSpeed)) smooth=\(n(g.smoothing)) tight=\(n(g.tightening)) invx=\(g.invertX ? 1 : 0) invy=\(g.invertY ? 1 : 0) yaw=\(g.turn.rawValue) stickfull=\(n(g.stickFullSpeed)) stickmin=\(n(g.stickMinimum)) cal=\(g.autoCalibrate ? "auto" : "off") xs=\(n(g.xScale ?? 1)) ys=\(n(g.yScale ?? 1)) yw=\(n(g.yaw)) rw=\(n(g.roll))")
         for (i, s) in [m.left, m.right].enumerated() {
             let mode: String, to: Int
             switch s.mode {
@@ -293,7 +306,7 @@ public enum PadProfiles {
             case .off: mode = "none"; to = i
             }
             let k = s.keys.count == 4 ? s.keys : [13, 1, 0, 2]
-            lines.append("stick \(i) mode=\(mode) to=\(to) dz=\(n(s.deadzone)) outer=\(n(s.outer)) sens=\(n(s.speed)) power=\(n(s.curve)) flick360=\(n(s.countsPerTurn)) flicktime=\(n(s.flickTime)) keys=\(k.map(String.init).joined(separator: ",")) invy=\(s.invertY ? 1 : 0)")
+            lines.append("stick \(i) mode=\(mode) to=\(to) dz=\(n(s.deadzone)) outer=\(n(s.outer)) sens=\(n(s.speed)) power=\(n(s.curve)) flick360=\(n(s.countsPerTurn)) flicktime=\(n(s.flickTime)) keys=\(k.map(String.init).joined(separator: ",")) invy=\(s.invertY ? 1 : 0) xs=\(n(s.xScale ?? 1)) ys=\(n(s.yScale ?? 1)) ramp=\(n(s.edgeBoost ?? 0)) ramptime=\(n(s.edgeBoostTime ?? 0.4))")
         }
         for t in 0..<2 { lines.append("trigger \(t) soft=\(n(m.triggers.soft)) full=\(n(m.triggers.full))") }
         for (l, layer) in m.layers.enumerated().prefix(8) {
@@ -471,7 +484,13 @@ public enum PadProfiles {
         else { refresh(environments: environments, shared: shared, file: file, defaultFile: df) }
     }
 
-    /// Whether an environment has a profile in use (its controllers then go through Wine's SDL driver).
+    /// Profiles applied inside Wine's controller driver (needed only for controller-button outputs); off unless
+    /// "pad-driver" is present in the environment.
+    public static func driverInUse(contents: URL) -> Bool {
+        FileManager.default.fileExists(atPath: folder(contents).appendingPathComponent("pad-driver").path) && inUse(contents: contents)
+    }
+
+    /// Whether an environment has a profile in use.
     public static func inUse(contents: URL) -> Bool {
         FileManager.default.fileExists(atPath: mapFile(contents).path) || FileManager.default.fileExists(atPath: routesFile(contents).path)
     }
@@ -484,7 +503,7 @@ public enum PadProfiles {
     public static func ensureDriverHelper(contents: URL) -> Bool {
         let helper = contents.appendingPathComponent("SharedSupport/nokcandu/nokcandu-rawmouse.dylib")
         let user = contents.appendingPathComponent("SharedSupport/prefix/user.reg")
-        guard inUse(contents: contents), FileManager.default.fileExists(atPath: helper.path),
+        guard driverInUse(contents: contents), FileManager.default.fileExists(atPath: helper.path),
               FileManager.default.fileExists(atPath: user.path) else { return false }
         let text = (try? String(contentsOf: user, encoding: .utf8)) ?? ""
         if text.contains(RegistryText.string(helper.path).dropFirst().dropLast()) { return false }

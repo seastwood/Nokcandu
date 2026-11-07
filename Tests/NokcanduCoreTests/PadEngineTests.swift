@@ -283,11 +283,44 @@ final class PadDriverHelperTests: XCTestCase {
         try Data("WINE REGISTRY Version 2\n\n[Environment] 1792876383\n#time=1\n\"TEMP\"=\"C:\\\\temp\"\n".utf8).write(to: user)
         XCTAssertFalse(PadProfiles.ensureDriverHelper(contents: c))          // no profile: nothing
         try Data("nokpad 1\n".utf8).write(to: PadProfiles.mapFile(c))
+        XCTAssertFalse(PadProfiles.ensureDriverHelper(contents: c))          // profiles run in Nokcandu unless asked
+        try Data().write(to: nok.appendingPathComponent("pad-driver"))
         XCTAssertTrue(PadProfiles.ensureDriverHelper(contents: c))
         let text = try String(contentsOf: user, encoding: .utf8)
         XCTAssertTrue(text.contains("\"DYLD_INSERT_LIBRARIES\"=\""))
         XCTAssertTrue(text.contains("nokcandu-rawmouse.dylib\""))
         XCTAssertTrue(text.contains("\"TEMP\""))
         XCTAssertFalse(PadProfiles.ensureDriverHelper(contents: c))          // once
+    }
+}
+
+final class PadAxisSpeedTests: XCTestCase {
+    func testStickMouseSpeedsPerAxis() {
+        let r = PadRecorder("stick 1 mode=mouse sens=1000 power=1 dz=0 outer=1 xs=2 ys=0.5")
+        pe_axis(r.engine, Int32(PE_AXIS_RX), 23170, 1)
+        pe_axis(r.engine, Int32(PE_AXIS_RY), -23170, 1)       // up-right
+        for i in 1...25 { r.tick(1 + Double(i) * 0.004) }
+        XCTAssertEqual(Double(r.mouse.x), 141, accuracy: 4)     // 0.707 × 1000 × 0.1 s × 2
+        XCTAssertEqual(Double(r.mouse.y), -35, accuracy: 3)     // × 0.5, up
+    }
+}
+
+final class PadGyroDirectionTests: XCTestCase {
+    /// Turning right (−yaw) and tilting right (−roll) both move the mouse right, in every turn setting.
+    func testTurningAndTiltingRightGoRight() {
+        for (mode, x, z) in [("yaw", -0.5, 0.0), ("roll", 0.0, -0.5), ("both", -0.3, -0.3)] {
+            let r = PadRecorder("gyro out=mouse min=10 cal=off yaw=\(mode)")
+            for i in 0...50 { pe_gyro(r.engine, 0, Float(x), Float(z), 1 + Double(i) * 0.01) }
+            XCTAssertGreaterThan(r.mouse.x, 50, mode)
+        }
+    }
+}
+
+final class PadEdgeBoostTests: XCTestCase {
+    func testHoldingAtTheEdgeSpeedsUp() {
+        let r = PadRecorder("stick 1 mode=mouse sens=1000 power=1 dz=0 outer=1 ramp=1 ramptime=0.2")
+        pe_axis(r.engine, Int32(PE_AXIS_RX), 32767, 1)
+        for i in 1...100 { r.tick(1 + Double(i) * 0.004) }         // 0.4 s: 0.2 s ramping, 0.2 s at 2×
+        XCTAssertEqual(Double(r.mouse.x), 700, accuracy: 15)
     }
 }

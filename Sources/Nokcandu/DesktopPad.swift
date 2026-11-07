@@ -4,21 +4,30 @@ import ApplicationServices
 import NokcanduCore
 import NokcanduPadEngine
 
-/// A controller profile on the Mac itself: the controller works the pointer, clicks and keys in any app, with a
-/// profile per app if you like. It steps aside while a Nokcandu game that has a profile of its own is in front
-/// (that game's profile applies inside it), and while an app set to "Off" is in front. Keys and mouse go to macOS
-/// like a real keyboard and mouse (needs Accessibility permission); controller-button outputs don't apply here.
+/// Nokcandu's controller remapping. Whatever app is in front gets its profile: a Nokcandu game uses the profile
+/// chosen on its page ("Controller as it is" leaves the controller alone), any other app uses its own choice
+/// (Settings), and everything else the Mac profile when that's on. Keys and clicks go to macOS like a real
+/// keyboard and mouse (Accessibility permission); a Nokcandu game's mouse movement goes straight into the game,
+/// the same way raw mouse capture works, so aiming stays exact. Controller-button outputs don't apply here (the
+/// game sees the real controller, unless it's hidden from the game's Windows environment).
 @MainActor
 final class DesktopPad: ObservableObject {
     static let shared = DesktopPad()
 
-    static let onKey = "desktopPadOn", profileKey = "desktopPadProfile", rulesKey = "desktopPadApps"
+    static let onKey = "desktopPadOn", profileKey = "desktopPadProfile", rulesKey = "desktopPadApps", masterKey = "padProfilesOff"
     @Published var on: Bool = UserDefaults.standard.bool(forKey: onKey) { didSet { UserDefaults.standard.set(on, forKey: Self.onKey); evaluate() } }
     @Published var profileID: String? = UserDefaults.standard.string(forKey: profileKey) { didSet { UserDefaults.standard.set(profileID, forKey: Self.profileKey); evaluate(force: true) } }
     /// App bundle id → profile id, or "off".
     @Published var rules: [String: String] = (UserDefaults.standard.dictionary(forKey: rulesKey) as? [String: String]) ?? [:] {
         didSet { UserDefaults.standard.set(rules, forKey: Self.rulesKey); evaluate(force: true) }
     }
+    /// Every profile on or off (the quick switch in the menu bar, for playing something Nokcandu doesn't know).
+    @Published var enabled: Bool = !UserDefaults.standard.bool(forKey: masterKey) { didSet { UserDefaults.standard.set(!enabled, forKey: Self.masterKey); evaluate(force: true) } }
+    /// The library, to recognise Nokcandu games in front.
+    var games: [InstalledGame] = [] { didSet { evaluate() } }
+    /// The front app's Wine process when it's a Nokcandu game (its movement goes into the game).
+    private var gamePID: pid_t = 0
+    private var sock: Int32 = -1
     /// What's happening now, for the menu and Settings.
     @Published private(set) var status = "Off"
     @Published private(set) var trusted = AXIsProcessTrusted()
@@ -65,6 +74,30 @@ final class DesktopPad: ObservableObject {
         trusted = AXIsProcessTrustedWithOptions(opts)
     }
 
+    /// The Nokcandu game a running app belongs to: the game's app itself, its program inside a launcher
+    /// (…/SharedSupport/GameApp/<Game>.app), or a Mac game.
+    func game(for app: NSRunningApplication?) -> InstalledGame? {
+        guard let url = app?.bundleURL?.resolvingSymlinksInPath() else { return nil }
+        let path = url.path
+        if let r = path.range(of: "/Contents/SharedSupport/GameApp/") {
+            let host = URL(fileURLWithPath: String(path[..<r.lowerBound]) + "/Contents").standardizedFileURL
+            let name = url.deletingPathExtension().lastPathComponent
+            return games.first { $0.name == name && WineTools.hostContents(for: $0)?.resolvingSymlinksInPath().standardizedFileURL == host }
+                ?? games.first { $0.name == name }
+        }
+        return games.first { NokPaths.sameApp($0.appURL.path, url) || ($0.native.map { NokPaths.sameApp($0.appPath, url) } ?? false) }
+    }
+
+    /// The profile a game uses (nil: the controller as it is).
+    static func profile(for g: InstalledGame, all: [PadProfiles.Profile]) -> PadProfiles.Profile? {
+        guard let c = KeyRemap.gameContents(for: g) else { return nil }
+        let shared = KeyRemap.isShared(g)
+        if shared, PadProfiles.choice(contents: c, shared: true) == .sameAsLauncher {
+            return KeyRemap.contents(for: g).flatMap { PadProfiles.effective(contents: $0, all: all) }
+        }
+        return PadProfiles.effective(contents: c, shared: shared, all: all)
+    }
+
     /// Picks the profile for the app in front (or none) and (re)builds the engine when it changes.
     func evaluate(force: Bool = false) {
         trusted = AXIsProcessTrusted()
@@ -72,14 +105,19 @@ final class DesktopPad: ObservableObject {
         let id = front?.bundleIdentifier ?? ""
         var chosen: PadProfiles.Profile?
         let all = PadProfiles.profiles()
-        if !on { status = "Off" }
-        else if Self.gameUsesOwnProfile(front) { status = "Paused: \(front?.localizedName ?? "the game") uses its own profile" }
-        else if let rule = rules[id], rule == "off" { status = "Paused for \(front?.localizedName ?? "this app")" }
-        else if let p = (rules[id].flatMap { r in all.first { $0.id == r } }) ?? profileID.flatMap({ pid in all.first { $0.id == pid } }) {
-            chosen = p
-            status = "On: \(p.name)" + (rules[id] != nil ? " (for \(front?.localizedName ?? "this app"))" : "")
-        } else { status = "On, but no profile chosen" }
-        if on && chosen != nil && !trusted { status = "Needs Accessibility permission" }
+        let g = game(for: front)
+        gamePID = g != nil && g?.native == nil ? (front?.processIdentifier ?? 0) : 0
+        if !enabled { status = "All profiles off" }
+        else if let g {
+            chosen = Self.profile(for: g, all: all)
+            status = chosen.map { "\(g.name): \($0.name)" } ?? "\(g.name): controller as it is"
+        } else if let rule = rules[id] {
+            if rule == "off" { status = "Off for \(front?.localizedName ?? "this app")" }
+            else if let p = all.first(where: { $0.id == rule }) { chosen = p; status = "\(front?.localizedName ?? "This app"): \(p.name)" }
+        } else if on, let p = profileID.flatMap({ pid in all.first { $0.id == pid } }) {
+            chosen = p; status = "Mac: \(p.name)"
+        } else { status = on ? "Mac: no profile chosen" : "Waiting for a game" }
+        if chosen != nil && !trusted { status = "Needs Accessibility permission" }
         let text = (chosen != nil && trusted) ? PadProfiles.compile(chosen!, all: all) : ""
         if text == compiled && !force { return }
         compiled = text
@@ -171,8 +209,12 @@ final class DesktopPad: ObservableObject {
         ev.post(tap: .cghidEventTap)
     }
     private func move(_ dx: Int, _ dy: Int) {
+        if gamePID > 0, sendToGame(kind: 3, code: 0, dx: dx, dy: dy) { return }
         var p = cursor
         p.x += CGFloat(dx); p.y += CGFloat(dy)
+        if gamePID > 0, let w = gameWindow(gamePID) {          // keep the pointer inside the game's window
+            p.x = min(max(p.x, w.minX + 1), w.maxX - 2); p.y = min(max(p.y, w.minY + 28), w.maxY - 2)
+        }
         let bounds = NSScreen.screens.reduce(CGRect.null) { r, s in
             let f = s.frame, top = NSScreen.screens.first?.frame.maxY ?? f.maxY
             return r.union(CGRect(x: f.minX, y: top - f.maxY, width: f.width, height: f.height))
@@ -185,6 +227,30 @@ final class DesktopPad: ObservableObject {
         ev.flags = flags
         ev.post(tap: .cghidEventTap)
     }
+    /// The game's biggest window on screen (Mac screen coordinates, y down).
+    private func gameWindow(_ pid: pid_t) -> CGRect? {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
+        return list.filter { ($0[kCGWindowOwnerPID as String] as? Int32) == pid && ($0[kCGWindowLayer as String] as? Int) == 0 }
+            .compactMap { ($0[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0) } }
+            .max { $0.width * $0.height < $1.width * $1.height }
+    }
+
+    /// Movement straight into the front Nokcandu game (its helper listens while it's in front).
+    private func sendToGame(kind: UInt8, code: Int16, dx: Int, dy: Int) -> Bool {
+        if sock < 0 { sock = socket(AF_UNIX, SOCK_DGRAM, 0) }
+        guard sock >= 0 else { return false }
+        var addr = sockaddr_un(); addr.sun_family = sa_family_t(AF_UNIX)
+        let path = "/tmp/nokcandu-pad-\(getuid())-\(gamePID).sock"
+        _ = withUnsafeMutableBytes(of: &addr.sun_path) { buf in path.utf8CString.withUnsafeBytes { src in memcpy(buf.baseAddress!, src.baseAddress!, min(buf.count - 1, src.count)) } }
+        var msg: (UInt8, UInt8, Int16, Int32, Int32) = (kind, 0, code, Int32(dx), Int32(dy))
+        let sent = withUnsafePointer(to: &addr) { a in
+            a.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                withUnsafeBytes(of: &msg) { m in sendto(sock, m.baseAddress, 12, MSG_DONTWAIT, sa, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+            }
+        }
+        return sent == 12
+    }
+
     private func wheel(_ n: Int) {
         CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: Int32(n), wheel2: 0, wheel3: 0)?.post(tap: .cghidEventTap)
     }

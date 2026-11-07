@@ -12,6 +12,8 @@ struct ControllerProfileEditor: View {
     let gameName: String
     let all: [PadProfiles.Profile]
     let onChange: (PadProfiles.Profile) -> Void
+    /// Shown inside the Profiles tab (no Done button; stacks when narrow).
+    var embedded = false
 
     @State private var layerIndex = 0
     @State private var selection: Part = .input(.a)
@@ -24,9 +26,9 @@ struct ControllerProfileEditor: View {
 
     enum Part: Hashable { case input(PadProfiles.Input), stick(Int), gyro, triggers }
 
-    init(profile: PadProfiles.Profile, own: Bool, gameName: String, all: [PadProfiles.Profile], onChange: @escaping (PadProfiles.Profile) -> Void) {
+    init(profile: PadProfiles.Profile, own: Bool, gameName: String, all: [PadProfiles.Profile], embedded: Bool = false, onChange: @escaping (PadProfiles.Profile) -> Void) {
         _profile = State(initialValue: profile)
-        self.own = own; self.gameName = gameName; self.all = all; self.onChange = onChange
+        self.own = own; self.gameName = gameName; self.all = all; self.onChange = onChange; self.embedded = embedded
     }
 
     /// Everything resolved, for showing what comes from profiles underneath.
@@ -39,33 +41,46 @@ struct ControllerProfileEditor: View {
         merged.layers.first { $0.name.caseInsensitiveCompare(layerName) == .orderedSame }?.bindings[i]
     }
 
+    var left: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            layerBar
+            ControllerPicture(family: family, selection: $selection, tester: tester,
+                              mapped: { i in profile.layers[layerIndex][i] != nil || inherited(i) != nil },
+                              label: { i in shortLabel(i) })
+                .frame(width: 560, height: 400)
+            ExtraButtons(tester: tester, family: family, selection: $selection,
+                         mapped: { i in profile.layers[layerIndex][i] != nil || inherited(i) != nil })
+            PadTestView(tester: tester, family: family)
+        }
+        .frame(width: 560)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
-            HStack(alignment: .top, spacing: 16) {
-                VStack(alignment: .leading, spacing: 10) {
-                    layerBar
-                    ControllerPicture(family: family, selection: $selection, tester: tester,
-                                      mapped: { i in profile.layers[layerIndex][i] != nil || inherited(i) != nil },
-                                      label: { i in shortLabel(i) })
-                        .frame(width: 560, height: 400)
-                    ExtraButtons(tester: tester, family: family, selection: $selection,
-                                 mapped: { i in profile.layers[layerIndex][i] != nil || inherited(i) != nil })
-                    PadTestView(tester: tester, family: family)
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 16) {
+                    left
+                    Form { inspector }.formStyle(.grouped).frame(minWidth: 400, maxWidth: .infinity)
                 }
-                Form { inspector }
-                    .formStyle(.grouped)
-                    .frame(minWidth: 400, maxWidth: .infinity)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        left
+                        Form { inspector }.formStyle(.grouped).frame(width: 560, height: 560)
+                    }
+                }
             }
-            HStack {
-                Text("Changes are saved as you make them and apply on the next press, even while playing.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+            if !embedded {
+                HStack {
+                    Text("Changes are saved as you make them and apply on the next press, even while playing.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+                }
             }
         }
-        .padding(20)
-        .frame(minWidth: 1020, minHeight: 720)
+        .padding(embedded ? 16 : 20)
+        .frame(minWidth: embedded ? 560 : 1020, minHeight: embedded ? 500 : 720)
         .onAppear {
             family = Controllers.connected().first { $0.kind == .gamepad }?.family
             tester.start(profile: PadProfiles.compile(profile, all: everything))
@@ -241,7 +256,8 @@ struct ControllerProfileEditor: View {
             switch st.wrappedValue.mode {
             case .mouse:
                 slider("Speed", st.speed, 200...6000, "%.0f /s")
-                slider("Curve", st.curve, 1...3, "%.1f", info: "1 is straight; higher starts slower for fine aim and still reaches full speed.")
+                axisSliders(x: Binding(get: { st.wrappedValue.xScale ?? 1 }, set: { var v = st.wrappedValue; v.xScale = $0 == 1 ? nil : $0; st.wrappedValue = v }),
+                            y: Binding(get: { st.wrappedValue.yScale ?? 1 }, set: { var v = st.wrappedValue; v.yScale = $0 == 1 ? nil : $0; st.wrappedValue = v }))
             case .flick:
                 slider("One full turn", st.countsPerTurn, 500...20000, "%.0f", info: "Mouse movement that turns the game's camera all the way round. Flick the stick right: it should turn exactly 90°.")
                 slider("Flick time", st.flickTime, 0...0.3, "%.2f s")
@@ -261,7 +277,28 @@ struct ControllerProfileEditor: View {
                 Text("Push the stick to the edge to turn to face that way; rotate it around the edge to keep turning. Pairs well with gyro aim.").font(.caption).foregroundStyle(.secondary)
             }
         }
+        if st.wrappedValue.mode == .mouse {
+            Section("Acceleration") {
+                Picker("Curve", selection: Binding(get: { CurvePreset.of(st.wrappedValue.curve) }, set: { var v = st.wrappedValue; if let c = $0.value { v.curve = c }; st.wrappedValue = v })) {
+                    ForEach(CurvePreset.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                slider("Curve", st.curve, 0.5...4, "%.2f", info: "How speed rises as you push the stick: 1 is straight, higher starts slower for fine aim and still reaches full speed, below 1 is quicker off the centre.")
+                CurveGraph(power: st.wrappedValue.curve, deadzone: st.wrappedValue.deadzone, boost: st.wrappedValue.edgeBoost ?? 0)
+                    .frame(height: 90)
+                slider("Speed up at the edge", Binding(get: { st.wrappedValue.edgeBoost ?? 0 }, set: { var v = st.wrappedValue; v.edgeBoost = $0 < 0.025 ? nil : ($0 * 20).rounded() / 20; st.wrappedValue = v }),
+                       0...3, "+%.0f%%", scale: 100, info: "Holding the stick all the way out speeds the turn up over time, for quick turns without making fine aim faster.")
+                if (st.wrappedValue.edgeBoost ?? 0) > 0 {
+                    slider("Over", Binding(get: { st.wrappedValue.edgeBoostTime ?? 0.4 }, set: { var v = st.wrappedValue; v.edgeBoostTime = $0; st.wrappedValue = v }), 0.05...2, "%.2f s")
+                }
+            }
+        }
         if st.wrappedValue.mode != .off {
+            if st.wrappedValue.mode == .stick || st.wrappedValue.mode == .otherStick {
+                Section("Speed") {
+                    axisSliders(x: Binding(get: { st.wrappedValue.xScale ?? 1 }, set: { var v = st.wrappedValue; v.xScale = $0 == 1 ? nil : $0; st.wrappedValue = v }),
+                                y: Binding(get: { st.wrappedValue.yScale ?? 1 }, set: { var v = st.wrappedValue; v.yScale = $0 == 1 ? nil : $0; st.wrappedValue = v }))
+                }
+            }
             Section("Response") {
                 slider("Dead zone", st.deadzone, 0...0.5, "%.2f", info: "How far the stick moves before it counts. Raise it if the stick drifts.")
                 slider("Full at", st.outer, 0.5...1, "%.2f", info: "How far out the stick counts as fully pushed.")
@@ -288,7 +325,6 @@ struct ControllerProfileEditor: View {
         Section {
             Picker("Moves", selection: g.output) { ForEach(PadProfiles.GyroOutput.allCases, id: \.self) { Text($0.title).tag($0) } }
             if g.wrappedValue.output != .off {
-                Picker("Left and right from", selection: g.turn) { ForEach(PadProfiles.GyroTurn.allCases, id: \.self) { Text($0.title).tag($0) } }
                 Picker("When", selection: g.startsOn) {
                     Text("Always, unless a “Gyro off” button is held").tag(true)
                     Text("Only while a “Gyro on” button is held").tag(false)
@@ -302,9 +338,19 @@ struct ControllerProfileEditor: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
+        if g.wrappedValue.output != .off {
+            Section("Left and right comes from") {
+                slider("Turning (yaw)", Binding(get: { g.wrappedValue.yaw }, set: { var v = g.wrappedValue; v.yawAmount = ($0 * 20).rounded() / 20; v.rollAmount = v.roll; g.wrappedValue = v }),
+                       0...2, "%.0f%%", scale: 100, info: "Turning the controller left and right, like turning a steering wheel lying flat.")
+                slider("Tilting (roll)", Binding(get: { g.wrappedValue.roll }, set: { var v = g.wrappedValue; v.rollAmount = ($0 * 20).rounded() / 20; v.yawAmount = v.yaw; g.wrappedValue = v }),
+                       0...2, "%.0f%%", scale: 100, info: "Tilting the controller sideways. Some players like a mix of both: it feels natural however you hold the controller.")
+            }
+        }
         if g.wrappedValue.output == .mouse {
             Section("Sensitivity") {
                 slider("Sensitivity", g.sensitivity, 0.5...40, "%.1f", info: "Mouse movement per degree turned.")
+                axisSliders(x: Binding(get: { g.wrappedValue.xScale ?? 1 }, set: { var v = g.wrappedValue; v.xScale = $0 == 1 ? nil : $0; g.wrappedValue = v }),
+                            y: Binding(get: { g.wrappedValue.yScale ?? 1 }, set: { var v = g.wrappedValue; v.yScale = $0 == 1 ? nil : $0; g.wrappedValue = v }))
                 Toggle("Faster when turning fast", isOn: Binding(get: { g.wrappedValue.fastSensitivity != nil },
                                                                set: { var x = g.wrappedValue; x.fastSensitivity = $0 ? x.sensitivity * 2 : nil; g.wrappedValue = x }))
                 if g.wrappedValue.fastSensitivity != nil {
@@ -343,6 +389,14 @@ struct ControllerProfileEditor: View {
         } footer: {
             Text("A trigger with nothing set stays a trigger. Set \(PadProfiles.Input.rt.title(family)) and \(PadProfiles.Input.rtfull.title(family)) to different things for a two-stage trigger.").font(.caption).foregroundStyle(.secondary)
         }
+    }
+
+    /// Left/right and up/down speed as percentages of the main setting.
+    @ViewBuilder func axisSliders(x: Binding<Double>, y: Binding<Double>) -> some View {
+        slider("Left and right", Binding(get: { x.wrappedValue }, set: { x.wrappedValue = ($0 * 20).rounded() / 20 }), 0.25...3, "%.0f%%", scale: 100,
+               info: "Speed of left and right movement compared with the main speed (100% is the same).")
+        slider("Up and down", Binding(get: { y.wrappedValue }, set: { y.wrappedValue = ($0 * 20).rounded() / 20 }), 0.25...3, "%.0f%%", scale: 100,
+               info: "Many players like up and down a little slower than left and right.")
     }
 
     func slider(_ title: String, _ v: Binding<Double>, _ range: ClosedRange<Double>, _ fmt: String, scale: Double = 1, info: String? = nil) -> some View {
@@ -632,5 +686,41 @@ struct ExtraButtons: View {
             }
             Button { selection = .triggers } label: { Text("Trigger pull").font(.caption) }.buttonStyle(.link)
         }
+    }
+}
+
+
+enum CurvePreset: String, CaseIterable {
+    case quick, straight, smooth, precise, custom
+    var title: String { switch self { case .quick: "Quick off the centre"; case .straight: "Straight"; case .smooth: "Smooth"; case .precise: "Precise"; case .custom: "Custom" } }
+    var value: Double? { switch self { case .quick: 0.7; case .straight: 1; case .smooth: 1.5; case .precise: 2.5; case .custom: nil } }
+    static func of(_ v: Double) -> CurvePreset { allCases.first { $0.value.map { abs($0 - v) < 0.01 } ?? false } ?? .custom }
+}
+
+/// Output speed against how far the stick is pushed (with the dead zone and edge speed-up).
+struct CurveGraph: View {
+    let power: Double, deadzone: Double, boost: Double
+    var body: some View {
+        Canvas { ctx, size in
+            let w = size.width, h = size.height, top = 1 + boost
+            var grid = Path()
+            for f in [0.25, 0.5, 0.75] { grid.move(to: CGPoint(x: w * f, y: 0)); grid.addLine(to: CGPoint(x: w * f, y: h)) }
+            ctx.stroke(grid, with: .color(.secondary.opacity(0.15)), lineWidth: 0.5)
+            var curve = Path()
+            for i in 0...100 {
+                let x = Double(i) / 100
+                let r = x <= deadzone ? 0 : (x - deadzone) / (1 - deadzone)
+                let y = pow(r, power) / top
+                let p = CGPoint(x: x * w, y: h - y * h)
+                if i == 0 { curve.move(to: p) } else { curve.addLine(to: p) }
+            }
+            ctx.stroke(curve, with: .color(.accentColor), lineWidth: 2)
+            if boost > 0 {
+                var b = Path(); b.move(to: CGPoint(x: w, y: h - h / top)); b.addLine(to: CGPoint(x: w, y: 0))
+                ctx.stroke(b, with: .color(.accentColor.opacity(0.6)), style: StrokeStyle(lineWidth: 2, dash: [3, 3]))
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.04)))
+        .accessibilityLabel("Speed curve")
     }
 }

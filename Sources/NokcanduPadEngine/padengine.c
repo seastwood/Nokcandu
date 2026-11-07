@@ -42,6 +42,8 @@ typedef struct {
     double dz, outer, sens, power, flick360, flicktime;
     int keys[4];
     bool invy;
+    double xs, ys;               // left/right and up/down speed (1 = as set)
+    double ramp, ramptime, edge, ramp_t;   // mouse: speed up the longer it's held at the edge
     // state
     double x, y;                 // −1…1, y up
     bool flicking; double flick_left, flick_rate, last_angle; bool in_flick;
@@ -82,6 +84,7 @@ struct pe_engine {
     int gyro_out, gyro_yaw; bool gyro_default, gyro_toggled; int gyro_on_holds, gyro_off_holds;
     double g_min, g_max, g_lo, g_hi, g_smooth, g_tight, g_stickfull, g_stickmin;
     bool g_invx, g_invy, g_autocal, uses_gyro;
+    double g_xs, g_ys, g_yw, g_rw;     // how much turning (yaw) and tilting (roll) move left and right
     double cal_x, cal_y, cal_z, still_since, last_gyro;
     double smooth_buf[16][2]; int smooth_i;
     double g_rest_x, g_rest_y, gyro_stick_x, gyro_stick_y;
@@ -144,11 +147,11 @@ pe_engine *pe_create(const char *text, pe_sink sink) {
     for (int s = 0; s < 2; s++) {
         stick_t *k = &e->stick[s];
         k->mode = S_PAD; k->to = s; k->dz = 0.12; k->outer = 0.95; k->sens = 1500; k->power = 1.5;
-        k->flick360 = 4000; k->flicktime = 0.1; k->keys[0] = 13; k->keys[1] = 1; k->keys[2] = 0; k->keys[3] = 2;  // W S A D
+        k->flick360 = 4000; k->flicktime = 0.1; k->xs = 1; k->ys = 1; k->keys[0] = 13; k->keys[1] = 1; k->keys[2] = 0; k->keys[3] = 2;  // W S A D
         e->trig_soft[s] = 0.3; e->trig_full[s] = 0.95;
     }
     e->gyro_out = G_OFF; e->gyro_default = true; e->g_min = 8; e->g_max = 8; e->g_lo = 0; e->g_hi = 75;
-    e->g_smooth = 0; e->g_tight = 0; e->g_stickfull = 300; e->g_stickmin = 0.1; e->g_autocal = true;
+    e->g_smooth = 0; e->g_tight = 0; e->g_xs = 1; e->g_ys = 1; e->g_yw = 1; e->g_rw = 0; e->g_stickfull = 300; e->g_stickmin = 0.1; e->g_autocal = true;
     char *copy = strdup(text), *lsave;
     for (char *line = strtok_r(copy, "\n", &lsave); line; line = strtok_r(NULL, "\n", &lsave)) {
         char *words[24]; int nw = 0; char *wsave;
@@ -170,6 +173,9 @@ pe_engine *pe_create(const char *text, pe_sink sink) {
             e->g_invx = opt_d(OPT("invx"), 0) != 0; e->g_invy = opt_d(OPT("invy"), 0) != 0;
             e->g_stickfull = opt_d(OPT("stickfull"), 300); e->g_stickmin = opt_d(OPT("stickmin"), 0.1);
             const char *c = OPT("cal"); e->g_autocal = !c || strcmp(c, "off");
+            e->g_xs = opt_d(OPT("xs"), 1); e->g_ys = opt_d(OPT("ys"), 1);
+            double yw = e->gyro_yaw == Y_ROLL ? 0 : 1, rw = e->gyro_yaw == Y_YAW ? 0 : 1;
+            e->g_yw = opt_d(OPT("yw"), yw); e->g_rw = opt_d(OPT("rw"), rw);
         } else if (!strcmp(words[0], "stick") && nw > 1) {
             int s = atoi(words[1]); if (s < 0 || s > 1) continue;
             stick_t *k = &e->stick[s];
@@ -180,6 +186,8 @@ pe_engine *pe_create(const char *text, pe_sink sink) {
             k->sens = opt_d(OPT("sens"), k->sens); k->power = opt_d(OPT("power"), k->power);
             k->flick360 = opt_d(OPT("flick360"), k->flick360); k->flicktime = opt_d(OPT("flicktime"), k->flicktime);
             k->invy = opt_d(OPT("invy"), 0) != 0;
+            k->xs = opt_d(OPT("xs"), 1); k->ys = opt_d(OPT("ys"), 1);
+            k->ramp = opt_d(OPT("ramp"), 0); k->ramptime = opt_d(OPT("ramptime"), 0.4); k->edge = opt_d(OPT("edge"), 0.9);
             const char *ks = OPT("keys");
             if (ks) sscanf(ks, "%d,%d,%d,%d", &k->keys[0], &k->keys[1], &k->keys[2], &k->keys[3]);
         } else if (!strcmp(words[0], "trigger") && nw > 1) {
@@ -436,7 +444,7 @@ static void update_pad_sticks(pe_engine *e) {
         stick_t *k = &e->stick[s];
         if (k->mode != S_PAD) continue;
         double x, y, m; stick_shape(k, k->x, k->y, &x, &y, &m);
-        sx[k->to] += x; sy[k->to] += k->invy ? -y : y;
+        sx[k->to] += x * k->xs; sy[k->to] += (k->invy ? -y : y) * k->ys;
     }
     sx[0] += e->gyro_stick_x * (e->gyro_out == G_LSTICK); sy[0] += e->gyro_stick_y * (e->gyro_out == G_LSTICK);
     sx[1] += e->gyro_stick_x * (e->gyro_out == G_RSTICK); sy[1] += e->gyro_stick_y * (e->gyro_out == G_RSTICK);
@@ -489,9 +497,11 @@ static void sticks_continuous(pe_engine *e, double dt) {
         stick_t *k = &e->stick[s];
         if (k->mode == S_MOUSE) {
             double x, y, m; stick_shape(k, k->x, k->y, &x, &y, &m);
+            if (m >= k->edge && k->ramp > 0) k->ramp_t += dt; else k->ramp_t = 0;
             if (m > 0) {
-                double speed = k->sens * pow(m, k->power) * dt;
-                mouse_out(e, x / m * speed, -(k->invy ? -y : y) / m * speed);
+                double boost = k->ramp > 0 ? 1 + k->ramp * fmin(1, k->ramptime > 0 ? k->ramp_t / k->ramptime : 1) : 1;
+                double speed = k->sens * pow(m, k->power) * boost * dt;
+                mouse_out(e, x / m * speed * k->xs, -(k->invy ? -y : y) / m * speed * k->ys);
             }
         } else if (k->mode == S_FLICK && k->flicking) {
             double step = k->flick_rate * dt;
@@ -540,7 +550,9 @@ void pe_gyro(pe_engine *e, float gx, float gy, float gz, double now) {
         } else e->still_since = 0;
     }
     x -= e->cal_x; y -= e->cal_y; z -= e->cal_z;
-    double yaw = e->gyro_yaw == Y_ROLL ? -z : e->gyro_yaw == Y_BOTH ? (y - z) : y;   // left +
+    // Right-handed axes (x right, y out of the face, z towards the player), counter-clockwise positive: turning
+    // right is −y, tilting right is −z — the same sign, so "both" adds them. Left is +.
+    double yaw = y * e->g_yw + z * e->g_rw;
     double ox = -yaw, oy = -x;                       // right +, down + (mouse)
     if (e->g_invx) ox = -ox;
     if (e->g_invy) oy = -oy;
@@ -564,13 +576,13 @@ void pe_gyro(pe_engine *e, float gx, float gy, float gz, double now) {
             double f = (mag - e->g_lo) / (e->g_hi - e->g_lo); f = fmax(0, fmin(1, f));
             sens = e->g_min + (e->g_max - e->g_min) * f;
         }
-        mouse_out(e, ox * sens * dt, oy * sens * dt);
+        mouse_out(e, ox * sens * dt * e->g_xs, oy * sens * dt * e->g_ys);
     } else {
         double sx = 0, sy = 0;
         if (on && mag > 0) {
             double r = mag / e->g_stickfull; if (r > 1) r = 1;
             double out = e->g_stickmin + (1 - e->g_stickmin) * r;
-            sx = ox / mag * out * (mag > 0.5); sy = -oy / mag * out * (mag > 0.5);
+            sx = ox / mag * out * (mag > 0.5) * e->g_xs; sy = -oy / mag * out * (mag > 0.5) * e->g_ys;
         }
         e->gyro_stick_x = sx; e->gyro_stick_y = sy;
         update_pad_sticks(e);

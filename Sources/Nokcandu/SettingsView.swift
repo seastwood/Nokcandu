@@ -1,5 +1,6 @@
 import GameController
 import SwiftUI
+import ServiceManagement
 import AppKit
 import NokcanduCore
 
@@ -328,6 +329,11 @@ struct DesktopPadSettings: View {
                     }
                 }
                 Button("Add an App…") { addApp() }
+                Toggle("Open Nokcandu at login, in the menu bar", isOn: Binding(get: { SMAppService.mainApp.status == .enabled }, set: { on in
+                    if on { try? SMAppService.mainApp.register(); UserDefaults.standard.set(true, forKey: MenuBarSetting.key) } else { try? SMAppService.mainApp.unregister() }
+                    pad.objectWillChange.send()
+                }))
+                .help("So your controller works on the Mac from the moment you sign in, without opening Nokcandu.")
                     .help("Choose an app to give its own profile, or to turn the controller profile off in (for example games with their own controller support).")
             }
         }

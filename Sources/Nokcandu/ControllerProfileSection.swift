@@ -40,7 +40,7 @@ struct ControllerProfileSection: View {
 
     Profiles are shared: changing one changes every game using it, and one can be the default for all games. A profile can build on others — anything it doesn't set comes from them.
 
-    With a profile on, controllers reach the game as an Xbox controller (plus any keys and mouse). Changes apply on the next press, even while playing.
+    Nokcandu applies the profile while the game is in front — keys and clicks as a real keyboard and mouse, movement straight into the game. “Controller as it is” leaves the controller to the game's own controls. Changes apply on the next press, even while playing. All profiles are also in the sidebar's Profiles tab.
     """
 
     var body: some View {
@@ -49,7 +49,7 @@ struct ControllerProfileSection: View {
                 Picker("Profile", selection: Binding(get: { tag }, set: choose)) {
                     if shared { Text("Same as \(launcher)").tag("launcher") }
                     Text("Default (\(defaultProfile?.name ?? "controller as it is"))").tag("default")
-                    Text("Controller as it is").tag("none")
+                    Text("Controller as it is (the game's own controls)").tag("none")
                     if choice == .own { Text("Just for this game").tag("own") }
                     if !profiles.isEmpty { Divider() }
                     ForEach(profiles) { p in Text(p.name + (p.id == defaultID ? " (default)" : "")).tag(p.id) }
@@ -60,7 +60,9 @@ struct ControllerProfileSection: View {
             if let p = shownProfile {
                 SettingNote(summary(p))
                 HStack {
-                    Button("Edit \(choice == .own ? "This Game's Profile" : p.name)…") { edit(p, own: choice == .own) }
+                    Button("Edit \(choice == .own ? "This Game's Profile" : p.name)…") {
+                        if choice == .own { edit(p, own: true) } else { model.sidebarTab = .profiles; model.profileSelection = "pad:" + p.id }
+                    }
                     if choice == .followDefault { Text("Editing changes the default for every game using it.").font(.caption).foregroundStyle(.secondary) }
                 }
             } else if choice == .sameAsLauncher {
@@ -158,9 +160,10 @@ struct ControllerProfileSection: View {
 
     /// The controller makers that reach Windows as themselves need a restart to go through the profile instead.
     func noteRestart() {
+        NotificationCenter.default.post(name: .padProfilesChanged, object: nil)
         guard let host = WineTools.hostContents(for: game) else { return }
         if model.games.contains(where: { WineTools.hostContents(for: $0) == host && model.isRunning($0) }) {
-            model.say("Applies from the next press. If a PlayStation, Switch or Steam controller doesn't follow it yet, restart the game.")
+            model.say("Applies from the next press.")
         } else {
             Task.detached(priority: .utility) { Controllers.refresh(contents: host) }
         }

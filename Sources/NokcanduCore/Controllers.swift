@@ -14,13 +14,14 @@ import IOKit.hid
 /// Hidraw), only while that environment is closed; Wine reads them when it starts.
 public enum Controllers {
     public enum Mode: String, Codable, CaseIterable, Identifiable, Sendable {
-        case automatic, native, xbox
+        case automatic, native, xbox, hidden
         public var id: String { rawValue }
         public var title: String {
             switch self {
             case .automatic: "Automatic"
             case .native: "As itself"
             case .xbox: "As an Xbox controller"
+            case .hidden: "Not at all (profiles only)"
             }
         }
     }
@@ -51,7 +52,7 @@ public enum Controllers {
     public static func plan(_ mode: Mode, steam: Bool) -> [Family: Bool?] {
         switch mode {
         case .native: return Dictionary(uniqueKeysWithValues: Family.allCases.map { ($0, true) })
-        case .xbox: return Dictionary(uniqueKeysWithValues: Family.allCases.map { ($0, false) })
+        case .xbox, .hidden: return Dictionary(uniqueKeysWithValues: Family.allCases.map { ($0, false) })
         case .automatic:
             return steam ? Dictionary(uniqueKeysWithValues: Family.allCases.map { ($0, true) })
                          : Dictionary(uniqueKeysWithValues: Family.allCases.map { ($0, Optional<Bool>.none) })
@@ -77,8 +78,19 @@ public enum Controllers {
         let system = contents.appendingPathComponent("SharedSupport/prefix/system.reg")
         guard FileManager.default.fileExists(atPath: system.path) else { throw NokError("This Windows environment hasn't been set up yet.") }
         try apply(plan(effective(mode, contents: contents), steam: isSteamEnvironment(contents)), system: system)
+        try applyHidden(mode == .hidden, system: system)
         try NokPaths.ensure(settingsURL(contents).deletingLastPathComponent())
         try JSONEncoder().encode(Saved(mode: mode)).write(to: settingsURL(contents), options: .atomic)
+    }
+
+    /// "Not at all": Wine's controller driver offers no controllers or joysticks to Windows programs, so a game
+    /// played with a profile (keys and mouse) doesn't also react to the controller itself.
+    static func applyHidden(_ hidden: Bool, system: URL) throws {
+        let key = #"System\\CurrentControlSet\\Services\\WineBus"#
+        for (name, on) in [("Enable SDL", 0), ("DisableHidraw", 1), ("DisableInput", 1)] {
+            if hidden { _ = try RegistryText.set(system, key: key, name: name, value: String(format: "dword:%08x", on)) { _ in true } }
+            else { _ = try RegistryText.remove(system, key: key, name: name) }
+        }
     }
 
     static func apply(_ plan: [Family: Bool?], system: URL) throws {
@@ -94,7 +106,7 @@ public enum Controllers {
 
     /// With a controller profile in use, every controller goes through Wine's SDL driver (where the profile is
     /// applied) and reaches the game as an Xbox controller.
-    public static func effective(_ mode: Mode, contents: URL) -> Mode { PadProfiles.inUse(contents: contents) ? .xbox : mode }
+    public static func effective(_ mode: Mode, contents: URL) -> Mode { PadProfiles.driverInUse(contents: contents) && mode != .hidden ? .xbox : mode }
 
     /// Re-applies a saved choice (and a controller profile's needs) when the registry is out of step — after Repair,
     /// or a profile set while the game was open. Only while the environment is closed; cheap when nothing changes.
@@ -109,7 +121,8 @@ public enum Controllers {
               (try? String(contentsOf: marker, encoding: .utf8)) != want,
               FileManager.default.fileExists(atPath: system.path),
               WineTools.ownedProcesses(contents: contents).isEmpty else { return }
-        if (try? apply(plan(effective(mode(contents: contents), contents: contents), steam: isSteamEnvironment(contents)), system: system)) != nil {
+        if (try? apply(plan(effective(mode(contents: contents), contents: contents), steam: isSteamEnvironment(contents)), system: system)) != nil,
+           (try? applyHidden(mode(contents: contents) == .hidden, system: system)) != nil {
             try? Data(want.utf8).write(to: marker, options: .atomic)
         }
     }
