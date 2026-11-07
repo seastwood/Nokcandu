@@ -11,6 +11,8 @@ struct ProfilesSidebar: View {
     @State private var padDefault: String?
     @State private var keysDefault: String?
     @State private var usage: [String: [String]] = [:]       // profile id → game names
+    @State private var renaming: String?                      // "pad:<id>" or "keys:<id>"
+    @State private var renameText = ""
 
     var body: some View {
         List(selection: $model.profileSelection) {
@@ -32,9 +34,8 @@ struct ProfilesSidebar: View {
                     Text("None yet").foregroundStyle(.secondary).selectionDisabled()
                 }
                 ForEach(pads) { p in
-                    row(title: p.name, subtitle: padSubtitle(p), symbol: "gamecontroller")
+                    row(title: p.name, subtitle: padSubtitle(p), symbol: "gamecontroller", active: pad.activeID == p.id && pad.enabled)
                         .tag("pad:" + p.id)
-                        .contextMenu { padMenu(p) }
                 }
             }
             Section("Keyboard Layouts") {
@@ -47,6 +48,18 @@ struct ProfilesSidebar: View {
                 }
             }
         }
+        // Right-click any profile or layout.
+        .contextMenu(forSelectionType: String.self) { ids in
+            if let id = ids.first {
+                if id.hasPrefix("pad:"), let p = pads.first(where: { $0.id == String(id.dropFirst(4)) }) { padMenu(p) }
+                else if id.hasPrefix("keys:"), let l = layouts.first(where: { $0.id == String(id.dropFirst(5)) }) { layoutMenu(l) }
+            }
+        }
+        .alert("Rename", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("Name", text: $renameText)
+            Button("Rename") { finishRename() }.disabled(renameText.trimmingCharacters(in: .whitespaces).isEmpty)
+            Button("Cancel", role: .cancel) { renaming = nil }
+        } message: { Text("Games using it keep using it.") }
         .safeAreaInset(edge: .bottom) {
             VStack(alignment: .leading, spacing: 8) {
                 Menu {
@@ -69,15 +82,20 @@ struct ProfilesSidebar: View {
         .onChange(of: model.libraryRevision) { _, _ in load() }
     }
 
-    func row(title: String, subtitle: String, symbol: String) -> some View {
+    func row(title: String, subtitle: String, symbol: String, active: Bool = false) -> some View {
         HStack(spacing: 10) {
             Image(systemName: symbol).font(.title2).foregroundStyle(Color.accentColor).frame(width: 32, height: 32)
+                .overlay(alignment: .bottomTrailing) {
+                    if active { Circle().fill(.green).frame(width: 10, height: 10).overlay(Circle().stroke(Color(nsColor: .windowBackgroundColor), lineWidth: 2)).offset(x: 2, y: 2) }
+                }
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.headline).lineLimit(1)
-                Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(active ? "Active · \(pad.activeWhere)" : subtitle).font(.caption).foregroundStyle(active ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary)).lineLimit(1)
             }
         }
         .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(active ? "Active" : "")
     }
 
     func padSubtitle(_ p: PadProfiles.Profile) -> String {
@@ -90,12 +108,61 @@ struct ProfilesSidebar: View {
     }
 
     @ViewBuilder func padMenu(_ p: PadProfiles.Profile) -> some View {
-        Button("Use on the Mac") { pad.profileID = p.id; pad.on = true }
+        Button(pad.everywhereID == p.id ? "Deactivate" : "Activate Everywhere") {
+            pad.everywhereID = pad.everywhereID == p.id ? nil : p.id; if pad.everywhereID != nil { pad.enabled = true }
+        }
+        Button(pad.profileID == p.id && pad.on ? "Stop Using on the Mac" : "Use on the Mac") {
+            if pad.profileID == p.id && pad.on { pad.on = false } else { pad.profileID = p.id; pad.on = true }
+        }
         Button(p.id == padDefault ? "Stop Using as Default" : "Set as Default for All Games") { ProfileActions.setDefault(p.id == padDefault ? nil : p, model: model) }
-        Button(pad.everywhereID == p.id ? "Stop Using Everywhere" : "Use Everywhere") { pad.everywhereID = pad.everywhereID == p.id ? nil : p.id; if pad.everywhereID != nil { pad.enabled = true } }
+        Divider()
+        Button("Edit") { model.profileSelection = "pad:" + p.id }
+        Button("Rename…") { renameText = p.name; renaming = "pad:" + p.id }
         Button("Duplicate") { ProfileActions.duplicate(p, model: model) }
         Divider()
         Button("Delete", role: .destructive) { ProfileActions.delete(p, model: model); model.profileSelection = "mac" }
+    }
+
+    @ViewBuilder func layoutMenu(_ l: KeyRemap.Layout) -> some View {
+        Button(l.id == keysDefault ? "Stop Using as Default" : "Set as Default for All Games") {
+            try? KeyRemap.setDefault(l.id == keysDefault ? nil : l, environments: KeyRemap.environments(model.games), shared: KeyRemap.sharedFolders(model.games))
+            load()
+        }
+        Divider()
+        Button("Edit") { model.profileSelection = "keys:" + l.id }
+        Button("Rename…") { renameText = l.name; renaming = "keys:" + l.id }
+        Button("Duplicate") {
+            let names = Set(layouts.map(\.name))
+            var n = l.name + " copy", i = 2
+            while names.contains(n) { n = "\(l.name) copy \(i)"; i += 1 }
+            let c = KeyRemap.Layout(name: n, mappings: l.mappings)
+            try? KeyRemap.store(c, environments: [])
+            load(); model.profileSelection = "keys:" + c.id
+        }
+        Divider()
+        Button("Delete", role: .destructive) {
+            try? KeyRemap.delete(l, environments: KeyRemap.environments(model.games), shared: KeyRemap.sharedFolders(model.games))
+            load(); model.profileSelection = "mac"
+        }
+    }
+
+    func finishRename() {
+        let n = renameText.trimmingCharacters(in: .whitespaces)
+        guard let id = renaming, !n.isEmpty else { return }
+        if id.hasPrefix("pad:"), var p = pads.first(where: { $0.id == String(id.dropFirst(4)) }) {
+            p.name = n
+            try? PadProfiles.store(p, environments: KeyRemap.environments(model.games), shared: KeyRemap.sharedFolders(model.games))
+        } else if id.hasPrefix("keys:"), var l = layouts.first(where: { $0.id == String(id.dropFirst(5)) }) {
+            l.name = n
+            try? KeyRemap.store(l, environments: [])
+        }
+        renaming = nil
+        NotificationCenter.default.post(name: .padProfilesChanged, object: nil)
+        load()
+        // Show the page again with the new name.
+        let sel = model.profileSelection
+        model.profileSelection = nil
+        DispatchQueue.main.async { model.profileSelection = sel }
     }
 
     func load() {
@@ -167,12 +234,14 @@ struct ProfilesTabDetail: View {
 
     var body: some View {
         let sel = model.profileSelection ?? "mac"
-        if sel.hasPrefix("pad:"), let p = PadProfiles.profiles().first(where: { $0.id == String(sel.dropFirst(4)) }) {
-            PadProfilePage(profile: p).id(p.id)
-        } else if sel.hasPrefix("keys:"), let l = KeyRemap.layouts().first(where: { $0.id == String(sel.dropFirst(5)) }) {
-            KeyLayoutPage(layout: l).id(l.id)
-        } else {
-            Form { DesktopPadSettings() }.formStyle(.grouped)
+        Group {
+            if sel.hasPrefix("pad:"), let p = PadProfiles.profiles().first(where: { $0.id == String(sel.dropFirst(4)) }) {
+                PadProfilePage(profile: p).id(p.id + p.name)          // a rename from the sidebar reloads the editor
+            } else if sel.hasPrefix("keys:"), let l = KeyRemap.layouts().first(where: { $0.id == String(sel.dropFirst(5)) }) {
+                KeyLayoutPage(layout: l).id(l.id + l.name)
+            } else {
+                Form { DesktopPadSettings() }.formStyle(.grouped)
+            }
         }
     }
 }

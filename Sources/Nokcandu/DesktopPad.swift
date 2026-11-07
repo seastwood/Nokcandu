@@ -48,6 +48,9 @@ final class DesktopPad: ObservableObject {
     private var sock: Int32 = -1
     /// What's happening now, for the menu and Settings.
     @Published private(set) var status = "Off"
+    /// The profile applying right now (nil: none), and where it applies.
+    @Published private(set) var activeID: String?
+    @Published private(set) var activeWhere = ""
     @Published private(set) var trusted = AXIsProcessTrusted()
 
     private var engine: OpaquePointer?
@@ -139,6 +142,9 @@ final class DesktopPad: ObservableObject {
             chosen = p; status = "Mac: \(p.name)"
         } else { status = on ? "Mac: no profile chosen" : "Waiting for a game" }
         if chosen != nil && !trusted { status = "Needs Accessibility permission" }
+        let wherePlaying: String = everywhereID != nil && chosen?.id == everywhereID ? "Everywhere" : g?.name ?? (rules[id] != nil ? (front?.localizedName ?? "") : "On the Mac")
+        if activeID != chosen?.id { activeID = chosen?.id }
+        if activeWhere != wherePlaying { activeWhere = wherePlaying }
         let text = (chosen != nil && trusted) ? PadProfiles.compile(chosen!, all: all) : ""
         if text == compiled && !force { return }
         compiled = text
