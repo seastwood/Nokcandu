@@ -92,6 +92,7 @@ struct pe_engine {
     timer_t_ timers[MAX_TIMERS]; int ntimers;
     double m_rest_x, m_rest_y;
     outs_t pulse_store[MAX_TIMERS];      // outputs of taps waiting to be released
+    int shown_layer, shown_gyro;          // last state reported to sink.state
 };
 
 static const char *input_names[PE_INPUTS] = {
@@ -216,6 +217,7 @@ pe_engine *pe_create(const char *text, pe_sink sink) {
     }
     free(copy);
     e->uses_gyro = e->gyro_out != G_OFF;
+    e->shown_layer = 0; e->shown_gyro = e->gyro_out == G_OFF ? -1 : e->gyro_default ? 1 : 0;
     for (int i = 0; i < 2; i++) e->stick[i].last_angle = NAN;
     return e;
 }
@@ -242,6 +244,19 @@ static void emit_axis(pe_engine *e, int axis, int v) {
 }
 static void update_triggers(pe_engine *e);
 
+static bool gyro_enabled(const pe_engine *e);
+static int top_layer(const pe_engine *e) {
+    for (int l = MAX_LAYERS - 1; l > 0; l--) if (e->layer_holds[l] > 0 || e->layer_toggled[l]) return l;
+    return 0;
+}
+// Tells the sink when the layer or the gyro switch changes (for an on-screen note).
+static void report_state(pe_engine *e) {
+    int l = top_layer(e), g = e->gyro_out == 0 ? -1 : gyro_enabled(e) ? 1 : 0;
+    if (l == e->shown_layer && g == e->shown_gyro) return;
+    e->shown_layer = l; e->shown_gyro = g;
+    if (e->sink.state) e->sink.state(e->sink.ctx, l, g);
+}
+
 static void out_set(pe_engine *e, out_t o, bool down) {
     int d = down ? 1 : -1;
     switch (o.kind) {
@@ -266,6 +281,7 @@ static void out_set(pe_engine *e, out_t o, bool down) {
     case O_LAYER_TOGGLE: if (down) e->layer_toggled[o.code] = !e->layer_toggled[o.code]; break;
     default: break;
     }
+    if (o.kind >= O_GYRO_ON && o.kind <= O_LAYER_TOGGLE) report_state(e);
 }
 static void outs_set(pe_engine *e, const outs_t *o, bool down) {
     if (down) for (int i = 0; i < o->n; i++) out_set(e, o->o[i], true);
@@ -679,5 +695,6 @@ void pe_release_all(pe_engine *e, double now) {
     e->gyro_on_holds = e->gyro_off_holds = 0;
     update_triggers(e);
     update_pad_sticks(e);
+    report_state(e);
     (void)now;
 }

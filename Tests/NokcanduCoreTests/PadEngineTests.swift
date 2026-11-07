@@ -322,3 +322,19 @@ final class PadEdgeBoostTests: XCTestCase {
         XCTAssertEqual(Double(r.mouse.x), 700, accuracy: 15)
     }
 }
+
+final class PadStateReportTests: XCTestCase {
+    final class Box { var states: [String] = [] }
+    func testLayerAndGyroChangesAreReported() {
+        let box = Box()
+        var sink = pe_sink()
+        sink.ctx = Unmanaged.passUnretained(box).toOpaque()
+        sink.state = { c, l, g in Unmanaged<Box>.fromOpaque(c!).takeUnretainedValue().states.append("\(l),\(g)") }
+        let e = pe_create("nokpad 1\ngyro out=mouse\nbind 0 lb press=layer:hold:1\nbind 0 back press=gyro:toggle\nbind 1 a press=key:1", sink)
+        pe_button(e, pe_input_named("lb"), true, 1); pe_button(e, pe_input_named("lb"), false, 1.1)
+        pe_button(e, pe_input_named("back"), true, 2); pe_button(e, pe_input_named("back"), false, 2.1)
+        pe_button(e, pe_input_named("a"), true, 3); pe_button(e, pe_input_named("a"), false, 3.1)    // not a state change
+        XCTAssertEqual(box.states, ["1,1", "0,1", "0,0"])
+        pe_destroy(e)
+    }
+}

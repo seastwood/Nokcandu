@@ -29,6 +29,8 @@ typedef struct {
     void (*mouse_button)(void *ctx, int button, bool down);
     void (*mouse_move)(void *ctx, int dx, int dy);
     void (*wheel)(void *ctx, int clicks);           // + up, − down
+    /// The top active layer (0 = base) or the gyro's on/off changed. gyro: −1 not used, 0 off, 1 on. Optional.
+    void (*state)(void *ctx, int layer, int gyro);
 } pe_sink;
 
 typedef struct pe_engine pe_engine;

@@ -35,8 +35,13 @@ final class DesktopPad: ObservableObject {
     @Published var everywhereID: String? = (try? String(contentsOf: DesktopPad.everywhereFile, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmptyPad {
         didSet {
             // A file too: games then leave their own profile out of Wine's controller driver.
-            if let id = everywhereID { try? NokPaths.ensure(NokPaths.support); try? Data(id.utf8).write(to: Self.everywhereFile, options: .atomic) }
-            else { try? FileManager.default.removeItem(at: Self.everywhereFile) }
+            if let id = everywhereID {
+                try? NokPaths.ensure(NokPaths.support); try? Data(id.utf8).write(to: Self.everywhereFile, options: .atomic)
+                if let p = PadProfiles.profiles().first(where: { $0.id == id }) { PadHUD.shared.show("\(p.name) everywhere", symbol: "gamecontroller.fill") }
+            } else {
+                try? FileManager.default.removeItem(at: Self.everywhereFile)
+                if oldValue != nil { PadHUD.shared.show("Profiles back to normal", symbol: "gamecontroller") }
+            }
             evaluate(force: true)
         }
     }
@@ -147,6 +152,8 @@ final class DesktopPad: ObservableObject {
         if activeWhere != wherePlaying { activeWhere = wherePlaying }
         let text = (chosen != nil && trusted) ? PadProfiles.compile(chosen!, all: all) : ""
         if text == compiled && !force { return }
+        layerNames = chosen.map { PadProfiles.merged($0, all: all).layers.map(\.name) } ?? []
+        shownLayer = 0; shownGyro = chosen.map { PadProfiles.merged($0, all: all).gyro.output == .off ? -1 : (PadProfiles.merged($0, all: all).gyro.startsOn ? 1 : 0) } ?? -1
         compiled = text
         rebuild()
     }
@@ -164,8 +171,22 @@ final class DesktopPad: ObservableObject {
         sink.mouse_button = { _, b, d in MainActor.assumeIsolated { DesktopPad.shared.mouse(Int(b), d) } }
         sink.mouse_move = { _, x, y in MainActor.assumeIsolated { DesktopPad.shared.move(Int(x), Int(y)) } }
         sink.wheel = { _, n in MainActor.assumeIsolated { DesktopPad.shared.wheel(Int(n)) } }
+        sink.state = { _, l, g in MainActor.assumeIsolated { DesktopPad.shared.stateChanged(layer: Int(l), gyro: Int(g)) } }
         engine = compiled.withCString { pe_create($0, sink) }
         attach()
+    }
+
+    /// Names of the active profile's layers (index = the engine's layer number).
+    private var layerNames: [String] = []
+    private var shownLayer = 0, shownGyro = -1
+    func stateChanged(layer: Int, gyro: Int) {
+        if layer != shownLayer {
+            let name = layerNames.indices.contains(layer) ? layerNames[layer] : "Layer \(layer)"
+            PadHUD.shared.show(layer == 0 ? "Base layer" : name, symbol: layer == 0 ? "square.stack" : "square.stack.3d.up.fill")
+        } else if gyro != shownGyro, gyro >= 0, shownGyro >= 0 {
+            PadHUD.shared.show(gyro == 1 ? "Gyro on" : "Gyro off", symbol: gyro == 1 ? "gyroscope" : "gyroscope")
+        }
+        shownLayer = layer; shownGyro = gyro
     }
 
     private func tick() { if let e = engine { pe_tick(e, Self.now()) } }

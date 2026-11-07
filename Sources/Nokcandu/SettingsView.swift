@@ -330,6 +330,7 @@ struct DesktopPadSettings: View {
                         }
                     }
                 }
+                Toggle("Show a note when a layer or the gyro switches", isOn: Binding(get: { PadHUD.enabled }, set: { PadHUD.enabled = $0; pad.objectWillChange.send() }))
                 Button("Add an App…") { addApp() }
                 Toggle("Open Nokcandu at login, in the menu bar", isOn: Binding(get: { SMAppService.mainApp.status == .enabled }, set: { on in
                     if on { try? SMAppService.mainApp.register(); UserDefaults.standard.set(true, forKey: MenuBarSetting.key) } else { try? SMAppService.mainApp.unregister() }
