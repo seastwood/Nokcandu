@@ -9,6 +9,7 @@ enum DropToAdd {
         case installer(URL)
         case discs([URL])
         case gameFolder(URL)
+        case folderOfGames(URL)            // a folder holding several game folders
         case nokcanduGames([URL])          // folders holding Nokcandu game apps
         case unknown(String)
     }
@@ -27,6 +28,7 @@ enum DropToAdd {
         if urls.count == 1, fm.isDirectory(urls[0]) {
             let found = LibraryDiscovery.folders(in: urls[0], depth: 3, known: [])
             if !found.isEmpty { return .nokcanduGames(found.map(\.folder)) }
+            if !FolderOfGames.hasOwnProgram(urls[0]), FolderOfGames.scan(urls[0]).count > 1 { return .folderOfGames(urls[0]) }
             return .gameFolder(urls[0])
         }
         return .unknown("Drop a setup program (.exe or .msi), disc images, a game folder, or games made with Nokcandu.")

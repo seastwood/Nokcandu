@@ -22,6 +22,7 @@ struct NokcanduApp: App {
         .commands {
             CommandGroup(after: .newItem) {
                 Button("Add a Game…") { model.showInstaller = true }.keyboardShortcut("i", modifiers: [.command, .shift])
+                Button("Add a Folder of Games…") { model.chooseFolderOfGames() }
                 Button("Game Stores…") { model.openStores() }.keyboardShortcut("l", modifiers: [.command, .shift])
                 Button("Refresh Library") { model.refresh() }.keyboardShortcut("r")
                 Button("Check for Game Updates") { Task { await model.checkStoreUpdates(); model.say(model.storeUpdates.isEmpty ? "Your GOG and Epic games are up to date." : "\(model.storeUpdates.count) game update(s) available.") } }
@@ -124,36 +125,28 @@ struct LibraryView: View {
             }
             .searchable(text: $model.librarySearch, placement: .sidebar, prompt: "Search games")
             .modifier(SearchFocusModifier(request: $model.focusSearch))
-            .navigationSplitViewColumnWidth(min: 220, ideal: 250)
+            .navigationSplitViewColumnWidth(min: 236, ideal: 260)
             .modifier(SoftTopEdge())
             .toolbar {
                 if #available(macOS 26.0, *) { ToolbarSpacer(.flexible) }
-                ToolbarItem(placement: .automatic) {
-                    Menu {
-                        Picker("Sort By", selection: Binding(get: { model.sortMode }, set: { model.setSort($0) })) {
-                            ForEach(LibraryOrganizer.Sort.allCases) { Text($0.title).tag($0) }
-                        }
-                        .pickerStyle(.inline)
-                        Text("Drag games to put them in your own order.")
-                    } label: {
-                        Image(systemName: "arrow.up.arrow.down")
-                    }
-                    .menuIndicator(.hidden)
-                    .help("Sort games")
-                    .accessibilityLabel("Sort games")
-                }
+                // Sort and filter share one button so the sidebar's buttons all fit when it's narrow.
                 ToolbarItem(placement: .automatic) {
                     Menu {
                         Picker("Show", selection: $model.libraryFilter) {
                             ForEach([AppModel.LibraryFilter.all, .running, .windows, .mac, .steam, .battleNet] + model.driveFilters) { Text($0.title).tag($0) }
                         }
                         .pickerStyle(.inline)
+                        Picker("Sort By", selection: Binding(get: { model.sortMode }, set: { model.setSort($0) })) {
+                            ForEach(LibraryOrganizer.Sort.allCases) { Text($0.title).tag($0) }
+                        }
+                        .pickerStyle(.inline)
+                        Text("Drag games to put them in your own order.")
                     } label: {
                         Image(systemName: model.libraryFilter == .all ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
                     }
                     .menuIndicator(.hidden)
-                    .help(model.libraryFilter == .all ? "Show only some games" : "Showing: \(model.libraryFilter.title)")
-                    .accessibilityLabel(model.libraryFilter == .all ? "Filter games" : "Filter games, showing \(model.libraryFilter.title)")
+                    .help(model.libraryFilter == .all ? "Show and sort games" : "Showing: \(model.libraryFilter.title)")
+                    .accessibilityLabel(model.libraryFilter == .all ? "Show and sort games" : "Show and sort games, showing \(model.libraryFilter.title)")
                 }
                 ToolbarItem(placement: .automatic) { ActivityButton() }
                 ToolbarItem(placement: .automatic) {
@@ -225,6 +218,9 @@ struct LibraryView: View {
         .sheet(isPresented: $model.showSeveralGames) { SeveralGamesSheet().environmentObject(model) }
         .sheet(item: Binding(get: { model.droppedFolder.map(DroppedFolder.init) }, set: { model.droppedFolder = $0?.url })) { d in
             DropFolderSheet(folder: d.url).environmentObject(model)
+        }
+        .sheet(item: Binding(get: { model.folderOfGames.map(FolderOfGamesItem.init) }, set: { model.folderOfGames = $0?.url })) { f in
+            FolderOfGamesSheet(root: f.url).environmentObject(model)
         }
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             let group = DispatchGroup(); var urls: [URL] = []; let lock = NSLock()

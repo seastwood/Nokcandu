@@ -596,6 +596,10 @@ struct InstallerView: View {
                             .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                     }
                 }
+                if pickedFolder == nil {
+                    Button("Several games in one folder? Add a Folder of Games…") { app.chooseFolderOfGames() }
+                        .buttonStyle(.link).font(.callout)
+                }
                 if let f = pickedFolder {
                     Picker("Game files", selection: $copyFolder) {
                         Text("Use it where it is").tag(false)

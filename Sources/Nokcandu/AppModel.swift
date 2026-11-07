@@ -216,6 +216,14 @@ final class AppModel: ObservableObject {
     // MARK: Drag and drop
 
     @Published var droppedFolder: URL?
+    @Published var folderOfGames: URL?
+    func chooseFolderOfGames() {
+        let p = NSOpenPanel()
+        p.canChooseDirectories = true; p.canChooseFiles = false
+        p.message = "Choose the folder that holds your game folders."
+        p.prompt = "Find Games"
+        if p.runModal() == .OK, let u = p.url { folderOfGames = u }
+    }
     func handleDrop(_ urls: [URL]) {
         switch DropToAdd.classify(urls) {
         case .installer(let u):
@@ -226,6 +234,7 @@ final class AppModel: ObservableObject {
                                   inputs: ["isoPaths": list.map(\.path).joined(separator: "\n"), "isoPath": list[0].path])
             showInstaller = true
         case .gameFolder(let u): droppedFolder = u
+        case .folderOfGames(let u): folderOfGames = u
         case .nokcanduGames(let folders):
             let n = LibraryDiscovery.add(folders)
             refresh()
