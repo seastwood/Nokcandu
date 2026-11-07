@@ -44,6 +44,9 @@ struct GameControllersSection: View {
                 .labelsHidden().frame(width: 280)
                 .disabled(working || running)
             }
+            if let c = contents, PadProfiles.inUse(contents: c) {
+                SettingNote("A controller profile is on here, so controllers reach games as an Xbox controller through it (from the next start of \(steam ? "Steam" : "the game")).\(steam ? " Turn off Steam Input for the game (its Properties → Controller) so Steam doesn't remap the controller as well." : "")")
+            }
             if running { SettingNote("Quit the game\(steam || game.battleNet != nil || game.hosted != nil ? " and its launcher" : "") to change this.") }
             if connected.isEmpty {
                 SettingNote("No controller connected. Plug one in or turn it on (Bluetooth controllers pair in System Settings → Bluetooth).")

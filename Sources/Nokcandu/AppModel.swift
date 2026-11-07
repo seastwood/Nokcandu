@@ -626,6 +626,16 @@ final class AppModel: ObservableObject {
                 }
             } catch { fail(error); return }
             let g = GameLibrary.inspect(g.appURL) ?? g
+            // A controller profile needs every controller to go through Wine's SDL driver: set that up while the
+            // Windows environment is still closed (no-op when it's already right or running).
+            if let host = WineTools.hostContents(for: g) {
+                let games = self.games
+                await Task.detached(priority: .userInitiated) {
+                    PadProfiles.refresh(environments: KeyRemap.environments(games), shared: KeyRemap.sharedFolders(games))
+                    PadProfiles.refreshRoutes(games)
+                    Controllers.refresh(contents: host)
+                }.value
+            }
             if let why = await WindowedPresentation.restartReason(for: g) {
                 let alert = NSAlert()
                 let host = WineTools.hostContents(for: g).flatMap { GameLibrary.inspect($0.deletingLastPathComponent()) }
