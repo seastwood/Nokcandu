@@ -54,10 +54,13 @@ struct ProfilesSidebar: View {
                     Divider()
                     ForEach(PadProfiles.starters() + [PadProfiles.desktopStarter()]) { s in Button(s.name) { newPad(s) } }
                 } label: { Label("New Controller Profile", systemImage: "plus.circle") }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .menuStyle(.button).menuIndicator(.hidden).fixedSize()
+                .padding(.leading, 3)          // a menu's label sits 3 points left of a button's
                 Button { newLayout() } label: { Label("New Keyboard Layout", systemImage: "plus.circle") }
             }
             .buttonStyle(.borderless)
+            .labelStyle(AlignedIconLabelStyle())
+            .foregroundStyle(.primary)
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
