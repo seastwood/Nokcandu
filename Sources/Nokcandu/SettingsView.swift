@@ -294,7 +294,7 @@ struct DesktopPadSettings: View {
     var body: some View {
         Section("Controller on the Mac") {
             Toggle("Use a controller profile on the Mac", isOn: $pad.on)
-            Text("Move the pointer, click and type with your controller in any app — to pick a game, browse, or play Mac games and others that don't support controllers. It pauses while a Nokcandu game with its own profile is in front (that profile applies inside the game), and in apps set to Off below. Buttons set to controller buttons do nothing here; the app sees the real controller anyway.")
+            Text("Move the pointer, click and type with your controller in any app — to pick a game, browse, or play Mac games and others that don't support controllers. Nokcandu games use the profile chosen on their Controls tab instead, and apps set to Off below are left alone. Buttons set to controller buttons only change anything inside Windows games.")
                 .font(.caption).foregroundStyle(.secondary)
             if pad.on {
                 LabeledContent("Now") { Text(pad.status).foregroundStyle(pad.status.hasPrefix("Needs") ? .orange : .secondary) }

@@ -33,7 +33,18 @@ public enum HelperPatch {
         var result = WineEnvironment.upgradeExports(text).replacingOccurrences(of: globalExport,
             with: #"NOKCANDU_HELPER_LIBRARY="$SUPPORT/nokcandu/nokcandu-rawmouse.dylib""#)
         result = result.components(separatedBy: "\n").map { line in
-            let body = line.drop(while: { $0 == " " || $0 == "\t" })
+            let indent = line.prefix { $0 == " " || $0 == "\t" }
+            var body = Substring(line.dropFirst(indent.count))
+            // `if ! "$WINE" …` / `if "$WINE" …`: the first Wine command can start Windows' background processes
+            // (and Wine's controller driver with them), which keep its environment for the whole session.
+            for lead in ["if ! ", "if ", "! "] where body.hasPrefix(lead) {
+                let rest = body.dropFirst(lead.count)
+                if (rest.hasPrefix(#""$SUPPORT/wine/bin/wine" "#) || rest.hasPrefix(#""$WINE" "#)) {
+                    return String(indent) + lead + scopedPrefix + rest
+                }
+                break
+            }
+            body = Substring(line.dropFirst(indent.count))
             let command = body.hasPrefix("exec ") ? body.dropFirst(5) : body
             guard command.hasPrefix(#""$SUPPORT/wine/bin/wine" "#) || command.hasPrefix(#""$WINE" "#) || command.hasPrefix(RecipeSettings.invocation) else { return line }
             return String(line.prefix(line.count - body.count)) + scopedPrefix + body

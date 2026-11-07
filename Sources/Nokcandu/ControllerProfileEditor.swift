@@ -37,37 +37,39 @@ struct ControllerProfileEditor: View {
         PadProfiles.merged(profile, all: everything)
     }
     var layerName: String { layerIndex == 0 ? "Base" : profile.layers[layerIndex].name }
+    /// What this button does here without a setting of its own: the same layer in profiles underneath, and in a
+    /// layer the base layer (a layer only changes what you change in it).
     func inherited(_ i: PadProfiles.Input) -> PadProfiles.Binding? {
-        merged.layers.first { $0.name.caseInsensitiveCompare(layerName) == .orderedSame }?.bindings[i]
+        let m = merged
+        if let b = m.layers.first(where: { $0.name.caseInsensitiveCompare(layerName) == .orderedSame })?.bindings[i] { return b }
+        guard layerIndex > 0 else { return nil }
+        return profile.layers[0][i] ?? m.layers.first?.bindings[i]
     }
 
-    var left: some View {
+    func left(_ width: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             layerBar
             ControllerPicture(family: family, selection: $selection, tester: tester,
                               mapped: { i in profile.layers[layerIndex][i] != nil || inherited(i) != nil },
                               label: { i in shortLabel(i) })
-                .frame(width: 560, height: 400)
+                .frame(width: width, height: width * 400 / 560)
             ExtraButtons(tester: tester, family: family, selection: $selection,
                          mapped: { i in profile.layers[layerIndex][i] != nil || inherited(i) != nil })
             PadTestView(tester: tester, family: family)
         }
-        .frame(width: 560)
+        .frame(width: width)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
-            ViewThatFits(in: .horizontal) {
+            // The picture shrinks to leave the settings their room.
+            GeometryReader { geo in
                 HStack(alignment: .top, spacing: 16) {
-                    left
-                    Form { inspector }.formStyle(.grouped).frame(minWidth: 400, maxWidth: .infinity)
-                }
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        left
-                        Form { inspector }.formStyle(.grouped).frame(width: 560, height: 560)
-                    }
+                    ScrollView { left(max(330, min(560, geo.size.width - 416))) }
+                        .scrollIndicators(.never)
+                        .frame(width: max(330, min(560, geo.size.width - 416)))
+                    Form { inspector }.formStyle(.grouped).frame(minWidth: 380, maxWidth: .infinity)
                 }
             }
             if !embedded {
@@ -80,7 +82,7 @@ struct ControllerProfileEditor: View {
             }
         }
         .padding(embedded ? 16 : 20)
-        .frame(minWidth: embedded ? 560 : 1020, minHeight: embedded ? 500 : 720)
+        .frame(minWidth: embedded ? 720 : 1020, minHeight: embedded ? 500 : 720)
         .onAppear {
             family = Controllers.connected().first { $0.kind == .gamepad }?.family
             tester.start(profile: PadProfiles.compile(profile, all: everything))
@@ -150,7 +152,23 @@ struct ControllerProfileEditor: View {
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
             }
             Spacer()
+            Menu("Quick Setup") {
+                Button(swapped(.a, .b) ? "Unswap A and B" : "Swap A and B") { swap(.a, .b) }
+                Button(swapped(.x, .y) ? "Unswap X and Y" : "Swap X and Y") { swap(.x, .y) }
+                Divider()
+                Button("Clear \(layerIndex == 0 ? "the Base Layer" : layerName)") { profile.layers[layerIndex].bindings = [:] }
+            }
+            .fixedSize()
+            .help("Swapped buttons reach Windows games as each other (Nintendo-style A and B, for example).")
         }
+    }
+
+    func swapped(_ a: PadProfiles.Input, _ b: PadProfiles.Input) -> Bool {
+        profile.layers[layerIndex][a]?.press == [.pad(b)] && profile.layers[layerIndex][b]?.press == [.pad(a)]
+    }
+    func swap(_ a: PadProfiles.Input, _ b: PadProfiles.Input) {
+        if swapped(a, b) { profile.layers[layerIndex][a] = nil; profile.layers[layerIndex][b] = nil }
+        else { profile.layers[layerIndex][a] = .as(.pad(b)); profile.layers[layerIndex][b] = .as(.pad(a)) }
     }
 
     func finishLayer() {
@@ -436,7 +454,7 @@ struct BindingEditor: View {
         }
         .pickerStyle(.segmented)
         if kind == .same, let inherited {
-            LabeledContent("From the profile underneath") { Text(inherited).foregroundStyle(.secondary) }
+            LabeledContent(inLayer ? "From underneath" : "From the profile underneath") { Text(inherited).foregroundStyle(.secondary) }
         }
         if let b = binding {
             switch kind {
@@ -675,7 +693,7 @@ struct ExtraButtons: View {
     let mapped: (PadProfiles.Input) -> Bool
 
     var body: some View {
-        HStack(spacing: 6) {
+        FlowRow(spacing: 6) {
             ForEach([PadProfiles.Input.paddle1, .paddle2, .paddle3, .paddle4, .touchpad, .misc], id: \.self) { i in
                 Button { selection = .input(i) } label: {
                     Text(i.title(family)).font(.caption)

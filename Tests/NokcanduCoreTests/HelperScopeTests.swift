@@ -74,3 +74,21 @@ printf 'wine-ok\n'
         XCTAssertEqual(try String(contentsOf: launcher, encoding: .utf8), legacy)
     }
 }
+
+final class HelperScopeFirstCommandTests: XCTestCase {
+    /// The first Wine command often sits in an `if`: it starts Windows' background processes (and Wine's controller
+    /// driver), which keep its environment, so it must carry the helper too.
+    func testWineCommandsInsideIfCarryTheHelper() {
+        let out = HelperPatch.scopeWineLibrary("""
+        export PATH="$SUPPORT/wine/bin:/usr/bin"
+         if ! "$WINE" reg add 'HKCU\\\\Software' /f >/dev/null; then
+          echo failed
+         fi
+        if "$SUPPORT/wine/bin/wine" cmd /c ver; then :; fi
+        if ! /usr/bin/true; then :; fi
+        """)
+        XCTAssertTrue(out.contains(#" if ! DYLD_INSERT_LIBRARIES="${NOKCANDU_HELPER_LIBRARY:-}" "$WINE" reg add"#), out)
+        XCTAssertTrue(out.contains(#"if DYLD_INSERT_LIBRARIES="${NOKCANDU_HELPER_LIBRARY:-}" "$SUPPORT/wine/bin/wine" cmd"#), out)
+        XCTAssertTrue(out.contains("if ! /usr/bin/true"))
+    }
+}

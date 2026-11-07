@@ -47,7 +47,7 @@ struct GameControllersSection: View {
                 .disabled(working || running)
             }
             if let g = KeyRemap.gameContents(for: game), PadProfiles.effective(contents: g, shared: KeyRemap.isShared(game)) != nil, mode != .hidden {
-                SettingNote("This game uses a controller profile, and still sees the controller itself too. If it reacts to both, choose “Not at all (profiles only)”.\(steam ? " Turn off Steam Input for the game (its Properties → Controller) so Steam doesn't remap the controller as well." : "")")
+                SettingNote("This game uses a controller profile: it gets the controller as an Xbox controller with the profile applied, and buttons set to keys or mouse don't reach it as controller buttons (from the next start of \(steam ? "Steam" : "the game")).\(steam ? " Turn off Steam Input for the game (its Properties → Controller) so Steam doesn't remap the controller as well." : "")")
             }
             if running { SettingNote("Quit the game\(steam || game.battleNet != nil || game.hosted != nil ? " and its launcher" : "") to change this.") }
             if connected.isEmpty {

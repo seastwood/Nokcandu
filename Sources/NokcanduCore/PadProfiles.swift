@@ -18,11 +18,11 @@ public enum PadProfiles {
         /// Inputs that are real controller buttons (can be sent to the game as a button).
         public static var padButtons: [Input] { allCases.filter { !$0.isTrigger } }
 
-        /// The name printed on this controller's button.
+        /// The name printed on this controller's button. Nintendo controllers report their buttons by the letter
+        /// printed on them (A is the right-hand button), so the letters stay and only the picture moves them.
         public func title(_ family: Controllers.Family? = nil) -> String {
             switch (self, family) {
             case (.a, .playstation): "Cross"; case (.b, .playstation): "Circle"; case (.x, .playstation): "Square"; case (.y, .playstation): "Triangle"
-            case (.a, .nintendo): "B"; case (.b, .nintendo): "A"; case (.x, .nintendo): "Y"; case (.y, .nintendo): "X"
             case (.lb, .playstation): "L1"; case (.rb, .playstation): "R1"; case (.lt, .playstation): "L2"; case (.rt, .playstation): "R2"
             case (.ltfull, .playstation): "L2 (full pull)"; case (.rtfull, .playstation): "R2 (full pull)"
             case (.ls, .playstation): "L3"; case (.rs, .playstation): "R3"
@@ -484,10 +484,10 @@ public enum PadProfiles {
         else { refresh(environments: environments, shared: shared, file: file, defaultFile: df) }
     }
 
-    /// Profiles applied inside Wine's controller driver (needed only for controller-button outputs); off unless
-    /// "pad-driver" is present in the environment.
+    /// Profiles also applied inside Wine's controller driver (what the game sees as the controller), unless
+    /// "pad-driver-off" is present in the environment.
     public static func driverInUse(contents: URL) -> Bool {
-        FileManager.default.fileExists(atPath: folder(contents).appendingPathComponent("pad-driver").path) && inUse(contents: contents)
+        !FileManager.default.fileExists(atPath: folder(contents).appendingPathComponent("pad-driver-off").path) && inUse(contents: contents)
     }
 
     /// Whether an environment has a profile in use.

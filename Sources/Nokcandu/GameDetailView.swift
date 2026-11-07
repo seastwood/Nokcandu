@@ -249,6 +249,7 @@ struct GameDetailView: View {
             }
             .padding(28)
             .frame(maxWidth: 720, alignment: .leading)
+            .frame(maxWidth: .infinity)          // the scroll bar sits at the window's edge, the page stays centred
         }
         .onAppear { reloadDisplay(); cinematicDiagnosis = CinematicFix.diagnoseLastRun(game); graphicsHint = CrashHints.diagnose(game) }
         .task(id: "\(game.id)-\(running)") { await loadNotices() }
@@ -729,6 +730,7 @@ struct NativeGameDetail: View {
             }
             .padding(24)
             .frame(maxWidth: 760, alignment: .leading)
+            .frame(maxWidth: .infinity)
         }
         .confirmationDialog("Remove \(game.name)?", isPresented: $confirmRemove) {
             Button("Remove from Nokcandu") { remove(trash: false) }

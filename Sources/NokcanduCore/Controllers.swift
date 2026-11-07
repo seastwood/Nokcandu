@@ -111,7 +111,6 @@ public enum Controllers {
     /// Re-applies a saved choice (and a controller profile's needs) when the registry is out of step — after Repair,
     /// or a profile set while the game was open. Only while the environment is closed; cheap when nothing changes.
     public static func refresh(contents: URL) {
-        PadProfiles.ensureDriverHelper(contents: contents)
         let system = contents.appendingPathComponent("SharedSupport/prefix/system.reg")
         let saved = FileManager.default.fileExists(atPath: settingsURL(contents).path)
         let profile = PadProfiles.inUse(contents: contents)

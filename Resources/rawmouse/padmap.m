@@ -79,9 +79,11 @@ static void sink_pad_axis(void *ctx, int a, int v) {
     nok_sdl_event ev = {0};
     ev.caxis.type = NOK_SDL_CAXIS; ev.caxis.which = (int32_t)(intptr_t)ctx; ev.caxis.axis = (uint8_t)a; ev.caxis.value = (int16_t)v; pad_push(ev);
 }
-static void sink_key(void *ctx, int k, bool d) { (void)ctx; pad_send((padmsg){ PADMSG_KEY, d, (int16_t)k, 0, 0 }); }
-static void sink_mouse_button(void *ctx, int b, bool d) { (void)ctx; pad_send((padmsg){ PADMSG_MOUSE_BUTTON, d, (int16_t)b, 0, 0 }); }
-static void sink_mouse_move(void *ctx, int x, int y) { (void)ctx; st_mouse_msgs++; st_mouse_x += x; st_mouse_y += y; pad_send((padmsg){ PADMSG_MOUSE_MOVE, 0, 0, x, y }); }
+// Keys and mouse come from Nokcandu itself (it runs the same profile for the game in front); here the profile only
+// decides what the game sees as the controller — remapped buttons, and nothing for buttons set to keys or mouse.
+static void sink_key(void *ctx, int k, bool d) { (void)ctx; (void)k; (void)d; }
+static void sink_mouse_button(void *ctx, int b, bool d) { (void)ctx; (void)b; (void)d; }
+static void sink_mouse_move(void *ctx, int x, int y) { (void)ctx; st_mouse_msgs++; st_mouse_x += x; st_mouse_y += y; }
 // What the driver half has seen (pad-status next to this library), every two seconds while a profile is in use.
 static void pad_status(double now) {
     if (!pad_profile_text[0] || now - st_last_write < 2) return;
@@ -96,7 +98,7 @@ static void pad_status(double now) {
     fclose(f);
     st_buttons = st_axes = st_gyro = st_ticks = st_mouse_msgs = 0; st_mouse_x = st_mouse_y = 0; st_max_gap = 0;
 }
-static void sink_wheel(void *ctx, int n) { (void)ctx; pad_send((padmsg){ PADMSG_WHEEL, 0, (int16_t)n, 0, 0 }); }
+static void sink_wheel(void *ctx, int n) { (void)ctx; (void)n; }
 
 static pe_engine *pad_engine_for(int32_t which, bool create) {
     for (int i = 0; i < PAD_MAX; i++) if (pads[i].used && pads[i].which == which) return pads[i].e;
@@ -323,7 +325,11 @@ static void pad_mouse_move(int dx, int dy) {
         dispatch_async(raw_q, ^{ send_relative(dx, dy, NSEvent.pressedMouseButtons != 0 || pad_buttons_down[0] || pad_buttons_down[1]); });
         return;
     }
-    if (pad_post_relative(dx, dy)) { pad_moves_relative++; return; }
+    // The game shows a cursor (menus): move the pointer you see, and Wine follows it. Hidden (mouse-look):
+    // movement goes straight into the game.
+    id ctl = controller();
+    bool cursor_hidden = ctl && hidden_ivar >= 0 && *(BOOL *)((char *)(__bridge void *)ctl + hidden_ivar);
+    if (cursor_hidden && pad_post_relative(dx, dy)) { pad_moves_relative++; return; }
     pad_moves_warp++;
     CGPoint p = pad_cursor(); p.x += dx; p.y += dy;
     NSWindow *kw = NSApp.keyWindow;
@@ -369,12 +375,12 @@ static void pad_write_active(bool active) {
     fclose(f);
     rename(tmp, pad_active_path);
 }
-// Nokcandu sends a profile's mouse movement here while this game is in front. Profiles inside Wine's controller
-// driver (pad-active) are only used when "pad-driver" is present next to this library.
+// Nokcandu sends a profile's mouse movement here while this game is in front. The profile also runs inside Wine's
+// controller driver (pad-active) for what the game sees as the controller, unless "pad-driver-off" is present.
 static char pad_driver_flag[PATH_MAX];
 static void pad_activate(void) {
     struct stat st;
-    bool driver = stat(pad_driver_flag, &st) == 0 && stat(pad_map_path, &st) == 0;
+    bool driver = stat(pad_driver_flag, &st) != 0 && stat(pad_map_path, &st) == 0;
     if (pad_listen < 0) {
         char path[104]; pad_socket_path(getpid(), path, sizeof path);
         unlink(path);
@@ -416,7 +422,7 @@ static void install_pad_game(const char *folder) {
     if (!folder) return;
     snprintf(pad_map_path, sizeof pad_map_path, "%s/pad-map", folder);
     snprintf(pad_active_path, sizeof pad_active_path, "%s/pad-active", folder);
-    snprintf(pad_driver_flag, sizeof pad_driver_flag, "%s/pad-driver", folder);
+    snprintf(pad_driver_flag, sizeof pad_driver_flag, "%s/pad-driver-off", folder);
     // A game inside a shared launcher may have a profile of its own: pad-map.tsv routes its programs to it.
     int argc = *_NSGetArgc(); char **argv = *_NSGetArgv();
     if (argc > 1) {

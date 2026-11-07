@@ -283,8 +283,6 @@ final class PadDriverHelperTests: XCTestCase {
         try Data("WINE REGISTRY Version 2\n\n[Environment] 1792876383\n#time=1\n\"TEMP\"=\"C:\\\\temp\"\n".utf8).write(to: user)
         XCTAssertFalse(PadProfiles.ensureDriverHelper(contents: c))          // no profile: nothing
         try Data("nokpad 1\n".utf8).write(to: PadProfiles.mapFile(c))
-        XCTAssertFalse(PadProfiles.ensureDriverHelper(contents: c))          // profiles run in Nokcandu unless asked
-        try Data().write(to: nok.appendingPathComponent("pad-driver"))
         XCTAssertTrue(PadProfiles.ensureDriverHelper(contents: c))
         let text = try String(contentsOf: user, encoding: .utf8)
         XCTAssertTrue(text.contains("\"DYLD_INSERT_LIBRARIES\"=\""))
