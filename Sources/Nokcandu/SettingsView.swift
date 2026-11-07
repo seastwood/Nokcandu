@@ -55,6 +55,7 @@ struct GeneralSettings: View {
                     }))
                 Text("Steam, Battle.net, the EA app and Ubisoft Connect keep running (downloads, sign-in, friends) but stop competing with the game for the processor until you switch to them. Games also ask macOS for its fastest cores.")
                     .font(.caption).foregroundStyle(.secondary)
+                NetworkSteadySetting()
                 Toggle("Take a restore point before big changes", isOn: Binding(get: { RestorePoints.automaticChosen }, set: { RestorePoints.automaticChosen = $0; model.objectWillChange.send() }))
                 Text("Before a fix, an engine change or Reset to Recommended, keeps one copy of the game's Windows environment to go back to (the newest replaces the last). Off by default: those changes have their own Undo, and you can take a restore point yourself any time in a game's Storage tab.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -231,6 +232,52 @@ struct ControllersSection: View {
             let kind = c.extendedGamepad != nil ? "full gamepad" : c.microGamepad != nil ? "simple gamepad" : "controller"
             let battery = c.battery.map { " · battery \(Int($0.batteryLevel * 100))%" } ?? ""
             return "\(c.vendorName ?? "Controller") (\(kind))\(battery)"
+        }
+    }
+}
+
+
+/// Settings → General: steadier Wi-Fi while playing (a small system helper switches AWDL off during games).
+struct NetworkSteadySetting: View {
+    @State private var installed = NetworkSteady.installed
+    @State private var enabled = NetworkSteady.enabled
+    @State private var working = false
+    @State private var error: String?
+
+    var body: some View {
+        Toggle("Steadier Wi-Fi while playing", isOn: Binding(get: { installed && enabled }, set: { on in
+            if on && !installed { install() } else { NetworkSteady.enabled = on; enabled = on }
+        }))
+        .disabled(working)
+        Text("Turns off AWDL — the wireless link AirDrop, AirPlay, Sidecar and Universal Control use — while a game runs, and back on when it stops. It makes Wi-Fi hop channels every few seconds, which shows up as lag spikes online. Needs a small helper, installed once with your password\(installed ? "" : " when you turn this on"). A wired connection avoids the spikes altogether.")
+            .font(.caption).foregroundStyle(.secondary)
+        if let error { Text(error).font(.caption).foregroundStyle(.orange) }
+        if installed {
+            Button("Remove the Wi-Fi Helper…") { uninstall() }.buttonStyle(.link).font(.caption).disabled(working)
+        }
+    }
+
+    func install() {
+        working = true; error = nil
+        Task.detached {
+            let r = Result { try NetworkSteady.install() }
+            await MainActor.run {
+                working = false
+                installed = NetworkSteady.installed
+                if case .failure(let e) = r, e.localizedDescription != "Cancelled." { error = e.localizedDescription }
+                if installed { NetworkSteady.enabled = true; enabled = true }
+            }
+        }
+    }
+    func uninstall() {
+        working = true; error = nil
+        Task.detached {
+            let r = Result { try NetworkSteady.uninstall() }
+            await MainActor.run {
+                working = false
+                installed = NetworkSteady.installed
+                if case .failure(let e) = r, e.localizedDescription != "Cancelled." { error = e.localizedDescription }
+            }
         }
     }
 }

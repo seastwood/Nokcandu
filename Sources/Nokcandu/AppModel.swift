@@ -490,7 +490,12 @@ final class AppModel: ObservableObject {
                 }
                 return (states, checkHelpers ? HelperActivation.statuses(for: snapshot) : previousHelpers, heavy)
             }.value
-            if runStates.values.contains(where: { if case .launcherRunning = $0 { return true }; return false }) { warnAboutPower() }
+            let playing = snapshot.contains { g in
+                if case .launcherRunning = states.0[g.id] ?? .notRunning { return !LibraryOrganizer.isLauncher(g) }
+                return false
+            }
+            if playing { warnAboutPower() }
+            Task.detached(priority: .utility) { NetworkSteady.setPlaying(playing) }
             for (game, session) in states.2 where memoryWarned.insert("\(game.id)#\(session.pid)").inserted {
                 let text = "\(game.name) is using \(MemoryWatch.gigabytes(session.peak)) of this Mac's \(MemoryWatch.gigabytes(MemoryWatch.physicalMemory)) memory. Closing other apps helps; its page has more after you quit."
                 say(text, game: game.id)

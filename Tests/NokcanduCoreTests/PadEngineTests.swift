@@ -256,3 +256,16 @@ final class MacGameKeysTests: XCTestCase {
         XCTAssertEqual(KeyRemap.previousMapping("RegistryID Key Value\n1 UserKeyMapping (\n)\n"), "[]")
     }
 }
+
+final class NetworkSteadyTests: XCTestCase {
+    func testHelperScriptAndPlistAreValid() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("netsteady-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let s = dir.appendingPathComponent("s.sh"), p = dir.appendingPathComponent("p.plist")
+        try Data(NetworkSteady.scriptText(flag: "/Users/x/Library/Application Support/Nokcandu/it's here").utf8).write(to: s)
+        try Data(NetworkSteady.plistText().utf8).write(to: p)
+        XCTAssertTrue(try Shell.run("/bin/bash", ["-n", s.path]).ok)
+        XCTAssertTrue(try Shell.run("/usr/bin/plutil", ["-lint", p.path]).ok)
+    }
+}
