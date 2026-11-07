@@ -823,6 +823,7 @@ static void watch_settings(void) {
 #include "cursor-visibility.m"
 #include "borderless-confinement.m"
 #include "keyremap.m"
+#include "padmap.m"
 #include "priorities.m"
 
 static void image_added(const struct mach_header *mh, __unused intptr_t slide) {
@@ -846,6 +847,8 @@ static void image_added(const struct mach_header *mh, __unused intptr_t slide) {
             if (dladdr((const void *)install_key_remap, &me) && me.dli_fname) {
                 char path[PATH_MAX]; strlcpy(path, me.dli_fname, sizeof path);
                 install_key_remap(dirname(path));
+                strlcpy(path, me.dli_fname, sizeof path);
+                install_pad_game(dirname(path));
             }
         }
         watch_settings();
@@ -1129,6 +1132,15 @@ __attribute__((constructor)) static void start(void) {
         }
     }
     if (argc > 1 && launcher_program(argv[1])) prio_watch_as_launcher();
+    if (argc > 1) {      // Wine's controller driver runs in winedevice.exe: controller remapping hooks in there
+        const char *base = argv[1];
+        for (const char *q = argv[1]; *q; q++) if (*q == '\\' || *q == '/') base = q + 1;
+        Dl_info pad_info;
+        if (!strcasecmp(base, "winedevice.exe") && dladdr((const void *)start, &pad_info) && pad_info.dli_fname) {
+            char lib[PATH_MAX]; strlcpy(lib, pad_info.dli_fname, sizeof lib);
+            install_pad_bus(dirname(lib));
+        }
+    }
     if (argc > 1 && nokcandu_background_program(argv[1])) {
         helper_enabled = false;
         if (responsible_for_itself()) run_from_game_app_as(true);

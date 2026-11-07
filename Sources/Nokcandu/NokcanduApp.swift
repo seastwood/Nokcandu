@@ -210,37 +210,7 @@ struct LibraryView: View {
         } message: { g in
             Text((g.native != nil ? "Unsaved progress may be lost." : GameLauncher.quitScope(g)) + " You can turn asking back on in Settings → General.")
         }
-        .sheet(isPresented: $model.showReport) { ReportProblemView(game: model.selectedGame).environmentObject(model) }
-        .sheet(isPresented: $model.showWelcome) {
-            WelcomeView().environmentObject(model)
-        }
-        .sheet(isPresented: $model.showWhatsNew) { WhatsNewView() }
-        .sheet(isPresented: $model.showSeveralGames) { SeveralGamesSheet().environmentObject(model) }
-        .sheet(item: Binding(get: { model.droppedFolder.map(DroppedFolder.init) }, set: { model.droppedFolder = $0?.url })) { d in
-            DropFolderSheet(folder: d.url).environmentObject(model)
-        }
-        .sheet(item: Binding(get: { model.folderOfGames.map(FolderOfGamesItem.init) }, set: { model.folderOfGames = $0?.url })) { f in
-            FolderOfGamesSheet(root: f.url).environmentObject(model)
-        }
-        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-            let group = DispatchGroup(); var urls: [URL] = []; let lock = NSLock()
-            for p in providers {
-                group.enter()
-                _ = p.loadObject(ofClass: URL.self) { u, _ in if let u { lock.lock(); urls.append(u); lock.unlock() }; group.leave() }
-            }
-            group.notify(queue: .main) { model.handleDrop(urls) }
-            return true
-        }
-        .alert("Found games on your drives", isPresented: Binding(get: { !model.foundFolders.isEmpty && !model.showWelcome && !model.showWhatsNew }, set: { if !$0 && !model.foundFolders.isEmpty { model.declineFoundFolders() } })) {
-            Button("Add Them") { model.addFoundFolders() }
-            Button("Not Now", role: .cancel) { model.declineFoundFolders() }
-        } message: {
-            Text(model.foundFolders.map { "\($0.games) game\($0.games == 1 ? "" : "s") in \($0.url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))" }.joined(separator: "\n")
-                 + "\n\nThese were made with Nokcandu. Adding them uses them where they are — nothing is copied.")
-        }
-        .sheet(isPresented: $model.showProfiles) {
-            ProfilesView(focusNumber: model.profileFocus).environmentObject(model)
-        }
+        .modifier(LibrarySheets(model: model))
         .onChange(of: model.showStorage) { if model.showStorage { showSettings("storage"); model.showStorage = false } }
         .onChange(of: model.showUpdates) { if model.showUpdates { showSettings("updates"); model.showUpdates = false } }
         .onChange(of: model.showSteamLibrary) {
@@ -477,3 +447,43 @@ private struct NoTitlebarSeparator: NSViewRepresentable {
 }
 
 struct DroppedFolder: Identifiable { var url: URL; var id: String { url.path } }
+
+
+/// The library window's sheets and alerts, kept apart so the window's own view stays quick to type-check.
+struct LibrarySheets: ViewModifier {
+    @ObservedObject var model: AppModel
+    func body(content: Content) -> some View {
+            content
+            .sheet(isPresented: $model.showReport) { ReportProblemView(game: model.selectedGame).environmentObject(model) }
+            .sheet(isPresented: $model.showWelcome) {
+                WelcomeView().environmentObject(model)
+            }
+            .sheet(isPresented: $model.showWhatsNew) { WhatsNewView() }
+            .sheet(isPresented: $model.showSeveralGames) { SeveralGamesSheet().environmentObject(model) }
+            .sheet(item: Binding(get: { model.droppedFolder.map(DroppedFolder.init) }, set: { model.droppedFolder = $0?.url })) { d in
+                DropFolderSheet(folder: d.url).environmentObject(model)
+            }
+            .sheet(item: Binding(get: { model.folderOfGames.map(FolderOfGamesItem.init) }, set: { model.folderOfGames = $0?.url })) { f in
+                FolderOfGamesSheet(root: f.url).environmentObject(model)
+            }
+            .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+                let group = DispatchGroup(); var urls: [URL] = []; let lock = NSLock()
+                for p in providers {
+                    group.enter()
+                    _ = p.loadObject(ofClass: URL.self) { u, _ in if let u { lock.lock(); urls.append(u); lock.unlock() }; group.leave() }
+                }
+                group.notify(queue: .main) { model.handleDrop(urls) }
+                return true
+            }
+            .alert("Found games on your drives", isPresented: Binding(get: { !model.foundFolders.isEmpty && !model.showWelcome && !model.showWhatsNew }, set: { if !$0 && !model.foundFolders.isEmpty { model.declineFoundFolders() } })) {
+                Button("Add Them") { model.addFoundFolders() }
+                Button("Not Now", role: .cancel) { model.declineFoundFolders() }
+            } message: {
+                Text(model.foundFolders.map { "\($0.games) game\($0.games == 1 ? "" : "s") in \($0.url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))" }.joined(separator: "\n")
+                     + "\n\nThese were made with Nokcandu. Adding them uses them where they are — nothing is copied.")
+            }
+            .sheet(isPresented: $model.showProfiles) {
+                ProfilesView(focusNumber: model.profileFocus).environmentObject(model)
+            }
+    }
+}
