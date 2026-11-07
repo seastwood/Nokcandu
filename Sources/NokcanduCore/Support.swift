@@ -9,6 +9,14 @@ import CoreGraphics
 /// Well-known locations. Everything Nokcandu owns lives under Application Support;
 /// game apps stay where the user keeps them.
 public enum NokPaths {
+    /// Whether a recorded app path is this app: through links (an app moved to another drive leaves a link behind)
+    /// and regardless of a trailing slash.
+    public static func sameApp(_ path: String?, _ app: URL) -> Bool {
+        guard let path, !path.isEmpty else { return false }
+        func norm(_ u: URL) -> String { u.resolvingSymlinksInPath().standardizedFileURL.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) }
+        return norm(URL(fileURLWithPath: path)) == norm(app)
+    }
+
     /// Set only by Nokcandu’s saved-settings helper to find the installed app’s verified resources.
     nonisolated(unsafe) public static var resourceOverride: URL?
     public static var home: URL { FileManager.default.homeDirectoryForCurrentUser }

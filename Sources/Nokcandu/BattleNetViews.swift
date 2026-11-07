@@ -68,7 +68,7 @@ struct BattleNetGameInfo: View {
                 Text("Starts through Battle.net (launch code \(game.battleNet?.code ?? "?")). If Battle.net isn't open it opens it first and waits until you're signed in. Performance and raw-mouse settings come from the Battle.net app; graphics can be set per game below.")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Spacer()
-                if let h = model.games.first(where: { $0.appURL.path == game.battleNet?.hostApp }) {
+                if let h = model.games.first(where: { NokPaths.sameApp(game.battleNet?.hostApp, $0.appURL) }) {
                     Button("Battle.net Settings") { model.selection = h.id }
                 }
             }

@@ -129,7 +129,7 @@ public enum GameRemoval {
             if !dependents.isEmpty { return "Your Battle.net games (\(dependents.map(\.name).joined(separator: ", "))) run inside this Battle.net. Remove them first." }
         }
         if let kind = PCLaunchers.kind(of: g) {
-            let dependents = library.filter { $0.hosted.map { URL(fileURLWithPath: $0.hostApp).resolvingSymlinksInPath() == g.appURL.resolvingSymlinksInPath() } ?? false }
+            let dependents = library.filter { $0.hosted.map { NokPaths.sameApp($0.hostApp, g.appURL) } ?? false }
             if !dependents.isEmpty { return "Your \(kind.title) games use this launcher. Remove their Nokcandu apps first." }
         }
         return nil

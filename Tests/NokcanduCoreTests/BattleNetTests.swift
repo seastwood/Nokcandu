@@ -111,3 +111,20 @@ final class BattleNetTests: XCTestCase {
         XCTAssertNil(GameSetups.pending(InstalledGame(appURL: root.appendingPathComponent("Other.app"), name: "Other")))
     }
 }
+
+final class SameAppPathTests: XCTestCase {
+    func testAMovedAppIsStillTheSameAppThroughItsLink() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent("sameapp-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: base) }
+        let real = base.appendingPathComponent("Drive/Launchers/Battle.net.app")
+        try fm.createDirectory(at: real, withIntermediateDirectories: true)
+        let old = base.appendingPathComponent("Home/Battle.net.app")
+        try fm.createDirectory(at: old.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fm.createSymbolicLink(at: old, withDestinationURL: real)
+        XCTAssertTrue(NokPaths.sameApp(old.path, URL(fileURLWithPath: real.path, isDirectory: true)))
+        XCTAssertTrue(NokPaths.sameApp(real.path + "/", real))
+        XCTAssertFalse(NokPaths.sameApp(base.appendingPathComponent("Other.app").path, real))
+        XCTAssertFalse(NokPaths.sameApp(nil, real))
+    }
+}

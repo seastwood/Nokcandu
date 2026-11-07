@@ -93,7 +93,7 @@ public enum BattleNet {
     public static func addedApp(for game: BlizzardGame, host: InstalledGame? = nil, in games: [InstalledGame]) -> InstalledGame? {
         games.first { app in
             guard let link = app.battleNet, link.uid == game.uid, FileManager.default.fileExists(atPath: app.appURL.path) else { return false }
-            return host == nil || URL(fileURLWithPath: link.hostApp).resolvingSymlinksInPath() == host!.appURL.resolvingSymlinksInPath()
+            return host == nil || NokPaths.sameApp(link.hostApp, host!.appURL)
         }
     }
 

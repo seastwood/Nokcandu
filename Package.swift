@@ -11,10 +11,11 @@ let package = Package(
         .library(name: "NokcanduCore", targets: ["NokcanduCore"]),
     ],
     targets: [
-        .target(name: "NokcanduCore", path: "Sources/NokcanduCore"),
+        .target(name: "NokcanduPadEngine", path: "Sources/NokcanduPadEngine"),
+        .target(name: "NokcanduCore", dependencies: ["NokcanduPadEngine"], path: "Sources/NokcanduCore"),
         .executableTarget(name: "Nokcandu", dependencies: ["NokcanduCore"], path: "Sources/Nokcandu"),
         .executableTarget(name: "NokcanduSettings", dependencies: ["NokcanduCore"], path: "Sources/NokcanduSettings"),
         .executableTarget(name: "NokcanduScreenSize", path: "Sources/NokcanduScreenSize"),
-        .testTarget(name: "NokcanduCoreTests", dependencies: ["NokcanduCore"], path: "Tests/NokcanduCoreTests"),
+        .testTarget(name: "NokcanduCoreTests", dependencies: ["NokcanduCore", "NokcanduPadEngine"], path: "Tests/NokcanduCoreTests"),
     ]
 )

@@ -25,7 +25,7 @@ public enum BattleNetGraphics {
     }
 
     public static func host(of g: InstalledGame, in games: [InstalledGame]) -> InstalledGame? {
-        games.first { $0.appURL.path == g.battleNet?.hostApp }
+        games.first { NokPaths.sameApp(g.battleNet?.hostApp, $0.appURL) }
     }
 
     public static func set(_ p: GraphicsPreset?, for g: InstalledGame, games: [InstalledGame]) throws {
@@ -46,7 +46,7 @@ public enum BattleNetGraphics {
 
     /// Rewrites the Battle.net app's program list from its games' choices (graphics and virtual screen size).
     public static func writeMap(host h: InstalledGame, games: [InstalledGame]) throws {
-        for g in games where g.battleNet?.hostApp == h.appURL.path {
+        for g in games where NokPaths.sameApp(g.battleNet?.hostApp, h.appURL) {
             guard let exe = program(g, host: h) else { continue }
             try ProgramSettings.update(launcher: h.contents, key: exe, graphics: choice(g), game: g)
         }
