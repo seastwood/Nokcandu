@@ -49,6 +49,9 @@ static time_t pad_active_mtime, pad_profile_mtime; static long pad_active_ns, pa
 static double pad_last_check;
 static nok_sdl_event pad_queue[256]; static int pad_qh, pad_qt;
 static int pad_sock = -1;
+static unsigned long st_buttons, st_axes, st_gyro, st_ticks, st_mouse_msgs; static long st_mouse_x, st_mouse_y;
+static float st_gx, st_gy, st_gz; static double st_last_write, st_max_gap, st_last_wait;
+static bool st_sensor_ok;
 
 static void pad_push(nok_sdl_event ev) {
     int next = (pad_qt + 1) % 256;
@@ -78,7 +81,21 @@ static void sink_pad_axis(void *ctx, int a, int v) {
 }
 static void sink_key(void *ctx, int k, bool d) { (void)ctx; pad_send((padmsg){ PADMSG_KEY, d, (int16_t)k, 0, 0 }); }
 static void sink_mouse_button(void *ctx, int b, bool d) { (void)ctx; pad_send((padmsg){ PADMSG_MOUSE_BUTTON, d, (int16_t)b, 0, 0 }); }
-static void sink_mouse_move(void *ctx, int x, int y) { (void)ctx; pad_send((padmsg){ PADMSG_MOUSE_MOVE, 0, 0, x, y }); }
+static void sink_mouse_move(void *ctx, int x, int y) { (void)ctx; st_mouse_msgs++; st_mouse_x += x; st_mouse_y += y; pad_send((padmsg){ PADMSG_MOUSE_MOVE, 0, 0, x, y }); }
+// What the driver half has seen (pad-status next to this library), every two seconds while a profile is in use.
+static void pad_status(double now) {
+    if (!pad_profile_text[0] || now - st_last_write < 2) return;
+    double span = st_last_write > 0 ? now - st_last_write : 2;
+    st_last_write = now;
+    char path[PATH_MAX]; snprintf(path, sizeof path, "%s/pad-status", pad_state_dir);
+    FILE *f = fopen(path, "w");
+    if (!f) return;
+    fprintf(f, "driver %.1fs: buttons %lu axes %lu gyro %lu (sensor %s, last %.2f %.2f %.2f rad/s) ticks %lu longest wait %.0f ms; mouse %lu moves, total %ld,%ld; game pid %d\n",
+            span, st_buttons, st_axes, st_gyro, st_sensor_ok ? "on" : "not turned on", st_gx, st_gy, st_gz, st_ticks, st_max_gap * 1000,
+            st_mouse_msgs, st_mouse_x, st_mouse_y, (int)pad_game_pid);
+    fclose(f);
+    st_buttons = st_axes = st_gyro = st_ticks = st_mouse_msgs = 0; st_mouse_x = st_mouse_y = 0; st_max_gap = 0;
+}
 static void sink_wheel(void *ctx, int n) { (void)ctx; pad_send((padmsg){ PADMSG_WHEEL, 0, (int16_t)n, 0, 0 }); }
 
 static pe_engine *pad_engine_for(int32_t which, bool create) {
@@ -152,6 +169,7 @@ static int pad_next_wait_ms(double now, int timeout) {
 
 static int nok_wait(nok_sdl_event *ev, int timeout) {
     pad_check();
+    { double t = pad_now(); if (st_last_wait > 0 && t - st_last_wait > st_max_gap) st_max_gap = t - st_last_wait; st_last_wait = t; st_ticks++; pad_status(t); }
     if (pad_pop(ev)) return 1;
     double now = pad_now();
     pad_tick_all(now);
@@ -162,14 +180,17 @@ static int nok_wait(nok_sdl_event *ev, int timeout) {
         switch (ev->type) {
         case NOK_SDL_CSENSOR: {             // gyro: Wine's driver has no use for it
             pe_engine *e = pad_engine_for(ev->csensor.which, true);
+            if (ev->csensor.sensor == NOK_SDL_SENSOR_GYRO) { st_gyro++; st_gx = ev->csensor.data[0]; st_gy = ev->csensor.data[1]; st_gz = ev->csensor.data[2]; }
             if (e && ev->csensor.sensor == NOK_SDL_SENSOR_GYRO) pe_gyro(e, ev->csensor.data[0], ev->csensor.data[1], ev->csensor.data[2], now);
             r = 0; break; }
         case NOK_SDL_CBDOWN: case NOK_SDL_CBUP: {
             pe_engine *e = pad_engine_for(ev->cbutton.which, true);
+            st_buttons++;
             if (e) { pe_button(e, ev->cbutton.button, ev->type == NOK_SDL_CBDOWN, now); r = 0; }
             break; }
         case NOK_SDL_CAXIS: {
             pe_engine *e = pad_engine_for(ev->caxis.which, true);
+            st_axes++;
             if (e) { pe_axis(e, ev->caxis.axis, ev->caxis.value, now); r = 0; }
             break; }
         case NOK_SDL_CREMOVED:
@@ -185,7 +206,8 @@ static int nok_wait(nok_sdl_event *ev, int timeout) {
 
 static void *nok_open(int index) {
     void *c = real_open(index);
-    if (c && real_sensor) real_sensor(c, NOK_SDL_SENSOR_GYRO, 1);      // gyro on, for profiles that use it
+    if (c && real_sensor) st_sensor_ok = real_sensor(c, NOK_SDL_SENSOR_GYRO, 1) == 0;      // gyro on, for profiles that use it
+    fprintf(stderr, "nokcandu: controller %d opened; gyro %s\n", index, st_sensor_ok ? "on" : real_sensor ? "not available" : "unknown");
     return c;
 }
 
@@ -270,11 +292,39 @@ static void pad_mouse_button(int b, bool down) {
     if (cg) CGEventSetFlags(cg, pad_flags);
     pad_post(cg);
 }
+static unsigned long pad_moves_in, pad_moves_relative, pad_moves_warp;
+// A relative move straight into Wine's event queue for the front game window (what a real mouse's movement
+// becomes), whether or not the game is capturing the mouse. Main thread.
+static bool pad_post_relative(int dx, int dy) {
+    if (relative_type <= 0 || !orig_postEvent) return false;
+    NSWindow *w = NSApp.keyWindow;
+    id ctl = controller();
+    if (![w isKindOfClass:objc_getClass("WineWindow")] || !ctl) return false;
+    id q = ((id (*)(id, SEL))objc_msgSend)(w, sel_registerName("queue"));
+    if (!q) return false;
+    char *ev = calloc(1, kEventAllocSize);
+    if (!ev) return false;
+    *(int *)(ev + kRefs) = 1;
+    *(int *)(ev + kDeliver) = INT_MAX;
+    *(int *)(ev + kType) = relative_type;
+    *(void **)(ev + kWindow) = (void *)CFBridgingRetain(w);
+    *(int *)(ev + kX) = dx;
+    *(int *)(ev + kY) = dy;
+    *(int *)(ev + kDrag) = NSEvent.pressedMouseButtons != 0 || pad_buttons_down[0] || pad_buttons_down[1];
+    *(unsigned long *)(ev + kTime) = ((unsigned long (*)(id, SEL, NSTimeInterval))objc_msgSend)(ctl, sel_registerName("ticksForEventTime:"), NSProcessInfo.processInfo.systemUptime);
+    ((void (*)(id, SEL, void *))orig_postEvent)(q, sel_registerName("postEvent:"), ev);
+    release_ours(ev);
+    return true;
+}
 static void pad_mouse_move(int dx, int dy) {
+    pad_moves_in++;
     if (atomic_load(&armed)) {                         // the game has the mouse captured: same path as raw mouse
+        pad_moves_relative++;
         dispatch_async(raw_q, ^{ send_relative(dx, dy, NSEvent.pressedMouseButtons != 0 || pad_buttons_down[0] || pad_buttons_down[1]); });
         return;
     }
+    if (pad_post_relative(dx, dy)) { pad_moves_relative++; return; }
+    pad_moves_warp++;
     CGPoint p = pad_cursor(); p.x += dx; p.y += dy;
     bool drag = pad_buttons_down[0] || pad_buttons_down[1];
     CGEventRef cg = CGEventCreateMouseEvent(NULL, drag ? (pad_buttons_down[0] ? kCGEventLeftMouseDragged : kCGEventRightMouseDragged) : kCGEventMouseMoved,
@@ -283,8 +333,19 @@ static void pad_mouse_move(int dx, int dy) {
     CGEventSetIntegerValueField(cg, kCGMouseEventDeltaX, dx);
     CGEventSetIntegerValueField(cg, kCGMouseEventDeltaY, dy);
     CGWarpMouseCursorPosition(p);
-    CGAssociateMouseAndMouseCursorPosition(true);
     pad_post(cg);
+}
+static void pad_game_status(void) {
+    static double last; double now = NSProcessInfo.processInfo.systemUptime;
+    if (now - last < 2 || !pad_active_path[0]) return;
+    last = now;
+    char path[PATH_MAX]; snprintf(path, sizeof path, "%s-game", pad_active_path);
+    FILE *f = fopen(path, "w");
+    if (!f) return;
+    fprintf(f, "game: %lu moves in (%lu relative, %lu by pointer), capturing %s, relative layout %d, raw mouse %s\n",
+            pad_moves_in, pad_moves_relative, pad_moves_warp, atomic_load(&armed) ? "yes" : "no", relative_type, atomic_load(&raw_enabled) ? "on" : "off");
+    fclose(f);
+    pad_moves_in = pad_moves_relative = pad_moves_warp = 0;
 }
 static void pad_wheel(int n) { pad_post(CGEventCreateScrollWheelEvent(NULL, kCGScrollEventUnitLine, 1, n)); }
 static void pad_release_local(void) {
@@ -320,7 +381,7 @@ static void pad_activate(void) {
                     switch (m.kind) {
                     case PADMSG_KEY: pad_key(m.code, m.down); break;
                     case PADMSG_MOUSE_BUTTON: pad_mouse_button(m.code, m.down); break;
-                    case PADMSG_MOUSE_MOVE: pad_mouse_move(m.dx, m.dy); break;
+                    case PADMSG_MOUSE_MOVE: pad_mouse_move(m.dx, m.dy); pad_game_status(); break;
                     case PADMSG_WHEEL: pad_wheel(m.code); break;
                     case PADMSG_RELEASE: pad_release_local(); break;
                     }
