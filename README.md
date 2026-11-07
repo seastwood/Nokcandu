@@ -28,10 +28,43 @@ with tested settings, one-click fixes and safe updates.
 - **Raw mouse capture** — optional and off by default; reads your mouse directly whenever a game captures it (aiming, camera control) (hundreds of updates a second, no macOS acceleration), which can improve aiming in compatible games. Toggle it while playing; compatibility varies by game.
 - **Play in a resizable window** — optional, per game: the game runs on a virtual screen shown in a normal Mac window you can move, resize, minimize or make full screen, without changing your Mac's display. Change its resolution while the game runs. Control-Command-C frees or captures the mouse, Control-Command-F toggles full screen, Shift-Command-Esc always frees the mouse.
 - **Local network games** — Windows games that use Bonjour (like StarCraft's Local Area Network) use the Mac's own Bonjour; nothing to install. Sound follows the Mac's output when you plug in headphones.
+- **Controller profiles** — remap any controller for any game or app on your Mac; see [below](#controller-profiles--for-any-game-anywhere-on-your-mac).
 - **Performance** — FPS counter, vsync, frame limit. **Drives** — map D:, E:… to external SSDs. **Storage** — see and free space.
 - **Fixes & health** — Optional DirectX 8 compatibility (d3d8to9 + bundled DXVK 2.3), DirectX 9 shader extras, borderless windows, cinematic playback (LAV Filters), known community fixes (winetricks), anti-cheat notes, Repair, Diagnostics, crash recognition with suggested fixes, notes per game.
 - **Stays current** — checks this repo for new Nokcandu releases and the Sikarugir/LAV projects for new components. New engines are self-tested before they're offered, each game tries them separately, and you can roll back.
 - **Safe by design** — every file Nokcandu changes is backed up and journaled; your saves and game files are never touched by repairs or updates.
+
+## Controller profiles — for any game, anywhere on your Mac
+
+![The Profiles tab: a controller profile with its layers, a picture of the controller showing what each button does, and the selected button's settings](docs/controller-profiles.png)
+
+Nokcandu has a full controller remapper built in, and **it works system-wide**: not just in games you run with Nokcandu,
+but in Mac games, games from launchers you already use, and any other Mac app. If you only want the remapping,
+that's fine — you never have to install a game in Nokcandu to use it.
+
+- **Remap everything** — every button, stick, trigger, paddle and the touchpad click can do itself, another controller button,
+  a key, a mouse button or the scroll wheel. Click **Press…** and press the key or mouse button you want.
+- **Tap, hold, double tap, turbo and button combinations** — one button can do different things depending on how you press it.
+- **Sticks and gyro as a mouse** — separate X and Y sensitivity, response curves, edge acceleration, and gyro yaw and roll amounts.
+  The gyro can be switched on, off or held with any button.
+- **Layers** — hold or toggle a button to switch to another layer. Layers inherit the base layer, so you only change what's different.
+  A short note on screen shows which layer or gyro mode you switched into (it can be turned off in Settings).
+- **Quick Setup** — swap A/B and X/Y in one click; Xbox, PlayStation and Nintendo button labels, remembered per controller.
+- **Live test** — see exactly what the game will get as you press buttons.
+- **Profiles that build on each other**, duplicate, rename and right-click to activate.
+
+**Where a profile applies**
+
+- **Each game** picks a profile, or uses the controller **as it is** — some games work best with their own controller controls.
+- **On the Mac** — a profile for moving the pointer, clicking and typing with your controller everywhere else, with rules for
+  particular apps (handy for games from other launchers).
+- **Use Everywhere** — activate any profile for every app and game until you stop it, from the profile's page, its right-click
+  menu or the menu bar (for streaming, or trying a profile without a game).
+- **One switch turns it all off** (Profiles tab, Settings or the menu bar), so your controller works untouched.
+
+Using a profile outside Windows games needs Accessibility access (macOS asks the first time), and Nokcandu can open at login
+in the menu bar so profiles are always ready. **Keyboard layouts** work the same way: remap keys (including fn/Globe)
+for Windows games and Mac games.
 
 ## Game Profiles
 
