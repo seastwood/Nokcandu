@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import NokcanduCore
 
 /// Editing a controller profile: a picture of the controller (click a button, stick or the gyro), layers, what
@@ -15,7 +16,8 @@ struct ControllerProfileEditor: View {
     @State private var layerIndex = 0
     @State private var selection: Part = .input(.a)
     @State private var family: Controllers.Family?
-    @StateObject private var tester = PadTester()
+    /// Not observed here: the live test updates many times a second, and redrawing the whole editor would close any open menu.
+    @State private var tester = PadTester()
     @State private var newLayerName = ""
     @State private var addingLayer = false
     @State private var renamingLayer = false
@@ -43,16 +45,17 @@ struct ControllerProfileEditor: View {
             HStack(alignment: .top, spacing: 16) {
                 VStack(alignment: .leading, spacing: 10) {
                     layerBar
-                    ControllerPicture(family: family, selection: $selection, pressed: tester.pressed, sticks: tester.sticks,
+                    ControllerPicture(family: family, selection: $selection, tester: tester,
                                       mapped: { i in profile.layers[layerIndex][i] != nil || inherited(i) != nil },
                                       label: { i in shortLabel(i) })
                         .frame(width: 440, height: 290)
-                    extraButtons
+                    ExtraButtons(tester: tester, family: family, selection: $selection,
+                                 mapped: { i in profile.layers[layerIndex][i] != nil || inherited(i) != nil })
                     PadTestView(tester: tester, family: family)
                 }
-                Divider()
-                ScrollView { inspector.padding(.trailing, 8) }
-                    .frame(minWidth: 340, maxWidth: .infinity)
+                Form { inspector }
+                    .formStyle(.grouped)
+                    .frame(minWidth: 380, maxWidth: .infinity)
             }
             HStack {
                 Text("Changes are saved as you make them and apply on the next press, even while playing.")
@@ -173,20 +176,6 @@ struct ControllerProfileEditor: View {
         layerIndex = 0
     }
 
-    var extraButtons: some View {
-        HStack(spacing: 6) {
-            ForEach([PadProfiles.Input.paddle1, .paddle2, .paddle3, .paddle4, .touchpad, .misc], id: \.self) { i in
-                Button { selection = .input(i) } label: {
-                    Text(i.title(family)).font(.caption)
-                        .padding(.horizontal, 6).padding(.vertical, 3)
-                        .background(RoundedRectangle(cornerRadius: 5).fill(tester.pressed.contains(i) ? Color.accentColor.opacity(0.6) : (profile.layers[layerIndex][i] != nil || inherited(i) != nil) ? Color.accentColor.opacity(0.2) : Color.secondary.opacity(0.12)))
-                        .overlay(RoundedRectangle(cornerRadius: 5).stroke(selection == .input(i) ? Color.accentColor : .clear, lineWidth: 2))
-                }.buttonStyle(.plain)
-            }
-            Button { selection = .triggers } label: { Text("Trigger pull").font(.caption) }.buttonStyle(.link)
-        }
-    }
-
     func shortLabel(_ i: PadProfiles.Input) -> String? {
         guard let b = profile.layers[layerIndex][i] ?? inherited(i) else { return nil }
         let first = b.press.first ?? b.tap.first ?? b.hold.first ?? b.togetherOutputs.first
@@ -221,14 +210,11 @@ struct ControllerProfileEditor: View {
     @ViewBuilder func inputInspector(_ i: PadProfiles.Input) -> some View {
         let own = profile.layers[layerIndex][i]
         let from = own == nil ? inherited(i) : nil
-        VStack(alignment: .leading, spacing: 10) {
-            Text(i.title(family)).font(.title3.bold())
-            if layerIndex > 0 { Text("In the \(layerName) layer").font(.caption).foregroundStyle(.secondary) }
-            if let from {
-                SettingNote("Comes from a profile this one builds on: \(describe(from)). Change it here to override it.")
-            }
+        Section {
             BindingEditor(binding: bindingFor(i), input: i, family: family, layers: profile.layers.dropFirst().map(\.name),
-                          inLayer: layerIndex > 0)
+                          inLayer: layerIndex > 0, inherited: from.map(describe))
+        } header: {
+            InspectorTitle(title: i.title(family), subtitle: layerIndex > 0 ? "\(layerName) layer" : nil, symbol: i.isTrigger ? "l2.button.roundedtop.horizontal" : "circle.circle")
         }
     }
 
@@ -250,39 +236,45 @@ struct ControllerProfileEditor: View {
 
     @ViewBuilder func stickInspector(_ s: Int) -> some View {
         let st = stickBinding(s)
-        VStack(alignment: .leading, spacing: 10) {
-            Text(s == 0 ? "Left Stick" : "Right Stick").font(.title3.bold())
+        Section {
             Picker("Works as", selection: st.mode) { ForEach(PadProfiles.StickMode.allCases, id: \.self) { Text($0.title).tag($0) } }
             switch st.wrappedValue.mode {
             case .mouse:
                 slider("Speed", st.speed, 200...6000, "%.0f /s")
                 slider("Curve", st.curve, 1...3, "%.1f", info: "1 is straight; higher starts slower for fine aim and still reaches full speed.")
             case .flick:
-                slider("One full turn", st.countsPerTurn, 500...20000, "%.0f", info: "Mouse movement that turns the game's camera all the way round. Find it by flicking the stick right: it should turn exactly 90°.")
+                slider("One full turn", st.countsPerTurn, 500...20000, "%.0f", info: "Mouse movement that turns the game's camera all the way round. Flick the stick right: it should turn exactly 90°.")
                 slider("Flick time", st.flickTime, 0...0.3, "%.2f s")
-                SettingNote("Push the stick to the edge to turn to face that way; rotate it around the edge to keep turning. Combine with gyro aim for up and down.")
             case .keys:
                 ForEach(0..<4, id: \.self) { k in
-                    SettingRow(title: ["Up", "Down", "Left", "Right"][k]) {
-                        Picker("", selection: Binding(get: { st.wrappedValue.keys.indices.contains(k) ? st.wrappedValue.keys[k] : 13 },
-                                                      set: { v in var x = st.wrappedValue; if x.keys.count < 4 { x.keys = [13, 1, 0, 2] }; x.keys[k] = v; st.wrappedValue = x })) {
-                            ForEach(PadProfiles.keys) { Text($0.title).tag($0.code) }
-                        }.labelsHidden().frame(width: 160)
+                    Picker(["Up", "Down", "Left", "Right"][k], selection: Binding(get: { st.wrappedValue.keys.indices.contains(k) ? st.wrappedValue.keys[k] : 13 },
+                                                  set: { v in var x = st.wrappedValue; if x.keys.count < 4 { x.keys = [13, 1, 0, 2] }; x.keys[k] = v; st.wrappedValue = x })) {
+                        ForEach(PadProfiles.keys) { Text($0.title).tag($0.code) }
                     }
                 }
             default: EmptyView()
             }
-            if st.wrappedValue.mode != .off {
+        } header: {
+            InspectorTitle(title: s == 0 ? "Left Stick" : "Right Stick", subtitle: nil, symbol: s == 0 ? "l.joystick" : "r.joystick")
+        } footer: {
+            if st.wrappedValue.mode == .flick {
+                Text("Push the stick to the edge to turn to face that way; rotate it around the edge to keep turning. Pairs well with gyro aim.").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        if st.wrappedValue.mode != .off {
+            Section("Response") {
                 slider("Dead zone", st.deadzone, 0...0.5, "%.2f", info: "How far the stick moves before it counts. Raise it if the stick drifts.")
-                slider("Full at", st.outer, 0.5...1, "%.2f", info: "How far out the stick is fully pushed.")
+                slider("Full at", st.outer, 0.5...1, "%.2f", info: "How far out the stick counts as fully pushed.")
                 Toggle("Invert up and down", isOn: st.invertY)
             }
-            Divider()
-            Text("Stick click").font(.headline)
+        }
+        Section {
             BindingEditor(binding: bindingFor(s == 0 ? .ls : .rs), input: s == 0 ? .ls : .rs, family: family,
-                          layers: profile.layers.dropFirst().map(\.name), inLayer: layerIndex > 0)
-            if (s == 0 ? profile.leftStick : profile.rightStick) != nil {
-                Button("Use the Profile Underneath's Settings") { if s == 0 { profile.leftStick = nil } else { profile.rightStick = nil } }.buttonStyle(.link)
+                          layers: profile.layers.dropFirst().map(\.name), inLayer: layerIndex > 0,
+                          inherited: profile.layers[layerIndex][s == 0 ? .ls : .rs] == nil ? inherited(s == 0 ? .ls : .rs).map(describe) : nil)
+        } header: { Text("Stick Click") } footer: {
+            if (s == 0 ? profile.leftStick : profile.rightStick) != nil, !profile.buildsOn.isEmpty {
+                Button("Use the Settings of the Profile Underneath") { if s == 0 { profile.leftStick = nil } else { profile.rightStick = nil } }.buttonStyle(.link).font(.caption)
             }
         }
     }
@@ -293,53 +285,74 @@ struct ControllerProfileEditor: View {
 
     @ViewBuilder var gyroInspector: some View {
         let g = gyroBinding
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Gyro").font(.title3.bold())
+        Section {
             Picker("Moves", selection: g.output) { ForEach(PadProfiles.GyroOutput.allCases, id: \.self) { Text($0.title).tag($0) } }
             if g.wrappedValue.output != .off {
-                Picker("Turning left and right comes from", selection: g.turn) { ForEach(PadProfiles.GyroTurn.allCases, id: \.self) { Text($0.title).tag($0) } }
-                Toggle("On until a “Gyro off” button is held", isOn: g.startsOn)
-                SettingNote(g.wrappedValue.startsOn
-                            ? "Give a button “Gyro off while held” to reposition the controller without turning (like lifting a mouse)."
-                            : "The gyro only moves while a button set to “Gyro on while held” is held (for example while aiming).")
-                if g.wrappedValue.output == .mouse {
-                    slider("Sensitivity", g.sensitivity, 0.5...40, "%.1f", info: "Mouse movement per degree turned.")
-                    Toggle("Faster when turning fast", isOn: Binding(get: { g.wrappedValue.fastSensitivity != nil },
-                                                                   set: { var x = g.wrappedValue; x.fastSensitivity = $0 ? x.sensitivity * 2 : nil; g.wrappedValue = x }))
-                    if g.wrappedValue.fastSensitivity != nil {
-                        slider("Fast sensitivity", Binding(get: { g.wrappedValue.fastSensitivity ?? 0 }, set: { var x = g.wrappedValue; x.fastSensitivity = $0; g.wrappedValue = x }), 0.5...80, "%.1f")
-                        slider("Slow below", g.slowSpeed, 0...100, "%.0f °/s")
-                        slider("Fast above", g.fastSpeed, 10...400, "%.0f °/s")
-                    }
-                } else {
-                    slider("Full push at", g.stickFullSpeed, 30...720, "%.0f °/s", info: "Turning this fast pushes the stick all the way.")
-                    slider("Least push", g.stickMinimum, 0...0.5, "%.2f", info: "Games ignore small stick movements; this starts beyond their dead zone.")
+                Picker("Left and right from", selection: g.turn) { ForEach(PadProfiles.GyroTurn.allCases, id: \.self) { Text($0.title).tag($0) } }
+                Picker("When", selection: g.startsOn) {
+                    Text("Always, unless a “Gyro off” button is held").tag(true)
+                    Text("Only while a “Gyro on” button is held").tag(false)
                 }
+            }
+        } header: {
+            InspectorTitle(title: "Gyro", subtitle: nil, symbol: "gyroscope")
+        } footer: {
+            if g.wrappedValue.output != .off {
+                Text(g.wrappedValue.startsOn ? "Give a button “Gyro off while held” to reposition the controller without turning, like lifting a mouse." : "Give a button “Gyro on while held”, for example the aim trigger.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        if g.wrappedValue.output == .mouse {
+            Section("Sensitivity") {
+                slider("Sensitivity", g.sensitivity, 0.5...40, "%.1f", info: "Mouse movement per degree turned.")
+                Toggle("Faster when turning fast", isOn: Binding(get: { g.wrappedValue.fastSensitivity != nil },
+                                                               set: { var x = g.wrappedValue; x.fastSensitivity = $0 ? x.sensitivity * 2 : nil; g.wrappedValue = x }))
+                if g.wrappedValue.fastSensitivity != nil {
+                    slider("Fast sensitivity", Binding(get: { g.wrappedValue.fastSensitivity ?? 0 }, set: { var x = g.wrappedValue; x.fastSensitivity = $0; g.wrappedValue = x }), 0.5...80, "%.1f")
+                    slider("Slow below", g.slowSpeed, 0...100, "%.0f °/s")
+                    slider("Fast above", g.fastSpeed, 10...400, "%.0f °/s")
+                }
+            }
+        } else if g.wrappedValue.output != .off {
+            Section("Stick") {
+                slider("Full push at", g.stickFullSpeed, 30...720, "%.0f °/s", info: "Turning this fast pushes the stick all the way.")
+                slider("Least push", g.stickMinimum, 0...0.5, "%.2f", info: "Games ignore small stick movements; this starts beyond their dead zone.")
+            }
+        }
+        if g.wrappedValue.output != .off {
+            Section("Steadiness") {
                 slider("Smoothing below", g.smoothing, 0...20, "%.1f °/s", info: "Slow movements are averaged for steadier aim; fast ones stay instant. 0 is off.")
                 slider("Steady below", g.tightening, 0...10, "%.1f °/s", info: "Very small movements (hand shake) are scaled down. 0 is off.")
                 Toggle("Invert left and right", isOn: g.invertX)
                 Toggle("Invert up and down", isOn: g.invertY)
                 Toggle("Calibrate when the controller is still", isOn: g.autoCalibrate)
-                SettingNote("Put the controller down for a moment if the aim slowly drifts.")
             }
-            if profile.gyro != nil { Button("Use the Profile Underneath's Gyro") { profile.gyro = nil }.buttonStyle(.link) }
+        }
+        if profile.gyro != nil, !profile.buildsOn.isEmpty {
+            Section { Button("Use the Gyro of the Profile Underneath") { profile.gyro = nil }.buttonStyle(.link) }
         }
     }
 
     @ViewBuilder var triggerInspector: some View {
         let t = Binding(get: { profile.triggers ?? merged.triggers }, set: { profile.triggers = $0 })
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Trigger Pull").font(.title3.bold())
+        Section {
             slider("Pressed at", t.soft, 0.05...0.9, "%.0f%%", scale: 100, info: "How far a trigger is pulled to count as pressed when it's set to a key or button.")
-            slider("Full pull at", t.full, 0.5...1, "%.0f%%", scale: 100, info: "The full-pull inputs (\(PadProfiles.Input.ltfull.title(family)), \(PadProfiles.Input.rtfull.title(family))): a second action at the end of the pull.")
-            SettingNote("A trigger with nothing set stays a trigger. Set \(PadProfiles.Input.rt.title(family)) and \(PadProfiles.Input.rtfull.title(family)) to two different things for a two-stage trigger.")
+            slider("Full pull at", t.full, 0.5...1, "%.0f%%", scale: 100, info: "When \(PadProfiles.Input.ltfull.title(family)) and \(PadProfiles.Input.rtfull.title(family)) count: a second action at the end of the pull.")
+        } header: {
+            InspectorTitle(title: "Trigger Pull", subtitle: nil, symbol: "r2.button.roundedtop.horizontal")
+        } footer: {
+            Text("A trigger with nothing set stays a trigger. Set \(PadProfiles.Input.rt.title(family)) and \(PadProfiles.Input.rtfull.title(family)) to different things for a two-stage trigger.").font(.caption).foregroundStyle(.secondary)
         }
     }
 
     func slider(_ title: String, _ v: Binding<Double>, _ range: ClosedRange<Double>, _ fmt: String, scale: Double = 1, info: String? = nil) -> some View {
-        SettingRow(title: title, info: info) {
-            Slider(value: v, in: range).frame(width: 150)
-            Text(String(format: fmt, v.wrappedValue * scale)).font(.caption.monospacedDigit()).frame(width: 64, alignment: .trailing)
+        LabeledContent {
+            HStack(spacing: 8) {
+                Slider(value: v, in: range).frame(minWidth: 120)
+                Text(String(format: fmt, v.wrappedValue * scale)).font(.callout.monospacedDigit()).foregroundStyle(.secondary).frame(width: 64, alignment: .trailing)
+            }
+        } label: {
+            HStack(spacing: 4) { Text(title); if let info { InfoButton(info) } }
         }
     }
 }
@@ -352,38 +365,58 @@ struct BindingEditor: View {
     let family: Controllers.Family?
     let layers: [String]
     let inLayer: Bool
+    var inherited: String? = nil
+    @State private var more = false
 
     enum Kind: String, CaseIterable { case same, press, taps }
     var kind: Kind {
-        guard let b = binding else { return .same }
+        guard let b = binding, !(b.press.isEmpty && b.tap.isEmpty && b.hold.isEmpty && b.double.isEmpty) else { return .same }
         return (!b.tap.isEmpty || !b.hold.isEmpty || !b.double.isEmpty) ? .taps : .press
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Picker("Does", selection: Binding(get: { kind }, set: setKind)) {
-                Text(inLayer ? "Same as underneath" : "Itself").tag(Kind.same)
-                Text("Something else").tag(Kind.press)
-                Text("Tap, hold or double tap").tag(Kind.taps)
-            }
-            .pickerStyle(.radioGroup)
-            if let b = binding {
-                switch kind {
-                case .press:
-                    OutputsEditor(title: "Press", outputs: field(\.press), family: family, layers: layers)
-                    turbo(b)
-                case .taps:
-                    OutputsEditor(title: "Tap", outputs: field(\.tap), family: family, layers: layers)
-                    OutputsEditor(title: "Hold", outputs: field(\.hold), family: family, layers: layers)
-                    OutputsEditor(title: "Double tap", outputs: field(\.double), family: family, layers: layers)
-                    SettingRow(title: "Hold after", info: "How long a press lasts before it counts as a hold.") {
-                        Stepper("\(Int((b.holdTime ?? 0.2) * 1000)) ms", value: Binding(get: { b.holdTime ?? 0.2 }, set: { binding?.holdTime = $0 }), in: 0.08...1, step: 0.02)
-                    }
-                case .same: EmptyView()
+        Picker("Does", selection: Binding(get: { kind }, set: setKind)) {
+            Text(inLayer ? "As underneath" : "Itself").tag(Kind.same)
+            Text("Something else").tag(Kind.press)
+            Text("Tap / Hold").tag(Kind.taps)
+        }
+        .pickerStyle(.segmented)
+        if kind == .same, let inherited {
+            LabeledContent("From the profile underneath") { Text(inherited).foregroundStyle(.secondary) }
+        }
+        if let b = binding {
+            switch kind {
+            case .press:
+                OutputsEditor(title: "Press", outputs: field(\.press), family: family, layers: layers)
+                Toggle("Repeat while held", isOn: Binding(get: { (b.turbo ?? 0) > 0 }, set: { binding?.turbo = $0 ? 100 : nil }))
+                if let t = b.turbo, t > 0 {
+                    LabeledContent("Every") { Stepper("\(t) ms", value: Binding(get: { t }, set: { binding?.turbo = $0 }), in: 30...1000, step: 10) }
                 }
+            case .taps:
+                OutputsEditor(title: "Tap", outputs: field(\.tap), family: family, layers: layers)
+                OutputsEditor(title: "Hold", outputs: field(\.hold), family: family, layers: layers)
+                OutputsEditor(title: "Double tap", outputs: field(\.double), family: family, layers: layers)
+                LabeledContent("Hold after") {
+                    Stepper("\(Int((b.holdTime ?? 0.2) * 1000)) ms", value: Binding(get: { b.holdTime ?? 0.2 }, set: { binding?.holdTime = $0 }), in: 0.08...1, step: 0.02)
+                }
+            case .same: EmptyView()
             }
-            Divider()
-            together
+        }
+        DisclosureGroup("More", isExpanded: Binding(get: { more || binding?.together != nil }, set: { more = $0 })) {
+            Picker("Pressed together with", selection: Binding(get: { binding?.together }, set: { v in
+                var b = binding ?? PadProfiles.Binding()
+                b.together = v
+                if v != nil && b.togetherOutputs.isEmpty { b.togetherOutputs = [.nothing] }
+                if v == nil { b.togetherOutputs = [] }
+                binding = b.isEmpty && b.together == nil ? nil : b
+            })) {
+                Text("Nothing").tag(PadProfiles.Input?.none)
+                ForEach(PadProfiles.Input.allCases.filter { $0 != input }, id: \.self) { Text($0.title(family)).tag(PadProfiles.Input?.some($0)) }
+            }
+            .help("Both pressed at the same moment (within 1/20 s) do something else. This button then waits that long before acting alone.")
+            if binding?.together != nil {
+                OutputsEditor(title: "Together", outputs: field(\.togetherOutputs), family: family, layers: layers)
+            }
         }
     }
 
@@ -409,34 +442,23 @@ struct BindingEditor: View {
             binding = b
         }
     }
+}
 
-    @ViewBuilder func turbo(_ b: PadProfiles.Binding) -> some View {
-        SettingToggle(title: "Repeat while held", info: "Presses again and again while you hold the button (turbo).",
-                      isOn: Binding(get: { (b.turbo ?? 0) > 0 }, set: { binding?.turbo = $0 ? 100 : nil }))
-        if let t = b.turbo, t > 0 {
-            SettingRow(title: "Every") {
-                Stepper("\(t) ms", value: Binding(get: { t }, set: { binding?.turbo = $0 }), in: 30...1000, step: 10)
+/// The inspector's heading: what's selected, with its symbol.
+struct InspectorTitle: View {
+    let title: String
+    let subtitle: String?
+    let symbol: String
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: symbol).font(.title2).foregroundStyle(Color.accentColor)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(title).font(.title3.bold()).foregroundStyle(.primary)
+                if let subtitle { Text(subtitle).font(.caption).foregroundStyle(.secondary) }
             }
         }
-    }
-
-    @ViewBuilder var together: some View {
-        let others = PadProfiles.Input.allCases.filter { $0 != input }
-        SettingRow(title: "Pressed together with", info: "Both pressed at the same moment (within 1/20 s) do something else. This button then waits that long before acting alone.") {
-            Picker("", selection: Binding(get: { binding?.together }, set: { v in
-                var b = binding ?? PadProfiles.Binding()
-                b.together = v
-                if v != nil && b.togetherOutputs.isEmpty { b.togetherOutputs = [.nothing] }
-                if v == nil { b.togetherOutputs = [] }
-                binding = b.isEmpty && b.together == nil ? nil : b
-            })) {
-                Text("Nothing").tag(PadProfiles.Input?.none)
-                ForEach(others, id: \.self) { Text($0.title(family)).tag(PadProfiles.Input?.some($0)) }
-            }.labelsHidden().frame(width: 170)
-        }
-        if binding?.together != nil {
-            OutputsEditor(title: "Together", outputs: field(\.togetherOutputs), family: family, layers: layers)
-        }
+        .textCase(nil)
+        .padding(.bottom, 2)
     }
 }
 
@@ -446,10 +468,58 @@ struct OutputsEditor: View {
     @Binding var outputs: [PadProfiles.Output]
     let family: Controllers.Family?
     let layers: [String]
+    @State private var recording = false
+    @State private var monitor: Any?
+    @State private var heldModifiers = Set<Int>()
+
+    func add(_ o: PadProfiles.Output) {
+        if o == .nothing { outputs = [.nothing] } else { outputs.removeAll { $0 == .nothing }; if !outputs.contains(o) { outputs.append(o) } }
+    }
+
+    /// The next key, mouse button or scroll becomes an output. Modifiers held with a key are added too (Shift+R).
+    func record() {
+        recording = true; heldModifiers = []
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel]) { e in
+            switch e.type {
+            case .flagsChanged:
+                let k = Int(e.keyCode)
+                let down: Bool = {
+                    switch k {
+                    case 56, 60: return e.modifierFlags.contains(.shift)
+                    case 59, 62: return e.modifierFlags.contains(.control)
+                    case 58, 61: return e.modifierFlags.contains(.option)
+                    case 55, 54: return e.modifierFlags.contains(.command)
+                    case 63: return e.modifierFlags.contains(.function)
+                    case 57: return true
+                    default: return false
+                    }
+                }()
+                if down { heldModifiers.insert(k) }
+                else if heldModifiers.contains(k) {      // a modifier pressed and let go on its own
+                    add(.key(k)); stopRecording()
+                }
+                return nil
+            case .keyDown:
+                for m in heldModifiers.sorted() { add(.key(m)) }
+                add(.key(Int(e.keyCode))); stopRecording(); return nil
+            case .leftMouseDown: add(.mouse(.left)); stopRecording(); return nil
+            case .rightMouseDown: add(.mouse(.right)); stopRecording(); return nil
+            case .otherMouseDown:
+                add(.mouse(e.buttonNumber == 2 ? .middle : e.buttonNumber == 3 ? .back : .forward)); stopRecording(); return nil
+            case .scrollWheel:
+                guard abs(e.scrollingDeltaY) > 0.5 else { return nil }
+                add(.wheel(up: e.scrollingDeltaY > 0)); stopRecording(); return nil
+            default: return e
+            }
+        }
+    }
+    func stopRecording() {
+        if let m = monitor { NSEvent.removeMonitor(m) }
+        monitor = nil; recording = false; heldModifiers = []
+    }
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(title).frame(width: 78, alignment: .leading)
+        LabeledContent(title) {
             FlowRow {
                 ForEach(Array(outputs.enumerated()), id: \.offset) { i, o in
                     HStack(spacing: 3) {
@@ -460,10 +530,11 @@ struct OutputsEditor: View {
                     .padding(.horizontal, 7).padding(.vertical, 3)
                     .background(Capsule().fill(Color.accentColor.opacity(0.15)))
                 }
-                Menu(outputs.isEmpty ? "Choose" : "Add") { OutputMenu(family: family, layers: layers) { o in
-                    if o == .nothing { outputs = [.nothing] } else { outputs.removeAll { $0 == .nothing }; if !outputs.contains(o) { outputs.append(o) } }
-                } }
-                .fixedSize()
+                Menu(outputs.isEmpty ? "Choose" : "Add") { OutputMenu(family: family, layers: layers) { o in add(o) } }
+                    .fixedSize()
+                Button(recording ? "Press a key or click…" : "Press…") { recording ? stopRecording() : record() }
+                    .help("Press a key, or click or scroll the mouse inside this window, to add it. Press the button again to stop.")
+                    .foregroundStyle(recording ? Color.accentColor : Color.primary)
             }
         }
     }
@@ -537,6 +608,29 @@ struct FlowRow: Layout {
             if x > bounds.minX && x + size.width > bounds.maxX { x = bounds.minX; y += line + spacing; line = 0 }
             s.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
             x += size.width + spacing; line = max(line, size.height)
+        }
+    }
+}
+
+
+/// Paddles, touchpad and the like: buttons that don't fit the picture.
+struct ExtraButtons: View {
+    @ObservedObject var tester: PadTester
+    let family: Controllers.Family?
+    @Binding var selection: ControllerProfileEditor.Part
+    let mapped: (PadProfiles.Input) -> Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach([PadProfiles.Input.paddle1, .paddle2, .paddle3, .paddle4, .touchpad, .misc], id: \.self) { i in
+                Button { selection = .input(i) } label: {
+                    Text(i.title(family)).font(.caption)
+                        .padding(.horizontal, 6).padding(.vertical, 3)
+                        .background(RoundedRectangle(cornerRadius: 5).fill(tester.pressed.contains(i) ? Color.accentColor.opacity(0.6) : mapped(i) ? Color.accentColor.opacity(0.2) : Color.secondary.opacity(0.12)))
+                        .overlay(RoundedRectangle(cornerRadius: 5).stroke(selection == .input(i) ? Color.accentColor : .clear, lineWidth: 2))
+                }.buttonStyle(.plain)
+            }
+            Button { selection = .triggers } label: { Text("Trigger pull").font(.caption) }.buttonStyle(.link)
         }
     }
 }
