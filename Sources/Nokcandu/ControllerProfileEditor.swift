@@ -24,6 +24,7 @@ struct ControllerProfileEditor: View {
     @State private var addingLayer = false
     @State private var renamingLayer = false
 
+    static let labelsKey = "padEditorLabels"
     enum Part: Hashable { case input(PadProfiles.Input), stick(Int), gyro, triggers }
 
     init(profile: PadProfiles.Profile, own: Bool, gameName: String, all: [PadProfiles.Profile], embedded: Bool = false, onChange: @escaping (PadProfiles.Profile) -> Void) {
@@ -84,7 +85,12 @@ struct ControllerProfileEditor: View {
         .padding(embedded ? 16 : 20)
         .frame(minWidth: embedded ? 720 : 1020, minHeight: embedded ? 500 : 720)
         .onAppear {
-            family = Controllers.connected().first { $0.kind == .gamepad }?.family
+            // The labels you chose last time; until then, the connected controller's.
+            if let saved = UserDefaults.standard.string(forKey: Self.labelsKey) {
+                family = saved == "xbox" ? nil : Controllers.Family(rawValue: saved)
+            } else {
+                family = Controllers.connected().first { $0.kind == .gamepad }?.family
+            }
             tester.start(profile: PadProfiles.compile(profile, all: everything))
         }
         .onDisappear { tester.stop() }
@@ -111,7 +117,7 @@ struct ControllerProfileEditor: View {
                 TextField("Name", text: $profile.name).textFieldStyle(.plain).font(.title2.bold()).frame(maxWidth: 320)
             }
             Spacer()
-            Picker("Labels", selection: $family) {
+            Picker("Labels", selection: Binding(get: { family }, set: { family = $0; UserDefaults.standard.set($0?.rawValue ?? "xbox", forKey: Self.labelsKey) })) {
                 Text("Xbox").tag(Controllers.Family?.none)
                 Text("PlayStation").tag(Controllers.Family?.some(.playstation))
                 Text("Nintendo").tag(Controllers.Family?.some(.nintendo))
