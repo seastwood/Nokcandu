@@ -179,6 +179,9 @@ public enum Controllers {
             return usage == kHIDUsage_GD_GamePad ? .gamepad : .flight
         }
         if usagePage == 2 { return usage == 0x02 ? .wheel : .flight }       // simulation controls: automobile / flight…
+        // Nintendo, PlayStation and Steam controllers are controllers, whatever they call themselves (a Switch Pro
+        // Controller reports itself as a joystick).
+        if Family.of(vendorID: v) != nil { return .gamepad }
         if usage == kHIDUsage_GD_Joystick || usage == kHIDUsage_GD_MultiAxisController { return .joystick }
         return .gamepad
     }

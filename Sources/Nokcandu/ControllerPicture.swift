@@ -342,6 +342,23 @@ struct DPadWell: Shape {
 
 /// A controller's buttons and axes from macOS's GameController framework, in the mapping engine's terms.
 enum PadGC {
+    /// The connected controller's name, to remember choices per controller.
+    static var connectedName: String {
+        GCController.controllers().first { $0.extendedGamepad != nil }.map { $0.vendorName ?? $0.productCategory } ?? "none"
+    }
+    /// The connected controller's maker, from the name macOS gives it (a Switch Pro Controller, a DualSense…),
+    /// else from the devices' maker codes.
+    static func connectedFamily() -> Controllers.Family? {
+        for c in GCController.controllers() where c.extendedGamepad != nil {
+            let n = (c.productCategory + " " + (c.vendorName ?? "")).lowercased()
+            if n.contains("switch") || n.contains("joy-con") || n.contains("nintendo") || n.contains("pro controller") { return .nintendo }
+            if n.contains("dualsense") || n.contains("dualshock") || n.contains("playstation") || n.contains("ps4") || n.contains("ps5") { return .playstation }
+            if n.contains("steam") { return .valve }
+            if n.contains("xbox") { return nil }
+        }
+        return Controllers.connected().compactMap(\.family).first
+    }
+
     static func state(_ g: GCExtendedGamepad) -> (buttons: [(PadProfiles.Input, Bool)], axes: [(Int32, Float)]) {
         typealias I = PadProfiles.Input
         var buttons: [(I, Bool)] = [
