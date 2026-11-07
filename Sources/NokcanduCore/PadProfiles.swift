@@ -463,6 +463,24 @@ public enum PadProfiles {
         FileManager.default.fileExists(atPath: mapFile(contents).path) || FileManager.default.fileExists(atPath: routesFile(contents).path)
     }
 
+    /// Wine's controller driver runs in a background Windows process (winedevice.exe), which only loads Nokcandu's
+    /// helper when the Windows environment's own settings name it — launchers start their programs with the
+    /// helper, but not Windows' background processes. With a profile in use, add it there (environment closed;
+    /// it takes effect from its next start). A different value someone put there is left alone.
+    @discardableResult
+    public static func ensureDriverHelper(contents: URL) -> Bool {
+        let helper = contents.appendingPathComponent("SharedSupport/nokcandu/nokcandu-rawmouse.dylib")
+        let user = contents.appendingPathComponent("SharedSupport/prefix/user.reg")
+        guard inUse(contents: contents), FileManager.default.fileExists(atPath: helper.path),
+              FileManager.default.fileExists(atPath: user.path) else { return false }
+        let text = (try? String(contentsOf: user, encoding: .utf8)) ?? ""
+        if text.contains(RegistryText.string(helper.path).dropFirst().dropLast()) { return false }
+        guard WineTools.ownedProcesses(contents: contents).isEmpty else { return false }
+        return (try? RegistryText.set(user, key: "Environment", name: "DYLD_INSERT_LIBRARIES", value: RegistryText.string(helper.path)) { current in
+            current == nil || current?.hasSuffix("nokcandu-rawmouse.dylib") == true
+        }) == true
+    }
+
     // MARK: Games inside shared launchers
 
     static func routesFile(_ host: URL) -> URL { folder(host).appendingPathComponent("pad-map.tsv") }

@@ -269,3 +269,25 @@ final class NetworkSteadyTests: XCTestCase {
         XCTAssertTrue(try Shell.run("/usr/bin/plutil", ["-lint", p.path]).ok)
     }
 }
+
+final class PadDriverHelperTests: XCTestCase {
+    func testProfileEnvironmentsLoadTheHelperInWindowsBackgroundProcesses() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("padhelper-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let c = base.appendingPathComponent("Game.app/Contents")
+        let nok = c.appendingPathComponent("SharedSupport/nokcandu"), prefix = c.appendingPathComponent("SharedSupport/prefix")
+        try FileManager.default.createDirectory(at: nok, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: prefix, withIntermediateDirectories: true)
+        try Data().write(to: nok.appendingPathComponent("nokcandu-rawmouse.dylib"))
+        let user = prefix.appendingPathComponent("user.reg")
+        try Data("WINE REGISTRY Version 2\n\n[Environment] 1792876383\n#time=1\n\"TEMP\"=\"C:\\\\temp\"\n".utf8).write(to: user)
+        XCTAssertFalse(PadProfiles.ensureDriverHelper(contents: c))          // no profile: nothing
+        try Data("nokpad 1\n".utf8).write(to: PadProfiles.mapFile(c))
+        XCTAssertTrue(PadProfiles.ensureDriverHelper(contents: c))
+        let text = try String(contentsOf: user, encoding: .utf8)
+        XCTAssertTrue(text.contains("\"DYLD_INSERT_LIBRARIES\"=\""))
+        XCTAssertTrue(text.contains("nokcandu-rawmouse.dylib\""))
+        XCTAssertTrue(text.contains("\"TEMP\""))
+        XCTAssertFalse(PadProfiles.ensureDriverHelper(contents: c))          // once
+    }
+}
