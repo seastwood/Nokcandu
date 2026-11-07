@@ -293,7 +293,9 @@ struct DesktopPadSettings: View {
 
     var body: some View {
         Section("Controller on the Mac") {
-            Toggle("Use a controller profile on the Mac", isOn: $pad.on)
+            Toggle("Controller profiles", isOn: $pad.enabled)
+            Text("Off turns every controller profile off — in games and on the Mac — so controllers work as they are.").font(.caption).foregroundStyle(.secondary)
+            Toggle("Use a controller profile on the Mac", isOn: $pad.on).disabled(!pad.enabled)
             Text("Move the pointer, click and type with your controller in any app — to pick a game, browse, or play Mac games and others that don't support controllers. Nokcandu games use the profile chosen on their Controls tab instead, and apps set to Off below are left alone. Buttons set to controller buttons only change anything inside Windows games.")
                 .font(.caption).foregroundStyle(.secondary)
             if pad.on {

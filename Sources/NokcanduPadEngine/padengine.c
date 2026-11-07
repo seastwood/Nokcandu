@@ -550,6 +550,10 @@ void pe_gyro(pe_engine *e, float gx, float gy, float gz, double now) {
         } else e->still_since = 0;
     }
     x -= e->cal_x; y -= e->cal_y; z -= e->cal_z;
+    // A controller lying still still reads a little: below the sensor's noise nothing moves.
+    if (fabs(x) < 0.4) x = 0;
+    if (fabs(y) < 0.4) y = 0;
+    if (fabs(z) < 0.4) z = 0;
     // Right-handed axes (x right, y out of the face, z towards the player), counter-clockwise positive: turning
     // right is −y, tilting right is −z — the same sign, so "both" adds them. Left is +.
     double yaw = y * e->g_yw + z * e->g_rw;

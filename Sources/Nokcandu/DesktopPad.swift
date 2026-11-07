@@ -22,7 +22,15 @@ final class DesktopPad: ObservableObject {
         didSet { UserDefaults.standard.set(rules, forKey: Self.rulesKey); evaluate(force: true) }
     }
     /// Every profile on or off (the quick switch in the menu bar, for playing something Nokcandu doesn't know).
-    @Published var enabled: Bool = !UserDefaults.standard.bool(forKey: masterKey) { didSet { UserDefaults.standard.set(!enabled, forKey: Self.masterKey); evaluate(force: true) } }
+    @Published var enabled: Bool = !FileManager.default.fileExists(atPath: DesktopPad.offFile.path) {
+        didSet {
+            // A file too, so the part inside each game (Wine's controller driver) stops as well.
+            if enabled { try? FileManager.default.removeItem(at: Self.offFile) }
+            else { try? NokPaths.ensure(NokPaths.support); FileManager.default.createFile(atPath: Self.offFile.path, contents: Data()) }
+            evaluate(force: true)
+        }
+    }
+    static var offFile: URL { NokPaths.support.appendingPathComponent("controller-profiles-off") }
     /// The library, to recognise Nokcandu games in front.
     var games: [InstalledGame] = [] { didSet { evaluate() } }
     /// The front app's Wine process when it's a Nokcandu game (its movement goes into the game).
@@ -66,6 +74,7 @@ final class DesktopPad: ObservableObject {
         })
         observers.append(nc.addObserver(forName: .padProfilesChanged, object: nil, queue: .main) { _ in MainActor.assumeIsolated { DesktopPad.shared.evaluate(force: true) } })
         attach()
+        watchRealMouse()
         evaluate()
     }
 
@@ -138,9 +147,6 @@ final class DesktopPad: ObservableObject {
         sink.mouse_move = { _, x, y in MainActor.assumeIsolated { DesktopPad.shared.move(Int(x), Int(y)) } }
         sink.wheel = { _, n in MainActor.assumeIsolated { DesktopPad.shared.wheel(Int(n)) } }
         engine = compiled.withCString { pe_create($0, sink) }
-        let t = Timer(timeInterval: 0.002, repeats: true) { _ in MainActor.assumeIsolated { DesktopPad.shared.tick() } }
-        RunLoop.main.add(t, forMode: .common)
-        timer = t
         attach()
     }
 
@@ -151,6 +157,13 @@ final class DesktopPad: ObservableObject {
     static var testerOpen = false
 
     func attach() {
+        // Timers only while a controller is connected and a profile applies.
+        let any = GCController.controllers().contains { $0.extendedGamepad != nil }
+        if engine != nil && any && timer == nil {
+            let t = Timer(timeInterval: 0.004, repeats: true) { _ in MainActor.assumeIsolated { DesktopPad.shared.tick() } }
+            RunLoop.main.add(t, forMode: .common)
+            timer = t
+        } else if (engine == nil || !any), let t = timer { t.invalidate(); timer = nil }
         guard !Self.testerOpen else { return }
         for c in GCController.controllers() {
             guard let gp = c.extendedGamepad else { continue }
@@ -208,7 +221,20 @@ final class DesktopPad: ObservableObject {
         if b > 1 { ev.setIntegerValueField(.mouseEventButtonNumber, value: Int64(b)) }
         ev.post(tap: .cghidEventTap)
     }
+    /// The real mouse or trackpad moved this recently (seconds of uptime): it takes priority over the controller.
+    private var lastRealMouse: TimeInterval = 0
+    private var mouseMonitor: Any?
+    func watchRealMouse() {
+        guard mouseMonitor == nil else { return }
+        mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]) { e in
+            // Our own posted movement carries no hardware source; real devices do.
+            guard e.cgEvent?.getIntegerValueField(.eventSourceUnixProcessID) != Int64(getpid()) else { return }
+            MainActor.assumeIsolated { DesktopPad.shared.lastRealMouse = ProcessInfo.processInfo.systemUptime }
+        }
+    }
+
     private func move(_ dx: Int, _ dy: Int) {
+        if ProcessInfo.processInfo.systemUptime - lastRealMouse < 0.3 { return }      // the real mouse is aiming
         if gamePID > 0, sendToGame(kind: 3, code: 0, dx: dx, dy: dy) { return }
         var p = cursor
         p.x += CGFloat(dx); p.y += CGFloat(dy)

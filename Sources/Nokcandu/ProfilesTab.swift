@@ -14,6 +14,15 @@ struct ProfilesSidebar: View {
 
     var body: some View {
         List(selection: $model.profileSelection) {
+            Toggle(isOn: $pad.enabled) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Controller profiles").font(.headline)
+                    Text(pad.enabled ? "On — games and apps use their profiles" : "Off — controllers work as they are everywhere").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .toggleStyle(.switch)
+            .selectionDisabled()
+            .padding(.vertical, 2)
             Section("On the Mac") {
                 row(title: "Controller on the Mac", subtitle: pad.on ? pad.status : "Off — profiles apply only in games", symbol: "desktopcomputer")
                     .tag("mac")

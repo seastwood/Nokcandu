@@ -378,9 +378,10 @@ static void pad_write_active(bool active) {
 // Nokcandu sends a profile's mouse movement here while this game is in front. The profile also runs inside Wine's
 // controller driver (pad-active) for what the game sees as the controller, unless "pad-driver-off" is present.
 static char pad_driver_flag[PATH_MAX];
+static char pad_off_flag[PATH_MAX];
 static void pad_activate(void) {
     struct stat st;
-    bool driver = stat(pad_driver_flag, &st) != 0 && stat(pad_map_path, &st) == 0;
+    bool driver = stat(pad_driver_flag, &st) != 0 && stat(pad_map_path, &st) == 0 && stat(pad_off_flag, &st) != 0;
     if (pad_listen < 0) {
         char path[104]; pad_socket_path(getpid(), path, sizeof path);
         unlink(path);
@@ -423,6 +424,7 @@ static void install_pad_game(const char *folder) {
     snprintf(pad_map_path, sizeof pad_map_path, "%s/pad-map", folder);
     snprintf(pad_active_path, sizeof pad_active_path, "%s/pad-active", folder);
     snprintf(pad_driver_flag, sizeof pad_driver_flag, "%s/pad-driver-off", folder);
+    { const char *home = getenv("HOME"); if (home) snprintf(pad_off_flag, sizeof pad_off_flag, "%s/Library/Application Support/Nokcandu/controller-profiles-off", home); }
     // A game inside a shared launcher may have a profile of its own: pad-map.tsv routes its programs to it.
     int argc = *_NSGetArgc(); char **argv = *_NSGetArgv();
     if (argc > 1) {

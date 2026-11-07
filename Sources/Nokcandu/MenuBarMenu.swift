@@ -52,8 +52,9 @@ enum MenuBarSetting {
 struct DesktopPadMenu: View {
     @ObservedObject var pad = DesktopPad.shared
     var body: some View {
-        Toggle("Controller on the Mac", isOn: $pad.on)
-        if pad.on {
+        Toggle("Controller Profiles", isOn: $pad.enabled)
+        Toggle("Controller on the Mac", isOn: $pad.on).disabled(!pad.enabled)
+        if pad.on && pad.enabled {
             Text(pad.status)
             Menu("Mac Profile") {
                 ForEach(PadProfiles.profiles()) { p in
