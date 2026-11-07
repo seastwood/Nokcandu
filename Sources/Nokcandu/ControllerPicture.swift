@@ -15,59 +15,68 @@ struct ControllerPicture: View {
     let label: (PadProfiles.Input) -> String?
 
     typealias I = PadProfiles.Input
-    /// The controller symbol's proportions (width ÷ height), and where its own d-pad and buttons sit (fractions of it).
-    static let aspect: CGFloat = 1.45
+    /// The drawn body's proportions (width ÷ height). Places are fractions of the body's box.
+    static let aspect: CGFloat = 1.55
 
-    /// Places on the symbol, as fractions of the symbol's box; shoulders and triggers sit above it.
+    var psLayout: Bool { family == .playstation }
+    /// Xbox and Nintendo: left stick high, d-pad low. PlayStation: d-pad high, both sticks low.
+    var dpadCenter: CGPoint { psLayout ? CGPoint(x: 0.24, y: 0.36) : CGPoint(x: 0.37, y: 0.585) }
+    var stickPlaces: [CGPoint] { [psLayout ? CGPoint(x: 0.37, y: 0.585) : CGPoint(x: 0.24, y: 0.36), CGPoint(x: 0.63, y: 0.585)] }
+
     func place(_ i: I) -> CGPoint {
-        let ps = family == .playstation
-        let dpad = CGPoint(x: 0.265, y: 0.40), face = CGPoint(x: 0.735, y: 0.40)
+        let d = dpadCenter, face = CGPoint(x: 0.76, y: 0.36)
+        let dx: CGFloat = 0.058, dy: CGFloat = 0.09
         switch i {
-        case .up: return CGPoint(x: dpad.x, y: dpad.y - 0.105)
-        case .down: return CGPoint(x: dpad.x, y: dpad.y + 0.105)
-        case .left: return CGPoint(x: dpad.x - 0.07, y: dpad.y)
-        case .right: return CGPoint(x: dpad.x + 0.07, y: dpad.y)
-        case .y: return CGPoint(x: face.x, y: face.y - 0.105)
-        case .a: return CGPoint(x: face.x, y: face.y + 0.105)
-        case .x: return CGPoint(x: face.x - 0.07, y: face.y)
-        case .b: return CGPoint(x: face.x + 0.07, y: face.y)
-        case .back: return CGPoint(x: 0.42, y: 0.30)
-        case .start: return CGPoint(x: 0.58, y: 0.30)
-        case .guide: return CGPoint(x: 0.5, y: ps ? 0.50 : 0.18)
-        case .lb: return CGPoint(x: 0.22, y: -0.08)
-        case .rb: return CGPoint(x: 0.78, y: -0.08)
+        case .up: return CGPoint(x: d.x, y: d.y - dy)
+        case .down: return CGPoint(x: d.x, y: d.y + dy)
+        case .left: return CGPoint(x: d.x - dx, y: d.y)
+        case .right: return CGPoint(x: d.x + dx, y: d.y)
+        case .y: return CGPoint(x: face.x, y: face.y - dy)
+        case .a: return CGPoint(x: face.x, y: face.y + dy)
+        case .x: return CGPoint(x: face.x - dx, y: face.y)
+        case .b: return CGPoint(x: face.x + dx, y: face.y)
+        case .back: return CGPoint(x: 0.42, y: 0.33)
+        case .start: return CGPoint(x: 0.58, y: 0.33)
+        case .guide: return CGPoint(x: 0.5, y: psLayout ? 0.47 : 0.19)
+        case .lb: return CGPoint(x: 0.22, y: -0.07)
+        case .rb: return CGPoint(x: 0.78, y: -0.07)
         case .lt: return CGPoint(x: 0.22, y: -0.24)
         case .rt: return CGPoint(x: 0.78, y: -0.24)
-        case .ltfull: return CGPoint(x: 0.10, y: -0.24)
-        case .rtfull: return CGPoint(x: 0.90, y: -0.24)
+        case .ltfull: return CGPoint(x: 0.1, y: -0.24)
+        case .rtfull: return CGPoint(x: 0.9, y: -0.24)
         default: return CGPoint(x: -1, y: -1)
         }
     }
     var shown: [I] { [.lt, .rt, .ltfull, .rtfull, .lb, .rb, .up, .down, .left, .right, .y, .a, .x, .b, .back, .start, .guide] }
-    var stickPlaces: [CGPoint] { [CGPoint(x: 0.38, y: 0.62), CGPoint(x: 0.62, y: 0.62)] }
 
     var body: some View {
         GeometryReader { geo in
-            // The symbol fills the width, below room for the shoulders and triggers.
-            let sw = min(geo.size.width * 0.84, (geo.size.height * 0.70) * Self.aspect)
+            let sw = min(geo.size.width * 0.92, (geo.size.height * 0.74) * Self.aspect)
             let sh = sw / Self.aspect
-            let x0 = (geo.size.width - sw) / 2, y0 = geo.size.height * 0.27
+            let x0 = (geo.size.width - sw) / 2, y0 = geo.size.height - sh - 2
             let at = { (p: CGPoint) in CGPoint(x: x0 + p.x * sw, y: y0 + p.y * sh) }
             ZStack {
-                Image(systemName: "gamecontroller.fill")
-                    .resizable().aspectRatio(Self.aspect, contentMode: .fit)
-                    .foregroundStyle(Color.secondary.opacity(0.16))
+                ControllerShape()
+                    .fill(LinearGradient(colors: [Color.primary.opacity(0.16), Color.primary.opacity(0.07)], startPoint: .top, endPoint: .bottom))
+                    .overlay(ControllerShape().stroke(Color.primary.opacity(0.18), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
                     .frame(width: sw, height: sh)
                     .position(x: x0 + sw / 2, y: y0 + sh / 2)
+                    .accessibilityHidden(true)
+                // the d-pad's cross, under its four buttons
+                DPadWell().fill(Color.primary.opacity(0.08))
+                    .frame(width: sw * 0.17, height: sh * 0.265)
+                    .position(at(dpadCenter))
                     .accessibilityHidden(true)
                 ForEach(shown, id: \.self) { i in spot(i).position(at(place(i))) }
                 ForEach(0..<2, id: \.self) { s in stick(s).position(at(stickPlaces[s])) }
                 Button { selection = .gyro } label: {
-                    Label("Gyro", systemImage: "gyroscope").font(.caption)
-                        .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(Capsule().fill(selection == .gyro ? Color.accentColor.opacity(0.35) : Color.secondary.opacity(0.15)))
+                    Label("Gyro", systemImage: "gyroscope").font(.callout)
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(Capsule().fill(selection == .gyro ? Color.accentColor.opacity(0.35) : Color.primary.opacity(0.08)))
+                        .overlay(Capsule().stroke(selection == .gyro ? Color.accentColor : .clear, lineWidth: 2))
                 }
-                .buttonStyle(.plain).position(at(CGPoint(x: 0.5, y: 0.92)))
+                .buttonStyle(.plain).position(at(CGPoint(x: 0.5, y: 0.93)))
                 .accessibilityLabel("Gyro settings")
             }
         }
@@ -87,11 +96,11 @@ struct ControllerPicture: View {
         return Button { selection = .input(i) } label: {
             VStack(spacing: 1) {
                 Text(short).font(.system(size: 11, weight: .semibold))
-                    .frame(minWidth: round ? 24 : 40, minHeight: 24)
+                    .frame(minWidth: round ? 28 : 46, minHeight: 28)
                     .background(Capsule().fill(on ? Color.accentColor : mapped(i) ? Color.accentColor.opacity(0.35) : Color(nsColor: .controlBackgroundColor)))
                     .overlay(Capsule().stroke(selected ? Color.accentColor : Color.secondary.opacity(0.35), lineWidth: selected ? 2 : 0.5))
                     .shadow(color: .black.opacity(0.12), radius: 1, y: 0.5)
-                if let l = label(i) { Text(l).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1).frame(maxWidth: 60) }
+                if let l = label(i), l != "—" { Text(l).font(.system(size: 10, weight: .medium)).foregroundStyle(Color.accentColor).lineLimit(1).frame(maxWidth: 64) }
             }
         }
         .buttonStyle(.plain)
@@ -105,11 +114,11 @@ struct ControllerPicture: View {
         let selected = selection == .stick(s) || selection == .input(click)
         return Button { selection = .stick(s) } label: {
             ZStack {
-                Circle().fill(pressed.contains(click) ? Color.accentColor.opacity(0.5) : Color(nsColor: .controlBackgroundColor)).frame(width: 46, height: 46)
+                Circle().fill(pressed.contains(click) ? Color.accentColor.opacity(0.5) : Color(nsColor: .controlBackgroundColor)).frame(width: 54, height: 54)
                     .shadow(color: .black.opacity(0.15), radius: 1.5, y: 0.5)
-                Circle().stroke(selected ? Color.accentColor : Color.secondary.opacity(0.35), lineWidth: selected ? 2 : 0.5).frame(width: 46, height: 46)
-                Circle().fill(Color.primary.opacity(0.55)).frame(width: 12, height: 12).offset(x: p.x * 18, y: -p.y * 18)
-                if let l = label(click) { Text(l).font(.system(size: 9)).foregroundStyle(.secondary).offset(y: 34) }
+                Circle().stroke(selected ? Color.accentColor : Color.secondary.opacity(0.35), lineWidth: selected ? 2 : 0.5).frame(width: 54, height: 54)
+                Circle().fill(Color.primary.opacity(0.55)).frame(width: 12, height: 12).offset(x: p.x * 20, y: -p.y * 20)
+                if let l = label(click), l != "—" { Text(l).font(.system(size: 10, weight: .medium)).foregroundStyle(Color.accentColor).offset(y: 38) }
             }
         }
         .buttonStyle(.plain)
@@ -308,5 +317,36 @@ struct PadTestView: View {
         } label: { Text("Test").font(.headline) }
         .onAppear { tester.family = family }
         .onChange(of: family) { _, f in tester.family = f }
+    }
+}
+
+
+/// A controller body: a wide top with rounded shoulders and two grips, no holes.
+struct ControllerShape: Shape {
+    func path(in r: CGRect) -> Path {
+        func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: r.minX + x * r.width, y: r.minY + y * r.height) }
+        var path = Path()
+        path.move(to: p(0.30, 0.05))
+        path.addCurve(to: p(0.70, 0.05), control1: p(0.40, 0.03), control2: p(0.60, 0.03))
+        path.addCurve(to: p(0.96, 0.42), control1: p(0.80, 0.07), control2: p(0.94, 0.16))
+        path.addCurve(to: p(0.85, 0.98), control1: p(0.99, 0.70), control2: p(0.96, 0.98))
+        path.addCurve(to: p(0.70, 0.78), control1: p(0.77, 0.98), control2: p(0.75, 0.84))
+        path.addCurve(to: p(0.30, 0.78), control1: p(0.60, 0.69), control2: p(0.40, 0.69))
+        path.addCurve(to: p(0.15, 0.98), control1: p(0.25, 0.84), control2: p(0.23, 0.98))
+        path.addCurve(to: p(0.04, 0.42), control1: p(0.04, 0.98), control2: p(0.01, 0.70))
+        path.addCurve(to: p(0.30, 0.05), control1: p(0.06, 0.16), control2: p(0.20, 0.07))
+        path.closeSubpath()
+        return path
+    }
+}
+
+/// A rounded plus: the well the d-pad's buttons sit in.
+struct DPadWell: Shape {
+    func path(in r: CGRect) -> Path {
+        let t = min(r.width, r.height) * 0.36
+        var p = Path()
+        p.addRoundedRect(in: CGRect(x: r.midX - t / 2, y: r.minY, width: t, height: r.height), cornerSize: CGSize(width: t / 3, height: t / 3))
+        p.addRoundedRect(in: CGRect(x: r.minX, y: r.midY - t / 2, width: r.width, height: t), cornerSize: CGSize(width: t / 3, height: t / 3))
+        return p
     }
 }

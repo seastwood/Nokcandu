@@ -48,14 +48,14 @@ struct ControllerProfileEditor: View {
                     ControllerPicture(family: family, selection: $selection, tester: tester,
                                       mapped: { i in profile.layers[layerIndex][i] != nil || inherited(i) != nil },
                                       label: { i in shortLabel(i) })
-                        .frame(width: 440, height: 290)
+                        .frame(width: 560, height: 400)
                     ExtraButtons(tester: tester, family: family, selection: $selection,
                                  mapped: { i in profile.layers[layerIndex][i] != nil || inherited(i) != nil })
                     PadTestView(tester: tester, family: family)
                 }
                 Form { inspector }
                     .formStyle(.grouped)
-                    .frame(minWidth: 380, maxWidth: .infinity)
+                    .frame(minWidth: 400, maxWidth: .infinity)
             }
             HStack {
                 Text("Changes are saved as you make them and apply on the next press, even while playing.")
@@ -65,7 +65,7 @@ struct ControllerProfileEditor: View {
             }
         }
         .padding(20)
-        .frame(minWidth: 860, minHeight: 660)
+        .frame(minWidth: 1020, minHeight: 720)
         .onAppear {
             family = Controllers.connected().first { $0.kind == .gamepad }?.family
             tester.start(profile: PadProfiles.compile(profile, all: everything))

@@ -9,12 +9,11 @@ struct ControllerProfileSection: View {
     @State private var profiles: [PadProfiles.Profile] = []
     @State private var choice: PadProfiles.Choice = .followDefault
     @State private var defaultID: String?
-    @State private var editing: EditTarget?
+    @Environment(\.openWindow) private var openWindow
     @State private var naming: Naming?
     @State private var name = ""
 
     enum Naming: Identifiable { case new, rename, duplicate; var id: Int { hashValue } }
-    struct EditTarget: Identifiable { var profile: PadProfiles.Profile; var own: Bool; var id: String { profile.id + (own ? "-own" : "") } }
 
     var contents: URL? { KeyRemap.gameContents(for: game) }
     var shared: Bool { KeyRemap.isShared(game) }
@@ -61,7 +60,7 @@ struct ControllerProfileSection: View {
             if let p = shownProfile {
                 SettingNote(summary(p))
                 HStack {
-                    Button("Edit \(choice == .own ? "This Game's Profile" : p.name)…") { editing = EditTarget(profile: p, own: choice == .own) }
+                    Button("Edit \(choice == .own ? "This Game's Profile" : p.name)…") { edit(p, own: choice == .own) }
                     if choice == .followDefault { Text("Editing changes the default for every game using it.").font(.caption).foregroundStyle(.secondary) }
                 }
             } else if choice == .sameAsLauncher {
@@ -75,10 +74,7 @@ struct ControllerProfileSection: View {
             }
         }
         .onAppear(perform: load)
-        .sheet(item: $editing) { t in
-            ControllerProfileEditor(profile: t.profile, own: t.own, gameName: game.name, all: profiles) { p in save(p, own: t.own) }
-                .environmentObject(model)
-        }
+        .onReceive(NotificationCenter.default.publisher(for: .padProfilesChanged)) { _ in load() }
         .alert(naming == .rename ? "Rename Profile" : "New Controller Profile", isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })) {
             TextField("Name", text: $name)
             Button(naming == .rename ? "Rename" : "Create") { finishNaming() }.disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -170,13 +166,8 @@ struct ControllerProfileSection: View {
         }
     }
 
-    func save(_ p: PadProfiles.Profile, own: Bool) {
-        guard let c = contents else { return }
-        do {
-            if own { try PadProfiles.set(.own, contents: c, own: p) }
-            else { try PadProfiles.store(p, environments: allEnvironments, shared: sharedFolders) }
-            if let i = profiles.firstIndex(where: { $0.id == p.id }) { profiles[i] = p }
-        } catch { model.fail(error) }
+    func edit(_ p: PadProfiles.Profile, own: Bool) {
+        openWindow(id: "padprofile", value: PadEditorTarget(gameID: game.id, profileID: own ? nil : p.id))
     }
 
     func adopt(_ starter: PadProfiles.Profile) {
@@ -190,7 +181,7 @@ struct ControllerProfileSection: View {
             try PadProfiles.set(.profile(p.id), contents: c)
             routes(); noteRestart()
             load()
-            editing = EditTarget(profile: p, own: false)
+            edit(p, own: false)
         } catch { model.fail(error) }
     }
 
@@ -216,7 +207,7 @@ struct ControllerProfileSection: View {
                 routes(); noteRestart()
                 naming = nil
                 load()
-                editing = EditTarget(profile: p, own: false)
+                edit(p, own: false)
                 return
             }
         } catch { model.fail(error) }
@@ -249,5 +240,42 @@ struct ControllerProfileSection: View {
             model.say("Deleted \(p.name). Games that chose it keep a copy as their own.")
         } catch { model.fail(error) }
         load()
+    }
+}
+
+
+extension Notification.Name { static let padProfilesChanged = Notification.Name("nokcandu.padProfilesChanged") }
+
+/// Which profile a Controller Profile window edits: a shared one, or a game's own (profileID nil).
+struct PadEditorTarget: Codable, Hashable { var gameID: String; var profileID: String? }
+
+/// The Controller Profile window: finds the game and profile, and saves every change.
+struct ControllerProfileWindow: View {
+    @EnvironmentObject var model: AppModel
+    let target: PadEditorTarget
+
+    var game: InstalledGame? { model.games.first { $0.id == target.gameID } }
+
+    var body: some View {
+        if let g = game, let c = KeyRemap.gameContents(for: g), let p = target.profileID.map({ id in PadProfiles.profiles().first { $0.id == id } }) ?? PadProfiles.own(contents: c) {
+            ControllerProfileEditor(profile: p, own: target.profileID == nil, gameName: g.name, all: PadProfiles.profiles()) { new in
+                save(new, game: g, contents: c)
+            }
+            .navigationTitle(target.profileID == nil ? "\(g.name) — Controller Profile" : p.name)
+        } else {
+            ContentUnavailableView("Profile not found", systemImage: "gamecontroller", description: Text("It may have been deleted."))
+                .frame(width: 420, height: 300)
+        }
+    }
+
+    func save(_ p: PadProfiles.Profile, game g: InstalledGame, contents c: URL) {
+        do {
+            if target.profileID == nil { try PadProfiles.set(.own, contents: c, own: p) }
+            else {
+                let envs = KeyRemap.environments(model.games), shared = KeyRemap.sharedFolders(model.games)
+                try PadProfiles.store(p, environments: envs, shared: shared)
+            }
+            NotificationCenter.default.post(name: .padProfilesChanged, object: nil)
+        } catch { model.fail(error) }
     }
 }

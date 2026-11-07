@@ -49,6 +49,11 @@ struct NokcanduApp: App {
         }
         .handlesExternalEvents(matching: [])
         .windowResizability(.contentSize)
+        WindowGroup("Controller Profile", id: "padprofile", for: PadEditorTarget.self) { $target in
+            if let target { ControllerProfileWindow(target: target).environmentObject(model) }
+        }
+        .defaultSize(width: 1100, height: 760)
+        .handlesExternalEvents(matching: [])
         Window("Game Stores", id: "stores") {
             StoreLibraryView().environmentObject(model)
                 .handlesExternalEvents(preferring: [], allowing: [])
