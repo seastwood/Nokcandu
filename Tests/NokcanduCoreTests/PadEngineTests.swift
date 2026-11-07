@@ -338,3 +338,126 @@ final class PadStateReportTests: XCTestCase {
         pe_destroy(e)
     }
 }
+
+final class PadDeviceTests: XCTestCase {
+    func testDeviceButtonsHatAndAxes() {
+        let r = PadRecorder("device 1 vendor=1103 product=46727 kind=joystick\naxis 1 2 mode=pad to=lt half=1 dz=0\naxis 1 0 mode=mouse to=x sens=1000 power=1 dz=0\nbind 0 d1b0 press=key:49\nbind 0 d1hu press=key:13\nbind 0 d1a1p press=key:1\nbind 0 d1b1 press=pad:a")
+        pe_dev_button(r.engine, 1, 0, true, 1); pe_dev_button(r.engine, 1, 0, false, 1.1)
+        pe_dev_button(r.engine, 1, 5, true, 1.2)                       // nothing set: nothing (the game reads the device itself)
+        pe_dev_button(r.engine, 1, 1, true, 1.3); pe_dev_button(r.engine, 1, 1, false, 1.4)
+        pe_dev_hat(r.engine, 1, Int32(PE_HAT_UP | PE_HAT_RIGHT), 1.5); pe_dev_hat(r.engine, 1, 0, 1.6)
+        pe_dev_axis(r.engine, 1, 1, 30000, 1.7); pe_dev_axis(r.engine, 1, 1, 20000, 1.8); pe_dev_axis(r.engine, 1, 1, 0, 1.9)
+        XCTAssertEqual(r.take(), ["key 49 down", "key 49 up", "pad a down", "pad a up", "key 13 down", "key 13 up", "key 1 down", "key 1 up"])
+        pe_dev_axis(r.engine, 1, 2, -32768, 2); XCTAssertEqual(r.axes[4], 0)            // pedal at rest
+        pe_dev_axis(r.engine, 1, 2, 32767, 2.1); XCTAssertEqual(r.axes[4], 32767)        // all the way
+        pe_dev_axis(r.engine, 1, 0, 32767, 3)
+        for i in 1...50 { r.tick(3 + Double(i) * 0.01) }
+        XCTAssertEqual(Double(r.mouse.x), 500, accuracy: 30)
+        XCTAssertTrue(pe_dev_uses(r.engine, 1, 0, 0)); XCTAssertFalse(pe_dev_uses(r.engine, 1, 0, 5))
+        XCTAssertTrue(pe_dev_uses(r.engine, 1, 1, 0)); XCTAssertTrue(pe_dev_uses(r.engine, 1, 2, 2)); XCTAssertFalse(pe_dev_uses(r.engine, 1, 2, 3))
+    }
+
+    func testJoinedControllerActsAsTheMainOne() {
+        let r = PadRecorder("device 1 vendor=1406 product=8201 kind=gamepad join=1\nbind 0 d1b1 press=key:12")
+        pe_dev_button(r.engine, 1, 0, true, 1); pe_dev_button(r.engine, 1, 0, false, 1.1)
+        pe_dev_button(r.engine, 1, 1, true, 1.2)
+        XCTAssertEqual(r.take(), ["pad a down", "pad a up", "key 12 down"])
+        pe_dev_axis(r.engine, 1, 3, 20000, 2); XCTAssertEqual(r.axes[3], 20000)
+        pe_dev_axis(r.engine, 1, 5, 32767, 2.1); XCTAssertEqual(r.axes[5], 32767)
+        XCTAssertTrue(pe_dev_uses(r.engine, 1, 0, 9))
+    }
+
+    func testInputNames() {
+        for n in ["d1b0", "d1b31", "d2hu", "d4hl", "d3a7p", "d1a0n"] { XCTAssertEqual(String(cString: pe_input_name(pe_input_named(n))), n) }
+        for n in ["d0b1", "d5b1", "d1b32", "d1a8p", "d1a1", "d1hx"] { XCTAssertEqual(pe_input_named(n), -1, n) }
+    }
+
+    func testProfileCompilesDevicesAndTheirBindings() {
+        var p = PadProfiles.Profile(name: "Flight")
+        var stick = PadProfiles.Device(name: "Stick", productName: "T.16000M", vendorID: 1103, productID: 46727, buttonCount: 16, axisNames: ["X", "Y", "Twist", "Slider"], hasHat: true)
+        stick.setAxis(2, { var a = PadProfiles.DeviceAxis(mode: .stick); a.target = .rx; return a }())
+        var pedals = PadProfiles.Device(name: "Pedals", productName: "TFRP", vendorID: 1103, productID: 46721, nth: 1)
+        pedals.setAxis(0, { var a = PadProfiles.DeviceAxis(); a.restsAtEnd = true; return a }())
+        p.devices = [stick, pedals]
+        p.base[key: stick.key("b0")] = .as(.key(49))
+        p.base[key: pedals.key("a0p")] = .as(.key(1))
+        p.base[key: "dev.gone.b0"] = .as(.key(2))                  // a removed device's leftover: skipped
+        let text = PadProfiles.compile(p, all: [p])
+        XCTAssertTrue(text.contains("device 1 vendor=1103 product=46727 nth=0 kind=joystick join=0"))
+        XCTAssertTrue(text.contains("device 2 vendor=1103 product=46721 nth=1 kind=joystick join=0"))
+        XCTAssertTrue(text.contains("axis 1 2 mode=pad to=rx"))
+        XCTAssertTrue(text.contains("axis 2 0 mode=off to=lx inv=0 half=1"))
+        XCTAssertTrue(text.contains("bind 0 d1b0 press=key:49"))
+        XCTAssertTrue(text.contains("bind 0 d2a0p press=key:1"))
+        XCTAssertFalse(text.contains("key:2"))
+        // A profile built on this one gets its devices and can add to their bindings in a layer of the same name.
+        var top = PadProfiles.Profile(name: "Top", buildsOn: [p.id])
+        top.base[key: stick.key("b1")] = .as(.key(3))
+        let t2 = PadProfiles.compile(top, all: [p, top])
+        XCTAssertTrue(t2.contains("bind 0 d1b0 press=key:49") && t2.contains("bind 0 d1b1 press=key:3"))
+        // It runs: the engine reads all of it.
+        let r = PadRecorder(String(text.dropFirst("nokpad 1\n".count)))
+        XCTAssertEqual(pe_device_count(r.engine), 2)
+        pe_dev_axis(r.engine, 2, 0, 32767, 1)
+        XCTAssertEqual(r.take(), ["key 1 down"])
+        // Saved and read back (older profiles without devices still read).
+        let back = try? JSONDecoder().decode(PadProfiles.Profile.self, from: JSONEncoder().encode(p))
+        XCTAssertEqual(back, p)
+        XCTAssertNil(try JSONDecoder().decode(PadProfiles.Profile.self, from: Data(#"{"id":"x","name":"Old","buildsOn":[],"layers":[{"id":"base","name":"Base","bindings":{}}]}"#.utf8)).devices)
+    }
+
+    func testDeviceInputTitles() {
+        let d = PadProfiles.Device(name: "Stick", productName: "Stick", vendorID: 1, productID: 2, axisNames: ["X", "Y", "Throttle"])
+        XCTAssertEqual(d.inputTitle("b0"), "Button 1"); XCTAssertEqual(d.inputTitle("hl"), "Hat left")
+        XCTAssertEqual(d.inputTitle("a1n"), "Pushed forward (Y)"); XCTAssertEqual(d.inputTitle("a2p"), "Throttle +")
+        let g = PadProfiles.Device(name: "Pad", productName: "Pad", vendorID: 1, productID: 2, gamepad: true)
+        XCTAssertEqual(g.inputTitle("b0"), "A"); XCTAssertEqual(g.inputTitle("b0", family: .playstation), "Cross"); XCTAssertEqual(g.buttons, 21)
+    }
+
+    /// SDL's order: by usage across pages, the device's order for equal usages, duplicates skipped.
+    func testHIDLayoutMatchesSDL() {
+        typealias E = HIDLayout.Element
+        let list = [
+            E(type: 2, page: 9, usage: 2, cookie: 10, min: 0, max: 1),       // button 2
+            E(type: 2, page: 9, usage: 1, cookie: 11, min: 0, max: 1),       // button 1
+            E(type: 1, page: 2, usage: 0xBB, cookie: 20, min: 0, max: 255),  // throttle
+            E(type: 1, page: 1, usage: 0x31, cookie: 21, min: 0, max: 1023), // Y
+            E(type: 1, page: 1, usage: 0x30, cookie: 22, min: 0, max: 1023), // X
+            E(type: 1, page: 1, usage: 0x36, cookie: 23, min: 0, max: 255),  // slider
+            E(type: 1, page: 1, usage: 0x36, cookie: 24, min: 0, max: 255),  // slider 2
+            E(type: 1, page: 1, usage: 0x39, cookie: 30, min: 0, max: 7),    // hat
+            E(type: 1, page: 1, usage: 0x30, cookie: 22, min: 0, max: 1023), // X again: skipped
+            E(type: 513, page: 9, usage: 3, cookie: 40, min: 0, max: 1),     // an output, not an input: skipped
+        ]
+        let l = HIDLayout.layout(list)
+        XCTAssertEqual(l.buttons.map(\.cookie), [11, 10])
+        XCTAssertEqual(l.axes.map(\.name), ["X", "Y", "Slider", "Slider 2", "Throttle"])
+        XCTAssertEqual(l.hat?.cookie, 30)
+        XCTAssertEqual(HIDLayout.axisValue(0, min: 0, max: 1023), -32768)
+        XCTAssertEqual(HIDLayout.axisValue(1023, min: 0, max: 1023), 32767)
+        XCTAssertEqual(HIDLayout.hatBits(1, min: 0, max: 7), 3)          // up-right
+        XCTAssertEqual(HIDLayout.hatBits(8, min: 0, max: 7), 0)          // centred
+        XCTAssertEqual(HIDLayout.hatBits(1, min: 0, max: 3), 2)          // 4-position hat: right
+    }
+}
+
+final class PadStickDirectionTests: XCTestCase {
+    func testEachDirectionIsItsOwnButton() {
+        var p = PadProfiles.Profile(name: "Dirs")
+        p.leftStick = PadProfiles.Stick(mode: .directions)
+        p.base[.lsup] = .as(.key(13))
+        p.base[.lsright] = PadProfiles.Binding(tap: [.key(2)], hold: [.key(3)])
+        let text = PadProfiles.compile(p, all: [p])
+        XCTAssertTrue(text.contains("stick 0 mode=dirs"))
+        let r = PadRecorder(String(text.dropFirst("nokpad 1\n".count)))
+        pe_axis(r.engine, Int32(PE_AXIS_LY), -30000, 1)          // up
+        pe_axis(r.engine, Int32(PE_AXIS_LX), 30000, 1.01)        // up and right
+        pe_axis(r.engine, Int32(PE_AXIS_LY), 0, 1.02)            // right
+        r.tick(1.5)                                              // held: the hold
+        pe_axis(r.engine, Int32(PE_AXIS_LX), 0, 1.6)
+        XCTAssertEqual(r.take(), ["key 13 down", "key 13 up", "key 3 down", "key 3 up"])
+        XCTAssertEqual(r.axes[0], 0)                             // the game doesn't see the stick move
+        XCTAssertNil(PadProfiles.Output(token: "pad:lsup"))      // not a controller button to send
+        XCTAssertFalse(PadProfiles.Input.padButtons.contains(.rsleft))
+    }
+}

@@ -12,11 +12,16 @@ public enum PadProfiles {
     public enum Input: String, CaseIterable, Codable, Hashable, Identifiable, Sendable {
         case a, b, x, y, back, guide, start, ls, rs, lb, rb, up, down, left, right, misc
         case paddle1, paddle2, paddle3, paddle4, touchpad, lt, rt, ltfull, rtfull
+        /// A stick's directions, when the stick works as four buttons (StickMode.directions).
+        case lsup, lsdown, lsleft, lsright, rsup, rsdown, rsleft, rsright
         public var id: String { rawValue }
 
         public var isTrigger: Bool { [.lt, .rt, .ltfull, .rtfull].contains(self) }
+        public var isStickDirection: Bool { Self.stickDirections(0).contains(self) || Self.stickDirections(1).contains(self) }
+        /// Up, down, left, right of the left (0) or right (1) stick.
+        public static func stickDirections(_ s: Int) -> [Input] { s == 0 ? [.lsup, .lsdown, .lsleft, .lsright] : [.rsup, .rsdown, .rsleft, .rsright] }
         /// Inputs that are real controller buttons (can be sent to the game as a button).
-        public static var padButtons: [Input] { allCases.filter { !$0.isTrigger } }
+        public static var padButtons: [Input] { allCases.filter { !$0.isTrigger && !$0.isStickDirection } }
 
         /// The name printed on this controller's button. Nintendo controllers report their buttons by the letter
         /// printed on them (A is the right-hand button), so the letters stay and only the picture moves them.
@@ -41,6 +46,8 @@ public enum PadProfiles {
             case (.paddle1, .valve): "Right back grip"; case (.paddle2, .valve): "Left back grip"
             case (.paddle3, .valve): "Right inner grip"; case (.paddle4, .valve): "Left inner grip"
             case (.paddle1, _): "Paddle P1"; case (.paddle2, _): "Paddle P2"; case (.paddle3, _): "Paddle P3"; case (.paddle4, _): "Paddle P4"
+            case (.lsup, _): "Left stick up"; case (.lsdown, _): "Left stick down"; case (.lsleft, _): "Left stick left"; case (.lsright, _): "Left stick right"
+            case (.rsup, _): "Right stick up"; case (.rsdown, _): "Right stick down"; case (.rsleft, _): "Right stick left"; case (.rsright, _): "Right stick right"
             }
         }
     }
@@ -77,7 +84,7 @@ public enum PadProfiles {
             let parts = token.split(separator: ":", maxSplits: 1).map(String.init)
             let v = parts.count > 1 ? parts[1] : ""
             switch parts.first ?? "" {
-            case "pad": guard let i = Input(rawValue: v), !i.isTrigger else { return nil }; self = .pad(i)
+            case "pad": guard let i = Input(rawValue: v), !i.isTrigger, !i.isStickDirection else { return nil }; self = .pad(i)
             case "trig": self = .trigger(right: v == "r")
             case "key": guard let k = Int(v) else { return nil }; self = .key(k)
             case "mouse": guard let m = MouseButton(rawValue: v) else { return nil }; self = .mouse(m)
@@ -148,14 +155,136 @@ public enum PadProfiles {
             get { bindings[i.rawValue] }
             set { bindings[i.rawValue] = newValue?.isEmpty == false ? newValue : nil }
         }
+        /// A device's button, hat direction or axis (Device.key).
+        public subscript(key k: String) -> Binding? {
+            get { bindings[k] }
+            set { bindings[k] = newValue?.isEmpty == false ? newValue : nil }
+        }
+    }
+
+    // MARK: Extra devices
+
+    /// What a device's axis does besides counting as a button when pushed far enough.
+    public enum AxisMode: String, CaseIterable, Codable, Hashable, Sendable {
+        case off, stick, mouse
+        public var title: String { switch self { case .off: "Nothing (buttons only)"; case .stick: "A controller stick or trigger"; case .mouse: "The mouse" } }
+    }
+    public enum AxisTarget: String, CaseIterable, Codable, Hashable, Sendable {
+        case lx, ly, rx, ry, lt, rt
+        public func title(_ family: Controllers.Family? = nil) -> String {
+            switch self {
+            case .lx: "Left stick, left and right"; case .ly: "Left stick, up and down"
+            case .rx: "Right stick, left and right"; case .ry: "Right stick, up and down"
+            case .lt: Input.lt.title(family); case .rt: Input.rt.title(family)
+            }
+        }
+        var engine: String { rawValue }
+    }
+    public struct DeviceAxis: Codable, Hashable, Sendable {
+        public var mode: AxisMode = .off
+        public var target: AxisTarget?
+        /// Mouse: moves it up and down (else left and right).
+        public var vertical: Bool?
+        public var invert: Bool?
+        /// Rests at one end (a pedal, a throttle without a centre detent): 0 at rest, 1 all the way.
+        public var restsAtEnd: Bool?
+        public var deadzone: Double?
+        /// Mouse: counts per second at full push, and how sharply speed rises.
+        public var speed: Double?
+        public var curve: Double?
+        /// How far it's pushed to count as a button press (0…1).
+        public var pressAt: Double?
+        public init(mode: AxisMode = .off) { self.mode = mode }
+        public var isDefault: Bool { self == DeviceAxis() }
+    }
+    /// A joystick, throttle, pedals, wheel, button box or another controller, combined with the controller in one
+    /// profile. Recognised by its maker and model codes (and which one, with several identical ones).
+    public struct Device: Codable, Hashable, Identifiable, Sendable {
+        public var id: String
+        /// What you call it ("Left stick", "Pedals").
+        public var name: String
+        /// What the device calls itself.
+        public var productName: String
+        public var vendorID: Int
+        public var productID: Int
+        /// With several identical devices, which one (0 the first).
+        public var nth: Int?
+        /// A controller with the usual layout (buttons named like the controller's).
+        public var gamepad: Bool?
+        /// A controller that becomes part of the main one: what it doesn't set acts as the main controller's own
+        /// buttons and sticks (two halves held in each hand, or two controllers for one player).
+        public var joined: Bool?
+        /// Axis number → what it does.
+        public var axes: [String: DeviceAxis]?
+        /// What it has, to show it while it's unplugged.
+        public var buttonCount: Int?
+        public var axisNames: [String]?
+        public var hasHat: Bool?
+        public init(id: String = UUID().uuidString, name: String, productName: String, vendorID: Int, productID: Int, nth: Int? = nil,
+                    gamepad: Bool? = nil, buttonCount: Int? = nil, axisNames: [String]? = nil, hasHat: Bool? = nil) {
+            self.id = id; self.name = name; self.productName = productName; self.vendorID = vendorID; self.productID = productID
+            self.nth = nth; self.gamepad = gamepad; self.buttonCount = buttonCount; self.axisNames = axisNames; self.hasHat = hasHat
+        }
+        public var isGamepad: Bool { gamepad == true }
+        public func axis(_ n: Int) -> DeviceAxis { axes?[String(n)] ?? DeviceAxis() }
+        public mutating func setAxis(_ n: Int, _ a: DeviceAxis) {
+            var m = axes ?? [:]; m[String(n)] = a.isDefault ? nil : a; axes = m.isEmpty ? nil : m
+        }
+        /// Where a device's input is kept in a layer's bindings: "b0"… a button, "hu"/"hr"/"hd"/"hl" the hat,
+        /// "a2p"/"a2n" axis 3 pushed past its press point one way or the other.
+        public func key(_ k: String) -> String { "dev.\(id).\(k)" }
+        public static func parse(_ key: String) -> (device: String, input: String)? {
+            let p = key.split(separator: ".", maxSplits: 2).map(String.init)
+            return p.count == 3 && p[0] == "dev" ? (p[1], p[2]) : nil
+        }
+        public static let hatKeys = ["hu", "hr", "hd", "hl"]
+        public static let maxButtons = 32, maxAxes = 8
+
+        public var buttons: Int { isGamepad ? 21 : min(buttonCount ?? 12, Self.maxButtons) }
+        public var axisCount: Int { isGamepad ? 6 : min(axisNames?.count ?? 4, Self.maxAxes) }
+        public var hat: Bool { !isGamepad && (hasHat ?? false) }
+
+        public func axisTitle(_ n: Int, family: Controllers.Family? = nil) -> String {
+            if isGamepad { return ["Left stick, left and right", "Left stick, up and down", "Right stick, left and right", "Right stick, up and down", Input.lt.title(family), Input.rt.title(family)][min(n, 5)] }
+            let names = axisNames ?? []
+            return names.indices.contains(n) ? names[n] : "Axis \(n + 1)"
+        }
+        /// "Button 3", "Hat up", "Throttle, pushed up"… for a key from `key(_:)`.
+        public func inputTitle(_ k: String, family: Controllers.Family? = nil) -> String {
+            if k.hasPrefix("b"), let n = Int(k.dropFirst()) {
+                return isGamepad && n < Input.allCases.count ? Input.allCases[n].title(family) : "Button \(n + 1)"
+            }
+            if k.hasPrefix("h"), let i = Self.hatKeys.firstIndex(of: k) { return ["Hat up", "Hat right", "Hat down", "Hat left"][i] }
+            if k.hasPrefix("a"), let n = Int(k.dropFirst().dropLast()) {
+                let plus = k.hasSuffix("p")
+                if isGamepad {
+                    switch n {
+                    case 0: return plus ? "Left stick pushed right" : "Left stick pushed left"
+                    case 1: return plus ? "Left stick pushed down" : "Left stick pushed up"
+                    case 2: return plus ? "Right stick pushed right" : "Right stick pushed left"
+                    case 3: return plus ? "Right stick pushed down" : "Right stick pushed up"
+                    default: return axisTitle(n, family: family) + " pulled"
+                    }
+                }
+                let name = axisTitle(n), a = axis(n)
+                if a.restsAtEnd == true { return name + " pressed" }
+                switch name {
+                case "X": return plus ? "Pushed right (X)" : "Pushed left (X)"
+                case "Y": return plus ? "Pulled back (Y)" : "Pushed forward (Y)"
+                case "Twist", "Rz": return plus ? "Twisted right" : "Twisted left"
+                default: return name + (plus ? " +" : " −")
+                }
+            }
+            return k
+        }
     }
 
     public enum StickMode: String, CaseIterable, Codable, Hashable, Sendable {
-        case stick, otherStick, mouse, flick, keys, off
+        case stick, otherStick, mouse, flick, keys, directions, off
         public var title: String {
             switch self {
             case .stick: "Stick"; case .otherStick: "The other stick"; case .mouse: "Mouse"
-            case .flick: "Flick stick"; case .keys: "Keys"; case .off: "Nothing"
+            case .flick: "Flick stick"; case .keys: "Keys"; case .directions: "Four directions, each set on its own"; case .off: "Nothing"
             }
         }
     }
@@ -233,6 +362,8 @@ public enum PadProfiles {
         public var rightStick: Stick?
         public var gyro: Gyro?
         public var triggers: Triggers?
+        /// Devices combined with the controller in this profile (up to four).
+        public var devices: [Device]?
         public init(id: String = UUID().uuidString, name: String, buildsOn: [String] = [], layers: [Layer] = [Layer(id: "base", name: "Base")],
                     leftStick: Stick? = nil, rightStick: Stick? = nil, gyro: Gyro? = nil, triggers: Triggers? = nil) {
             self.id = id; self.name = name; self.buildsOn = buildsOn; self.layers = layers.isEmpty ? [Layer(id: "base", name: "Base")] : layers
@@ -277,6 +408,22 @@ public enum PadProfiles {
         return (Array(zip(names, maps)).map { (name: $0.0, bindings: $0.1) }, left, right, gyro, triggers)
     }
 
+    /// The devices a profile combines (the top one of its stack that sets any).
+    public static func devices(_ p: Profile, all: [Profile]) -> [Device] {
+        stack(p, all: all).last { $0.devices != nil }?.devices ?? []
+    }
+    /// Device bindings across the stack, by layer name (lowercased; the first layer is "base").
+    public static func deviceBindings(_ p: Profile, all: [Profile]) -> [String: [String: Binding]] {
+        var out: [String: [String: Binding]] = [:]
+        for q in stack(p, all: all) {
+            for (i, layer) in q.layers.enumerated() {
+                let name = i == 0 ? "base" : layer.name.lowercased()
+                for (k, b) in layer.bindings where k.hasPrefix("dev.") { out[name, default: [:]][k] = b }
+            }
+        }
+        return out
+    }
+
     public static func compile(_ p: Profile, all: [Profile]) -> String {
         let m = merged(p, all: all)
         let layerIndex = Dictionary(m.layers.enumerated().map { ($0.element.name.lowercased(), $0.offset) }, uniquingKeysWith: { a, _ in a })
@@ -303,16 +450,40 @@ public enum PadProfiles {
             case .mouse: mode = "mouse"; to = i
             case .flick: mode = "flick"; to = i
             case .keys: mode = "keys"; to = i
+            case .directions: mode = "dirs"; to = i
             case .off: mode = "none"; to = i
             }
             let k = s.keys.count == 4 ? s.keys : [13, 1, 0, 2]
             lines.append("stick \(i) mode=\(mode) to=\(to) dz=\(n(s.deadzone)) outer=\(n(s.outer)) sens=\(n(s.speed)) power=\(n(s.curve)) flick360=\(n(s.countsPerTurn)) flicktime=\(n(s.flickTime)) keys=\(k.map(String.init).joined(separator: ",")) invy=\(s.invertY ? 1 : 0) xs=\(n(s.xScale ?? 1)) ys=\(n(s.yScale ?? 1)) ramp=\(n(s.edgeBoost ?? 0)) ramptime=\(n(s.edgeBoostTime ?? 0.4))")
         }
         for t in 0..<2 { lines.append("trigger \(t) soft=\(n(m.triggers.soft)) full=\(n(m.triggers.full))") }
+        let devs = Array(devices(p, all: all).prefix(4))
+        var slotOf: [String: Int] = [:]
+        for (i, d) in devs.enumerated() {
+            let slot = i + 1
+            slotOf[d.id] = slot
+            lines.append("device \(slot) vendor=\(d.vendorID) product=\(d.productID) nth=\(d.nth ?? 0) kind=\(d.isGamepad ? "gamepad" : "joystick") join=\(d.isGamepad && d.joined == true ? 1 : 0)")
+            for (k, a) in (d.axes ?? [:]).sorted(by: { $0.key < $1.key }) {
+                guard let ax = Int(k), ax >= 0, ax < Device.maxAxes else { continue }
+                let mode: String, to: String
+                switch a.mode {
+                case .off: mode = "off"; to = "lx"
+                case .stick: mode = "pad"; to = (a.target ?? .lx).engine
+                case .mouse: mode = "mouse"; to = a.vertical == true ? "y" : "x"
+                }
+                lines.append("axis \(slot) \(ax) mode=\(mode) to=\(to) inv=\(a.invert == true ? 1 : 0) half=\(a.restsAtEnd == true ? 1 : 0) dz=\(n(a.deadzone ?? 0.05)) sens=\(n(a.speed ?? 1500)) power=\(n(a.curve ?? 1.5)) press=\(n(a.pressAt ?? 0.5))")
+            }
+        }
+        let devBinds = deviceBindings(p, all: all)
         for (l, layer) in m.layers.enumerated().prefix(8) {
-            for input in Input.allCases {
-                guard let b = layer.bindings[input], !b.isEmpty else { continue }
-                var parts = ["bind \(l) \(input.rawValue)"]
+            var entries: [(String, Binding)] = Input.allCases.compactMap { i in layer.bindings[i].map { (i.rawValue, $0) } }
+            for (k, b) in (devBinds[l == 0 ? "base" : layer.name.lowercased()] ?? [:]).sorted(by: { $0.key < $1.key }) {
+                guard let parsed = Device.parse(k), let slot = slotOf[parsed.device] else { continue }
+                entries.append(("d\(slot)\(parsed.input)", b))
+            }
+            for (name, b) in entries {
+                guard !b.isEmpty else { continue }
+                var parts = ["bind \(l) \(name)"]
                 if let s = outs(b.press) { parts.append("press=\(s)") }
                 if let s = outs(b.tap) { parts.append("tap=\(s)") }
                 if let s = outs(b.hold) { parts.append("hold=\(s)") }

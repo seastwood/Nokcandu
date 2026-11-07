@@ -45,6 +45,13 @@ that's fine — you never have to install a game in Nokcandu to use it.
 - **Remap everything** — every button, stick, trigger, paddle and the touchpad click can do itself, another controller button,
   a key, a mouse button or the scroll wheel. Click **Press…** and press the key or mouse button you want.
 - **Tap, hold, double tap, turbo and button combinations** — one button can do different things depending on how you press it.
+- **Combine devices in one profile** — add joysticks, a throttle, pedals, a wheel, a button box or a second controller
+  (up to four) next to your controller. Each button, hat and axis can be set like a controller button, and axes can drive a
+  stick, a trigger or the mouse — two pedals as one rudder, a throttle as a trigger. A second controller can join the main
+  one, so two halves held in each hand act as one controller. Windows games still see each device as usual for anything
+  you leave alone.
+- **Each stick direction on its own** — set up, down, left and right separately (keys, clicks, buttons, tap and hold, layers).
+  The picture shows what each stick does.
 - **Sticks and gyro as a mouse** — separate X and Y sensitivity, response curves, edge acceleration, and gyro yaw and roll amounts.
   The gyro can be switched on, off or held with any button.
 - **Layers** — hold or toggle a button to switch to another layer. Layers inherit the base layer, so you only change what's different.

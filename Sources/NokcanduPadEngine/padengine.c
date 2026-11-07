@@ -11,6 +11,9 @@
 //        holdtime=0.2 doubletime=0.22
 // <outs>: comma-separated: pad:<button> trig:l|r key:<code> mouse:left|right|middle|back|forward wheel:up|down
 //         gyro:on|off|toggle layer:hold:<n> layer:toggle:<n> none
+//   device <slot 1…4> vendor=<n> product=<n> nth=<n> kind=joystick|gamepad join=0|1
+//   axis <slot> <n> mode=off|pad|mouse to=lx|ly|rx|ry|lt|rt|x|y inv=0 half=0 dz=0.05 sens=1500 power=1.5 press=0.5
+//        (half: rests at one end, like a pedal or throttle: 0…1)
 // Layer 0 is the base. A button with no binding in any active layer stays itself (a controller button).
 #include "padengine.h"
 #include <stdlib.h>
@@ -36,7 +39,7 @@ typedef struct {
     double hold_time, double_time;
 } binding_t;
 
-enum { S_PAD, S_MOUSE, S_FLICK, S_KEYS, S_NONE };
+enum { S_PAD, S_MOUSE, S_FLICK, S_KEYS, S_NONE, S_DIRS };
 typedef struct {
     int mode, to;
     double dz, outer, sens, power, flick360, flicktime;
@@ -54,6 +57,18 @@ typedef struct {
 enum { G_OFF, G_MOUSE, G_LSTICK, G_RSTICK };
 enum { Y_YAW, Y_ROLL, Y_BOTH };
 
+enum { A_OFF, A_PAD, A_MOUSE };
+typedef struct {
+    int mode, to; bool inv, half, set; double dz, sens, power, press;
+    double v;                    // now, shaped (−1…1, or 0…1 for half)
+    bool pos, neg;               // past the press point
+} dev_axis_t;
+typedef struct {
+    bool set, gamepad, join; int vendor, product, nth;
+    dev_axis_t ax[PE_DEV_AXES];
+    int hat;
+} device_t;
+
 typedef struct { double at; int kind; int a, b; } timer_t_;
 enum { T_RELEASE_OUTS, T_HOLD, T_DOUBLE_WAIT, T_TURBO, T_SIM_WAIT };
 
@@ -69,11 +84,13 @@ typedef struct {
 
 struct pe_engine {
     pe_sink sink;
-    binding_t bind[MAX_LAYERS][PE_INPUTS];
+    binding_t bind[MAX_LAYERS][PE_ALL_INPUTS];
     bool layer_toggled[MAX_LAYERS];
     int layer_holds[MAX_LAYERS];
-    press_t press[PE_INPUTS];
-    bool physical[PE_INPUTS];
+    press_t press[PE_ALL_INPUTS];
+    bool physical[PE_ALL_INPUTS];
+    device_t dev[PE_MAX_DEVICES + 1];    // 1…4
+    int ndev;
     // outputs (reference counts)
     int pad_ref[PE_PAD_BUTTONS], trig_ref[2], key_ref[KEYS], mouse_ref[PE_MOUSE_BUTTONS];
     int axis_out[PE_AXES];
@@ -97,13 +114,40 @@ struct pe_engine {
 
 static const char *input_names[PE_INPUTS] = {
     "a", "b", "x", "y", "back", "guide", "start", "ls", "rs", "lb", "rb", "up", "down", "left", "right", "misc",
-    "paddle1", "paddle2", "paddle3", "paddle4", "touchpad", "lt", "rt", "ltfull", "rtfull"
+    "paddle1", "paddle2", "paddle3", "paddle4", "touchpad", "lt", "rt", "ltfull", "rtfull",
+    "lsup", "lsdown", "lsleft", "lsright", "rsup", "rsdown", "rsleft", "rsright"
 };
+static int dev_in(int slot, int k) { return PE_INPUTS + (slot - 1) * PE_DEV_INPUTS + k; }
+enum { K_HAT = PE_DEV_BUTTONS, K_AXIS = PE_DEV_BUTTONS + 4 };
+static const char hat_names[4] = { 'u', 'r', 'd', 'l' };
 int pe_input_named(const char *n) {
     for (int i = 0; i < PE_INPUTS; i++) if (!strcmp(n, input_names[i])) return i;
+    // d<slot>b<n>, d<slot>h<u|r|d|l>, d<slot>a<n><p|n>
+    if (n[0] == 'd' && n[1] >= '1' && n[1] <= '0' + PE_MAX_DEVICES && n[2]) {
+        int slot = n[1] - '0';
+        const char *r = n + 3;
+        if (n[2] == 'b') { char *end; long b = strtol(r, &end, 10); if (end != r && !*end && b >= 0 && b < PE_DEV_BUTTONS) return dev_in(slot, (int)b); }
+        if (n[2] == 'h' && r[0] && !r[1]) for (int h = 0; h < 4; h++) if (r[0] == hat_names[h]) return dev_in(slot, K_HAT + h);
+        if (n[2] == 'a') {
+            char *end; long a = strtol(r, &end, 10);
+            if (end != r && a >= 0 && a < PE_DEV_AXES && (end[0] == 'p' || end[0] == 'n') && !end[1]) return dev_in(slot, K_AXIS + 2 * (int)a + (end[0] == 'n'));
+        }
+    }
     return -1;
 }
-const char *pe_input_name(int i) { return i >= 0 && i < PE_INPUTS ? input_names[i] : "?"; }
+const char *pe_input_name(int i) {
+    if (i >= 0 && i < PE_INPUTS) return input_names[i];
+    if (i < PE_INPUTS || i >= PE_ALL_INPUTS) return "?";
+    static char buf[4][12]; static int turn; char *b = buf[turn++ & 3];
+    int slot = (i - PE_INPUTS) / PE_DEV_INPUTS + 1, k = (i - PE_INPUTS) % PE_DEV_INPUTS;
+    if (k < K_HAT) snprintf(b, 12, "d%db%d", slot, k);
+    else if (k < K_AXIS) snprintf(b, 12, "d%dh%c", slot, hat_names[k - K_HAT]);
+    else snprintf(b, 12, "d%da%d%c", slot, (k - K_AXIS) / 2, (k - K_AXIS) % 2 ? 'n' : 'p');
+    return b;
+}
+// Which input of a device an engine input is (slot 0 when it's the controller's own).
+static int dev_slot(int in) { return in < PE_INPUTS || in >= PE_ALL_INPUTS ? 0 : (in - PE_INPUTS) / PE_DEV_INPUTS + 1; }
+static int dev_key(int in) { return (in - PE_INPUTS) % PE_DEV_INPUTS; }
 
 // MARK: Parsing
 
@@ -181,7 +225,7 @@ pe_engine *pe_create(const char *text, pe_sink sink) {
             int s = atoi(words[1]); if (s < 0 || s > 1) continue;
             stick_t *k = &e->stick[s];
             const char *m = OPT("mode");
-            if (m) k->mode = !strcmp(m, "mouse") ? S_MOUSE : !strcmp(m, "flick") ? S_FLICK : !strcmp(m, "keys") ? S_KEYS : !strcmp(m, "none") ? S_NONE : S_PAD;
+            if (m) k->mode = !strcmp(m, "mouse") ? S_MOUSE : !strcmp(m, "flick") ? S_FLICK : !strcmp(m, "keys") ? S_KEYS : !strcmp(m, "none") ? S_NONE : !strcmp(m, "dirs") ? S_DIRS : S_PAD;
             k->to = (int)opt_d(OPT("to"), s) ? 1 : 0;
             k->dz = opt_d(OPT("dz"), k->dz); k->outer = opt_d(OPT("outer"), k->outer);
             k->sens = opt_d(OPT("sens"), k->sens); k->power = opt_d(OPT("power"), k->power);
@@ -195,6 +239,26 @@ pe_engine *pe_create(const char *text, pe_sink sink) {
             int t = atoi(words[1]); if (t < 0 || t > 1) continue;
             const char *m = OPT("mode"); if (m) e->trig_mode[t] = !strcmp(m, "none") ? 1 : 0;
             e->trig_soft[t] = opt_d(OPT("soft"), e->trig_soft[t]); e->trig_full[t] = opt_d(OPT("full"), e->trig_full[t]);
+        } else if (!strcmp(words[0], "device") && nw > 1) {
+            int d = atoi(words[1]); if (d < 1 || d > PE_MAX_DEVICES) continue;
+            device_t *v = &e->dev[d];
+            v->set = true;
+            v->vendor = (int)opt_d(OPT("vendor"), 0); v->product = (int)opt_d(OPT("product"), 0); v->nth = (int)opt_d(OPT("nth"), 0);
+            const char *k = OPT("kind"); v->gamepad = k && !strcmp(k, "gamepad");
+            v->join = v->gamepad && opt_d(OPT("join"), 0) != 0;
+            if (d > e->ndev) e->ndev = d;
+        } else if (!strcmp(words[0], "axis") && nw > 2) {
+            int d = atoi(words[1]), n = atoi(words[2]);
+            if (d < 1 || d > PE_MAX_DEVICES || n < 0 || n >= PE_DEV_AXES) continue;
+            dev_axis_t *a = &e->dev[d].ax[n];
+            a->set = true;
+            const char *m = OPT("mode"); a->mode = m && !strcmp(m, "pad") ? A_PAD : m && !strcmp(m, "mouse") ? A_MOUSE : A_OFF;
+            const char *t = OPT("to");
+            static const char *tos[] = { "lx", "ly", "rx", "ry", "lt", "rt" };
+            a->to = 0;
+            if (t) { for (int i = 0; i < 6; i++) if (!strcmp(t, tos[i])) a->to = i; if (!strcmp(t, "x")) a->to = 0; if (!strcmp(t, "y")) a->to = 1; }
+            a->inv = opt_d(OPT("inv"), 0) != 0; a->half = opt_d(OPT("half"), 0) != 0;
+            a->dz = opt_d(OPT("dz"), 0.05); a->sens = opt_d(OPT("sens"), 1500); a->power = opt_d(OPT("power"), 1.5); a->press = opt_d(OPT("press"), 0.5);
         } else if (!strcmp(words[0], "bind") && nw > 2) {
             int l = atoi(words[1]), in = pe_input_named(words[2]);
             if (l < 0 || l >= MAX_LAYERS || in < 0) continue;
@@ -216,6 +280,14 @@ pe_engine *pe_create(const char *text, pe_sink sink) {
         #undef OPT
     }
     free(copy);
+    // A device that joins the controller: its sticks and triggers are the controller's unless set otherwise.
+    for (int d = 1; d <= PE_MAX_DEVICES; d++) {
+        device_t *v = &e->dev[d];
+        for (int n = 0; n < PE_DEV_AXES; n++) {
+            dev_axis_t *a = &v->ax[n];
+            if (!a->set) { a->dz = 0.05; a->sens = 1500; a->power = 1.5; a->press = 0.5; if (v->join && n < 6) { a->mode = A_PAD; a->to = n; a->dz = 0; } }
+        }
+    }
     e->uses_gyro = e->gyro_out != G_OFF;
     e->shown_layer = 0; e->shown_gyro = e->gyro_out == G_OFF ? -1 : e->gyro_default ? 1 : 0;
     for (int i = 0; i < 2; i++) e->stick[i].last_angle = NAN;
@@ -312,6 +384,14 @@ static bool trigger_bound(const pe_engine *e, int t) {
 
 static void input_down(pe_engine *e, int in, double now);
 static void input_up(pe_engine *e, int in, double now);
+// The controller button an input stays when nothing is set for it: the controller's own, and the buttons of a
+// device that joins it. -1: nothing.
+static int pass_target(const pe_engine *e, int in) {
+    if (in < PE_PAD_BUTTONS) return in;
+    int slot = dev_slot(in);
+    if (slot && e->dev[slot].join && dev_key(in) < PE_PAD_BUTTONS) return dev_key(in);
+    return -1;
+}
 
 static void begin_press(pe_engine *e, int in, const binding_t *b, double now) {
     press_t *p = &e->press[in];
@@ -320,7 +400,8 @@ static void begin_press(pe_engine *e, int in, const binding_t *b, double now) {
     p->b = b; p->since = now; p->passthrough = false;
     if (!b) {
         p->phase = P_PRESS; p->passthrough = true;
-        if (in < PE_PAD_BUTTONS) { out_t o = { O_PAD, (short)in }; out_set(e, o, true); }
+        int t = pass_target(e, in);
+        if (t >= 0) { out_t o = { O_PAD, (short)t }; out_set(e, o, true); }
         return;
     }
     if (b->hold.n || (b->tap.n && b->press.n == 0 && b->dbl.n == 0)) {
@@ -374,7 +455,7 @@ static void input_down(pe_engine *e, int in, double now) {
         return;
     }
     // A partner may be pending on us even though our own binding doesn't name it.
-    for (int other = 0; other < PE_INPUTS; other++) {
+    for (int other = 0; other < PE_ALL_INPUTS; other++) {
         press_t *q = &e->press[other];
         if (q->phase == P_SIM_PENDING && q->b && q->b->sim_with == in && now - q->since <= SIM_WINDOW) {
             timers_cancel(e, T_SIM_WAIT, other);
@@ -411,7 +492,7 @@ static void input_up(pe_engine *e, int in, double now) {
         return;                          // stays waiting
     default:
         timers_cancel(e, T_TURBO, in);
-        if (p->passthrough) { if (in < PE_PAD_BUTTONS) { out_t o = { O_PAD, (short)in }; out_set(e, o, false); } }
+        if (p->passthrough) { int t = pass_target(e, in); if (t >= 0) { out_t o = { O_PAD, (short)t }; out_set(e, o, false); } }
         else outs_set(e, &p->active, false);
         p->active.n = 0; p->phase = P_IDLE; p->passthrough = false;
         return;
@@ -428,11 +509,21 @@ void pe_button(pe_engine *e, int button, bool down, double now) {
 
 // MARK: Triggers
 
+// What the devices' axes add to one of the controller's (sticks −1…1 y down, like SDL; triggers 0…1).
+static double dev_pad(const pe_engine *e, int target) {
+    double sum = 0;
+    for (int d = 1; d <= e->ndev; d++) for (int n = 0; n < PE_DEV_AXES; n++) {
+        const dev_axis_t *a = &e->dev[d].ax[n];
+        if (a->mode == A_PAD && a->to == target) sum += target >= 4 ? fmax(0, a->v) : a->v;
+    }
+    return sum;
+}
 static void update_triggers(pe_engine *e) {
     for (int t = 0; t < 2; t++) {
         int v = 0;
         if (e->trig_ref[t] > 0) v = 32767;
         else if (e->trig_mode[t] == 0 && !trigger_bound(e, t)) v = e->raw_axis[PE_AXIS_LT + t];
+        if (e->ndev) { int dv = (int)lround(fmin(1, dev_pad(e, 4 + t)) * 32767); if (dv > v) v = dv; }
         emit_axis(e, PE_AXIS_LT + t, v);
     }
 }
@@ -465,9 +556,10 @@ static void update_pad_sticks(pe_engine *e) {
     sx[0] += e->gyro_stick_x * (e->gyro_out == G_LSTICK); sy[0] += e->gyro_stick_y * (e->gyro_out == G_LSTICK);
     sx[1] += e->gyro_stick_x * (e->gyro_out == G_RSTICK); sy[1] += e->gyro_stick_y * (e->gyro_out == G_RSTICK);
     for (int s = 0; s < 2; s++) {
-        double x = fmax(-1, fmin(1, sx[s])), y = fmax(-1, fmin(1, sy[s]));
+        double dx = e->ndev ? dev_pad(e, 2 * s) : 0, dy = e->ndev ? dev_pad(e, 2 * s + 1) : 0;
+        double x = fmax(-1, fmin(1, sx[s] + dx)), y = fmax(-1, fmin(1, -sy[s] + dy));
         emit_axis(e, s ? PE_AXIS_RX : PE_AXIS_LX, (int)lround(x * 32767));
-        emit_axis(e, s ? PE_AXIS_RY : PE_AXIS_LY, (int)lround(-y * 32767));     // SDL: y down
+        emit_axis(e, s ? PE_AXIS_RY : PE_AXIS_LY, (int)lround(y * 32767));      // SDL: y down
     }
 }
 static void mouse_out(pe_engine *e, double dx, double dy) {
@@ -490,6 +582,20 @@ static void stick_keys(pe_engine *e, stick_t *k) {
         out_t o = { O_KEY, (short)k->keys[i] }; out_set(e, o, want[i]);
     }
 }
+// The stick as four buttons (eight ways: up-right holds both), each set like any button.
+static void stick_dirs(pe_engine *e, int s, double now) {
+    stick_t *k = &e->stick[s];
+    double m = sqrt(k->x * k->x + k->y * k->y);
+    bool want[4] = { false, false, false, false };       // up, down, left, right
+    if (m > fmax(k->dz, 0.4)) {
+        double a = atan2(k->x, k->y) * 180 / M_PI;
+        want[0] = fabs(a) < 67.5; want[1] = fabs(a) > 112.5; want[3] = a > 22.5 && a < 157.5; want[2] = a < -22.5 && a > -157.5;
+    }
+    for (int i = 0; i < 4; i++) {
+        int in = PE_LS_UP + 4 * s + i;
+        if (want[i] != e->physical[in]) { e->physical[in] = want[i]; if (want[i]) input_down(e, in, now); else input_up(e, in, now); }
+    }
+}
 static void stick_flick(pe_engine *e, stick_t *k, double now) {
     double m = sqrt(k->x * k->x + k->y * k->y);
     double a = atan2(k->x, k->y) * 180 / M_PI;
@@ -508,7 +614,18 @@ static void stick_flick(pe_engine *e, stick_t *k, double now) {
     }
     (void)now;
 }
+static void devices_continuous(pe_engine *e, double dt) {
+    double mx = 0, my = 0;
+    for (int d = 1; d <= e->ndev; d++) for (int n = 0; n < PE_DEV_AXES; n++) {
+        const dev_axis_t *a = &e->dev[d].ax[n];
+        if (a->mode != A_MOUSE || a->v == 0) continue;
+        double m = fabs(a->v), speed = a->sens * pow(m, a->power) * dt * (a->v < 0 ? -1 : 1);
+        if (a->to == 1) my += speed; else mx += speed;
+    }
+    if (mx || my) mouse_out(e, mx, my);
+}
 static void sticks_continuous(pe_engine *e, double dt) {
+    if (e->ndev) devices_continuous(e, dt);
     for (int s = 0; s < 2; s++) {
         stick_t *k = &e->stick[s];
         if (k->mode == S_MOUSE) {
@@ -538,6 +655,7 @@ void pe_axis(pe_engine *e, int axis, int value, double now) {
     k->x = e->raw_axis[s ? PE_AXIS_RX : PE_AXIS_LX] / 32767.0;
     k->y = -e->raw_axis[s ? PE_AXIS_RY : PE_AXIS_LY] / 32767.0;       // y up
     if (k->mode == S_KEYS) stick_keys(e, k);
+    else if (k->mode == S_DIRS) stick_dirs(e, s, now);
     else if (k->mode == S_FLICK) stick_flick(e, k, now);
     update_pad_sticks(e);
 }
@@ -669,16 +787,19 @@ double pe_next_deadline(const pe_engine *e) {
         if (k->mode == S_MOUSE && sqrt(k->x * k->x + k->y * k->y) > k->dz) continuous = true;
         if (k->mode == S_FLICK && k->flicking) continuous = true;
     }
+    for (int dv = 1; dv <= e->ndev; dv++) for (int n = 0; n < PE_DEV_AXES; n++)
+        if (e->dev[dv].ax[n].mode == A_MOUSE && e->dev[dv].ax[n].v != 0) continuous = true;
     if (continuous) { double c = e->last_tick + 0.004; if (!d || c < d) d = c; }
     return d;
 }
 
 void pe_release_all(pe_engine *e, double now) {
     if (!e) return;
-    for (int i = 0; i < PE_INPUTS; i++) if (e->physical[i] || e->press[i].phase != P_IDLE) {
+    for (int i = 0; i < PE_ALL_INPUTS; i++) if (e->physical[i] || e->press[i].phase != P_IDLE) {
         e->physical[i] = false;
         press_t *p = &e->press[i];
-        if (p->passthrough && i < PE_PAD_BUTTONS) { out_t o = { O_PAD, (short)i }; out_set(e, o, false); }
+        int t = p->passthrough ? pass_target(e, i) : -1;
+        if (t >= 0) { out_t o = { O_PAD, (short)t }; out_set(e, o, false); }
         else outs_set(e, &p->active, false);
         p->active.n = 0; p->phase = P_IDLE; p->passthrough = false;
     }
@@ -687,6 +808,7 @@ void pe_release_all(pe_engine *e, double now) {
     for (int s = 0; s < 2; s++) { stick_t *k = &e->stick[s]; k->x = k->y = 0; if (k->mode == S_KEYS) stick_keys(e, k); k->in_flick = k->flicking = false; }
     for (int a = 0; a < PE_AXES; a++) e->raw_axis[a] = 0;
     e->gyro_stick_x = e->gyro_stick_y = 0;
+    for (int d = 1; d <= PE_MAX_DEVICES; d++) { e->dev[d].hat = 0; for (int n = 0; n < PE_DEV_AXES; n++) { e->dev[d].ax[n].v = 0; e->dev[d].ax[n].pos = e->dev[d].ax[n].neg = false; } }
     for (int b = 0; b < PE_PAD_BUTTONS; b++) if (e->pad_ref[b]) { e->pad_ref[b] = 1; out_t o = { O_PAD, (short)b }; out_set(e, o, false); }
     for (int k = 0; k < KEYS; k++) if (e->key_ref[k]) { e->key_ref[k] = 1; out_t o = { O_KEY, (short)k }; out_set(e, o, false); }
     for (int m = 0; m < PE_MOUSE_BUTTONS; m++) if (e->mouse_ref[m]) { e->mouse_ref[m] = 1; out_t o = { O_MOUSE, (short)m }; out_set(e, o, false); }
@@ -697,4 +819,67 @@ void pe_release_all(pe_engine *e, double now) {
     update_pad_sticks(e);
     report_state(e);
     (void)now;
+}
+
+// MARK: Extra devices
+
+static void dev_input(pe_engine *e, int in, bool down, double now) {
+    if (e->physical[in] == down) return;
+    e->physical[in] = down;
+    if (down) input_down(e, in, now); else input_up(e, in, now);
+}
+void pe_dev_button(pe_engine *e, int slot, int button, bool down, double now) {
+    if (!e || slot < 1 || slot > PE_MAX_DEVICES || button < 0 || button >= PE_DEV_BUTTONS) return;
+    pe_tick(e, now);
+    dev_input(e, dev_in(slot, button), down, now);
+}
+void pe_dev_hat(pe_engine *e, int slot, int bits, double now) {
+    if (!e || slot < 1 || slot > PE_MAX_DEVICES) return;
+    pe_tick(e, now);
+    e->dev[slot].hat = bits;
+    static const int bit[4] = { PE_HAT_UP, PE_HAT_RIGHT, PE_HAT_DOWN, PE_HAT_LEFT };
+    // Let go first, then press (sliding from up to right releases up before right goes down).
+    for (int h = 0; h < 4; h++) if (!(bits & bit[h])) dev_input(e, dev_in(slot, K_HAT + h), false, now);
+    for (int h = 0; h < 4; h++) if (bits & bit[h]) dev_input(e, dev_in(slot, K_HAT + h), true, now);
+}
+void pe_dev_axis(pe_engine *e, int slot, int axis, int value, double now) {
+    if (!e || slot < 1 || slot > PE_MAX_DEVICES || axis < 0 || axis >= PE_DEV_AXES) return;
+    pe_tick(e, now);
+    dev_axis_t *a = &e->dev[slot].ax[axis];
+    double v = fmax(-1, fmin(1, value / 32767.0));
+    if (a->inv) v = -v;
+    if (a->half) v = (v + 1) / 2;
+    double m = fabs(v);
+    v = m <= a->dz ? 0 : (v < 0 ? -1 : 1) * fmin(1, (m - a->dz) / (1 - a->dz));
+    a->v = v;
+    // Past the press point counts as a button press (a little lower to let go, so it doesn't flicker).
+    double on = a->press, off = a->press * 0.8;
+    bool pos = a->pos ? v > off : v >= on, neg = a->half ? false : a->neg ? v < -off : v <= -on;
+    if (pos != a->pos) { a->pos = pos; dev_input(e, dev_in(slot, K_AXIS + 2 * axis), pos, now); }
+    if (neg != a->neg) { a->neg = neg; dev_input(e, dev_in(slot, K_AXIS + 2 * axis + 1), neg, now); }
+    if (a->mode == A_PAD) { if (a->to >= 4) update_triggers(e); else update_pad_sticks(e); }
+}
+int pe_device_count(const pe_engine *e) { return e ? e->ndev : 0; }
+bool pe_device_info(const pe_engine *e, int slot, int *vendor, int *product, int *nth, bool *gamepad, bool *joined) {
+    if (!e || slot < 1 || slot > PE_MAX_DEVICES || !e->dev[slot].set) return false;
+    const device_t *v = &e->dev[slot];
+    if (vendor) *vendor = v->vendor;
+    if (product) *product = v->product;
+    if (nth) *nth = v->nth;
+    if (gamepad) *gamepad = v->gamepad;
+    if (joined) *joined = v->join;
+    return true;
+}
+static bool bound_anywhere(const pe_engine *e, int in) {
+    for (int l = 0; l < MAX_LAYERS; l++) if (e->bind[l][in].set) return true;
+    return false;
+}
+bool pe_dev_uses(const pe_engine *e, int slot, int kind, int n) {
+    if (!e || slot < 1 || slot > PE_MAX_DEVICES || !e->dev[slot].set) return false;
+    if (e->dev[slot].join) return true;
+    if (kind == 0) return n >= 0 && n < PE_DEV_BUTTONS && bound_anywhere(e, dev_in(slot, n));
+    if (kind == 1) { for (int h = 0; h < 4; h++) if (bound_anywhere(e, dev_in(slot, K_HAT + h))) return true; return false; }
+    if (kind == 2 && n >= 0 && n < PE_DEV_AXES)
+        return e->dev[slot].ax[n].mode != A_OFF || bound_anywhere(e, dev_in(slot, K_AXIS + 2 * n)) || bound_anywhere(e, dev_in(slot, K_AXIS + 2 * n + 1));
+    return false;
 }

@@ -60,6 +60,8 @@ final class DesktopPad: ObservableObject {
 
     private var engine: OpaquePointer?
     private var compiled = ""
+    /// The profile's joysticks, pedals, other controllers… into the same engine.
+    private lazy var feed = DeviceFeed { DesktopPad.shared.engine }
     private var timer: Timer?
     private var observers: [NSObjectProtocol] = []
     private var lastButtons: [Int: Bool] = [:], lastAxes: [Int: Int] = [:]
@@ -90,6 +92,7 @@ final class DesktopPad: ObservableObject {
             // A game says it uses its own profile a moment after it comes to the front.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { DesktopPad.shared.evaluate() }
         })
+        observers.append(nc.addObserver(forName: .hidDevicesChanged, object: nil, queue: .main) { _ in MainActor.assumeIsolated { DesktopPad.shared.attach() } })
         observers.append(nc.addObserver(forName: .padProfilesChanged, object: nil, queue: .main) { _ in MainActor.assumeIsolated { DesktopPad.shared.evaluate(force: true) } })
         attach()
         watchRealMouse()
@@ -155,6 +158,7 @@ final class DesktopPad: ObservableObject {
         layerNames = chosen.map { PadProfiles.merged($0, all: all).layers.map(\.name) } ?? []
         shownLayer = 0; shownGyro = chosen.map { PadProfiles.merged($0, all: all).gyro.output == .off ? -1 : (PadProfiles.merged($0, all: all).gyro.startsOn ? 1 : 0) } ?? -1
         compiled = text
+        feed.set(text.isEmpty ? [] : chosen.map { PadProfiles.devices($0, all: all) } ?? [])
         rebuild()
     }
 
@@ -197,14 +201,16 @@ final class DesktopPad: ObservableObject {
 
     func attach() {
         // Timers only while a controller is connected and a profile applies.
-        let any = GCController.controllers().contains { $0.extendedGamepad != nil }
+        let any = GCController.controllers().contains { $0.extendedGamepad != nil } || feed.anyConnected
         if engine != nil && any && timer == nil {
             let t = Timer(timeInterval: 0.004, repeats: true) { _ in MainActor.assumeIsolated { DesktopPad.shared.tick() } }
             RunLoop.main.add(t, forMode: .common)
             timer = t
         } else if (engine == nil || !any), let t = timer { t.invalidate(); timer = nil }
+        feed.paused = Self.testerOpen
         guard !Self.testerOpen else { return }
-        for c in GCController.controllers() {
+        feed.attachGamepads()
+        for c in feed.mainControllers() {
             guard let gp = c.extendedGamepad else { continue }
             gp.valueChangedHandler = { pad, _ in MainActor.assumeIsolated { DesktopPad.shared.read(pad) } }
             if let m = c.motion {

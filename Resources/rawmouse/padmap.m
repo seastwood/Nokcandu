@@ -16,9 +16,12 @@
 typedef struct { uint32_t type, timestamp; int32_t which; uint8_t button, state, p1, p2; } nok_sdl_cbutton;
 typedef struct { uint32_t type, timestamp; int32_t which; uint8_t axis, p1, p2, p3; int16_t value; uint16_t p4; } nok_sdl_caxis;
 typedef struct { uint32_t type, timestamp; int32_t which; int32_t sensor; float data[3]; } nok_sdl_csensor;
-typedef union { uint32_t type; nok_sdl_cbutton cbutton; nok_sdl_caxis caxis; nok_sdl_csensor csensor; uint8_t pad[56]; } nok_sdl_event;
+typedef struct { uint32_t type, timestamp; int32_t which; uint8_t hat, value, p1, p2; } nok_sdl_jhat;
+// Joystick events have the same layout as the controller's: axis like caxis, buttons like cbutton.
+typedef union { uint32_t type; nok_sdl_cbutton cbutton; nok_sdl_caxis caxis; nok_sdl_csensor csensor; nok_sdl_jhat jhat; uint8_t pad[56]; } nok_sdl_event;
 enum { NOK_SDL_CAXIS = 0x650, NOK_SDL_CBDOWN = 0x651, NOK_SDL_CBUP = 0x652, NOK_SDL_CADDED = 0x653, NOK_SDL_CREMOVED = 0x654,
-       NOK_SDL_CSENSOR = 0x659, NOK_SDL_SENSOR_GYRO = 2 };
+       NOK_SDL_CSENSOR = 0x659, NOK_SDL_SENSOR_GYRO = 2,
+       NOK_SDL_JAXIS = 0x600, NOK_SDL_JHAT = 0x602, NOK_SDL_JBDOWN = 0x603, NOK_SDL_JBUP = 0x604, NOK_SDL_JADDED = 0x605, NOK_SDL_JREMOVED = 0x606 };
 
 // Messages from the driver to the game process.
 enum { PADMSG_KEY = 1, PADMSG_MOUSE_BUTTON, PADMSG_MOUSE_MOVE, PADMSG_WHEEL, PADMSG_RELEASE };
@@ -40,8 +43,17 @@ static int (*real_sensor)(void *, int, int);
 static int32_t (*real_instance)(void *);
 static void *(*real_joystick)(void *);
 
+static int (*real_num_joysticks)(void);
+static int32_t (*real_device_instance)(int);
+static uint16_t (*real_device_vendor)(int), (*real_device_product)(int);
+
 #define PAD_MAX 8
-static struct { int32_t which; pe_engine *e; bool used; } pads[PAD_MAX];
+// One engine per controller. With a profile that combines devices, one of them is the main controller (main):
+// the devices' inputs go into its engine, and what they do comes out as that controller. Until a controller is
+// there the main engine waits with which = -1 (keys and mouse still work; controller outputs go nowhere).
+static struct { int32_t which; pe_engine *e; bool used, main; } pads[PAD_MAX];
+static bool pad_has_devices;
+static struct { int32_t which; int slot; } slot_cache[16]; static int slot_cached;
 static char pad_profile_text[65536];
 static char pad_profile_path[PATH_MAX];
 static pid_t pad_game_pid;
@@ -70,14 +82,17 @@ static void pad_send(padmsg m) {
     pad_socket_path(pad_game_pid, a.sun_path, sizeof a.sun_path);
     sendto(pad_sock, &m, sizeof m, MSG_DONTWAIT, (struct sockaddr *)&a, sizeof a);
 }
+static int32_t pad_which_of(void *ctx) { int i = (int)(intptr_t)ctx; return i >= 0 && i < PAD_MAX && pads[i].used ? pads[i].which : -1; }
 static void sink_pad_button(void *ctx, int b, bool down) {
     nok_sdl_event ev = {0};
-    ev.cbutton.type = down ? NOK_SDL_CBDOWN : NOK_SDL_CBUP; ev.cbutton.which = (int32_t)(intptr_t)ctx;
+    int32_t which = pad_which_of(ctx); if (which < 0) return;
+    ev.cbutton.type = down ? NOK_SDL_CBDOWN : NOK_SDL_CBUP; ev.cbutton.which = which;
     ev.cbutton.button = (uint8_t)b; ev.cbutton.state = down; pad_push(ev);
 }
 static void sink_pad_axis(void *ctx, int a, int v) {
     nok_sdl_event ev = {0};
-    ev.caxis.type = NOK_SDL_CAXIS; ev.caxis.which = (int32_t)(intptr_t)ctx; ev.caxis.axis = (uint8_t)a; ev.caxis.value = (int16_t)v; pad_push(ev);
+    int32_t which = pad_which_of(ctx); if (which < 0) return;
+    ev.caxis.type = NOK_SDL_CAXIS; ev.caxis.which = which; ev.caxis.axis = (uint8_t)a; ev.caxis.value = (int16_t)v; pad_push(ev);
 }
 // Keys and mouse come from Nokcandu itself (it runs the same profile for the game in front); here the profile only
 // decides what the game sees as the controller — remapped buttons, and nothing for buttons set to keys or mouse.
@@ -100,23 +115,63 @@ static void pad_status(double now) {
 }
 static void sink_wheel(void *ctx, int n) { (void)ctx; (void)n; }
 
-static pe_engine *pad_engine_for(int32_t which, bool create) {
-    for (int i = 0; i < PAD_MAX; i++) if (pads[i].used && pads[i].which == which) return pads[i].e;
-    if (!create || !pad_profile_text[0]) return NULL;
+static pe_engine *pad_new_engine(int32_t which, bool main) {
     for (int i = 0; i < PAD_MAX; i++) if (!pads[i].used) {
-        pe_sink s = { (void *)(intptr_t)which, sink_pad_button, sink_pad_axis, sink_key, sink_mouse_button, sink_mouse_move, sink_wheel };
+        pe_sink s = { (void *)(intptr_t)i, sink_pad_button, sink_pad_axis, sink_key, sink_mouse_button, sink_mouse_move, sink_wheel, NULL };
         pads[i].e = pe_create(pad_profile_text, s);
         if (!pads[i].e) return NULL;
-        pads[i].which = which; pads[i].used = true;
+        pads[i].which = which; pads[i].used = true; pads[i].main = main;
         return pads[i].e;
     }
     return NULL;
 }
+static pe_engine *pad_engine_for(int32_t which, bool create) {
+    for (int i = 0; i < PAD_MAX; i++) if (pads[i].used && pads[i].which == which) return pads[i].e;
+    if (!create || !pad_profile_text[0]) return NULL;
+    // The devices' engine was waiting for a controller: this one becomes the main controller.
+    for (int i = 0; i < PAD_MAX; i++) if (pads[i].used && pads[i].main && pads[i].which < 0) { pads[i].which = which; return pads[i].e; }
+    bool main = pad_has_devices;
+    for (int i = 0; i < PAD_MAX; i++) if (pads[i].used && pads[i].main) main = false;
+    return pad_new_engine(which, main);
+}
+// The engine the devices feed (the main controller's).
+static pe_engine *pad_main_engine(void) {
+    if (!pad_profile_text[0]) return NULL;
+    for (int i = 0; i < PAD_MAX; i++) if (pads[i].used && pads[i].main) return pads[i].e;
+    for (int i = 0; i < PAD_MAX; i++) if (pads[i].used) { pads[i].main = true; return pads[i].e; }
+    return pad_new_engine(-1, true);
+}
+// Which of the profile's devices an SDL joystick is (0: none): its maker and model codes, and with several
+// identical ones, its place among them (in the order they were connected).
+static int pad_slot_for(int32_t which) {
+    if (!pad_has_devices) return 0;
+    for (int i = 0; i < slot_cached; i++) if (slot_cache[i].which == which) return slot_cache[i].slot;
+    int slot = 0;
+    pe_engine *e = pad_main_engine();
+    if (e && real_num_joysticks && real_device_instance && real_device_vendor && real_device_product) {
+        int n = real_num_joysticks(), vid = -1, pid = -1;
+        for (int i = 0; i < n; i++) if (real_device_instance(i) == which) { vid = real_device_vendor(i); pid = real_device_product(i); }
+        int nth = 0;
+        for (int i = 0; i < n; i++) if (real_device_vendor(i) == vid && real_device_product(i) == pid && real_device_instance(i) < which) nth++;
+        for (int d = 1; d <= pe_device_count(e) && vid >= 0; d++) {
+            int v, p, k; bool gp, joined;
+            if (pe_device_info(e, d, &v, &p, &k, &gp, &joined) && v == vid && p == pid && k == nth) { slot = d; break; }
+        }
+        if (slot) fprintf(stderr, "nokcandu: device %04x:%04x #%d is the profile's device %d\n", vid, pid, nth + 1, slot);
+    }
+    if (slot_cached < 16) { slot_cache[slot_cached].which = which; slot_cache[slot_cached].slot = slot; slot_cached++; }
+    return slot;
+}
+static bool pad_slot_gamepad(int slot) {
+    bool gp = false; pe_engine *e = pad_main_engine();
+    return e && pe_device_info(e, slot, NULL, NULL, NULL, &gp, NULL) && gp;
+}
 static void pad_drop_engines(void) {
     double now = pad_now();
     for (int i = 0; i < PAD_MAX; i++) if (pads[i].used) {
-        pe_release_all(pads[i].e, now); pe_destroy(pads[i].e); pads[i].used = false;
+        pe_release_all(pads[i].e, now); pe_destroy(pads[i].e); pads[i].used = false; pads[i].main = false;
     }
+    slot_cached = 0;
     pad_send((padmsg){ PADMSG_RELEASE, 0, 0, 0, 0 });
 }
 static bool pad_changed(const char *path, time_t *mt, long *ns) {
@@ -145,12 +200,14 @@ static void pad_check(void) {
         }
     }
     if (pad_game_pid > 0 && kill(pad_game_pid, 0) != 0) { pad_drop_engines(); pad_game_pid = 0; pad_profile_path[0] = 0; pad_profile_text[0] = 0; }
+    if (!pad_profile_text[0]) pad_has_devices = false;
     if (pad_profile_path[0] && pad_changed(pad_profile_path, &pad_profile_mtime, &pad_profile_ns)) {
         pad_drop_engines();
         pad_profile_text[0] = 0;
         FILE *f = fopen(pad_profile_path, "r");
         if (f) { size_t n = fread(pad_profile_text, 1, sizeof pad_profile_text - 1, f); pad_profile_text[n] = 0; fclose(f); }
         if (strncmp(pad_profile_text, "nokpad ", 7)) pad_profile_text[0] = 0;
+        pad_has_devices = strstr(pad_profile_text, "\ndevice ") != NULL;
         fprintf(stderr, "nokcandu: controller profile %s\n", pad_profile_text[0] ? pad_profile_path : "off");
     }
 }
@@ -179,6 +236,42 @@ static int nok_wait(nok_sdl_event *ev, int timeout) {
     int r = real_wait(ev, pad_next_wait_ms(now, timeout));
     now = pad_now();
     if (r) {
+        int slot = 0;
+        switch (ev->type) {
+        case NOK_SDL_CAXIS: case NOK_SDL_CBDOWN: case NOK_SDL_CBUP: case NOK_SDL_CSENSOR:
+        case NOK_SDL_JAXIS: case NOK_SDL_JHAT: case NOK_SDL_JBDOWN: case NOK_SDL_JBUP:
+            slot = pad_slot_for(ev->cbutton.which); break;
+        case NOK_SDL_JADDED: case NOK_SDL_JREMOVED: case NOK_SDL_CADDED:
+            slot_cached = 0; break;
+        }
+        if (slot) {
+            // One of the profile's devices: into the main controller's engine. What the profile uses doesn't also
+            // reach the game from the device itself; the rest does.
+            pe_engine *e = pad_main_engine();
+            bool gp = pad_slot_gamepad(slot);
+            switch (ev->type) {
+            case NOK_SDL_CSENSOR: r = 0; break;
+            case NOK_SDL_CBDOWN: case NOK_SDL_CBUP:
+                if (gp && e) { pe_dev_button(e, slot, ev->cbutton.button, ev->type == NOK_SDL_CBDOWN, now); if (pe_dev_uses(e, slot, 0, ev->cbutton.button)) r = 0; }
+                break;
+            case NOK_SDL_CAXIS:
+                if (gp && e) { pe_dev_axis(e, slot, ev->caxis.axis, ev->caxis.value, now); if (pe_dev_uses(e, slot, 2, ev->caxis.axis)) r = 0; }
+                break;
+            case NOK_SDL_JBDOWN: case NOK_SDL_JBUP:
+                if (!gp && e) { pe_dev_button(e, slot, ev->cbutton.button, ev->type == NOK_SDL_JBDOWN, now); if (pe_dev_uses(e, slot, 0, ev->cbutton.button)) r = 0; }
+                break;
+            case NOK_SDL_JAXIS:
+                if (!gp && e) { pe_dev_axis(e, slot, ev->caxis.axis, ev->caxis.value, now); if (pe_dev_uses(e, slot, 2, ev->caxis.axis)) r = 0; }
+                break;
+            case NOK_SDL_JHAT:
+                if (!gp && e && ev->jhat.hat == 0) { pe_dev_hat(e, slot, ev->jhat.value, now); if (pe_dev_uses(e, slot, 1, 0)) r = 0; }
+                break;
+            }
+            if (!r && pad_pop(ev)) return 1;
+            if (!r) pad_tick_all(now);
+            if (!r && pad_pop(ev)) return 1;
+            return r;
+        }
         switch (ev->type) {
         case NOK_SDL_CSENSOR: {             // gyro: Wine's driver has no use for it
             pe_engine *e = pad_engine_for(ev->csensor.which, true);
@@ -196,8 +289,9 @@ static int nok_wait(nok_sdl_event *ev, int timeout) {
             if (e) { pe_axis(e, ev->caxis.axis, ev->caxis.value, now); r = 0; }
             break; }
         case NOK_SDL_CREMOVED:
+            slot_cached = 0;
             for (int i = 0; i < PAD_MAX; i++) if (pads[i].used && pads[i].which == ev->cbutton.which) {
-                pe_release_all(pads[i].e, now); pe_destroy(pads[i].e); pads[i].used = false;
+                pe_release_all(pads[i].e, now); pe_destroy(pads[i].e); pads[i].used = false; pads[i].main = false;
             }
             break;
         }
@@ -221,6 +315,10 @@ static void *nok_dlsym(void *handle, const char *name) {
         real_wait = real;
         if (!real_open) real_open = (void *(*)(int))dlsym(handle, "SDL_GameControllerOpen");
         if (!real_sensor) real_sensor = (int (*)(void *, int, int))dlsym(handle, "SDL_GameControllerSetSensorEnabled");
+        real_num_joysticks = (int (*)(void))dlsym(handle, "SDL_NumJoysticks");
+        real_device_instance = (int32_t (*)(int))dlsym(handle, "SDL_JoystickGetDeviceInstanceID");
+        real_device_vendor = (uint16_t (*)(int))dlsym(handle, "SDL_JoystickGetDeviceVendor");
+        real_device_product = (uint16_t (*)(int))dlsym(handle, "SDL_JoystickGetDeviceProduct");
         fprintf(stderr, "nokcandu: controller remapping ready\n");
         return (void *)nok_wait;
     }

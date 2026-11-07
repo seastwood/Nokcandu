@@ -25,7 +25,9 @@ struct ControllerProfileEditor: View {
     @State private var renamingLayer = false
 
     static let labelsKey = "padEditorLabels"
-    enum Part: Hashable { case input(PadProfiles.Input), stick(Int), gyro, triggers }
+    enum Part: Hashable { case input(PadProfiles.Input), stick(Int), gyro, triggers, deviceInput(String, String), deviceAxis(String, Int) }
+    /// The device shown on the left instead of the controller (nil: the controller).
+    @State private var shownDevice: String?
 
     init(profile: PadProfiles.Profile, own: Bool, gameName: String, all: [PadProfiles.Profile], embedded: Bool = false, onChange: @escaping (PadProfiles.Profile) -> Void) {
         _profile = State(initialValue: profile)
@@ -50,15 +52,113 @@ struct ControllerProfileEditor: View {
     func left(_ width: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             layerBar
-            ControllerPicture(family: family, selection: $selection, tester: tester,
-                              mapped: { i in profile.layers[layerIndex][i] != nil || inherited(i) != nil },
-                              label: { i in shortLabel(i) })
-                .frame(width: width, height: width * 400 / 560)
-            ExtraButtons(tester: tester, family: family, selection: $selection,
-                         mapped: { i in profile.layers[layerIndex][i] != nil || inherited(i) != nil })
+            DeviceStrip(devices: devicesBinding, shown: $shownDevice, selection: $selection)
+            if let id = shownDevice, let i = devicesBinding.wrappedValue.firstIndex(where: { $0.id == id }) {
+                DevicePanel(device: devicesBinding[i], tester: tester, family: family, selection: $selection,
+                            mapped: { k in let key = "dev.\(id).\(k)"; return profile.layers[layerIndex][key: key] != nil || inheritedDevice(key) != nil },
+                            label: { k in let key = "dev.\(id).\(k)"; return shortLabel(profile.layers[layerIndex][key: key] ?? inheritedDevice(key)) },
+                            remove: { removeDevice(id) })
+                    .frame(width: width)
+            } else {
+                ControllerPicture(family: family, selection: $selection, tester: tester,
+                                  mapped: { i in profile.layers[layerIndex][i] != nil || inherited(i) != nil },
+                                  label: { i in shortLabel(i) }, stickLabel: { s in stickLabel(s) })
+                    .frame(width: width, height: width * 400 / 560)
+                ExtraButtons(tester: tester, family: family, selection: $selection,
+                             mapped: { i in profile.layers[layerIndex][i] != nil || inherited(i) != nil })
+            }
             PadTestView(tester: tester, family: family)
         }
         .frame(width: width)
+    }
+
+    // MARK: Devices
+
+    /// The profile's devices (until it sets its own, the ones of the profile it builds on).
+    var devicesBinding: Binding<[PadProfiles.Device]> {
+        Binding(get: { profile.devices ?? PadProfiles.devices(profile, all: everything) },
+                set: { profile.devices = $0.isEmpty && profile.buildsOn.isEmpty ? nil : $0 })
+    }
+    func inheritedDevice(_ k: String) -> PadProfiles.Binding? {
+        let m = PadProfiles.deviceBindings(profile, all: everything)
+        if let b = m[layerIndex == 0 ? "base" : layerName.lowercased()]?[k] { return b }
+        guard layerIndex > 0 else { return nil }
+        return profile.layers[0][key: k] ?? m["base"]?[k]
+    }
+    func removeDevice(_ id: String) {
+        devicesBinding.wrappedValue.removeAll { $0.id == id }
+        for l in profile.layers.indices { profile.layers[l].bindings = profile.layers[l].bindings.filter { !$0.key.hasPrefix("dev.\(id).") } }
+        shownDevice = nil; selection = .input(.a)
+    }
+    func deviceBinding(_ k: String) -> Binding<PadProfiles.Binding?> {
+        Binding(get: { profile.layers[layerIndex][key: k] }, set: { profile.layers[layerIndex][key: k] = $0 })
+    }
+
+    @ViewBuilder func deviceInputInspector(_ id: String, _ k: String) -> some View {
+        if let d = devicesBinding.wrappedValue.first(where: { $0.id == id }) {
+            let key = d.key(k)
+            Section {
+                BindingEditor(binding: deviceBinding(key), input: nil, family: family, layers: profile.layers.dropFirst().map(\.name),
+                              inLayer: layerIndex > 0, inherited: profile.layers[layerIndex][key: key] == nil ? inheritedDevice(key).map(describe) : nil,
+                              sameTitle: d.isGamepad && d.joined == true ? "As the controller's" : "As it is")
+            } header: {
+                InspectorTitle(title: d.inputTitle(k, family: family), subtitle: d.name + (layerIndex > 0 ? " · \(layerName) layer" : ""), symbol: "button.programmable")
+            } footer: {
+                Text(d.isGamepad && d.joined == true
+                     ? "Left as it is, it does what the same button on the main controller does."
+                     : "Left as it is, Windows games get it from the device itself, as usual. Set it to something here and they get that instead.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder func deviceAxisInspector(_ id: String, _ n: Int) -> some View {
+        if let i = devicesBinding.wrappedValue.firstIndex(where: { $0.id == id }) {
+            let d = devicesBinding.wrappedValue[i]
+            let a = Binding<PadProfiles.DeviceAxis>(get: { devicesBinding.wrappedValue[i].axis(n) },
+                                                   set: { v in var list = devicesBinding.wrappedValue; list[i].setAxis(n, v); devicesBinding.wrappedValue = list })
+            Section {
+                Picker("Moves", selection: a.mode) { ForEach(PadProfiles.AxisMode.allCases, id: \.self) { Text($0.title).tag($0) } }
+                switch a.wrappedValue.mode {
+                case .stick:
+                    Picker("Which", selection: Binding(get: { a.wrappedValue.target ?? .lx }, set: { var v = a.wrappedValue; v.target = $0; a.wrappedValue = v })) {
+                        ForEach(PadProfiles.AxisTarget.allCases, id: \.self) { Text($0.title(family)).tag($0) }
+                    }
+                case .mouse:
+                    Picker("Direction", selection: Binding(get: { a.wrappedValue.vertical == true }, set: { var v = a.wrappedValue; v.vertical = $0 ? true : nil; a.wrappedValue = v })) {
+                        Text("Left and right").tag(false); Text("Up and down").tag(true)
+                    }
+                    slider("Speed", Binding(get: { a.wrappedValue.speed ?? 1500 }, set: { var v = a.wrappedValue; v.speed = $0; a.wrappedValue = v }), 100...6000, "%.0f /s")
+                    slider("Curve", Binding(get: { a.wrappedValue.curve ?? 1.5 }, set: { var v = a.wrappedValue; v.curve = $0; a.wrappedValue = v }), 0.5...4, "%.2f",
+                           info: "1 is straight; higher starts slower for fine control and still reaches full speed.")
+                case .off: EmptyView()
+                }
+            } header: {
+                InspectorTitle(title: d.axisTitle(n, family: family), subtitle: d.name, symbol: "slider.horizontal.3")
+            } footer: {
+                if a.wrappedValue.mode == .stick {
+                    Text("Several axes can move the same stick or trigger: they add up — two pedals as one rudder (one of them inverted), for example.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else if a.wrappedValue.mode == .off && !(d.isGamepad && d.joined == true) {
+                    Text("Windows games still get this axis from the device itself unless it's set to something.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Section("Response") {
+                Toggle("Rests at one end (a pedal or throttle)", isOn: Binding(get: { a.wrappedValue.restsAtEnd == true }, set: { var v = a.wrappedValue; v.restsAtEnd = $0 ? true : nil; a.wrappedValue = v }))
+                Toggle("Invert", isOn: Binding(get: { a.wrappedValue.invert == true }, set: { var v = a.wrappedValue; v.invert = $0 ? true : nil; a.wrappedValue = v }))
+                slider("Dead zone", Binding(get: { a.wrappedValue.deadzone ?? 0.05 }, set: { var v = a.wrappedValue; v.deadzone = $0; a.wrappedValue = v }), 0...0.5, "%.2f",
+                       info: "How far it moves before it counts. Raise it if it drifts.")
+                slider("Pressed at", Binding(get: { a.wrappedValue.pressAt ?? 0.5 }, set: { var v = a.wrappedValue; v.pressAt = $0; a.wrappedValue = v }), 0.1...0.95, "%.0f%%", scale: 100,
+                       info: "How far it's pushed to count as the button press below.")
+            }
+            ForEach(a.wrappedValue.restsAtEnd == true || (d.isGamepad && n >= 4) ? ["a\(n)p"] : ["a\(n)p", "a\(n)n"], id: \.self) { k in
+                Section(d.inputTitle(k, family: family)) {
+                    BindingEditor(binding: deviceBinding(d.key(k)), input: nil, family: family, layers: profile.layers.dropFirst().map(\.name),
+                                  inLayer: layerIndex > 0, inherited: profile.layers[layerIndex][key: d.key(k)] == nil ? inheritedDevice(d.key(k)).map(describe) : nil,
+                                  sameTitle: "Nothing")
+                }
+            }
+        }
     }
 
     var body: some View {
@@ -91,12 +191,12 @@ struct ControllerProfileEditor: View {
             } else {
                 family = PadGC.connectedFamily()
             }
-            tester.start(profile: PadProfiles.compile(profile, all: everything))
+            tester.start(profile: PadProfiles.compile(profile, all: everything), devices: PadProfiles.devices(profile, all: everything))
         }
         .onDisappear { tester.stop() }
         .onChange(of: profile) { _, p in
             onChange(p)
-            tester.reload(PadProfiles.compile(p, all: everything))
+            tester.reload(PadProfiles.compile(p, all: everything), devices: PadProfiles.devices(p, all: all.filter { $0.id != p.id } + [p]))
         }
         .alert(renamingLayer ? "Rename Layer" : "New Layer", isPresented: Binding(get: { addingLayer || renamingLayer }, set: { if !$0 { addingLayer = false; renamingLayer = false } })) {
             TextField("Name", text: $newLayerName)
@@ -215,8 +315,31 @@ struct ControllerProfileEditor: View {
         layerIndex = 0
     }
 
-    func shortLabel(_ i: PadProfiles.Input) -> String? {
-        guard let b = profile.layers[layerIndex][i] ?? inherited(i) else { return nil }
+    /// What a stick does, short enough for the picture (nil: it's a stick, as it is).
+    func stickLabel(_ s: Int) -> String? {
+        let st = (s == 0 ? profile.leftStick : profile.rightStick) ?? (s == 0 ? merged.left : merged.right)
+        switch st.mode {
+        case .stick: return nil
+        case .otherStick: return s == 0 ? "R stick" : "L stick"
+        case .mouse: return "Mouse"
+        case .flick: return "Flick"
+        case .off: return "Off"
+        case .keys: return Self.keyRow(st.keys.map { PadProfiles.keyTitle($0) })
+        case .directions:
+            let parts = PadProfiles.Input.stickDirections(s).map { shortLabel($0) ?? "·" }
+            return parts.allSatisfy { $0 == "·" } ? "Directions" : Self.keyRow(parts)
+        }
+    }
+    /// Up, down, left, right as one short label: "WSAD", "Arrows", or "W S A D".
+    static func keyRow(_ t: [String]) -> String {
+        if t == ["Up Arrow", "Down Arrow", "Left Arrow", "Right Arrow"] || t == ["↑", "↓", "←", "→"] { return "Arrows" }
+        let short = t.map { $0.replacingOccurrences(of: " Arrow", with: "").replacingOccurrences(of: "Left ", with: "L").replacingOccurrences(of: "Right ", with: "R") }
+        // Single keys read like WASD: up, left, down, right.
+        return short.allSatisfy { $0.count == 1 } ? [0, 2, 1, 3].map { short[$0] }.joined() : short.map { String($0.prefix(4)) }.joined(separator: " ")
+    }
+    func shortLabel(_ i: PadProfiles.Input) -> String? { shortLabel(profile.layers[layerIndex][i] ?? inherited(i)) }
+    func shortLabel(_ binding: PadProfiles.Binding?) -> String? {
+        guard let b = binding else { return nil }
         let first = b.press.first ?? b.tap.first ?? b.hold.first ?? b.togetherOutputs.first
         guard let o = first else { return nil }
         switch o {
@@ -239,6 +362,8 @@ struct ControllerProfileEditor: View {
         case .stick(let s): stickInspector(s)
         case .gyro: gyroInspector
         case .triggers: triggerInspector
+        case .deviceInput(let id, let k): deviceInputInspector(id, k)
+        case .deviceAxis(let id, let n): deviceAxisInspector(id, n)
         }
     }
 
@@ -276,7 +401,15 @@ struct ControllerProfileEditor: View {
     @ViewBuilder func stickInspector(_ s: Int) -> some View {
         let st = stickBinding(s)
         Section {
-            Picker("Works as", selection: st.mode) { ForEach(PadProfiles.StickMode.allCases, id: \.self) { Text($0.title).tag($0) } }
+            Picker("Works as", selection: Binding(get: { st.wrappedValue.mode }, set: { m in
+                // Four directions start from the keys it had, so switching over keeps what worked.
+                if m == .directions, st.wrappedValue.mode == .keys {
+                    for (d, k) in zip(PadProfiles.Input.stickDirections(s), st.wrappedValue.keys) where profile.layers[layerIndex][d] == nil {
+                        profile.layers[layerIndex][d] = .as(.key(k))
+                    }
+                }
+                var v = st.wrappedValue; v.mode = m; st.wrappedValue = v
+            })) { ForEach(PadProfiles.StickMode.allCases, id: \.self) { Text($0.title).tag($0) } }
             switch st.wrappedValue.mode {
             case .mouse:
                 slider("Speed", st.speed, 200...6000, "%.0f /s")
@@ -299,6 +432,16 @@ struct ControllerProfileEditor: View {
         } footer: {
             if st.wrappedValue.mode == .flick {
                 Text("Push the stick to the edge to turn to face that way; rotate it around the edge to keep turning. Pairs well with gyro aim.").font(.caption).foregroundStyle(.secondary)
+            } else if st.wrappedValue.mode == .directions {
+                Text("Each direction works like a button: a key, a mouse button, a controller button, tap and hold, layers… Diagonals press both.").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        if st.wrappedValue.mode == .directions {
+            ForEach(PadProfiles.Input.stickDirections(s), id: \.self) { d in
+                Section(["Up", "Down", "Left", "Right"][PadProfiles.Input.stickDirections(s).firstIndex(of: d) ?? 0]) {
+                    BindingEditor(binding: bindingFor(d), input: d, family: family, layers: profile.layers.dropFirst().map(\.name),
+                                  inLayer: layerIndex > 0, inherited: profile.layers[layerIndex][d] == nil ? inherited(d).map(describe) : nil, sameTitle: "Nothing")
+                }
             }
         }
         if st.wrappedValue.mode == .mouse {
@@ -439,11 +582,14 @@ struct ControllerProfileEditor: View {
 
 struct BindingEditor: View {
     @Binding var binding: PadProfiles.Binding?
-    let input: PadProfiles.Input
+    /// The controller's button being set (nil: a device's).
+    let input: PadProfiles.Input?
     let family: Controllers.Family?
     let layers: [String]
     let inLayer: Bool
     var inherited: String? = nil
+    /// What "leave it" is called outside a layer.
+    var sameTitle = "Itself"
     @State private var more = false
 
     enum Kind: String, CaseIterable { case same, press, taps }
@@ -454,7 +600,7 @@ struct BindingEditor: View {
 
     var body: some View {
         Picker("Does", selection: Binding(get: { kind }, set: setKind)) {
-            Text(inLayer ? "As underneath" : "Itself").tag(Kind.same)
+            Text(inLayer ? "As underneath" : sameTitle).tag(Kind.same)
             Text("Something else").tag(Kind.press)
             Text("Tap / Hold").tag(Kind.taps)
         }
@@ -514,7 +660,7 @@ struct BindingEditor: View {
             binding = b
         case .taps:
             var b = binding ?? PadProfiles.Binding()
-            if b.tap.isEmpty { b.tap = b.press.isEmpty ? (input.isTrigger ? [.nothing] : [.pad(input)]) : b.press }
+            if b.tap.isEmpty { b.tap = b.press.isEmpty ? (input.map { $0.isTrigger || $0.isStickDirection ? [.nothing] : [.pad($0)] } ?? [.nothing]) : b.press }
             if b.hold.isEmpty { b.hold = [.nothing] }
             b.press = []; b.turbo = nil
             binding = b
@@ -746,5 +892,160 @@ struct CurveGraph: View {
         }
         .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.04)))
         .accessibilityLabel("Speed curve")
+    }
+}
+
+
+// MARK: - Devices combined with the controller
+
+/// The controller and the profile's other devices; pick one to show it, or add one that's connected.
+struct DeviceStrip: View {
+    @Binding var devices: [PadProfiles.Device]
+    @Binding var shown: String?
+    @Binding var selection: ControllerProfileEditor.Part
+    @ObservedObject var hid = HIDDevices.shared
+
+    var addable: [HIDDevices.Info] { hid.connected.filter { i in !devices.contains { i.matches($0) } } }
+
+    func chip(_ title: String, symbol: String, on: Bool, connected: Bool = true, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: symbol).font(.callout).lineLimit(1)
+                .padding(.horizontal, 9).padding(.vertical, 4)
+                .background(Capsule().fill(on ? Color.accentColor.opacity(0.25) : Color.secondary.opacity(0.12)))
+                .overlay(Capsule().stroke(on ? Color.accentColor : .clear, lineWidth: 1.5))
+                .opacity(connected ? 1 : 0.6)
+        }
+        .buttonStyle(.plain)
+    }
+
+    var body: some View {
+        FlowRow(spacing: 6) {
+            chip("Controller", symbol: "gamecontroller", on: shown == nil) { shown = nil; selection = .input(.a) }
+            ForEach(devices) { d in
+                let connected = hid.connected.contains { $0.matches(d) }
+                chip(d.name, symbol: d.isGamepad ? "gamecontroller" : "dial.medium", on: shown == d.id, connected: connected) {
+                    shown = d.id; selection = .deviceInput(d.id, "b0")
+                }
+                .help(connected ? d.productName : "\(d.productName) — not connected")
+            }
+            if devices.count < 4 {
+                Menu {
+                    if addable.isEmpty { Text("Connect a joystick, throttle, pedals, wheel or another controller") }
+                    ForEach(addable) { i in
+                        Button(i.name + (i.nth > 0 ? " (\(i.nth + 1))" : "")) {
+                            var d = i.device
+                            let same = devices.filter { $0.productName == d.productName }.count
+                            if same > 0 { d.name += " \(same + 1)" }
+                            devices.append(d); shown = d.id; selection = .deviceInput(d.id, "b0")
+                        }
+                    }
+                } label: { Label("Add Device", systemImage: "plus") }
+                .menuStyle(.borderlessButton).fixedSize()
+                .help("Combine a joystick, throttle, pedals, a wheel, a button box or another controller with this profile")
+            }
+        }
+        .onAppear { hid.start() }
+    }
+}
+
+/// One of the profile's devices: its buttons, hat and axes, lit up as you use them. Pressing or moving something
+/// on the device selects it.
+struct DevicePanel: View {
+    @Binding var device: PadProfiles.Device
+    @ObservedObject var tester: PadTester
+    let family: Controllers.Family?
+    @Binding var selection: ControllerProfileEditor.Part
+    let mapped: (String) -> Bool
+    let label: (String) -> String?
+    let remove: () -> Void
+    @ObservedObject var hid = HIDDevices.shared
+    @State private var confirmRemove = false
+
+    var connected: Bool { hid.connected.contains { $0.matches(device) } }
+
+    func chip(_ k: String) -> some View {
+        let held = tester.deviceHeld.contains(device.id + "." + k)
+        let isSel = selection == .deviceInput(device.id, k)
+        return Button { selection = .deviceInput(device.id, k) } label: {
+            VStack(spacing: 1) {
+                Text(device.inputTitle(k, family: family)).font(.caption).lineLimit(1)
+                if let l = label(k), l != "—" { Text(l).font(.system(size: 9, weight: .medium)).foregroundStyle(Color.accentColor) }
+            }
+            .padding(.horizontal, 7).padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 6).fill(held ? Color.accentColor.opacity(0.6) : mapped(k) ? Color.accentColor.opacity(0.2) : Color.secondary.opacity(0.12)))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(isSel ? Color.accentColor : .clear, lineWidth: 2))
+        }
+        .buttonStyle(.plain)
+    }
+
+    func axisRow(_ n: Int) -> some View {
+        let v = tester.deviceAxes[device.id + "." + String(n)] ?? 0
+        let a = device.axis(n)
+        let isSel = selection == .deviceAxis(device.id, n)
+        let what: String = {
+            switch a.mode {
+            case .off: return mapped("a\(n)p") || mapped("a\(n)n") ? "Buttons" : (device.isGamepad && device.joined == true ? "As the controller's" : "As it is")
+            case .stick: return (a.target ?? .lx).title(family)
+            case .mouse: return a.vertical == true ? "Mouse up and down" : "Mouse left and right"
+            }
+        }()
+        return Button { selection = .deviceAxis(device.id, n) } label: {
+            HStack(spacing: 8) {
+                Text(device.axisTitle(n, family: family)).font(.callout).frame(width: 120, alignment: .leading).lineLimit(1)
+                GeometryReader { g in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.secondary.opacity(0.15))
+                        Capsule().fill(Color.accentColor).frame(width: 4).offset(x: (CGFloat(v) + 1) / 2 * (g.size.width - 4))
+                    }
+                }
+                .frame(height: 8)
+                Text(what).font(.caption).foregroundStyle(.secondary).frame(width: 130, alignment: .trailing).lineLimit(1)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 5)
+            .background(RoundedRectangle(cornerRadius: 6).fill(isSel ? Color.accentColor.opacity(0.15) : Color.clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    TextField("Name", text: $device.name).textFieldStyle(.roundedBorder).frame(maxWidth: 220)
+                    Text(connected ? device.productName : "\(device.productName) · not connected").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer()
+                    Button("Remove", role: .destructive) { confirmRemove = true }
+                }
+                if device.isGamepad {
+                    Toggle("Part of the main controller", isOn: Binding(get: { device.joined == true }, set: { device.joined = $0 ? true : nil }))
+                    Text(device.joined == true
+                         ? "Buttons and sticks you don't set here do what the main controller's do, and games see one controller — for two halves held in each hand, or two controllers for one player."
+                         : "Only what you set here changes; games still see this controller on its own.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                Text("Buttons").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                FlowRow(spacing: 5) { ForEach(0..<device.buttons, id: \.self) { n in chip("b\(n)") } }
+                if device.hat {
+                    Text("Hat").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    FlowRow(spacing: 5) { ForEach(PadProfiles.Device.hatKeys, id: \.self) { k in chip(k) } }
+                }
+                if device.axisCount > 0 {
+                    Text(device.isGamepad ? "Sticks and triggers" : "Axes").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    VStack(spacing: 0) { ForEach(0..<device.axisCount, id: \.self) { n in axisRow(n) } }
+                }
+                Text(connected ? "Press a button or move an axis on the device to select it." : "Connect it to test it and select things by pressing them.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(4)
+        }
+        .onChange(of: tester.lastDeviceInput) { _, i in
+            guard let i, i.device == device.id else { return }
+            if i.key.hasPrefix("axis"), let n = Int(i.key.dropFirst(4)) { selection = .deviceAxis(device.id, n) }
+            else { selection = .deviceInput(device.id, i.key) }
+        }
+        .confirmationDialog("Remove \(device.name) from this profile?", isPresented: $confirmRemove) {
+            Button("Remove", role: .destructive, action: remove)
+        } message: { Text("What its buttons and axes were set to is removed too.") }
     }
 }

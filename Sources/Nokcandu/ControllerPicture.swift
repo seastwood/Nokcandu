@@ -13,6 +13,8 @@ struct ControllerPicture: View {
     var sticks: [CGPoint] { tester.sticks }
     let mapped: (PadProfiles.Input) -> Bool
     let label: (PadProfiles.Input) -> String?
+    /// What each stick does, when it isn't simply a stick ("Mouse", "WSAD"…).
+    var stickLabel: (Int) -> String? = { _ in nil }
 
     typealias I = PadProfiles.Input
     /// The drawn body's proportions (width ÷ height). Places are fractions of the body's box.
@@ -115,15 +117,19 @@ struct ControllerPicture: View {
         let selected = selection == .stick(s) || selection == .input(click)
         return Button { selection = .stick(s) } label: {
             ZStack {
-                Circle().fill(pressed.contains(click) ? Color.accentColor.opacity(0.5) : Color(nsColor: .controlBackgroundColor)).frame(width: 54, height: 54)
+                Circle().fill(pressed.contains(click) ? Color.accentColor.opacity(0.5) : stickLabel(s) != nil ? Color.accentColor.opacity(0.22) : Color(nsColor: .controlBackgroundColor)).frame(width: 54, height: 54)
                     .shadow(color: .black.opacity(0.15), radius: 1.5, y: 0.5)
                 Circle().stroke(selected ? Color.accentColor : Color.secondary.opacity(0.35), lineWidth: selected ? 2 : 0.5).frame(width: 54, height: 54)
                 Circle().fill(Color.primary.opacity(0.55)).frame(width: 12, height: 12).offset(x: p.x * 20, y: -p.y * 20)
-                if let l = label(click), l != "—" { Text(l).font(.system(size: 10, weight: .medium)).foregroundStyle(Color.accentColor).offset(y: 38) }
+                VStack(spacing: 0) {
+                    if let m = stickLabel(s) { Text(m).font(.system(size: 10, weight: .semibold)).foregroundStyle(Color.accentColor).lineLimit(1).fixedSize() }
+                    if let l = label(click), l != "—" { Text("click: " + l).font(.system(size: 9, weight: .medium)).foregroundStyle(Color.accentColor.opacity(0.85)).lineLimit(1).fixedSize() }
+                }
+                .offset(y: 42)
             }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(s == 0 ? "Left stick" : "Right stick")
+        .accessibilityLabel((s == 0 ? "Left stick" : "Right stick") + (stickLabel(s).map { ": \($0)" } ?? ""))
     }
 }
 
@@ -138,6 +144,21 @@ final class PadTester: ObservableObject {
     @Published var holding: [String] = []          // outputs held now
     @Published var dot = CGPoint(x: 0.5, y: 0.5)   // where the mouse would go (0…1, wraps)
     @Published var gyroSpeed = 0.0                  // degrees per second
+    /// The profile's devices: inputs held now ("<device id>.<key>"), axis positions (−1…1, "<id>.<n>"), and the
+    /// last thing pressed or moved on one (to pick it by pressing).
+    @Published var deviceHeld: Set<String> = []
+    @Published var deviceAxes: [String: Double] = [:]
+    @Published var lastDeviceInput: DeviceInput?
+    struct DeviceInput: Equatable { let device: String; let key: String; let at: Double }
+    private var axesPending: [String: Double] = [:], axesFlush = false
+    private lazy var feed: DeviceFeed = {
+        let f = DeviceFeed { [weak self] in self?.engine }
+        f.onInput = { [weak self] id, k, down in self?.deviceInput(id, k, down) }
+        f.onAxis = { [weak self] id, n, v in self?.deviceAxis(id, n, v) }
+        return f
+    }()
+    private var devices: [PadProfiles.Device] = []
+    private var padAxes: [Int: Int] = [:]
     @Published var controllerName: String?
     @Published var hasMotion = false
 
@@ -150,9 +171,12 @@ final class PadTester: ObservableObject {
     private var lastGyroShown = 0.0
     var family: Controllers.Family?
 
-    func start(profile text: String) {
+    func start(profile text: String, devices: [PadProfiles.Device] = []) {
         DesktopPad.testerOpen = true
-        reload(text)
+        reload(text, devices: devices)
+        observers.append(NotificationCenter.default.addObserver(forName: .hidDevicesChanged, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.attach() }
+        })
         GCController.shouldMonitorBackgroundEvents = true
         observers.append(NotificationCenter.default.addObserver(forName: .GCControllerDidConnect, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.attach() }
@@ -169,17 +193,23 @@ final class PadTester: ObservableObject {
         timer?.invalidate(); timer = nil
         observers.forEach(NotificationCenter.default.removeObserver); observers = []
         for c in GCController.controllers() { c.extendedGamepad?.valueChangedHandler = nil; c.motion?.valueChangedHandler = nil }
+        feed.stop()
         if let e = engine { pe_destroy(e) }; engine = nil
         DesktopPad.testerOpen = false
         DesktopPad.shared.attach()
     }
-    func reload(_ text: String) {
+    func reload(_ text: String, devices: [PadProfiles.Device]? = nil) {
         if let e = engine { pe_release_all(e, Self.now()); pe_destroy(e) }
-        held = [:]; holding = []
+        held = [:]; holding = []; padAxes = [:]
+        if let devices, devices != self.devices {
+            self.devices = devices
+            feed.set(devices, always: true)
+            attach()
+        }
         var sink = pe_sink()
         sink.ctx = Unmanaged.passUnretained(self).toOpaque()
         sink.pad_button = { c, b, d in PadTester.of(c).out("pad:" + String(cString: pe_input_name(b)), d) }
-        sink.pad_axis = { _, _, _ in }
+        sink.pad_axis = { c, a, v in PadTester.of(c).axisOut(Int(a), Int(v)) }
         sink.key = { c, k, d in PadTester.of(c).out("key:\(k)", d) }
         sink.mouse_button = { c, b, d in PadTester.of(c).out("mouse:\(["left", "right", "middle", "back", "forward"][Int(b)])", d) }
         sink.mouse_move = { c, x, y in PadTester.of(c).move(Int(x), Int(y)) }
@@ -212,10 +242,46 @@ final class PadTester: ObservableObject {
         }
     }
 
-    func title(_ token: String) -> String { PadProfiles.Output(token: token)?.title(family) ?? token }
+    /// A stick or trigger the game would see moved (from a device's axis, or the gyro as a stick).
+    nonisolated func axisOut(_ a: Int, _ v: Int) {
+        MainActor.assumeIsolated {
+            let was = abs(padAxes[a] ?? 0) > 9000, now = abs(v) > 9000
+            padAxes[a] = v
+            if was != now { out("axis:\(a)", now) }
+        }
+    }
+    private func deviceInput(_ id: String, _ k: String, _ down: Bool) {
+        let key = id + "." + k
+        if down { if !deviceHeld.contains(key) { deviceHeld.insert(key) }; lastDeviceInput = DeviceInput(device: id, key: k, at: Self.now()) }
+        else if deviceHeld.contains(key) { deviceHeld.remove(key) }
+    }
+    private func deviceAxis(_ id: String, _ n: Int, _ v: Double) {
+        let key = id + "." + String(n), old = deviceAxes[key] ?? 0
+        // Moved well away from where it was: that's the axis being picked (a resting pedal or throttle doesn't count).
+        if abs(v - old) > 0.5 && abs(v) > 0.5 { lastDeviceInput = DeviceInput(device: id, key: "axis\(n)", at: Self.now()) }
+        axesPending[key] = (v * 50).rounded() / 50
+        guard !axesFlush else { return }
+        axesFlush = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self else { return }
+            self.axesFlush = false
+            var a = self.deviceAxes
+            for (k, v) in self.axesPending { a[k] = v }
+            self.axesPending = [:]
+            if a != self.deviceAxes { self.deviceAxes = a }
+        }
+    }
+
+    func title(_ token: String) -> String {
+        if token.hasPrefix("axis:"), let a = Int(token.dropFirst(5)) {
+            return ["Left stick", "Left stick", "Right stick", "Right stick", PadProfiles.Input.lt.title(family), PadProfiles.Input.rt.title(family)][min(max(a, 0), 5)]
+        }
+        return PadProfiles.Output(token: token)?.title(family) ?? token
+    }
 
     private func attach() {
-        let c = GCController.controllers().first { $0.extendedGamepad != nil }
+        feed.attachGamepads()
+        let c = feed.mainControllers().first
         controllerName = c?.vendorName
         guard let c, let gp = c.extendedGamepad else { hasMotion = false; return }
         gp.valueChangedHandler = { [weak self] pad, _ in
