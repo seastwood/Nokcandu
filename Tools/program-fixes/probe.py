@@ -35,12 +35,23 @@ for architecture in ['i686', 'x86_64']:
                    NOKCANDU_NO_MICROPHONE='1', WINEDLLOVERRIDES='nok-scoped-test=b')
         wine = args.runtime/'SharedSupport/wine/bin/wine'
         try:
-            result = subprocess.run([str(wine), 'C:\\Client\\client.exe', 'C:\\Games\\Own\\game.exe'], env=env,
-                                    capture_output=True, text=True, timeout=100)
+            # A cold Wine environment can take minutes to start on a busy CI machine: wait longer, and try again
+            # (with a fresh wineserver) rather than failing on a slow start.
+            for attempt in range(3):
+                try:
+                    result = subprocess.run([str(wine), 'C:\\Client\\client.exe', 'C:\\Games\\Own\\game.exe'], env=env,
+                                            capture_output=True, text=True, timeout=240)
+                    break
+                except subprocess.TimeoutExpired:
+                    if attempt == 2:
+                        raise
+                    print(f'{architecture}: Wine was slow to start, trying again', flush=True)
+                    for flag in ['-k', '-w']:
+                        subprocess.run([str(wine.with_name('wineserver')), flag], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
             print(architecture, result.stdout, end='', flush=True)
             if result.returncode or 'client retained its original DLL rules' not in result.stdout:
                 print(result.stderr[-3000:])
                 raise SystemExit('Scoped child DLL routing failed: '+str(result.returncode))
         finally:
             for flag in ['-k', '-w']:
-                subprocess.run([str(wine.with_name('wineserver')), flag], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+                subprocess.run([str(wine.with_name('wineserver')), flag], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)

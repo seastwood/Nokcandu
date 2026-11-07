@@ -17,10 +17,12 @@ typedef struct { uint32_t type, timestamp; int32_t which; uint8_t button, state,
 typedef struct { uint32_t type, timestamp; int32_t which; uint8_t axis, p1, p2, p3; int16_t value; uint16_t p4; } nok_sdl_caxis;
 typedef struct { uint32_t type, timestamp; int32_t which; int32_t sensor; float data[3]; } nok_sdl_csensor;
 typedef struct { uint32_t type, timestamp; int32_t which; uint8_t hat, value, p1, p2; } nok_sdl_jhat;
+typedef struct { uint32_t type, timestamp; int32_t which; int32_t touchpad, finger; float x, y, pressure; } nok_sdl_ctouch;
 // Joystick events have the same layout as the controller's: axis like caxis, buttons like cbutton.
-typedef union { uint32_t type; nok_sdl_cbutton cbutton; nok_sdl_caxis caxis; nok_sdl_csensor csensor; nok_sdl_jhat jhat; uint8_t pad[56]; } nok_sdl_event;
+typedef union { uint32_t type; nok_sdl_cbutton cbutton; nok_sdl_caxis caxis; nok_sdl_csensor csensor; nok_sdl_jhat jhat; nok_sdl_ctouch ctouch; uint8_t pad[56]; } nok_sdl_event;
 enum { NOK_SDL_CAXIS = 0x650, NOK_SDL_CBDOWN = 0x651, NOK_SDL_CBUP = 0x652, NOK_SDL_CADDED = 0x653, NOK_SDL_CREMOVED = 0x654,
-       NOK_SDL_CSENSOR = 0x659, NOK_SDL_SENSOR_GYRO = 2,
+       NOK_SDL_CSENSOR = 0x659, NOK_SDL_SENSOR_GYRO = 2, NOK_SDL_SENSOR_ACCEL = 1,
+       NOK_SDL_CTOUCHDOWN = 0x656, NOK_SDL_CTOUCHMOTION = 0x657, NOK_SDL_CTOUCHUP = 0x658,
        NOK_SDL_JAXIS = 0x600, NOK_SDL_JHAT = 0x602, NOK_SDL_JBDOWN = 0x603, NOK_SDL_JBUP = 0x604, NOK_SDL_JADDED = 0x605, NOK_SDL_JREMOVED = 0x606 };
 
 // Messages from the driver to the game process.
@@ -180,11 +182,22 @@ static bool pad_changed(const char *path, time_t *mt, long *ns) {
     if (st.st_mtimespec.tv_sec == *mt && st.st_mtimespec.tv_nsec == *ns) return false;
     *mt = st.st_mtimespec.tv_sec; *ns = st.st_mtimespec.tv_nsec; return true;
 }
+// Nokcandu touches this to calibrate the gyro (its keyboard shortcut).
+static time_t pad_cal_mtime; static long pad_cal_ns; static bool pad_cal_seen;
+static void pad_check_calibrate(double now) {
+    char path[PATH_MAX]; const char *home = getenv("HOME");
+    if (!home) return;
+    snprintf(path, sizeof path, "%s/Library/Application Support/Nokcandu/controller-calibrate", home);
+    bool changed = pad_changed(path, &pad_cal_mtime, &pad_cal_ns);
+    if (changed && pad_cal_seen && pad_cal_mtime) for (int i = 0; i < PAD_MAX; i++) if (pads[i].used) pe_calibrate(pads[i].e, now);
+    pad_cal_seen = true;
+}
 // Which profile applies now: the one the game in front asked for (re-read when it or the profile changes).
 static void pad_check(void) {
     double now = pad_now();
     if (now - pad_last_check < 0.2) return;
     pad_last_check = now;
+    pad_check_calibrate(now);
     char active[PATH_MAX]; snprintf(active, sizeof active, "%s/pad-active", pad_state_dir);
     bool changed = pad_changed(active, &pad_active_mtime, &pad_active_ns);
     if (changed) {
@@ -277,6 +290,7 @@ static int nok_wait(nok_sdl_event *ev, int timeout) {
             pe_engine *e = pad_engine_for(ev->csensor.which, true);
             if (ev->csensor.sensor == NOK_SDL_SENSOR_GYRO) { st_gyro++; st_gx = ev->csensor.data[0]; st_gy = ev->csensor.data[1]; st_gz = ev->csensor.data[2]; }
             if (e && ev->csensor.sensor == NOK_SDL_SENSOR_GYRO) pe_gyro(e, ev->csensor.data[0], ev->csensor.data[1], ev->csensor.data[2], now);
+            if (e && ev->csensor.sensor == NOK_SDL_SENSOR_ACCEL) pe_accel(e, ev->csensor.data[0], ev->csensor.data[1], ev->csensor.data[2], now);
             r = 0; break; }
         case NOK_SDL_CBDOWN: case NOK_SDL_CBUP: {
             pe_engine *e = pad_engine_for(ev->cbutton.which, true);
@@ -287,6 +301,11 @@ static int nok_wait(nok_sdl_event *ev, int timeout) {
             pe_engine *e = pad_engine_for(ev->caxis.which, true);
             st_axes++;
             if (e) { pe_axis(e, ev->caxis.axis, ev->caxis.value, now); r = 0; }
+            break; }
+        case NOK_SDL_CTOUCHDOWN: case NOK_SDL_CTOUCHMOTION: case NOK_SDL_CTOUCHUP: {
+            pe_engine *e = pad_engine_for(ev->ctouch.which, true);
+            if (e && pe_uses_touch(e) && ev->ctouch.touchpad == 0)
+                pe_touch(e, ev->ctouch.finger, ev->type != NOK_SDL_CTOUCHUP, ev->ctouch.x, ev->ctouch.y, now);
             break; }
         case NOK_SDL_CREMOVED:
             slot_cached = 0;
@@ -302,7 +321,7 @@ static int nok_wait(nok_sdl_event *ev, int timeout) {
 
 static void *nok_open(int index) {
     void *c = real_open(index);
-    if (c && real_sensor) st_sensor_ok = real_sensor(c, NOK_SDL_SENSOR_GYRO, 1) == 0;      // gyro on, for profiles that use it
+    if (c && real_sensor) { st_sensor_ok = real_sensor(c, NOK_SDL_SENSOR_GYRO, 1) == 0; real_sensor(c, NOK_SDL_SENSOR_ACCEL, 1); }   // gyro (and tilt) on, for profiles that use them
     fprintf(stderr, "nokcandu: controller %d opened; gyro %s\n", index, st_sensor_ok ? "on" : real_sensor ? "not available" : "unknown");
     return c;
 }

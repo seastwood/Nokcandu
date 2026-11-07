@@ -15,6 +15,17 @@ final class DesktopPad: ObservableObject {
     static let shared = DesktopPad()
 
     static let onKey = "desktopPadOn", profileKey = "desktopPadProfile", rulesKey = "desktopPadApps", masterKey = "padProfilesOff"
+    static let controllerRulesKey = "desktopPadControllers", calibrateKeyKey = "padCalibrateShortcut"
+    /// Controller name → the profile the Mac uses while it's connected.
+    @Published var controllerRules: [String: String] = (UserDefaults.standard.dictionary(forKey: controllerRulesKey) as? [String: String]) ?? [:] {
+        didSet { UserDefaults.standard.set(controllerRules, forKey: Self.controllerRulesKey); evaluate(force: true) }
+    }
+    /// A keyboard shortcut that calibrates the gyro (key code and modifier flags), anywhere.
+    @Published var calibrateShortcut: [Int]? = UserDefaults.standard.array(forKey: calibrateKeyKey) as? [Int] {
+        didSet { UserDefaults.standard.set(calibrateShortcut, forKey: Self.calibrateKeyKey) }
+    }
+    /// Windows games' controller drivers watch this file: touching it calibrates there too.
+    static var calibrateFile: URL { NokPaths.support.appendingPathComponent("controller-calibrate") }
     @Published var on: Bool = UserDefaults.standard.bool(forKey: onKey) { didSet { UserDefaults.standard.set(on, forKey: Self.onKey); evaluate() } }
     @Published var profileID: String? = UserDefaults.standard.string(forKey: profileKey) { didSet { UserDefaults.standard.set(profileID, forKey: Self.profileKey); evaluate(force: true) } }
     /// App bundle id → profile id, or "off".
@@ -85,8 +96,9 @@ final class DesktopPad: ObservableObject {
         started = true
         GCController.shouldMonitorBackgroundEvents = true
         let nc = NotificationCenter.default
-        observers.append(nc.addObserver(forName: .GCControllerDidConnect, object: nil, queue: .main) { _ in MainActor.assumeIsolated { DesktopPad.shared.attach() } })
-        observers.append(nc.addObserver(forName: .GCControllerDidDisconnect, object: nil, queue: .main) { _ in MainActor.assumeIsolated { DesktopPad.shared.attach() } })
+        observers.append(nc.addObserver(forName: .GCControllerDidConnect, object: nil, queue: .main) { _ in MainActor.assumeIsolated { DesktopPad.shared.attach(); DesktopPad.shared.evaluate() } })
+        observers.append(nc.addObserver(forName: .GCControllerDidDisconnect, object: nil, queue: .main) { _ in MainActor.assumeIsolated { DesktopPad.shared.attach(); DesktopPad.shared.evaluate() } })
+        watchShortcut()
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { DesktopPad.shared.evaluate() }
             // A game says it uses its own profile a moment after it comes to the front.
@@ -146,6 +158,8 @@ final class DesktopPad: ObservableObject {
         } else if let rule = rules[id] {
             if rule == "off" { status = "Off for \(front?.localizedName ?? "this app")" }
             else if let p = all.first(where: { $0.id == rule }) { chosen = p; status = "\(front?.localizedName ?? "This app"): \(p.name)" }
+        } else if on, let linked = linkedProfile(all) {
+            chosen = linked.1; status = "\(linked.0): \(linked.1.name)"
         } else if on, let p = profileID.flatMap({ pid in all.first { $0.id == pid } }) {
             chosen = p; status = "Mac: \(p.name)"
         } else { status = on ? "Mac: no profile chosen" : "Waiting for a game" }
@@ -156,6 +170,11 @@ final class DesktopPad: ObservableObject {
         let text = (chosen != nil && trusted) ? PadProfiles.compile(chosen!, all: all) : ""
         if text == compiled && !force { return }
         layerNames = chosen.map { PadProfiles.merged($0, all: all).layers.map(\.name) } ?? []
+        let settings = chosen.map { PadProfiles.layerSettings($0, all: all) } ?? [:]
+        layerColors = layerNames.enumerated().map { i, n in settings[i == 0 ? "base" : n.lowercased()]?.color }
+        rumble = chosen.flatMap { PadProfiles.top($0, all: all, \.rumbleOnLayer) } ?? false
+        menus = chosen.map { Array(PadProfiles.collected($0, all: all, \.menus).prefix(8)) } ?? []
+        PadFeedback.shared.light(layerColors.first ?? nil, feed.mainControllers())
         shownLayer = 0; shownGyro = chosen.map { PadProfiles.merged($0, all: all).gyro.output == .off ? -1 : (PadProfiles.merged($0, all: all).gyro.startsOn ? 1 : 0) } ?? -1
         compiled = text
         feed.set(text.isEmpty ? [] : chosen.map { PadProfiles.devices($0, all: all) } ?? [])
@@ -176,6 +195,9 @@ final class DesktopPad: ObservableObject {
         sink.mouse_move = { _, x, y in MainActor.assumeIsolated { DesktopPad.shared.move(Int(x), Int(y)) } }
         sink.wheel = { _, n in MainActor.assumeIsolated { DesktopPad.shared.wheel(Int(n)) } }
         sink.state = { _, l, g in MainActor.assumeIsolated { DesktopPad.shared.stateChanged(layer: Int(l), gyro: Int(g)) } }
+        sink.text = { _, t in let s = t.map { String(cString: $0) } ?? ""; MainActor.assumeIsolated { DesktopPad.shared.typeText(s) } }
+        sink.menu = { _, m, sl in MainActor.assumeIsolated { DesktopPad.shared.menuChanged(Int(m), Int(sl)) } }
+        sink.calibration = { _, p in MainActor.assumeIsolated { PadHUD.shared.calibration(p) } }
         engine = compiled.withCString { pe_create($0, sink) }
         attach()
     }
@@ -183,8 +205,13 @@ final class DesktopPad: ObservableObject {
     /// Names of the active profile's layers (index = the engine's layer number).
     private var layerNames: [String] = []
     private var shownLayer = 0, shownGyro = -1
+    private var layerColors: [String?] = []
+    private var rumble = false
+    private var menus: [PadProfiles.RadialMenu] = []
     func stateChanged(layer: Int, gyro: Int) {
         if layer != shownLayer {
+            if rumble { PadFeedback.shared.rumble(feed.mainControllers()) }
+            PadFeedback.shared.light((layerColors.indices.contains(layer) ? layerColors[layer] : nil) ?? layerColors.first ?? nil, feed.mainControllers())
             let name = layerNames.indices.contains(layer) ? layerNames[layer] : "Layer \(layer)"
             PadHUD.shared.show(layer == 0 ? "Base layer" : name, symbol: layer == 0 ? "square.stack" : "square.stack.3d.up.fill")
         } else if gyro != shownGyro, gyro >= 0, shownGyro >= 0 {
@@ -194,6 +221,61 @@ final class DesktopPad: ObservableObject {
     }
 
     private func tick() { if let e = engine { pe_tick(e, Self.now()) } }
+
+    // MARK: Macros' text, radial menus, the on-screen keyboard, calibration
+
+    func typeText(_ s: String) {
+        for ch in s {
+            let u = Array(String(ch).utf16)
+            for down in [true, false] {
+                guard let ev = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: down) else { continue }
+                ev.keyboardSetUnicodeString(stringLength: u.count, unicodeString: u)
+                ev.post(tap: .cghidEventTap)
+            }
+        }
+    }
+    func tapKey(_ k: Int) { key(k, true); key(k, false) }
+    func menuChanged(_ m: Int, _ slice: Int) {
+        if m == Int(PE_RUMBLE_MENU) { PadFeedback.shared.rumble(feed.mainControllers(), strong: true); return }
+        if m == Int(PE_KEYBOARD_MENU) {
+            let held = Set(lastButtons.filter(\.value).compactMap { PadProfiles.Input(rawValue: String(cString: pe_input_name(Int32($0.key)))) })
+            OnScreenKeyboard.shared.type = { DesktopPad.shared.typeText($0) }
+            OnScreenKeyboard.shared.key = { DesktopPad.shared.tapKey($0) }
+            OnScreenKeyboard.shared.toggle(pressed: held)
+            return
+        }
+        guard menus.indices.contains(m) else { return }
+        if slice == -2 { RadialHUD.shared.close() }
+        else if slice == -1 { RadialHUD.shared.open(menus[m]) }
+        else { RadialHUD.shared.update(slice) }
+    }
+    /// Calibrates the gyro now: here, and inside running Windows games.
+    func calibrate() {
+        if let e = engine { pe_calibrate(e, Self.now()) } else { PadHUD.shared.show("No gyro profile running", symbol: "gyroscope") }
+        try? NokPaths.ensure(NokPaths.support)
+        try? Data(String(Date().timeIntervalSince1970).utf8).write(to: Self.calibrateFile, options: .atomic)
+    }
+    private var shortcutMonitors: [Any] = []
+    func watchShortcut() {
+        guard shortcutMonitors.isEmpty else { return }
+        let check: (NSEvent) -> Bool = { e in
+            MainActor.assumeIsolated {
+                guard let sc = DesktopPad.shared.calibrateShortcut, sc.count == 2, Int(e.keyCode) == sc[0],
+                      Int(e.modifierFlags.intersection([.command, .option, .control, .shift]).rawValue) == sc[1] else { return false }
+                DesktopPad.shared.calibrate(); return true
+            }
+        }
+        if let g = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: { e in _ = check(e) }) { shortcutMonitors.append(g) }
+        if let l = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { e in check(e) ? nil : e }) { shortcutMonitors.append(l) }
+    }
+    /// A profile linked to a connected controller.
+    func linkedProfile(_ all: [PadProfiles.Profile]) -> (String, PadProfiles.Profile)? {
+        for c in GCController.controllers() {
+            guard let n = c.vendorName, let id = controllerRules[n], let p = all.first(where: { $0.id == id }) else { continue }
+            return (n, p)
+        }
+        return nil
+    }
     nonisolated static func now() -> Double { ProcessInfo.processInfo.systemUptime }
 
     /// The profile editor's live test reads the controller while it's open; the Mac profile waits until it closes.
@@ -217,8 +299,16 @@ final class DesktopPad: ObservableObject {
                 if m.sensorsRequireManualActivation { m.sensorsActive = true }
                 m.valueChangedHandler = { motion in
                     let r = motion.rotationRate
-                    MainActor.assumeIsolated { if let e = DesktopPad.shared.engine { pe_gyro(e, Float(r.x), Float(r.y), Float(r.z), DesktopPad.now()) } }
+                    let a = motion.hasGravityAndUserAcceleration ? motion.gravity : motion.acceleration
+                    MainActor.assumeIsolated {
+                        guard let e = DesktopPad.shared.engine else { return }
+                        pe_gyro(e, Float(r.x), Float(r.y), Float(r.z), DesktopPad.now())
+                        if pe_uses_tilt(e) { pe_accel(e, Float(a.x), Float(a.y), Float(a.z), DesktopPad.now()) }
+                    }
                 }
+            }
+            PadGC.watchTouchpads(c) { f, down, x, y in
+                MainActor.assumeIsolated { if let e = DesktopPad.shared.engine { pe_touch(e, Int32(f), down, x, y, DesktopPad.now()) } }
             }
         }
     }
@@ -226,6 +316,10 @@ final class DesktopPad: ObservableObject {
     private func read(_ g: GCExtendedGamepad) {
         guard let e = engine else { return }
         let (buttons, axes) = PadGC.state(g)
+        if OnScreenKeyboard.shared.isOpen {
+            OnScreenKeyboard.shared.handle(Set(buttons.filter(\.1).map(\.0)), stick: CGPoint(x: Double(g.leftThumbstick.xAxis.value), y: Double(g.leftThumbstick.yAxis.value)))
+            return
+        }
         let now = Self.now()
         for (i, down) in buttons {
             let n = Int(pe_input_named(i.rawValue))

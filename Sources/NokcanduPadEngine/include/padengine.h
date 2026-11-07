@@ -17,7 +17,11 @@ enum {
     PE_LT = PE_PAD_BUTTONS, PE_RT, PE_LT_FULL, PE_RT_FULL,
     // A stick's four directions, when the stick is set to work as them ("stick N mode=dirs").
     PE_LS_UP, PE_LS_DOWN, PE_LS_LEFT, PE_LS_RIGHT, PE_RS_UP, PE_RS_DOWN, PE_RS_LEFT, PE_RS_RIGHT,
-    PE_INPUTS                               // 33
+    // The touchpad's four zones (top left, top right, bottom left, bottom right): touched, and clicked.
+    PE_TZ1, PE_TZ2, PE_TZ3, PE_TZ4, PE_TC1, PE_TC2, PE_TC3, PE_TC4,
+    // Tilting the controller (gyro controllers).
+    PE_TILT_LEFT, PE_TILT_RIGHT, PE_TILT_FWD, PE_TILT_BACK,
+    PE_INPUTS                               // 45
 };
 // Axes: SDL2's order. Sticks -32768…32767 (y down), triggers 0…32767.
 enum { PE_AXIS_LX, PE_AXIS_LY, PE_AXIS_RX, PE_AXIS_RY, PE_AXIS_LT, PE_AXIS_RT, PE_AXES };
@@ -33,6 +37,14 @@ typedef struct {
     void (*wheel)(void *ctx, int clicks);           // + up, − down
     /// The top active layer (0 = base) or the gyro's on/off changed. gyro: −1 not used, 0 off, 1 on. Optional.
     void (*state)(void *ctx, int layer, int gyro);
+    /// A macro types text (UTF-8). Optional.
+    void (*text)(void *ctx, const char *utf8);
+    /// A radial menu opened, pointed at a slice, or closed: slice −1 nothing yet, −2 closed (its choice, if any, has
+    /// been carried out). Menu PE_KEYBOARD_MENU with slice 1: the on-screen keyboard was asked for. Optional.
+    void (*menu)(void *ctx, int menu, int slice);
+    /// Gyro calibration: 0…1 while it's measuring (keep the controller still), 1 when done, −1 when it was moved
+    /// and starts over. Optional.
+    void (*calibration)(void *ctx, float progress);
 } pe_sink;
 
 typedef struct pe_engine pe_engine;
@@ -54,6 +66,15 @@ void pe_tick(pe_engine *e, double now);
 double pe_next_deadline(const pe_engine *e);
 /// Whether the engine wants gyro data (some binding or setting uses it).
 bool pe_uses_gyro(const pe_engine *e);
+enum { PE_KEYBOARD_MENU = 255, PE_RUMBLE_MENU = 254 };   // sink.menu ids: the on-screen keyboard, a rumble
+/// The touchpad: finger 0 or 1 touching (or lifted), at x, y 0…1 (y down).
+void pe_touch(pe_engine *e, int finger, bool down, float x, float y, double now);
+bool pe_uses_touch(const pe_engine *e);
+/// The accelerometer (any unit; only its direction counts), the gyro's axes: x right, y up out of the face, z towards you.
+void pe_accel(pe_engine *e, float x, float y, float z, double now);
+bool pe_uses_tilt(const pe_engine *e);
+/// Measures the gyro's resting drift now (2 seconds; put the controller down or hold it still).
+void pe_calibrate(pe_engine *e, double now);
 
 // MARK: Extra devices (joysticks, throttles, pedals, wheels, button boxes, a second controller)
 // A profile can combine up to PE_MAX_DEVICES more devices (slots 1…4) with the controller. Their buttons, hat and

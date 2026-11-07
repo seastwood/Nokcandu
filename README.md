@@ -54,11 +54,19 @@ that's fine — you never have to install a game in Nokcandu to use it.
   The picture shows what each stick does.
 - **Sticks and gyro as a mouse** — separate X and Y sensitivity, response curves, edge acceleration, and gyro yaw and roll amounts.
   The gyro can be switched on, off or held with any button.
-- **Layers** — hold or toggle a button to switch to another layer. Layers inherit the base layer, so you only change what's different.
-  A short note on screen shows which layer or gyro mode you switched into (it can be turned off in Settings).
+- **Layers** — hold or toggle a button to switch to another layer. Layers inherit the base layer, so you only change what's different,
+  and a layer can have its own stick and gyro settings (a slower aim layer, a scrolling layer). A short note on screen shows
+  which layer or gyro mode you switched into, the controller can rumble, and a DualSense or DualShock 4 can change colour per layer.
+- **Gyro made for aiming** — a One Euro filter (steady when slow, no lag on flicks), calibration when you set the controller down
+  or on a button, combination or keyboard shortcut (with a progress bar on screen), and tilting the controller as four more buttons.
+- **Touchpad** (DualSense, DualShock 4) — as a mouse with two-finger scrolling, scrolling, or four zones you can touch and click.
+- **Macros, sequences and radial menus** — keys with pauses and typed text from one press; button sequences like up-up-down;
+  hold a button and point a stick to pick from a ring of up to eight choices. There's an on-screen keyboard for typing with the
+  controller, and a button can rumble the controller.
 - **Quick Setup** — swap A/B and X/Y in one click; Xbox, PlayStation and Nintendo button labels, remembered per controller.
-- **Live test** — see exactly what the game will get as you press buttons.
-- **Profiles that build on each other**, duplicate, rename and right-click to activate.
+- **Live test** — see exactly what the game will get as you press buttons, and test the rumble.
+- **Profiles that build on each other**, duplicate, rename, right-click to activate, undo and redo, and share a profile as a file
+  or as text to paste.
 
 **Where a profile applies**
 
@@ -67,6 +75,7 @@ that's fine — you never have to install a game in Nokcandu to use it.
   particular apps (handy for games from other launchers).
 - **Use Everywhere** — activate any profile for every app and game until you stop it, from the profile's page, its right-click
   menu or the menu bar (for streaming, or trying a profile without a game).
+- **A controller can pick the profile** — the Mac can use a different profile while a particular controller is connected.
 - **One switch turns it all off** (Profiles tab, Settings or the menu bar), so your controller works untouched.
 
 Using a profile outside Windows games needs Accessibility access (macOS asks the first time), and Nokcandu can open at login

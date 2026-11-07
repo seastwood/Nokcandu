@@ -1,3 +1,4 @@
+import UniformTypeIdentifiers
 import SwiftUI
 import NokcanduCore
 
@@ -66,6 +67,9 @@ struct ProfilesSidebar: View {
                     Button("Blank Profile") { newPad(PadProfiles.Profile(name: "New Profile")) }
                     Divider()
                     ForEach(PadProfiles.starters() + [PadProfiles.desktopStarter()]) { s in Button(s.name) { newPad(s) } }
+                    Divider()
+                    Button("Import from File…") { ProfileActions.importFile(model: model) }
+                    Button("Paste Shared Profile") { ProfileActions.importText(NSPasteboard.general.string(forType: .string) ?? "", model: model) }
                 } label: { Label("New Controller Profile", systemImage: "plus.circle") }
                 // Both rows are menus of the same style, so they line up exactly.
                 Menu {
@@ -218,6 +222,33 @@ enum ProfileActions {
         model.profileSelection = "pad:" + c.id
         model.say("Made \(n). Change it, then choose it on the other game's Controls tab.")
     }
+    @MainActor static func copy(_ p: PadProfiles.Profile, model: AppModel) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(PadProfiles.exportText(p, all: PadProfiles.profiles()), forType: .string)
+        model.say("Copied \(p.name). Paste it into a message; the other person chooses New Controller Profile → Paste Shared Profile.")
+    }
+    @MainActor static func export(_ p: PadProfiles.Profile, model: AppModel) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = p.name + ".nokpad.json"
+        panel.allowedContentTypes = [.json]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do { try Data(PadProfiles.exportText(p, all: PadProfiles.profiles()).utf8).write(to: url, options: .atomic); model.say("Saved \(p.name) as \(url.lastPathComponent).") }
+        catch { model.fail(error) }
+    }
+    @MainActor static func importFile(model: AppModel) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json, .plainText]
+        guard panel.runModal() == .OK, let url = panel.url, let text = try? String(contentsOf: url, encoding: .utf8) else { return }
+        importText(text, model: model)
+    }
+    @MainActor static func importText(_ text: String, model: AppModel) {
+        do {
+            let new = try PadProfiles.importText(text, existing: PadProfiles.profiles())
+            for p in new { try PadProfiles.store(p, environments: []) }
+            NotificationCenter.default.post(name: .padProfilesChanged, object: nil)
+            if let last = new.last { model.profileSelection = "pad:" + last.id; model.say("Added \(last.name).") }
+        } catch { model.fail(error) }
+    }
     @MainActor static func setDefault(_ p: PadProfiles.Profile?, model: AppModel) {
         do {
             try PadProfiles.setDefault(p, environments: KeyRemap.environments(model.games), shared: KeyRemap.sharedFolders(model.games))
@@ -279,6 +310,12 @@ struct PadProfilePage: View {
                     .disabled(pad.profileID == profile.id && pad.on)
                 Button("Duplicate") { ProfileActions.duplicate(profile, model: model) }
                     .help("A copy to change for another game, leaving this one as it is.")
+                Menu("Share") {
+                    Button("Copy to Clipboard") { ProfileActions.copy(profile, model: model) }
+                    Button("Save as File…") { ProfileActions.export(profile, model: model) }
+                }
+                .fixedSize()
+                .help("Send this profile to someone: they add it with New Controller Profile → Import.")
                 Button(PadProfiles.defaultID() == profile.id ? "Stop Using as Default" : "Set as Default") {
                     ProfileActions.setDefault(PadProfiles.defaultID() == profile.id ? nil : profile, model: model)
                 }

@@ -461,3 +461,54 @@ final class PadStickDirectionTests: XCTestCase {
         XCTAssertFalse(PadProfiles.Input.padButtons.contains(.rsleft))
     }
 }
+
+final class PadExtrasTests: XCTestCase {
+    func testLayersMacrosSequencesMenusTouchTiltCompileAndRun() {
+        var p = PadProfiles.Profile(name: "All")
+        p.rightStick = { var s = PadProfiles.Stick(mode: .mouse); s.speed = 1000; s.curve = 1; s.deadzone = 0; return s }()
+        var aim = PadProfiles.Layer(name: "Aim")
+        aim.rightStick = { var s = PadProfiles.Stick(mode: .mouse); s.speed = 100; s.curve = 1; s.deadzone = 0; return s }()
+        p.layers.append(aim)
+        p.base[.lb] = .as(.layerHold("Aim"))
+        let mac = PadProfiles.Macro(name: "Hi", steps: [.init(.press, output: .key(4)), .init(.wait, ms: 50), .init(.text, text: "gg")])
+        p.macros = [mac]
+        p.base[.a] = .as(.macro(mac.id))
+        p.sequences = [PadProfiles.Sequence(name: "Konami", inputs: [.up, .up, .down], outputs: [.key(5)])]
+        let menu = PadProfiles.RadialMenu(name: "Buy", stick: 1, slices: [.init(title: "One", outputs: [.key(18)]), .init(title: "Two", outputs: [.key(19)])])
+        p.menus = [menu]
+        p.base[.rb] = .as(.menu(menu.id))
+        p.base[.back] = .as(.calibrate)
+        p.touchpad = PadProfiles.Touchpad(mode: .zones)
+        p.base[.tz1] = .as(.key(6))
+        p.tilt = PadProfiles.Tilt()
+        p.base[.tiltright] = .as(.key(7))
+        let text = PadProfiles.compile(p, all: [p])
+        for want in ["stick 1 mode=mouse", "layer=1", "macro 0 down:key:4 wait:30 up:key:4 wait:50 text:6767", "seq 0 in=up,up,down", "menu 0 stick=1 s0=key:18 s1=key:19",
+                     "bind 0 a press=macro:0", "bind 0 rb press=menu:0", "bind 0 back press=calibrate", "touch mode=zones", "tilt angle=30", "bind 0 tz1 press=key:6", "bind 0 tiltright press=key:7"] {
+            XCTAssertTrue(text.contains(want), want + "\n" + text)
+        }
+        let r = PadRecorder(String(text.dropFirst("nokpad 1\n".count)))
+        r.press("a", true, 1); r.press("a", false, 1.01)
+        r.tick(1.2)
+        XCTAssertEqual(Array(r.take().prefix(2)), ["key 4 down", "key 4 up"])
+        r.press("up", true, 2); r.press("up", false, 2.05); r.press("up", true, 2.2); r.press("up", false, 2.25); r.press("down", true, 2.4)
+        XCTAssertTrue(r.take().contains("key 5 down"))
+        // Tokens survive saving.
+        for o: PadProfiles.Output in [.macro("x"), .menu("y"), .keyboard, .calibrate, .rumble] { XCTAssertEqual(PadProfiles.Output(token: o.token), o) }
+        XCTAssertFalse(PadProfiles.Input.padButtons.contains(.tz1)); XCTAssertFalse(PadProfiles.Input.padButtons.contains(.tiltleft))
+    }
+
+    func testShareAndImport() throws {
+        let base = PadProfiles.Profile(name: "Base")
+        var top = PadProfiles.Profile(name: "CS2", buildsOn: [base.id])
+        top.base[.a] = .as(.key(49))
+        let text = PadProfiles.exportText(top, all: [base, top])
+        let imported = try PadProfiles.importText("Here you go:\n```json\n" + text + "\n```", existing: [base])
+        XCTAssertEqual(imported.count, 2)
+        XCTAssertEqual(imported.last?.name, "CS2"); XCTAssertEqual(imported.first?.name, "Base (2)")
+        XCTAssertNotEqual(imported.last?.id, top.id)
+        XCTAssertEqual(imported.last?.buildsOn, [imported.first!.id])
+        XCTAssertEqual(imported.last?.base[.a], .as(.key(49)))
+        XCTAssertThrowsError(try PadProfiles.importText("hello", existing: []))
+    }
+}

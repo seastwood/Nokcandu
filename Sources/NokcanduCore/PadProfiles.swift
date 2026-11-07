@@ -14,14 +14,22 @@ public enum PadProfiles {
         case paddle1, paddle2, paddle3, paddle4, touchpad, lt, rt, ltfull, rtfull
         /// A stick's directions, when the stick works as four buttons (StickMode.directions).
         case lsup, lsdown, lsleft, lsright, rsup, rsdown, rsleft, rsright
+        /// The touchpad's zones (top left, top right, bottom left, bottom right): touched, and clicked.
+        case tz1, tz2, tz3, tz4, tc1, tc2, tc3, tc4
+        /// Tilting the controller.
+        case tiltleft, tiltright, tiltfwd, tiltback
         public var id: String { rawValue }
+        /// Not a button on the controller: a stick direction, a touchpad zone or a tilt.
+        public var isVirtual: Bool { isStickDirection || Self.touchZones.contains(self) || Self.tilts.contains(self) }
+        public static let touchZones: [Input] = [.tz1, .tz2, .tz3, .tz4, .tc1, .tc2, .tc3, .tc4]
+        public static let tilts: [Input] = [.tiltleft, .tiltright, .tiltfwd, .tiltback]
 
         public var isTrigger: Bool { [.lt, .rt, .ltfull, .rtfull].contains(self) }
         public var isStickDirection: Bool { Self.stickDirections(0).contains(self) || Self.stickDirections(1).contains(self) }
         /// Up, down, left, right of the left (0) or right (1) stick.
         public static func stickDirections(_ s: Int) -> [Input] { s == 0 ? [.lsup, .lsdown, .lsleft, .lsright] : [.rsup, .rsdown, .rsleft, .rsright] }
         /// Inputs that are real controller buttons (can be sent to the game as a button).
-        public static var padButtons: [Input] { allCases.filter { !$0.isTrigger && !$0.isStickDirection } }
+        public static var padButtons: [Input] { allCases.filter { !$0.isTrigger && !$0.isVirtual } }
 
         /// The name printed on this controller's button. Nintendo controllers report their buttons by the letter
         /// printed on them (A is the right-hand button), so the letters stay and only the picture moves them.
@@ -48,6 +56,9 @@ public enum PadProfiles {
             case (.paddle1, _): "Paddle P1"; case (.paddle2, _): "Paddle P2"; case (.paddle3, _): "Paddle P3"; case (.paddle4, _): "Paddle P4"
             case (.lsup, _): "Left stick up"; case (.lsdown, _): "Left stick down"; case (.lsleft, _): "Left stick left"; case (.lsright, _): "Left stick right"
             case (.rsup, _): "Right stick up"; case (.rsdown, _): "Right stick down"; case (.rsleft, _): "Right stick left"; case (.rsright, _): "Right stick right"
+            case (.tz1, _): "Touch top left"; case (.tz2, _): "Touch top right"; case (.tz3, _): "Touch bottom left"; case (.tz4, _): "Touch bottom right"
+            case (.tc1, _): "Click top left"; case (.tc2, _): "Click top right"; case (.tc3, _): "Click bottom left"; case (.tc4, _): "Click bottom right"
+            case (.tiltleft, _): "Tilt left"; case (.tiltright, _): "Tilt right"; case (.tiltfwd, _): "Tilt forward"; case (.tiltback, _): "Tilt back"
             }
         }
     }
@@ -66,6 +77,11 @@ public enum PadProfiles {
         case wheel(up: Bool)
         case gyroOn, gyroOff, gyroToggle
         case layerHold(String), layerToggle(String)     // layer names
+        case macro(String)                              // a macro's id
+        case menu(String)                               // a radial menu's id (open while held)
+        case keyboard                                   // the on-screen keyboard
+        case calibrate                                  // measure the gyro's resting drift now
+        case rumble                                     // buzz the controller
         case nothing
 
         public var token: String {
@@ -77,6 +93,7 @@ public enum PadProfiles {
             case .wheel(let up): "wheel:\(up ? "up" : "down")"
             case .gyroOn: "gyro:on"; case .gyroOff: "gyro:off"; case .gyroToggle: "gyro:toggle"
             case .layerHold(let n): "layerhold:\(n)"; case .layerToggle(let n): "layertoggle:\(n)"
+            case .macro(let id): "macro:\(id)"; case .menu(let id): "menu:\(id)"; case .keyboard: "keyboard"; case .calibrate: "calibrate"; case .rumble: "rumble"
             case .nothing: "none"
             }
         }
@@ -84,7 +101,12 @@ public enum PadProfiles {
             let parts = token.split(separator: ":", maxSplits: 1).map(String.init)
             let v = parts.count > 1 ? parts[1] : ""
             switch parts.first ?? "" {
-            case "pad": guard let i = Input(rawValue: v), !i.isTrigger, !i.isStickDirection else { return nil }; self = .pad(i)
+            case "pad": guard let i = Input(rawValue: v), !i.isTrigger, !i.isVirtual else { return nil }; self = .pad(i)
+            case "macro": guard !v.isEmpty else { return nil }; self = .macro(v)
+            case "menu": guard !v.isEmpty else { return nil }; self = .menu(v)
+            case "keyboard": self = .keyboard
+            case "calibrate": self = .calibrate
+            case "rumble": self = .rumble
             case "trig": self = .trigger(right: v == "r")
             case "key": guard let k = Int(v) else { return nil }; self = .key(k)
             case "mouse": guard let m = MouseButton(rawValue: v) else { return nil }; self = .mouse(m)
@@ -112,6 +134,7 @@ public enum PadProfiles {
             case .wheel(let up): up ? "Scroll up" : "Scroll down"
             case .gyroOn: "Gyro on while held"; case .gyroOff: "Gyro off while held"; case .gyroToggle: "Gyro on/off"
             case .layerHold(let n): "\(n) while held"; case .layerToggle(let n): "\(n) on/off"
+            case .macro: "Macro"; case .menu: "Radial menu"; case .keyboard: "On-screen keyboard"; case .calibrate: "Calibrate the gyro"; case .rumble: "Rumble"
             case .nothing: "Nothing"
             }
         }
@@ -150,6 +173,12 @@ public enum PadProfiles {
         public var id: String
         public var name: String
         public var bindings: [String: Binding]          // Input raw value → binding
+        /// A layer's own stick and gyro settings while it's on (nil: as underneath).
+        public var leftStick: Stick?
+        public var rightStick: Stick?
+        public var gyro: Gyro?
+        /// The controller's light while this layer is on (DualSense, DualShock 4), "#RRGGBB".
+        public var color: String?
         public init(id: String = UUID().uuidString, name: String, bindings: [String: Binding] = [:]) { self.id = id; self.name = name; self.bindings = bindings }
         public subscript(_ i: Input) -> Binding? {
             get { bindings[i.rawValue] }
@@ -280,11 +309,12 @@ public enum PadProfiles {
     }
 
     public enum StickMode: String, CaseIterable, Codable, Hashable, Sendable {
-        case stick, otherStick, mouse, flick, keys, directions, off
+        case stick, otherStick, mouse, flick, keys, directions, scroll, off
         public var title: String {
             switch self {
             case .stick: "Stick"; case .otherStick: "The other stick"; case .mouse: "Mouse"
-            case .flick: "Flick stick"; case .keys: "Keys"; case .directions: "Four directions, each set on its own"; case .off: "Nothing"
+            case .flick: "Flick stick"; case .keys: "Keys"; case .directions: "Four directions, each set on its own"
+            case .scroll: "Scrolling"; case .off: "Nothing"
             }
         }
     }
@@ -307,6 +337,8 @@ public enum PadProfiles {
         /// Mouse: extra speed while held at the edge (0.5 = up to 1.5×), and how long it takes to get there.
         public var edgeBoost: Double?
         public var edgeBoostTime: Double?
+        /// Scrolling: lines per second at full push.
+        public var scrollSpeed: Double?
         public init(mode: StickMode = .stick) { self.mode = mode }
     }
 
@@ -341,10 +373,78 @@ public enum PadProfiles {
         /// How much turning (yaw) and tilting (roll) move left and right (1 = fully). Unset: from `turn`.
         public var yawAmount: Double?
         public var rollAmount: Double?
+        /// A One Euro filter: steady when turning slowly, no lag when turning fast. Its slow-turn cut-off (Hz; lower is
+        /// steadier) and how quickly it opens up with speed.
+        public var filter: Bool?
+        public var filterMinCutoff: Double?
+        public var filterBeta: Double?
         public var yaw: Double { yawAmount ?? (turn == .roll ? 0 : 1) }
         public var roll: Double { rollAmount ?? (turn == .yaw ? 0 : 1) }
         public init(output: GyroOutput = .off) { self.output = output }
     }
+    public enum TouchMode: String, CaseIterable, Codable, Hashable, Sendable {
+        case click, mouse, scroll, zones
+        public var title: String {
+            switch self { case .click: "Just its click"; case .mouse: "Mouse (two fingers scroll)"; case .scroll: "Scrolling"; case .zones: "Four zones (touch and click)" }
+        }
+    }
+    public struct Touchpad: Codable, Hashable, Sendable {
+        public var mode: TouchMode = .click
+        /// Mouse movement across the whole pad, and lines scrolled from top to bottom.
+        public var speed: Double?
+        public var scrollSpeed: Double?
+        public init(mode: TouchMode = .click) { self.mode = mode }
+    }
+    public struct Tilt: Codable, Hashable, Sendable {
+        /// How far it's tilted to count (degrees).
+        public var angle: Double?
+        public var invertX: Bool?
+        public var invertY: Bool?
+        public init() {}
+    }
+    /// A series of things done one after another by one press.
+    public struct Macro: Codable, Hashable, Identifiable, Sendable {
+        public enum Kind: String, Codable, CaseIterable, Sendable {
+            case press, down, up, wait, text
+            public var title: String { switch self { case .press: "Press"; case .down: "Hold down"; case .up: "Let go"; case .wait: "Wait"; case .text: "Type" } }
+        }
+        public struct Step: Codable, Hashable, Sendable {
+            public var kind: Kind
+            public var output: Output?
+            public var ms: Int?
+            public var text: String?
+            public init(_ kind: Kind, output: Output? = nil, ms: Int? = nil, text: String? = nil) { self.kind = kind; self.output = output; self.ms = ms; self.text = text }
+        }
+        public var id: String
+        public var name: String
+        public var steps: [Step]
+        public init(id: String = UUID().uuidString, name: String, steps: [Step] = []) { self.id = id; self.name = name; self.steps = steps }
+    }
+    /// Buttons pressed one after another (up, up, down…) doing something.
+    public struct Sequence: Codable, Hashable, Identifiable, Sendable {
+        public var id: String
+        public var name: String
+        public var inputs: [Input]
+        /// Most time between two presses (seconds).
+        public var stepTime: Double?
+        public var outputs: [Output]
+        public init(id: String = UUID().uuidString, name: String, inputs: [Input] = [], outputs: [Output] = []) { self.id = id; self.name = name; self.inputs = inputs; self.outputs = outputs }
+    }
+    /// A ring of up to eight choices: hold its button, point a stick, let go.
+    public struct RadialMenu: Codable, Hashable, Identifiable, Sendable {
+        public struct Slice: Codable, Hashable, Sendable {
+            public var title: String
+            public var outputs: [Output]
+            public init(title: String, outputs: [Output] = []) { self.title = title; self.outputs = outputs }
+        }
+        public var id: String
+        public var name: String
+        /// 0 the left stick, 1 the right.
+        public var stick: Int
+        public var slices: [Slice]
+        public init(id: String = UUID().uuidString, name: String, stick: Int = 1, slices: [Slice] = []) { self.id = id; self.name = name; self.stick = stick; self.slices = slices }
+    }
+
     public struct Triggers: Codable, Hashable, Sendable {
         /// How far a trigger is pulled to count as pressed, and as fully pulled (0…1).
         public var soft = 0.3, full = 0.95
@@ -364,6 +464,13 @@ public enum PadProfiles {
         public var triggers: Triggers?
         /// Devices combined with the controller in this profile (up to four).
         public var devices: [Device]?
+        public var touchpad: Touchpad?
+        public var tilt: Tilt?
+        public var macros: [Macro]?
+        public var sequences: [Sequence]?
+        public var menus: [RadialMenu]?
+        /// A short rumble when the layer changes.
+        public var rumbleOnLayer: Bool?
         public init(id: String = UUID().uuidString, name: String, buildsOn: [String] = [], layers: [Layer] = [Layer(id: "base", name: "Base")],
                     leftStick: Stick? = nil, rightStick: Stick? = nil, gyro: Gyro? = nil, triggers: Triggers? = nil) {
             self.id = id; self.name = name; self.buildsOn = buildsOn; self.layers = layers.isEmpty ? [Layer(id: "base", name: "Base")] : layers
@@ -408,6 +515,33 @@ public enum PadProfiles {
         return (Array(zip(names, maps)).map { (name: $0.0, bindings: $0.1) }, left, right, gyro, triggers)
     }
 
+    /// What layers set besides buttons, across the stack, by layer name (lowercased).
+    public static func layerSettings(_ p: Profile, all: [Profile]) -> [String: (left: Stick?, right: Stick?, gyro: Gyro?, color: String?)] {
+        var out: [String: (left: Stick?, right: Stick?, gyro: Gyro?, color: String?)] = [:]
+        for q in stack(p, all: all) {
+            for (i, layer) in q.layers.enumerated() {
+                let name = i == 0 ? "base" : layer.name.lowercased()
+                var cur = out[name] ?? (nil, nil, nil, nil)
+                if i > 0, let s = layer.leftStick { cur.left = s }
+                if i > 0, let s = layer.rightStick { cur.right = s }
+                if i > 0, let g = layer.gyro { cur.gyro = g }
+                if let c = layer.color { cur.color = c }
+                out[name] = cur
+            }
+        }
+        return out
+    }
+    /// The top setting of the stack that has one.
+    public static func top<T>(_ p: Profile, all: [Profile], _ k: KeyPath<Profile, T?>) -> T? {
+        stack(p, all: all).reversed().lazy.compactMap { $0[keyPath: k] }.first
+    }
+    /// Macros, sequences or menus across the stack (by id; the profile on top wins).
+    public static func collected<T: Identifiable>(_ p: Profile, all: [Profile], _ k: KeyPath<Profile, [T]?>) -> [T] where T.ID == String {
+        var out: [T] = []
+        for q in stack(p, all: all) { for x in q[keyPath: k] ?? [] { out.removeAll { $0.id == x.id }; out.append(x) } }
+        return out
+    }
+
     /// The devices a profile combines (the top one of its stack that sets any).
     public static func devices(_ p: Profile, all: [Profile]) -> [Device] {
         stack(p, all: all).last { $0.devices != nil }?.devices ?? []
@@ -427,22 +561,29 @@ public enum PadProfiles {
     public static func compile(_ p: Profile, all: [Profile]) -> String {
         let m = merged(p, all: all)
         let layerIndex = Dictionary(m.layers.enumerated().map { ($0.element.name.lowercased(), $0.offset) }, uniquingKeysWith: { a, _ in a })
-        func outs(_ o: [Output]) -> String? {
-            let t = o.compactMap { x -> String? in
-                switch x {
-                case .layerHold(let n): return layerIndex[n.lowercased()].map { "layer:hold:\($0)" }
-                case .layerToggle(let n): return layerIndex[n.lowercased()].map { "layer:toggle:\($0)" }
-                default: return x.token
-                }
+        let macros = Array(collected(p, all: all, \.macros).prefix(16)), menus = Array(collected(p, all: all, \.menus).prefix(8))
+        let macroIndex = Dictionary(macros.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { a, _ in a })
+        let menuIndex = Dictionary(menus.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { a, _ in a })
+        func token(_ x: Output) -> String? {
+            switch x {
+            case .layerHold(let n): return layerIndex[n.lowercased()].map { "layer:hold:\($0)" }
+            case .layerToggle(let n): return layerIndex[n.lowercased()].map { "layer:toggle:\($0)" }
+            case .macro(let id): return macroIndex[id].map { "macro:\($0)" }
+            case .menu(let id): return menuIndex[id].map { "menu:\($0)" }
+            default: return x.token
             }
+        }
+        func outs(_ o: [Output]) -> String? {
+            let t = o.compactMap(token)
             return t.isEmpty ? nil : t.joined(separator: ",")
         }
         func n(_ d: Double) -> String { String(format: "%g", d) }
         var lines = ["nokpad 1"]
-        let g = m.gyro
-        let gout: String = { switch g.output { case .off: "off"; case .mouse: "mouse"; case .leftStick: "lstick"; case .rightStick: "rstick" } }()
-        lines.append("gyro out=\(gout) on=\(g.startsOn ? 1 : 0) min=\(n(g.sensitivity)) max=\(n(g.fastSensitivity ?? g.sensitivity)) lo=\(n(g.slowSpeed)) hi=\(n(g.fastSpeed)) smooth=\(n(g.smoothing)) tight=\(n(g.tightening)) invx=\(g.invertX ? 1 : 0) invy=\(g.invertY ? 1 : 0) yaw=\(g.turn.rawValue) stickfull=\(n(g.stickFullSpeed)) stickmin=\(n(g.stickMinimum)) cal=\(g.autoCalibrate ? "auto" : "off") xs=\(n(g.xScale ?? 1)) ys=\(n(g.yScale ?? 1)) yw=\(n(g.yaw)) rw=\(n(g.roll))")
-        for (i, s) in [m.left, m.right].enumerated() {
+        func gyroLine(_ g: Gyro, layer: Int) -> String {
+            let gout: String = { switch g.output { case .off: "off"; case .mouse: "mouse"; case .leftStick: "lstick"; case .rightStick: "rstick" } }()
+            return "gyro out=\(gout) on=\(g.startsOn ? 1 : 0) min=\(n(g.sensitivity)) max=\(n(g.fastSensitivity ?? g.sensitivity)) lo=\(n(g.slowSpeed)) hi=\(n(g.fastSpeed)) smooth=\(n(g.smoothing)) tight=\(n(g.tightening)) invx=\(g.invertX ? 1 : 0) invy=\(g.invertY ? 1 : 0) yaw=\(g.turn.rawValue) stickfull=\(n(g.stickFullSpeed)) stickmin=\(n(g.stickMinimum)) cal=\(g.autoCalibrate ? "auto" : "off") xs=\(n(g.xScale ?? 1)) ys=\(n(g.yScale ?? 1)) yw=\(n(g.yaw)) rw=\(n(g.roll)) euro=\(g.filter == true ? 1 : 0) mincut=\(n(g.filterMinCutoff ?? 5)) beta=\(n(g.filterBeta ?? 0.05))" + (layer > 0 ? " layer=\(layer)" : "")
+        }
+        func stickLine(_ i: Int, _ s: Stick, layer: Int) -> String {
             let mode: String, to: Int
             switch s.mode {
             case .stick: mode = "pad"; to = i
@@ -451,10 +592,48 @@ public enum PadProfiles {
             case .flick: mode = "flick"; to = i
             case .keys: mode = "keys"; to = i
             case .directions: mode = "dirs"; to = i
+            case .scroll: mode = "scroll"; to = i
             case .off: mode = "none"; to = i
             }
             let k = s.keys.count == 4 ? s.keys : [13, 1, 0, 2]
-            lines.append("stick \(i) mode=\(mode) to=\(to) dz=\(n(s.deadzone)) outer=\(n(s.outer)) sens=\(n(s.speed)) power=\(n(s.curve)) flick360=\(n(s.countsPerTurn)) flicktime=\(n(s.flickTime)) keys=\(k.map(String.init).joined(separator: ",")) invy=\(s.invertY ? 1 : 0) xs=\(n(s.xScale ?? 1)) ys=\(n(s.yScale ?? 1)) ramp=\(n(s.edgeBoost ?? 0)) ramptime=\(n(s.edgeBoostTime ?? 0.4))")
+            let sens = s.mode == .scroll ? (s.scrollSpeed ?? 20) : s.speed
+            return "stick \(i) mode=\(mode) to=\(to) dz=\(n(s.deadzone)) outer=\(n(s.outer)) sens=\(n(sens)) power=\(n(s.curve)) flick360=\(n(s.countsPerTurn)) flicktime=\(n(s.flickTime)) keys=\(k.map(String.init).joined(separator: ",")) invy=\(s.invertY ? 1 : 0) xs=\(n(s.xScale ?? 1)) ys=\(n(s.yScale ?? 1)) ramp=\(n(s.edgeBoost ?? 0)) ramptime=\(n(s.edgeBoostTime ?? 0.4))" + (layer > 0 ? " layer=\(layer)" : "")
+        }
+        lines.append(gyroLine(m.gyro, layer: 0))
+        for (i, s) in [m.left, m.right].enumerated() { lines.append(stickLine(i, s, layer: 0)) }
+        let ls = layerSettings(p, all: all)
+        for (l, layer) in m.layers.enumerated().prefix(8) where l > 0 {
+            guard let set = ls[layer.name.lowercased()] else { continue }
+            if let s = set.left { lines.append(stickLine(0, s, layer: l)) }
+            if let s = set.right { lines.append(stickLine(1, s, layer: l)) }
+            if let g = set.gyro { lines.append(gyroLine(g, layer: l)) }
+        }
+        if let t = top(p, all: all, \.touchpad), t.mode != .click {
+            lines.append("touch mode=\(t.mode == .zones ? "zones" : t.mode.rawValue) sens=\(n(t.speed ?? 1500)) scroll=\(n(t.scrollSpeed ?? 12))")
+        }
+        if let t = top(p, all: all, \.tilt) {
+            lines.append("tilt angle=\(n(t.angle ?? 30)) invx=\(t.invertX == true ? 1 : 0) invy=\(t.invertY == true ? 1 : 0)")
+        }
+        for (i, mac) in macros.enumerated() {
+            var parts = ["macro \(i)"]
+            for st in mac.steps where parts.count < 46 {
+                switch st.kind {
+                case .press: if let o = st.output, o.macroFree, let t = token(o) { parts += ["down:\(t)", "wait:30", "up:\(t)"] }
+                case .down: if let o = st.output, o.macroFree, let t = token(o) { parts.append("down:\(t)") }
+                case .up: if let o = st.output, o.macroFree, let t = token(o) { parts.append("up:\(t)") }
+                case .wait: parts.append("wait:\(max(0, min(60000, st.ms ?? 100)))")
+                case .text: if let t = st.text, !t.isEmpty { parts.append("text:" + t.utf8.map { String(format: "%02x", $0) }.joined()) }
+                }
+            }
+            lines.append(parts.joined(separator: " "))
+        }
+        for (i, q) in collected(p, all: all, \.sequences).prefix(16).enumerated() where q.inputs.count >= 2 {
+            if let o = outs(q.outputs) { lines.append("seq \(i) in=\(q.inputs.prefix(8).map(\.rawValue).joined(separator: ",")) step=\(n(q.stepTime ?? 0.4)) out=\(o)") }
+        }
+        for (i, mn) in menus.enumerated() {
+            var parts = ["menu \(i) stick=\(mn.stick == 0 ? 0 : 1)"]
+            for (j, sl) in mn.slices.prefix(8).enumerated() { parts.append("s\(j)=\(outs(sl.outputs) ?? "none")") }
+            lines.append(parts.joined(separator: " "))
         }
         for t in 0..<2 { lines.append("trigger \(t) soft=\(n(m.triggers.soft)) full=\(n(m.triggers.full))") }
         let devs = Array(devices(p, all: all).prefix(4))
@@ -499,7 +678,45 @@ public enum PadProfiles {
         return lines.joined(separator: "\n") + "\n"
     }
 
+    // MARK: Sharing
+
+    /// A profile (and the ones it builds on) as text to send someone: settings only, like everything in a profile.
+    public static func exportText(_ p: Profile, all: [Profile]) -> String {
+        struct Pack: Encodable { let nokcanduControllerProfiles = 1; let profiles: [Profile] }
+        let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = (try? enc.encode(Pack(profiles: stack(p, all: all)))) ?? Data()
+        return String(decoding: data, as: UTF8.self)
+    }
+    /// Profiles from shared text (or a single profile's JSON), with new ids so nothing is overwritten, names made
+    /// unique, and what they build on pointing at the imported copies. The last one is the shared profile itself.
+    public static func importText(_ text: String, existing: [Profile]) throws -> [Profile] {
+        struct Pack: Decodable { let nokcanduControllerProfiles: Int?; let profiles: [Profile] }
+        var body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let r = body.range(of: #"```(?:json)?\s*\n[\s\S]*?```"#, options: .regularExpression) {
+            body = String(body[r]).replacingOccurrences(of: #"^```(?:json)?\s*\n"#, with: "", options: .regularExpression).replacingOccurrences(of: "```", with: "")
+        }
+        let data = Data(body.utf8)
+        let list: [Profile]
+        if let pack = try? JSONDecoder().decode(Pack.self, from: data) { list = pack.profiles }
+        else if let one = try? JSONDecoder().decode(Profile.self, from: data) { list = [one] }
+        else { throw NokError("That isn't a Nokcandu controller profile.") }
+        guard !list.isEmpty else { throw NokError("That isn't a Nokcandu controller profile.") }
+        var ids: [String: String] = [:]
+        for q in list { ids[q.id] = UUID().uuidString }
+        var names = Set(existing.map(\.name))
+        return list.map { q in
+            var c = q
+            c.id = ids[q.id]!
+            c.buildsOn = q.buildsOn.compactMap { b in ids[b] ?? (existing.contains { $0.id == b } ? b : nil) }
+            var n = q.name, i = 2
+            while names.contains(n) { n = "\(q.name) (\(i))"; i += 1 }
+            c.name = n; names.insert(n)
+            return c
+        }
+    }
+
     // MARK: Ready-made profiles to start from
+
 
     public static func starters() -> [Profile] {
         var gyroAim = Profile(id: "starter-gyro-aim", name: "Gyro aim")
@@ -717,3 +934,10 @@ public enum PadProfiles {
 }
 
 private extension String { var nilIfEmpty: String? { isEmpty ? nil : self } }
+
+extension PadProfiles.Output {
+    /// Can be a step of a macro (a macro can't start a macro, open a menu or the keyboard).
+    public var macroFree: Bool {
+        switch self { case .macro, .menu, .keyboard: false; default: true }
+    }
+}

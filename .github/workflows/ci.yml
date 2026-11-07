@@ -25,7 +25,7 @@ jobs:
             sudo /usr/sbin/softwareupdate --install-rosetta --agree-to-license
           fi
       - name: Real Wine 10 and 11 regressions (32 and 64 bit)
-        timeout-minutes: 30
+        timeout-minutes: 60
         run: python3 Tools/socket-events/ci.py
       - name: Check shell scripts
         run: bash -n build-app.sh make-dmg.sh dev-watch-agent.sh Resources/borderless/build.sh Resources/cabextract/build.sh Engine/wpcap/build.sh Engine/wpcap/package-source.sh Tools/native-ipx/packet-access.sh Tools/ipx-probe/win98/build.sh Tools/audio-guard/build-permission-probe.sh

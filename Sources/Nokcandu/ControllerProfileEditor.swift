@@ -15,17 +15,24 @@ struct ControllerProfileEditor: View {
     /// Shown inside the Profiles tab (no Done button; stacks when narrow).
     var embedded = false
 
-    @State private var layerIndex = 0
-    @State private var selection: Part = .input(.a)
-    @State private var family: Controllers.Family?
+    @State var layerIndex = 0
+    @State var selection: Part = .input(.a)
+    @State private var undoStack: [PadProfiles.Profile] = []
+    @State private var redoStack: [PadProfiles.Profile] = []
+    @State private var lastUndoPush = 0.0
+    @State private var undoing = false
+    @State var family: Controllers.Family?
     /// Not observed here: the live test updates many times a second, and redrawing the whole editor would close any open menu.
-    @State private var tester = PadTester()
+    @State var tester = PadTester()
     @State private var newLayerName = ""
     @State private var addingLayer = false
     @State private var renamingLayer = false
 
     static let labelsKey = "padEditorLabels"
-    enum Part: Hashable { case input(PadProfiles.Input), stick(Int), gyro, triggers, deviceInput(String, String), deviceAxis(String, Int) }
+    enum Part: Hashable {
+        case input(PadProfiles.Input), stick(Int), gyro, triggers, deviceInput(String, String), deviceAxis(String, Int)
+        case touchpad, tilt, macros, sequences, menus, feedback
+    }
     /// The device shown on the left instead of the controller (nil: the controller).
     @State private var shownDevice: String?
 
@@ -194,7 +201,16 @@ struct ControllerProfileEditor: View {
             tester.start(profile: PadProfiles.compile(profile, all: everything), devices: PadProfiles.devices(profile, all: everything))
         }
         .onDisappear { tester.stop() }
-        .onChange(of: profile) { _, p in
+        .environment(\.padExtras, PadExtras(macros: PadProfiles.collected(profile, all: everything, \.macros).map { ($0.id, $0.name) },
+                                              menus: PadProfiles.collected(profile, all: everything, \.menus).map { ($0.id, $0.name) }))
+        .onChange(of: profile) { old, p in
+            // Undo: one step per burst of changes (dragging a slider is one change).
+            if !undoing {
+                let t = ProcessInfo.processInfo.systemUptime
+                if t - lastUndoPush > 0.8 { undoStack.append(old); if undoStack.count > 100 { undoStack.removeFirst() }; redoStack = [] }
+                lastUndoPush = t
+            }
+            undoing = false
             onChange(p)
             tester.reload(PadProfiles.compile(p, all: everything), devices: PadProfiles.devices(p, all: all.filter { $0.id != p.id } + [p]))
         }
@@ -217,6 +233,13 @@ struct ControllerProfileEditor: View {
                 TextField("Name", text: $profile.name).textFieldStyle(.plain).font(.title2.bold()).frame(maxWidth: 320)
             }
             Spacer()
+            ControlGroup {
+                Button { guard let last = undoStack.popLast() else { return }; redoStack.append(profile); undoing = true; profile = last } label: { Image(systemName: "arrow.uturn.backward") }
+                    .disabled(undoStack.isEmpty).keyboardShortcut("z", modifiers: .command).help("Undo")
+                Button { guard let next = redoStack.popLast() else { return }; undoStack.append(profile); undoing = true; profile = next } label: { Image(systemName: "arrow.uturn.forward") }
+                    .disabled(redoStack.isEmpty).keyboardShortcut("z", modifiers: [.command, .shift]).help("Redo")
+            }
+            .fixedSize()
             Picker("Labels", selection: Binding(get: { family }, set: { family = $0; UserDefaults.standard.set($0?.rawValue ?? "xbox", forKey: Self.labelsKey + "." + PadGC.connectedName) })) {
                 Text("Xbox").tag(Controllers.Family?.none)
                 Text("PlayStation").tag(Controllers.Family?.some(.playstation))
@@ -317,12 +340,13 @@ struct ControllerProfileEditor: View {
 
     /// What a stick does, short enough for the picture (nil: it's a stick, as it is).
     func stickLabel(_ s: Int) -> String? {
-        let st = (s == 0 ? profile.leftStick : profile.rightStick) ?? (s == 0 ? merged.left : merged.right)
+        let st = layerStick(s) ?? baseStick(s)
         switch st.mode {
         case .stick: return nil
         case .otherStick: return s == 0 ? "R stick" : "L stick"
         case .mouse: return "Mouse"
         case .flick: return "Flick"
+        case .scroll: return "Scroll"
         case .off: return "Off"
         case .keys: return Self.keyRow(st.keys.map { PadProfiles.keyTitle($0) })
         case .directions:
@@ -350,6 +374,11 @@ struct ControllerProfileEditor: View {
         case .wheel(let up): return up ? "Wh↑" : "Wh↓"
         case .gyroOn, .gyroOff, .gyroToggle: return "Gyro"
         case .layerHold(let n), .layerToggle(let n): return String(n.prefix(4))
+        case .macro: return "Macro"
+        case .menu: return "Menu"
+        case .keyboard: return "Kbd"
+        case .calibrate: return "Calib"
+        case .rumble: return "Rumble"
         case .nothing: return "—"
         }
     }
@@ -364,6 +393,12 @@ struct ControllerProfileEditor: View {
         case .triggers: triggerInspector
         case .deviceInput(let id, let k): deviceInputInspector(id, k)
         case .deviceAxis(let id, let n): deviceAxisInspector(id, n)
+        case .touchpad: touchpadInspector
+        case .tilt: tiltInspector
+        case .macros: macrosInspector
+        case .sequences: sequencesInspector
+        case .menus: menusInspector
+        case .feedback: feedbackInspector
         }
     }
 
@@ -393,13 +428,35 @@ struct ControllerProfileEditor: View {
         return parts.joined(separator: "; ")
     }
 
+    /// The layer's own stick settings, when it has them.
+    func layerStick(_ s: Int) -> PadProfiles.Stick? {
+        guard layerIndex > 0 else { return nil }
+        let l = profile.layers[layerIndex]
+        return (s == 0 ? l.leftStick : l.rightStick) ?? PadProfiles.layerSettings(profile, all: everything)[layerName.lowercased()].flatMap { s == 0 ? $0.left : $0.right }
+    }
+    func baseStick(_ s: Int) -> PadProfiles.Stick { (s == 0 ? profile.leftStick : profile.rightStick) ?? (s == 0 ? merged.left : merged.right) }
     func stickBinding(_ s: Int) -> Binding<PadProfiles.Stick> {
-        Binding(get: { (s == 0 ? profile.leftStick : profile.rightStick) ?? (s == 0 ? merged.left : merged.right) },
-                set: { if s == 0 { profile.leftStick = $0 } else { profile.rightStick = $0 } })
+        if let own = layerStick(s) {
+            return Binding(get: { layerStick(s) ?? own }, set: { if s == 0 { profile.layers[layerIndex].leftStick = $0 } else { profile.layers[layerIndex].rightStick = $0 } })
+        }
+        return Binding(get: { baseStick(s) }, set: { if s == 0 { profile.leftStick = $0 } else { profile.rightStick = $0 } })
+    }
+    @ViewBuilder func layerOwnToggle(_ title: String, has: Bool, set: @escaping (Bool) -> Void) -> some View {
+        if layerIndex > 0 {
+            Section {
+                Toggle(title, isOn: Binding(get: { has }, set: set))
+            } footer: {
+                Text(has ? "While \(layerName) is on, these settings apply instead of the base layer's." : "Off: the same as the base layer.").font(.caption).foregroundStyle(.secondary)
+            }
+        }
     }
 
     @ViewBuilder func stickInspector(_ s: Int) -> some View {
         let st = stickBinding(s)
+        layerOwnToggle("Own stick settings in \(layerName)", has: layerStick(s) != nil) { on in
+            let v: PadProfiles.Stick? = on ? baseStick(s) : nil
+            if s == 0 { profile.layers[layerIndex].leftStick = v } else { profile.layers[layerIndex].rightStick = v }
+        }
         Section {
             Picker("Works as", selection: Binding(get: { st.wrappedValue.mode }, set: { m in
                 // Four directions start from the keys it had, so switching over keeps what worked.
@@ -418,6 +475,8 @@ struct ControllerProfileEditor: View {
             case .flick:
                 slider("One full turn", st.countsPerTurn, 500...20000, "%.0f", info: "Mouse movement that turns the game's camera all the way round. Flick the stick right: it should turn exactly 90°.")
                 slider("Flick time", st.flickTime, 0...0.3, "%.2f s")
+            case .scroll:
+                slider("Speed", Binding(get: { st.wrappedValue.scrollSpeed ?? 20 }, set: { var v = st.wrappedValue; v.scrollSpeed = $0; st.wrappedValue = v }), 2...80, "%.0f lines/s")
             case .keys:
                 ForEach(0..<4, id: \.self) { k in
                     Picker(["Up", "Down", "Left", "Right"][k], selection: Binding(get: { st.wrappedValue.keys.indices.contains(k) ? st.wrappedValue.keys[k] : 13 },
@@ -483,12 +542,20 @@ struct ControllerProfileEditor: View {
         }
     }
 
+    var layerGyro: PadProfiles.Gyro? {
+        guard layerIndex > 0 else { return nil }
+        return profile.layers[layerIndex].gyro ?? PadProfiles.layerSettings(profile, all: everything)[layerName.lowercased()]?.gyro
+    }
     var gyroBinding: Binding<PadProfiles.Gyro> {
-        Binding(get: { profile.gyro ?? merged.gyro }, set: { profile.gyro = $0 })
+        if let own = layerGyro { return Binding(get: { layerGyro ?? own }, set: { profile.layers[layerIndex].gyro = $0 }) }
+        return Binding(get: { profile.gyro ?? merged.gyro }, set: { profile.gyro = $0 })
     }
 
     @ViewBuilder var gyroInspector: some View {
         let g = gyroBinding
+        layerOwnToggle("Own gyro settings in \(layerName)", has: layerGyro != nil) { on in
+            profile.layers[layerIndex].gyro = on ? (profile.gyro ?? merged.gyro) : nil
+        }
         Section {
             Picker("Moves", selection: g.output) { ForEach(PadProfiles.GyroOutput.allCases, id: \.self) { Text($0.title).tag($0) } }
             if g.wrappedValue.output != .off {
@@ -538,7 +605,19 @@ struct ControllerProfileEditor: View {
                 slider("Steady below", g.tightening, 0...10, "%.1f °/s", info: "Very small movements (hand shake) are scaled down. 0 is off.")
                 Toggle("Invert left and right", isOn: g.invertX)
                 Toggle("Invert up and down", isOn: g.invertY)
-                Toggle("Calibrate when the controller is still", isOn: g.autoCalibrate)
+                Toggle("Calibrate when the controller is put down", isOn: g.autoCalibrate)
+            }
+            Section {
+                Toggle("Smart smoothing (One Euro filter)", isOn: Binding(get: { g.wrappedValue.filter == true }, set: { var v = g.wrappedValue; v.filter = $0 ? true : nil; g.wrappedValue = v }))
+                if g.wrappedValue.filter == true {
+                    slider("Steadiness", Binding(get: { 20 - (g.wrappedValue.filterMinCutoff ?? 5) }, set: { var v = g.wrappedValue; v.filterMinCutoff = max(0.3, 20 - $0); g.wrappedValue = v }), 0...19.7, "%.1f",
+                           info: "How much slow, careful aiming is smoothed. Higher is steadier.")
+                    slider("Quick when fast", Binding(get: { g.wrappedValue.filterBeta ?? 0.05 }, set: { var v = g.wrappedValue; v.filterBeta = $0; g.wrappedValue = v }), 0...0.5, "%.2f",
+                           info: "How quickly smoothing gets out of the way as you turn faster, so flicks don't lag.")
+                }
+            } header: { Text("Filter") } footer: {
+                Text("Smooths slow movement a lot and fast movement hardly at all — steady aim without lag. Calibrate any time with a button set to “Calibrate the gyro”, or a keyboard shortcut in Settings.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         if profile.gyro != nil, !profile.buildsOn.isEmpty {
@@ -695,6 +774,7 @@ struct OutputsEditor: View {
     @State private var recording = false
     @State private var monitor: Any?
     @State private var heldModifiers = Set<Int>()
+    @Environment(\.padExtras) var extras
 
     func add(_ o: PadProfiles.Output) {
         if o == .nothing { outputs = [.nothing] } else { outputs.removeAll { $0 == .nothing }; if !outputs.contains(o) { outputs.append(o) } }
@@ -747,7 +827,7 @@ struct OutputsEditor: View {
             FlowRow {
                 ForEach(Array(outputs.enumerated()), id: \.offset) { i, o in
                     HStack(spacing: 3) {
-                        Text(o.title(family)).font(.callout)
+                        Text(extras.title(o, family)).font(.callout)
                         Button { outputs.remove(at: i) } label: { Image(systemName: "xmark.circle.fill") }
                             .buttonStyle(.borderless).foregroundStyle(.secondary).accessibilityLabel("Remove \(o.title(family))")
                     }
@@ -768,6 +848,7 @@ struct OutputMenu: View {
     let family: Controllers.Family?
     let layers: [String]
     let pick: (PadProfiles.Output) -> Void
+    @Environment(\.padExtras) var extras
 
     var body: some View {
         let keys = PadProfiles.keys
@@ -798,7 +879,17 @@ struct OutputMenu: View {
             Button("Gyro on while held") { pick(.gyroOn) }
             Button("Gyro off while held") { pick(.gyroOff) }
             Button("Gyro on/off") { pick(.gyroToggle) }
+            Divider()
+            Button("Calibrate the gyro") { pick(.calibrate) }
         }
+        Button("Rumble") { pick(.rumble) }
+        if !extras.macros.isEmpty {
+            Menu("Macro") { ForEach(extras.macros, id: \.0) { m in Button(m.1) { pick(.macro(m.0)) } } }
+        }
+        if !extras.menus.isEmpty {
+            Menu("Radial menu") { ForEach(extras.menus, id: \.0) { m in Button(m.1 + " (while held)") { pick(.menu(m.0)) } } }
+        }
+        Button("On-screen keyboard") { pick(.keyboard) }
         if !layers.isEmpty {
             Menu("Layer") {
                 ForEach(layers, id: \.self) { n in
@@ -855,6 +946,10 @@ struct ExtraButtons: View {
                 }.buttonStyle(.plain)
             }
             Button { selection = .triggers } label: { Text("Trigger pull").font(.caption) }.buttonStyle(.link)
+            ForEach([("Touchpad", ControllerProfileEditor.Part.touchpad), ("Tilt", .tilt), ("Macros", .macros), ("Sequences", .sequences),
+                     ("Radial menus", .menus), ("Feedback", .feedback)], id: \.0) { t, part in
+                Button { selection = part } label: { Text(t).font(.caption).fontWeight(selection == part ? .bold : .regular) }.buttonStyle(.link)
+            }
         }
     }
 }

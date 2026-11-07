@@ -330,6 +330,8 @@ struct DesktopPadSettings: View {
                         }
                     }
                 }
+                ControllerLinks(pad: pad, profiles: profiles)
+                ShortcutRecorder(title: "Calibrate the gyro", shortcut: $pad.calibrateShortcut)
                 Toggle("Show a note when a layer or the gyro switches", isOn: Binding(get: { PadHUD.enabled }, set: { PadHUD.enabled = $0; pad.objectWillChange.send() }))
                 Button("Add an App…") { addApp() }
                 Toggle("Open Nokcandu at login, in the menu bar", isOn: Binding(get: { SMAppService.mainApp.status == .enabled }, set: { on in
@@ -364,4 +366,58 @@ struct DesktopPadSettings: View {
         pad.profileID = p.id
         openWindow(id: "padprofile", value: PadEditorTarget(gameID: "", profileID: p.id))
     }
+}
+
+
+/// "When this controller is connected, the Mac uses …": one row per controller connected or remembered.
+struct ControllerLinks: View {
+    @ObservedObject var pad: DesktopPad
+    let profiles: [PadProfiles.Profile]
+    var names: [String] {
+        Set(GCController.controllers().filter { $0.extendedGamepad != nil }.compactMap(\.vendorName)).union(pad.controllerRules.keys).sorted()
+    }
+    var body: some View {
+        ForEach(names, id: \.self) { n in
+            LabeledContent("With \(n)") {
+                Picker("", selection: Binding(get: { pad.controllerRules[n] ?? "" }, set: { pad.controllerRules[n] = $0.isEmpty ? nil : $0 })) {
+                    Text("The profile above").tag("")
+                    ForEach(profiles) { p in Text(p.name).tag(p.id) }
+                }.labelsHidden().frame(width: 200)
+            }
+            .help("While this controller is connected, the Mac uses this profile instead.")
+        }
+    }
+}
+
+/// Records a keyboard shortcut (a key with at least one of ⌘ ⌥ ⌃ ⇧).
+struct ShortcutRecorder: View {
+    let title: String
+    @Binding var shortcut: [Int]?
+    @State private var monitor: Any?
+    var label: String {
+        guard let s = shortcut, s.count == 2 else { return "None" }
+        let f = NSEvent.ModifierFlags(rawValue: UInt(s[1]))
+        var t = ""
+        if f.contains(.control) { t += "⌃" }; if f.contains(.option) { t += "⌥" }; if f.contains(.shift) { t += "⇧" }; if f.contains(.command) { t += "⌘" }
+        return t + PadProfiles.keyTitle(s[0])
+    }
+    var body: some View {
+        LabeledContent(title) {
+            HStack {
+                Button(monitor == nil ? label : "Press a shortcut…") { monitor == nil ? start() : stop() }
+                if shortcut != nil { Button { shortcut = nil } label: { Image(systemName: "xmark.circle") }.buttonStyle(.borderless).accessibilityLabel("Clear shortcut") }
+            }
+        }
+        .help("Works in any app and in games. A controller button, combination or sequence can calibrate too: give it “Calibrate the gyro”.")
+    }
+    func start() {
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in
+            let mods = e.modifierFlags.intersection([.command, .option, .control, .shift])
+            if e.keyCode == 53 { stop(); return nil }                  // Escape cancels
+            guard !mods.isEmpty else { return nil }
+            shortcut = [Int(e.keyCode), Int(mods.rawValue)]
+            stop(); return nil
+        }
+    }
+    func stop() { if let m = monitor { NSEvent.removeMonitor(m) }; monitor = nil }
 }

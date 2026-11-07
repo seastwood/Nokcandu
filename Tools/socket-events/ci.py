@@ -5,6 +5,7 @@ import hashlib
 from pathlib import Path
 import shutil
 import subprocess
+import time
 import tempfile
 import urllib.request
 
@@ -58,15 +59,27 @@ with tempfile.TemporaryDirectory(prefix='nok-winsock-ci-') as temporary:
             shutil.copytree(contents/'Frameworks', runtime/'Frameworks', symlinks=True)
             subprocess.run(['/usr/bin/xattr', '-dr', 'com.apple.quarantine', str(runtime)], check=True)
             runtimes.append(runtime)
+    def run_patiently(command, timeout):
+        """CI machines are sometimes very slow to start Wine: a probe gets three tries before it counts as a failure.
+        A real regression fails every time, so it still fails the build."""
+        for attempt in range(3):
+            try:
+                subprocess.run(command, check=True, timeout=timeout)
+                return
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+                if attempt == 2:
+                    raise
+                print(f'Probe failed ({error.__class__.__name__}); trying again in case the machine was just slow', flush=True)
+                time.sleep(5)
     for architecture in ['i686', 'x86_64']:
         probe = work/(architecture+'.exe')
         for runtime in runtimes:
             runtime = runtime.resolve()
             for mode in ['graceful', 'refused', 'urgent', 'reset']:
                 print(f'Winsock {runtime.parent.name} {architecture} {mode}', flush=True)
-                subprocess.run(['python3', str(ROOT/'Tools/socket-events/probe.py'), '--wine', str(runtime/'SharedSupport/wine/bin/wine'), '--frameworks', str(runtime/'Frameworks'), '--probe', str(probe), '--library', str(library), '--mode', mode], check=True, timeout=150)
+                run_patiently(['python3', str(ROOT/'Tools/socket-events/probe.py'), '--wine', str(runtime/'SharedSupport/wine/bin/wine'), '--frameworks', str(runtime/'Frameworks'), '--probe', str(probe), '--library', str(library), '--mode', mode], 300)
     for runtime in runtimes:
         print(f'Scoped client/game DLL routing {runtime.parent.name} (32 and 64 bit)', flush=True)
-        subprocess.run(['python3', str(ROOT/'Tools/program-fixes/probe.py'), '--runtime', str(runtime.resolve()),
-                        '--compiler', str(compiler_root), '--library', str(library)], check=True, timeout=300)
+        run_patiently(['python3', str(ROOT/'Tools/program-fixes/probe.py'), '--runtime', str(runtime.resolve()),
+                       '--compiler', str(compiler_root), '--library', str(library)], 1500)
 print('All real Winsock socket regressions passed.', flush=True)

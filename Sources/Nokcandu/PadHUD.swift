@@ -15,11 +15,18 @@ final class PadHUD {
     private var panel: NSPanel?
     private var hide: DispatchWorkItem?
 
-    func show(_ text: String, symbol: String) {
+    /// Gyro calibration: a bar while it measures, then "Gyro calibrated" (or "Hold still…" when it was moved).
+    func calibration(_ progress: Float) {
+        if progress >= 1 { show("Gyro calibrated", symbol: "checkmark.circle") }
+        else if progress < 0 { show("Keep it still — starting over", symbol: "gyroscope", progress: 0, stay: 2.5) }
+        else { show("Calibrating the gyro…", symbol: "gyroscope", progress: Double(progress), stay: 2.5) }
+    }
+
+    func show(_ text: String, symbol: String, progress: Double? = nil, stay: Double = 1.2) {
         guard Self.enabled else { return }
         let p = panel ?? make()
         panel = p
-        let host = NSHostingView(rootView: HUDView(text: text, symbol: symbol))
+        let host = NSHostingView(rootView: HUDView(text: text, symbol: symbol, progress: progress))
         host.frame.size = host.fittingSize
         p.contentView = host
         p.setContentSize(host.fittingSize)
@@ -34,7 +41,7 @@ final class PadHUD {
             NSAnimationContext.runAnimationGroup({ ctx in ctx.duration = 0.35; p?.animator().alphaValue = 0 }) { p?.orderOut(nil) }
         }
         hide = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + stay, execute: work)
     }
 
     private func make() -> NSPanel {
@@ -54,14 +61,24 @@ final class PadHUD {
 private struct HUDView: View {
     let text: String
     let symbol: String
+    var progress: Double? = nil
     var body: some View {
-        Label(text, systemImage: symbol)
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 16).padding(.vertical, 9)
-            .background(Capsule().fill(.black.opacity(0.72)))
-            .overlay(Capsule().stroke(.white.opacity(0.12), lineWidth: 1))
-            .padding(8)
-            .fixedSize()
+        VStack(spacing: 6) {
+            Label(text, systemImage: symbol)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
+            if let progress {
+                ZStack(alignment: .leading) {
+                    Capsule().fill(.white.opacity(0.18))
+                    Capsule().fill(.white).frame(width: max(4, 180 * progress))
+                }
+                .frame(width: 180, height: 5)
+            }
+        }
+        .padding(.horizontal, 16).padding(.vertical, 9)
+        .background(RoundedRectangle(cornerRadius: progress == nil ? 22 : 16).fill(.black.opacity(0.72)))
+        .overlay(RoundedRectangle(cornerRadius: progress == nil ? 22 : 16).stroke(.white.opacity(0.12), lineWidth: 1))
+        .padding(8)
+        .fixedSize()
     }
 }

@@ -214,6 +214,9 @@ final class PadTester: ObservableObject {
         sink.mouse_button = { c, b, d in PadTester.of(c).out("mouse:\(["left", "right", "middle", "back", "forward"][Int(b)])", d) }
         sink.mouse_move = { c, x, y in PadTester.of(c).move(Int(x), Int(y)) }
         sink.wheel = { c, n in PadTester.of(c).flash("wheel:\(n > 0 ? "up" : "down")") }
+        sink.text = { c, t in let s = t.map { String(cString: $0) } ?? ""; PadTester.of(c).flash("text:" + s) }
+        sink.menu = { c, m, sl in PadTester.of(c).menu(Int(m), Int(sl)) }
+        sink.calibration = { _, p in MainActor.assumeIsolated { PadHUD.shared.calibration(p) } }
         engine = text.withCString { pe_create($0, sink) }
         lastButtons = [:]; lastAxes = [:]
     }
@@ -272,7 +275,19 @@ final class PadTester: ObservableObject {
         }
     }
 
+    /// The radial menu open in the test (its slice pointed at), and whether the keyboard was asked for.
+    @Published var openMenu: (menu: Int, slice: Int)?
+    nonisolated func menu(_ m: Int, _ slice: Int) {
+        MainActor.assumeIsolated {
+            if m == Int(PE_KEYBOARD_MENU) { flash("keyboard"); return }
+            if m == Int(PE_RUMBLE_MENU) { flash("rumble"); PadFeedback.shared.rumble(GCController.controllers(), strong: true); return }
+            openMenu = slice == -2 ? nil : (m, slice)
+        }
+    }
+    func calibrate() { if let e = engine { pe_calibrate(e, Self.now()) } }
+
     func title(_ token: String) -> String {
+        if token.hasPrefix("text:") { return "Types “\(token.dropFirst(5))”" }
         if token.hasPrefix("axis:"), let a = Int(token.dropFirst(5)) {
             return ["Left stick", "Left stick", "Right stick", "Right stick", PadProfiles.Input.lt.title(family), PadProfiles.Input.rt.title(family)][min(max(a, 0), 5)]
         }
@@ -297,10 +312,17 @@ final class PadTester: ObservableObject {
                     let speed = (sqrt(r.x * r.x + r.y * r.y + r.z * r.z) * 180 / .pi).rounded()
                     let t = Self.now()
                     if speed != self.gyroSpeed, t - self.lastGyroShown > 0.1 { self.gyroSpeed = speed; self.lastGyroShown = t }
-                    if let e = self.engine { pe_gyro(e, Float(r.x), Float(r.y), Float(r.z), Self.now()) }
+                    if let e = self.engine {
+                        pe_gyro(e, Float(r.x), Float(r.y), Float(r.z), Self.now())
+                        let a = motion.hasGravityAndUserAcceleration ? motion.gravity : motion.acceleration
+                        if pe_uses_tilt(e) { pe_accel(e, Float(a.x), Float(a.y), Float(a.z), Self.now()) }
+                    }
                 }
             }
         } else { hasMotion = false }
+        PadGC.watchTouchpads(c) { [weak self] f, down, x, y in
+            MainActor.assumeIsolated { if let e = self?.engine { pe_touch(e, Int32(f), down, x, y, Self.now()) } }
+        }
     }
 
     private func read(_ g: GCExtendedGamepad) {
@@ -349,7 +371,16 @@ struct PadTestView: View {
                                 }
                             }
                         }
-                        if tester.hasMotion { Text(String(format: "Gyro: %.0f °/s", tester.gyroSpeed)).font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
+                        if let m = tester.openMenu {
+                            Text(m.slice >= 0 ? "Radial menu: choice \(m.slice + 1)" : "Radial menu open — point a stick").font(.callout.weight(.medium)).foregroundStyle(Color.accentColor)
+                        }
+                        if tester.hasMotion {
+                            HStack(spacing: 8) {
+                                Text(String(format: "Gyro: %.0f °/s", tester.gyroSpeed)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                                Button("Calibrate") { tester.calibrate() }.controlSize(.small)
+                                    .help("Put the controller down (or hold it very still) for two seconds")
+                            }
+                        }
                     } else {
                         Text("Connect a controller to test the profile here.").font(.callout).foregroundStyle(.secondary)
                     }
@@ -423,6 +454,19 @@ enum PadGC {
             if n.contains("xbox") { return nil }
         }
         return Controllers.connected().compactMap(\.family).first
+    }
+
+    /// The touchpad's fingers (DualSense, DualShock 4): 0 or 1, touching or lifted, at x, y 0…1 (y down).
+    static func watchTouchpads(_ c: GCController, _ f: @escaping (Int, Bool, Float, Float) -> Void) {
+        let pads = c.physicalInputProfile.allElements.compactMap { $0 as? GCControllerTouchpad }
+            .sorted { ($0.localizedName ?? "") < ($1.localizedName ?? "") }
+        for (i, tp) in pads.prefix(2).enumerated() {
+            let finger = i
+            let report: GCControllerTouchpadHandler = { _, x, y, _, _ in f(finger, true, (x + 1) / 2, (1 - y) / 2) }
+            tp.touchDown = report
+            tp.touchMoved = report
+            tp.touchUp = { _, x, y, _, _ in f(finger, false, (x + 1) / 2, (1 - y) / 2) }
+        }
     }
 
     static func state(_ g: GCExtendedGamepad) -> (buttons: [(PadProfiles.Input, Bool)], axes: [(Int32, Float)]) {
