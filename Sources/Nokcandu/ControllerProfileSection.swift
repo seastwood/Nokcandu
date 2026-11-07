@@ -59,6 +59,9 @@ struct ControllerProfileSection: View {
             }
             if let p = shownProfile {
                 SettingNote(summary(p))
+                if game.native != nil {
+                    SettingNote("A Mac game sees the controller itself too, so buttons set to keys or mouse also do their own thing in the game. Best for games without controller support, or with theirs turned off. Buttons set to other controller buttons don't change anything in Mac games.")
+                }
                 HStack {
                     Button("Edit \(choice == .own ? "This Game's Profile" : p.name)…") {
                         if choice == .own { edit(p, own: true) } else { model.sidebarTab = .profiles; model.profileSelection = "pad:" + p.id }

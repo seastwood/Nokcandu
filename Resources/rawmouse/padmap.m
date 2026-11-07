@@ -381,7 +381,8 @@ static char pad_driver_flag[PATH_MAX];
 static char pad_off_flag[PATH_MAX];
 static void pad_activate(void) {
     struct stat st;
-    bool driver = stat(pad_driver_flag, &st) != 0 && stat(pad_map_path, &st) == 0 && stat(pad_off_flag, &st) != 0;
+    char everywhere[PATH_MAX]; snprintf(everywhere, sizeof everywhere, "%.*s-everywhere", (int)(strlen(pad_off_flag) - 4), pad_off_flag);
+    bool driver = stat(pad_driver_flag, &st) != 0 && stat(pad_map_path, &st) == 0 && stat(pad_off_flag, &st) != 0 && stat(everywhere, &st) != 0;
     if (pad_listen < 0) {
         char path[104]; pad_socket_path(getpid(), path, sizeof path);
         unlink(path);

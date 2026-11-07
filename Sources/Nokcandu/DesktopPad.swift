@@ -31,6 +31,16 @@ final class DesktopPad: ObservableObject {
         }
     }
     static var offFile: URL { NokPaths.support.appendingPathComponent("controller-profiles-off") }
+    /// One profile for everything until it's switched off (streaming, say), whatever is in front — games included.
+    @Published var everywhereID: String? = (try? String(contentsOf: DesktopPad.everywhereFile, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmptyPad {
+        didSet {
+            // A file too: games then leave their own profile out of Wine's controller driver.
+            if let id = everywhereID { try? NokPaths.ensure(NokPaths.support); try? Data(id.utf8).write(to: Self.everywhereFile, options: .atomic) }
+            else { try? FileManager.default.removeItem(at: Self.everywhereFile) }
+            evaluate(force: true)
+        }
+    }
+    static var everywhereFile: URL { NokPaths.support.appendingPathComponent("controller-profiles-everywhere") }
     /// The library, to recognise Nokcandu games in front.
     var games: [InstalledGame] = [] { didSet { evaluate() } }
     /// The front app's Wine process when it's a Nokcandu game (its movement goes into the game).
@@ -117,7 +127,9 @@ final class DesktopPad: ObservableObject {
         let g = game(for: front)
         gamePID = g != nil && g?.native == nil ? (front?.processIdentifier ?? 0) : 0
         if !enabled { status = "All profiles off" }
-        else if let g {
+        else if let id = everywhereID, let p = all.first(where: { $0.id == id }) {
+            chosen = p; status = "Everywhere: \(p.name)"
+        } else if let g {
             chosen = Self.profile(for: g, all: all)
             status = chosen.map { "\(g.name): \($0.name)" } ?? "\(g.name): controller as it is"
         } else if let rule = rules[id] {
@@ -281,3 +293,5 @@ final class DesktopPad: ObservableObject {
         CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: Int32(n), wheel2: 0, wheel3: 0)?.post(tap: .cghidEventTap)
     }
 }
+
+private extension String { var nilIfEmptyPad: String? { isEmpty ? nil : self } }

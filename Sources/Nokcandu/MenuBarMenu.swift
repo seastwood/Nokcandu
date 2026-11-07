@@ -53,6 +53,12 @@ struct DesktopPadMenu: View {
     @ObservedObject var pad = DesktopPad.shared
     var body: some View {
         Toggle("Controller Profiles", isOn: $pad.enabled)
+        Menu(pad.everywhereID.flatMap { id in PadProfiles.profiles().first { $0.id == id }?.name }.map { "Everywhere: \($0)" } ?? "Use a Profile Everywhere") {
+            ForEach(PadProfiles.profiles()) { p in
+                Toggle(p.name, isOn: Binding(get: { pad.everywhereID == p.id }, set: { pad.everywhereID = $0 ? p.id : nil; if $0 { pad.enabled = true } }))
+            }
+            if pad.everywhereID != nil { Divider(); Button("Stop") { pad.everywhereID = nil } }
+        }
         Toggle("Controller on the Mac", isOn: $pad.on).disabled(!pad.enabled)
         if pad.on && pad.enabled {
             Text(pad.status)

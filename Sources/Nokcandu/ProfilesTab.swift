@@ -24,7 +24,7 @@ struct ProfilesSidebar: View {
             .selectionDisabled()
             .padding(.vertical, 2)
             Section("On the Mac") {
-                row(title: "Controller on the Mac", subtitle: pad.on ? pad.status : "Off — profiles apply only in games", symbol: "desktopcomputer")
+                row(title: "Controller on the Mac", subtitle: pad.everywhereID != nil || pad.on ? pad.status : "Off — profiles apply only in games", symbol: "desktopcomputer")
                     .tag("mac")
             }
             Section("Controller Profiles") {
@@ -92,7 +92,8 @@ struct ProfilesSidebar: View {
     @ViewBuilder func padMenu(_ p: PadProfiles.Profile) -> some View {
         Button("Use on the Mac") { pad.profileID = p.id; pad.on = true }
         Button(p.id == padDefault ? "Stop Using as Default" : "Set as Default for All Games") { ProfileActions.setDefault(p.id == padDefault ? nil : p, model: model) }
-        Button("Duplicate") { var c = p; c.id = UUID().uuidString; c.name = p.name + " copy"; newPad(c, keepName: true) }
+        Button(pad.everywhereID == p.id ? "Stop Using Everywhere" : "Use Everywhere") { pad.everywhereID = pad.everywhereID == p.id ? nil : p.id; if pad.everywhereID != nil { pad.enabled = true } }
+        Button("Duplicate") { ProfileActions.duplicate(p, model: model) }
         Divider()
         Button("Delete", role: .destructive) { ProfileActions.delete(p, model: model); model.profileSelection = "mac" }
     }
@@ -131,6 +132,18 @@ struct ProfilesSidebar: View {
 }
 
 enum ProfileActions {
+    /// A copy with a free name ("CS2 copy", "CS2 copy 2"…), selected so it can be changed straight away.
+    @MainActor static func duplicate(_ p: PadProfiles.Profile, model: AppModel) {
+        let names = Set(PadProfiles.profiles().map(\.name))
+        var c = p; c.id = UUID().uuidString
+        var n = p.name + " copy", i = 2
+        while names.contains(n) { n = "\(p.name) copy \(i)"; i += 1 }
+        c.name = n
+        try? PadProfiles.store(c, environments: [])
+        NotificationCenter.default.post(name: .padProfilesChanged, object: nil)
+        model.profileSelection = "pad:" + c.id
+        model.say("Made \(n). Change it, then choose it on the other game's Controls tab.")
+    }
     @MainActor static func setDefault(_ p: PadProfiles.Profile?, model: AppModel) {
         do {
             try PadProfiles.setDefault(p, environments: KeyRemap.environments(model.games), shared: KeyRemap.sharedFolders(model.games))
@@ -181,8 +194,15 @@ struct PadProfilePage: View {
                                    : "Used by " + ListFormatter.localizedString(byJoining: users) + ".")
                     .font(.callout).foregroundStyle(.secondary).lineLimit(2)
                 Spacer()
+                Button(pad.everywhereID == profile.id ? "Stop Using Everywhere" : "Use Everywhere") {
+                    pad.everywhereID = pad.everywhereID == profile.id ? nil : profile.id
+                    if pad.everywhereID != nil { pad.enabled = true }
+                }
+                .help("Use this profile in every app and game, until you stop it — for streaming, or trying it anywhere.")
                 Button(pad.profileID == profile.id && pad.on ? "Used on the Mac" : "Use on the Mac") { pad.profileID = profile.id; pad.on = true }
                     .disabled(pad.profileID == profile.id && pad.on)
+                Button("Duplicate") { ProfileActions.duplicate(profile, model: model) }
+                    .help("A copy to change for another game, leaving this one as it is.")
                 Button(PadProfiles.defaultID() == profile.id ? "Stop Using as Default" : "Set as Default") {
                     ProfileActions.setDefault(PadProfiles.defaultID() == profile.id ? nil : profile, model: model)
                 }
