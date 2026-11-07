@@ -74,8 +74,16 @@ static void key_apply(void) {
     while (fgets(line, sizeof line, f) && len < sizeof json - 128) {
         unsigned long long src, dst;
         if (sscanf(line, "%llx %llx", &src, &dst) != 2) continue;
-        len += snprintf(json + len, sizeof json - len, "%s{\"HIDKeyboardModifierMappingSrc\":%llu,\"HIDKeyboardModifierMappingDst\":%llu}", pairs ? "," : "", src, dst);
-        pairs++;
+        // fn (Globe) is page 0xFF usage 3 on Mac keyboards; some report the vendor page 0xFF01. Map fn from both,
+        // and to the form Mac keyboards use.
+        const unsigned long long fnTop = 0xFF00000003ULL, fnVendor = 0xFF0100000003ULL;
+        if (dst == fnVendor) dst = fnTop;
+        unsigned long long srcs[2] = {src, 0}; int n = 1;
+        if (src == fnTop || src == fnVendor) { srcs[0] = fnTop; srcs[1] = fnVendor; n = 2; }
+        for (int i = 0; i < n; i++) {
+            len += snprintf(json + len, sizeof json - len, "%s{\"HIDKeyboardModifierMappingSrc\":%llu,\"HIDKeyboardModifierMappingDst\":%llu}", pairs ? "," : "", srcs[i], dst);
+            pairs++;
+        }
     }
     fclose(f);
     if (!pairs) return;

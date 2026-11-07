@@ -54,9 +54,14 @@ public enum KeyRemap {
         for (i, code) in digits.enumerated() { u[code] = 0x1E + UInt64(i) }
         for (i, code) in [122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111].enumerated() { u[code] = 0x3A + UInt64(i) }
         var out = u.mapValues { 0x7_0000_0000 | $0 }
-        out[63] = 0xFF01_0000_0003                                                                               // fn (Globe)
+        out[63] = fnUsage
         return out
     }()
+    /// fn (Globe): Apple's top-case page 0xFF, usage 3 — what Mac keyboards report (their FnModifierUsagePage).
+    /// 0xFF01 usage 3 is the vendor-keyboard form; it's accepted when reading older settings and the game helper
+    /// maps both when fn is a source.
+    static let fnUsage: UInt64 = 0xFF_0000_0003
+    static let fnVendorUsage: UInt64 = 0xFF01_0000_0003
     /// A key that does nothing (keyboard usage 0: no event).
     static let nothingUsage: UInt64 = 0x7_0000_0000
 
@@ -79,7 +84,8 @@ public enum KeyRemap {
     }
     static func parse(_ text: String) -> [Mapping] {
         var seen = Set<Int>()
-        let byUsage = Dictionary(hidUsages.map { ($0.value, $0.key) }, uniquingKeysWith: { a, _ in a })
+        var byUsage = Dictionary(hidUsages.map { ($0.value, $0.key) }, uniquingKeysWith: { a, _ in a })
+        byUsage[fnVendorUsage] = 63
         return text.split(separator: "\n").compactMap { line -> Mapping? in
             let p = line.split(separator: " ").compactMap { UInt64($0.replacingOccurrences(of: "0x", with: ""), radix: 16) }
             guard p.count == 2, let from = byUsage[p[0]], seen.insert(from).inserted else { return nil }

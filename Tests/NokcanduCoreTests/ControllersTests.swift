@@ -51,7 +51,7 @@ final class KeyRemapTests: XCTestCase {
     func testMappingsBecomeMacKeyboardRemapsAndBack() {
         let m = [KeyRemap.Mapping(from: 63, to: 59), KeyRemap.Mapping(from: 59, to: 63), KeyRemap.Mapping(from: 61, to: 62), KeyRemap.Mapping(from: 0, to: nil)]
         let text = KeyRemap.text(m)
-        XCTAssertEqual(text, "0xff0100000003 0x7000000e0\n0x7000000e0 0xff0100000003\n0x7000000e6 0x7000000e4\n0x700000004 0x700000000\n")
+        XCTAssertEqual(text, "0xff00000003 0x7000000e0\n0x7000000e0 0xff00000003\n0x7000000e6 0x7000000e4\n0x700000004 0x700000000\n")
         XCTAssertEqual(KeyRemap.parse(text), m)
         XCTAssertEqual(Set(KeyRemap.keys.map(\.code)).count, KeyRemap.keys.count, "no key listed twice")
         XCTAssertTrue(KeyRemap.keys.allSatisfy { KeyRemap.hidUsages[$0.code] != nil }, "every listed key can be remapped")
