@@ -257,7 +257,15 @@ struct ControllerProfileWindow: View {
     var game: InstalledGame? { model.games.first { $0.id == target.gameID } }
 
     var body: some View {
-        if let g = game, let c = KeyRemap.gameContents(for: g), let p = target.profileID.map({ id in PadProfiles.profiles().first { $0.id == id } }) ?? PadProfiles.own(contents: c) {
+        if game == nil, let id = target.profileID, let p = PadProfiles.profiles().first(where: { $0.id == id }) {
+            ControllerProfileEditor(profile: p, own: false, gameName: "", all: PadProfiles.profiles()) { new in
+                do {
+                    try PadProfiles.store(new, environments: KeyRemap.environments(model.games), shared: KeyRemap.sharedFolders(model.games))
+                    NotificationCenter.default.post(name: .padProfilesChanged, object: nil)
+                } catch { model.fail(error) }
+            }
+            .navigationTitle(p.name)
+        } else if let g = game, let c = KeyRemap.gameContents(for: g), let p = target.profileID.map({ id in PadProfiles.profiles().first { $0.id == id } }) ?? PadProfiles.own(contents: c) {
             ControllerProfileEditor(profile: p, own: target.profileID == nil, gameName: g.name, all: PadProfiles.profiles()) { new in
                 save(new, game: g, contents: c)
             }

@@ -208,6 +208,7 @@ final class AppModel: ObservableObject {
             if !libraryLoaded, games.isEmpty, !UserDefaults.standard.bool(forKey: "welcomeDone") { showWelcome = true }
             libraryLoaded = true
             MacGameKeys.shared.start(games: games)
+            DesktopPad.shared.start()
             if firstLoad { discoverLibraries() }
             didRefresh()
         }

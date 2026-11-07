@@ -336,6 +336,19 @@ public enum PadProfiles {
         return [gyroAim, mk, flick]
     }
 
+    /// For the Mac itself: right stick moves the pointer, triggers click, left stick scrolls by keys.
+    public static func desktopStarter() -> Profile {
+        var p = Profile(id: "starter-desktop", name: "Pointer and Clicks")
+        p.rightStick = { var s = Stick(mode: .mouse); s.speed = 1400; s.curve = 2; return s }()
+        p.leftStick = { var s = Stick(mode: .keys); s.keys = [126, 125, 123, 124]; return s }()       // arrow keys
+        let pairs: [(Input, Output)] = [(.rt, .mouse(.left)), (.lt, .mouse(.right)), (.a, .key(36)), (.b, .key(53)),
+                                        (.rb, .wheel(up: false)), (.lb, .wheel(up: true)), (.x, .key(49)), (.y, .key(48)),
+                                        (.up, .key(126)), (.down, .key(125)), (.left, .key(123)), (.right, .key(124))]
+        for (i, o) in pairs { p.base[i] = .as(o) }
+        p.base[.rb]?.turbo = 60; p.base[.lb]?.turbo = 60
+        return p
+    }
+
     // MARK: Storage
 
     public static var profilesFile: URL { NokPaths.support.appendingPathComponent("controller-profiles.json") }

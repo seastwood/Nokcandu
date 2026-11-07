@@ -150,6 +150,7 @@ final class PadTester: ObservableObject {
     var family: Controllers.Family?
 
     func start(profile text: String) {
+        DesktopPad.testerOpen = true
         reload(text)
         GCController.shouldMonitorBackgroundEvents = true
         observers.append(NotificationCenter.default.addObserver(forName: .GCControllerDidConnect, object: nil, queue: .main) { [weak self] _ in
@@ -168,6 +169,8 @@ final class PadTester: ObservableObject {
         observers.forEach(NotificationCenter.default.removeObserver); observers = []
         for c in GCController.controllers() { c.extendedGamepad?.valueChangedHandler = nil; c.motion?.valueChangedHandler = nil }
         if let e = engine { pe_destroy(e) }; engine = nil
+        DesktopPad.testerOpen = false
+        DesktopPad.shared.attach()
     }
     func reload(_ text: String) {
         if let e = engine { pe_release_all(e, Self.now()); pe_destroy(e) }
@@ -235,20 +238,7 @@ final class PadTester: ObservableObject {
 
     private func read(_ g: GCExtendedGamepad) {
         typealias I = PadProfiles.Input
-        var buttons: [(I, Bool)] = [
-            (.a, g.buttonA.isPressed), (.b, g.buttonB.isPressed), (.x, g.buttonX.isPressed), (.y, g.buttonY.isPressed),
-            (.lb, g.leftShoulder.isPressed), (.rb, g.rightShoulder.isPressed),
-            (.ls, g.leftThumbstickButton?.isPressed ?? false), (.rs, g.rightThumbstickButton?.isPressed ?? false),
-            (.start, g.buttonMenu.isPressed), (.back, g.buttonOptions?.isPressed ?? false), (.guide, g.buttonHome?.isPressed ?? false),
-            (.up, g.dpad.up.isPressed), (.down, g.dpad.down.isPressed), (.left, g.dpad.left.isPressed), (.right, g.dpad.right.isPressed),
-        ]
-        if let ds = g as? GCDualSenseGamepad { buttons.append((.touchpad, ds.touchpadButton.isPressed)) }
-        else if let d4 = g as? GCDualShockGamepad { buttons.append((.touchpad, d4.touchpadButton.isPressed)) }
-        if let xb = g as? GCXboxGamepad {
-            buttons += [(.paddle1, xb.paddleButton1?.isPressed ?? false), (.paddle2, xb.paddleButton2?.isPressed ?? false),
-                        (.paddle3, xb.paddleButton3?.isPressed ?? false), (.paddle4, xb.paddleButton4?.isPressed ?? false),
-                        (.misc, xb.buttonShare?.isPressed ?? false)]
-        }
+        let (buttons, axes) = PadGC.state(g)
         let now = Self.now()
         var p = Set<I>()
         for (i, down) in buttons {
@@ -256,9 +246,6 @@ final class PadTester: ObservableObject {
             let n = Int(pe_input_named(i.rawValue))
             if lastButtons[n] != down { lastButtons[n] = down; if let e = engine { pe_button(e, Int32(n), down, now) } }
         }
-        let axes: [(Int32, Float)] = [(0, g.leftThumbstick.xAxis.value), (1, -g.leftThumbstick.yAxis.value),
-                                      (2, g.rightThumbstick.xAxis.value), (3, -g.rightThumbstick.yAxis.value),
-                                      (4, g.leftTrigger.value), (5, g.rightTrigger.value)]
         for (a, v) in axes {
             let iv = Int(max(-32768, min(32767, v * 32767)))
             if lastAxes[Int(a)] != iv { lastAxes[Int(a)] = iv; if let e = engine { pe_axis(e, a, Int32(iv), now) } }
@@ -348,5 +335,31 @@ struct DPadWell: Shape {
         p.addRoundedRect(in: CGRect(x: r.midX - t / 2, y: r.minY, width: t, height: r.height), cornerSize: CGSize(width: t / 3, height: t / 3))
         p.addRoundedRect(in: CGRect(x: r.minX, y: r.midY - t / 2, width: r.width, height: t), cornerSize: CGSize(width: t / 3, height: t / 3))
         return p
+    }
+}
+
+
+/// A controller's buttons and axes from macOS's GameController framework, in the mapping engine's terms.
+enum PadGC {
+    static func state(_ g: GCExtendedGamepad) -> (buttons: [(PadProfiles.Input, Bool)], axes: [(Int32, Float)]) {
+        typealias I = PadProfiles.Input
+        var buttons: [(I, Bool)] = [
+            (.a, g.buttonA.isPressed), (.b, g.buttonB.isPressed), (.x, g.buttonX.isPressed), (.y, g.buttonY.isPressed),
+            (.lb, g.leftShoulder.isPressed), (.rb, g.rightShoulder.isPressed),
+            (.ls, g.leftThumbstickButton?.isPressed ?? false), (.rs, g.rightThumbstickButton?.isPressed ?? false),
+            (.start, g.buttonMenu.isPressed), (.back, g.buttonOptions?.isPressed ?? false), (.guide, g.buttonHome?.isPressed ?? false),
+            (.up, g.dpad.up.isPressed), (.down, g.dpad.down.isPressed), (.left, g.dpad.left.isPressed), (.right, g.dpad.right.isPressed),
+        ]
+        if let ds = g as? GCDualSenseGamepad { buttons.append((.touchpad, ds.touchpadButton.isPressed)) }
+        else if let d4 = g as? GCDualShockGamepad { buttons.append((.touchpad, d4.touchpadButton.isPressed)) }
+        if let xb = g as? GCXboxGamepad {
+            buttons += [(.paddle1, xb.paddleButton1?.isPressed ?? false), (.paddle2, xb.paddleButton2?.isPressed ?? false),
+                        (.paddle3, xb.paddleButton3?.isPressed ?? false), (.paddle4, xb.paddleButton4?.isPressed ?? false),
+                        (.misc, xb.buttonShare?.isPressed ?? false)]
+        }
+        let axes: [(Int32, Float)] = [(0, g.leftThumbstick.xAxis.value), (1, -g.leftThumbstick.yAxis.value),
+                                      (2, g.rightThumbstick.xAxis.value), (3, -g.rightThumbstick.yAxis.value),
+                                      (4, g.leftTrigger.value), (5, g.rightTrigger.value)]
+        return (buttons, axes)
     }
 }

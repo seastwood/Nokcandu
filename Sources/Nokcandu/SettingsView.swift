@@ -60,6 +60,7 @@ struct GeneralSettings: View {
                 Text("Before a fix, an engine change or Reset to Recommended, keeps one copy of the game's Windows environment to go back to (the newest replaces the last). Off by default: those changes have their own Undo, and you can take a restore point yourself any time in a game's Storage tab.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            DesktopPadSettings()
             Section("Discord") {
                 Toggle("Show what you're playing in Discord", isOn: Binding(get: { DiscordBridge.enabled }, set: { DiscordBridge.enabled = $0; discordTick += 1 }))
                 Text("Windows games that support Discord Rich Presence show up in your Discord status. Nokcandu adds a small bridge (rpc-bridge, the one Sikarugir uses) to each game's Windows environment the next time it starts; turning this off removes it.")
@@ -279,5 +280,79 @@ struct NetworkSteadySetting: View {
                 if case .failure(let e) = r, e.localizedDescription != "Cancelled." { error = e.localizedDescription }
             }
         }
+    }
+}
+
+
+/// Settings → General → Controller on the Mac: a controller profile for the Mac itself and per-app choices.
+struct DesktopPadSettings: View {
+    @ObservedObject var pad = DesktopPad.shared
+    @Environment(\.openWindow) private var openWindow
+    @State private var profiles = PadProfiles.profiles()
+
+    var body: some View {
+        Section("Controller on the Mac") {
+            Toggle("Use a controller profile on the Mac", isOn: $pad.on)
+            Text("Move the pointer, click and type with your controller in any app — to pick a game, browse, or play Mac games and others that don't support controllers. It pauses while a Nokcandu game with its own profile is in front (that profile applies inside the game), and in apps set to Off below. Buttons set to controller buttons do nothing here; the app sees the real controller anyway.")
+                .font(.caption).foregroundStyle(.secondary)
+            if pad.on {
+                LabeledContent("Now") { Text(pad.status).foregroundStyle(pad.status.hasPrefix("Needs") ? .orange : .secondary) }
+                if !pad.trusted {
+                    HStack {
+                        Text("macOS needs to let Nokcandu control the pointer and keyboard (Privacy & Security → Accessibility).").font(.caption)
+                        Button("Allow…") { pad.askForAccess() }
+                    }
+                }
+                Picker("Profile", selection: Binding(get: { pad.profileID ?? "" }, set: { pad.profileID = $0.isEmpty ? nil : $0 })) {
+                    Text("None").tag("")
+                    ForEach(profiles) { p in Text(p.name).tag(p.id) }
+                }
+                HStack {
+                    if let id = pad.profileID, profiles.contains(where: { $0.id == id }) {
+                        Button("Edit Profile…") { openWindow(id: "padprofile", value: PadEditorTarget(gameID: "", profileID: id)) }
+                    }
+                    Menu("New From") {
+                        ForEach(PadProfiles.starters()) { s in Button(s.name) { adopt(s) } }
+                        Button("Pointer and Clicks") { adopt(PadProfiles.desktopStarter()) }
+                    }.fixedSize()
+                }
+                ForEach(pad.rules.keys.sorted(), id: \.self) { bundle in
+                    LabeledContent(appName(bundle)) {
+                        HStack {
+                            Picker("", selection: Binding(get: { pad.rules[bundle] ?? "off" }, set: { pad.rules[bundle] = $0 })) {
+                                Text("Off").tag("off")
+                                ForEach(profiles) { p in Text(p.name).tag(p.id) }
+                            }.labelsHidden().frame(width: 180)
+                            Button { pad.rules[bundle] = nil } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless).accessibilityLabel("Remove")
+                        }
+                    }
+                }
+                Button("Add an App…") { addApp() }
+                    .help("Choose an app to give its own profile, or to turn the controller profile off in (for example games with their own controller support).")
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .padProfilesChanged)) { _ in profiles = PadProfiles.profiles() }
+        .onAppear { profiles = PadProfiles.profiles(); DesktopPad.shared.start() }
+    }
+
+    func appName(_ bundle: String) -> String {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle).map { FileManager.default.displayName(atPath: $0.path).replacingOccurrences(of: ".app", with: "") } ?? bundle
+    }
+    func addApp() {
+        let p = NSOpenPanel()
+        p.allowedContentTypes = [.application]
+        p.directoryURL = URL(fileURLWithPath: "/Applications")
+        p.prompt = "Choose"
+        if p.runModal() == .OK, let u = p.url, let id = Bundle(url: u)?.bundleIdentifier { pad.rules[id] = "off" }
+    }
+    func adopt(_ starter: PadProfiles.Profile) {
+        var p = starter; p.id = UUID().uuidString
+        var n = p.name, i = 2
+        while profiles.contains(where: { $0.name == n }) { n = "\(p.name) \(i)"; i += 1 }
+        p.name = n
+        try? PadProfiles.store(p, environments: [])
+        profiles = PadProfiles.profiles()
+        pad.profileID = p.id
+        openWindow(id: "padprofile", value: PadEditorTarget(gameID: "", profileID: p.id))
     }
 }

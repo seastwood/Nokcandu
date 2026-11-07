@@ -27,6 +27,8 @@ struct MenuBarMenu: View {
             }
         }
         Divider()
+        DesktopPadMenu()
+        Divider()
         Button("Open Nokcandu") { show() }.keyboardShortcut("o")
         Button("Add a Game…") { model.showInstaller = true; show() }
         Button("Add a Folder of Games…") { show(); model.chooseFolderOfGames() }
@@ -43,4 +45,21 @@ struct MenuBarMenu: View {
 enum MenuBarSetting {
     static let key = "menuBarMenu"
     static var on: Bool { UserDefaults.standard.object(forKey: key) as? Bool ?? true }
+}
+
+
+/// Menu bar: the controller on the Mac, on or off, and which profile.
+struct DesktopPadMenu: View {
+    @ObservedObject var pad = DesktopPad.shared
+    var body: some View {
+        Toggle("Controller on the Mac", isOn: $pad.on)
+        if pad.on {
+            Text(pad.status)
+            Menu("Mac Profile") {
+                ForEach(PadProfiles.profiles()) { p in
+                    Toggle(p.name, isOn: Binding(get: { pad.profileID == p.id }, set: { if $0 { pad.profileID = p.id } }))
+                }
+            }
+        }
+    }
 }
