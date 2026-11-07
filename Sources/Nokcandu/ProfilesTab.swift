@@ -67,10 +67,16 @@ struct ProfilesSidebar: View {
                     Divider()
                     ForEach(PadProfiles.starters() + [PadProfiles.desktopStarter()]) { s in Button(s.name) { newPad(s) } }
                 } label: { Label("New Controller Profile", systemImage: "plus.circle") }
-                .menuStyle(.button).menuIndicator(.hidden).fixedSize()
-                .padding(.leading, 3)          // a menu's label sits 3 points left of a button's
-                Button { newLayout() } label: { Label("New Keyboard Layout", systemImage: "plus.circle") }
+                // Both rows are menus of the same style, so they line up exactly.
+                Menu {
+                    Button("Blank Layout") { newLayout() }
+                    if !layouts.isEmpty {
+                        Divider()
+                        ForEach(layouts) { l in Button("Copy of \(l.name)") { newLayout(from: l) } }
+                    }
+                } label: { Label("New Keyboard Layout", systemImage: "plus.circle") }
             }
+            .menuStyle(.button).menuIndicator(.hidden).fixedSize()
             .buttonStyle(.borderless)
             .labelStyle(AlignedIconLabelStyle())
             .foregroundStyle(.primary)
@@ -188,10 +194,11 @@ struct ProfilesSidebar: View {
         model.profileSelection = "pad:" + p.id
     }
 
-    func newLayout() {
-        var n = "New Layout", i = 2
-        while layouts.contains(where: { $0.name == n }) { n = "New Layout \(i)"; i += 1 }
-        let l = KeyRemap.Layout(name: n, mappings: [])
+    func newLayout(from source: KeyRemap.Layout? = nil) {
+        let base = source.map { "\($0.name) copy" } ?? "New Layout"
+        var n = base, i = 2
+        while layouts.contains(where: { $0.name == n }) { n = "\(base) \(i)"; i += 1 }
+        let l = KeyRemap.Layout(name: n, mappings: source?.mappings ?? [])
         try? KeyRemap.store(l, environments: [])
         load()
         model.profileSelection = "keys:" + l.id
