@@ -13,7 +13,7 @@ let package = Package(
     targets: [
         .target(name: "NokcanduPadEngine", path: "Sources/NokcanduPadEngine"),
         .target(name: "NokcanduCore", dependencies: ["NokcanduPadEngine"], path: "Sources/NokcanduCore"),
-        .executableTarget(name: "Nokcandu", dependencies: ["NokcanduCore"], path: "Sources/Nokcandu"),
+        .executableTarget(name: "Nokcandu", dependencies: ["NokcanduCore", "NokcanduPadEngine"], path: "Sources/Nokcandu"),
         .executableTarget(name: "NokcanduSettings", dependencies: ["NokcanduCore"], path: "Sources/NokcanduSettings"),
         .executableTarget(name: "NokcanduScreenSize", path: "Sources/NokcanduScreenSize"),
         .testTarget(name: "NokcanduCoreTests", dependencies: ["NokcanduCore", "NokcanduPadEngine"], path: "Tests/NokcanduCoreTests"),

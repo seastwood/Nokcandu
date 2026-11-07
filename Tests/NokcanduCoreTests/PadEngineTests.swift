@@ -167,3 +167,92 @@ final class PadEngineTests: XCTestCase {
         XCTAssertNil(pe_create("hello", pe_sink()))
     }
 }
+
+@testable import NokcanduCore
+
+final class PadProfilesTests: XCTestCase {
+    typealias P = PadProfiles
+
+    func testStackedProfilesAndLayersCompileAndRun() {
+        var shooter = P.Profile(id: "s", name: "Shooter basics")
+        shooter.base[.rt] = .as(.mouse(.left))
+        shooter.base[.a] = .as(.key(49))
+        shooter.layers.append(P.Layer(name: "Weapons", bindings: [:]))
+        shooter.layers[1][.a] = .as(.key(18))
+        shooter.base[.lb] = .as(.layerHold("Weapons"))
+        var aim = P.Profile(id: "g", name: "Gyro aim", buildsOn: ["s"])
+        aim.gyro = P.Gyro(output: .mouse)
+        aim.base[.a] = .as(.key(36))                     // overrides Shooter basics' Space
+        var weapons = P.Layer(name: "weapons")           // same layer, other case: merged
+        weapons[.b] = .as(.key(19))
+        aim.layers.append(weapons)
+        let text = P.compile(aim, all: [shooter, aim])
+        XCTAssertTrue(text.contains("gyro out=mouse"))
+        XCTAssertTrue(text.contains("bind 0 a press=key:36"))
+        XCTAssertTrue(text.contains("bind 0 rt press=mouse:left"))
+        XCTAssertTrue(text.contains("bind 0 lb press=layer:hold:1"))
+        XCTAssertTrue(text.contains("bind 1 a press=key:18"))
+        XCTAssertTrue(text.contains("bind 1 b press=key:19"))
+        let r = PadRecorder(String(text.dropFirst("nokpad 1\n".count)))
+        XCTAssertNotNil(r.engine)
+        r.press("lb", true, 1); r.press("a", true, 1.1); r.press("a", false, 1.2); r.press("lb", false, 1.3)
+        r.press("a", true, 2); r.press("a", false, 2.1)
+        XCTAssertEqual(r.take(), ["key 18 down", "key 18 up", "key 36 down", "key 36 up"])
+    }
+
+    func testBuildsOnLoopsAreCut() {
+        let a = P.Profile(id: "a", name: "A", buildsOn: ["b"]), b = P.Profile(id: "b", name: "B", buildsOn: ["a"])
+        XCTAssertEqual(P.stack(a, all: [a, b]).map(\.id), ["b", "a"])
+    }
+
+    func testOutputTokensRoundTrip() throws {
+        let outs: [P.Output] = [.pad(.y), .trigger(right: true), .key(56), .mouse(.forward), .wheel(up: false), .gyroOn, .gyroOff,
+                                .gyroToggle, .layerHold("Weapons"), .layerToggle("Map"), .nothing]
+        for o in outs { XCTAssertEqual(P.Output(token: o.token), o) }
+        let data = try JSONEncoder().encode(P.starters())
+        XCTAssertEqual(try JSONDecoder().decode([P.Profile].self, from: data), P.starters())
+    }
+
+    func testChoicesDefaultAndOwn() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("padprof-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let lf = base.appendingPathComponent("profiles.json"), df = base.appendingPathComponent("default")
+        let env1 = base.appendingPathComponent("One.app/Contents"), env2 = base.appendingPathComponent("Two.app/Contents")
+        var p = P.Profile(id: "p", name: "Mine"); p.base[.a] = .as(.key(49))
+        try P.store(p, environments: [env1, env2], file: lf, defaultFile: df)
+        XCTAssertFalse(P.inUse(contents: env1))                     // no default yet
+        try P.setDefault(p, environments: [env1, env2], file: df, profilesFile: lf)
+        XCTAssertTrue(P.inUse(contents: env1)); XCTAssertTrue(P.inUse(contents: env2))
+        try P.set(.normal, contents: env2, file: lf, defaultFile: df)
+        XCTAssertFalse(P.inUse(contents: env2))
+        p.base[.a] = .as(.key(36))
+        try P.store(p, environments: [env1, env2], file: lf, defaultFile: df)
+        XCTAssertTrue(try String(contentsOf: P.mapFile(env1), encoding: .utf8).contains("key:36"))
+        try P.delete(p, environments: [env1, env2], file: lf, defaultFile: df)
+        XCTAssertEqual(P.choice(contents: env1), .followDefault)     // followed the default, which is gone
+        XCTAssertFalse(P.inUse(contents: env1))
+    }
+}
+
+final class MacGameKeysTests: XCTestCase {
+    func testHidutilJSONMapsFnBothWaysAndReadsPreviousMapping() {
+        let json = KeyRemap.hidutilJSON("0xff0100000003 0x7000000e0\n0x7000000e0 0xff0100000003\n")!
+        XCTAssertTrue(json.contains("\"HIDKeyboardModifierMappingSrc\":1095216660483,\"HIDKeyboardModifierMappingDst\":30064771296"))
+        XCTAssertTrue(json.contains("\"HIDKeyboardModifierMappingSrc\":280379760050179,\"HIDKeyboardModifierMappingDst\":30064771296"))
+        XCTAssertTrue(json.contains("\"HIDKeyboardModifierMappingSrc\":30064771296,\"HIDKeyboardModifierMappingDst\":1095216660483"))
+        XCTAssertNil(KeyRemap.hidutilJSON(""))
+        let out = """
+        RegistryID  Key                   Value
+        100000a9c   UserKeyMapping   (
+                {
+                HIDKeyboardModifierMappingDst = 30064771296;
+                HIDKeyboardModifierMappingSrc = 30064771129;
+            }
+        )
+        100000f44   UserKeyMapping   (
+        )
+        """
+        XCTAssertEqual(KeyRemap.previousMapping(out), "[{\"HIDKeyboardModifierMappingSrc\":30064771129,\"HIDKeyboardModifierMappingDst\":30064771296}]")
+        XCTAssertEqual(KeyRemap.previousMapping("RegistryID Key Value\n1 UserKeyMapping (\n)\n"), "[]")
+    }
+}

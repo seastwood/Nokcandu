@@ -65,6 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
     /// With the menu bar menu on, Nokcandu keeps running after its window closes (the menu brings it back).
+    func applicationWillTerminate(_ notification: Notification) { MainActor.assumeIsolated { MacGameKeys.shared.stop() } }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !MenuBarSetting.on }
 }
 

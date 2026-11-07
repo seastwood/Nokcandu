@@ -76,7 +76,7 @@ public enum Controllers {
         }
         let system = contents.appendingPathComponent("SharedSupport/prefix/system.reg")
         guard FileManager.default.fileExists(atPath: system.path) else { throw NokError("This Windows environment hasn't been set up yet.") }
-        try apply(plan(mode, steam: isSteamEnvironment(contents)), system: system)
+        try apply(plan(effective(mode, contents: contents), steam: isSteamEnvironment(contents)), system: system)
         try NokPaths.ensure(settingsURL(contents).deletingLastPathComponent())
         try JSONEncoder().encode(Saved(mode: mode)).write(to: settingsURL(contents), options: .atomic)
     }
@@ -92,12 +92,25 @@ public enum Controllers {
         }
     }
 
-    /// Re-applies a saved choice when Nokcandu finds the registry out of step (for example after Repair), while closed.
+    /// With a controller profile in use, every controller goes through Wine's SDL driver (where the profile is
+    /// applied) and reaches the game as an Xbox controller.
+    public static func effective(_ mode: Mode, contents: URL) -> Mode { PadProfiles.inUse(contents: contents) ? .xbox : mode }
+
+    /// Re-applies a saved choice (and a controller profile's needs) when the registry is out of step — after Repair,
+    /// or a profile set while the game was open. Only while the environment is closed; cheap when nothing changes.
     public static func refresh(contents: URL) {
-        guard FileManager.default.fileExists(atPath: settingsURL(contents).path),
+        let system = contents.appendingPathComponent("SharedSupport/prefix/system.reg")
+        let saved = FileManager.default.fileExists(atPath: settingsURL(contents).path)
+        let profile = PadProfiles.inUse(contents: contents)
+        let marker = contents.appendingPathComponent("SharedSupport/nokcandu/controllers-applied")
+        let want = "\(effective(mode(contents: contents), contents: contents).rawValue)"
+        guard saved || profile || FileManager.default.fileExists(atPath: marker.path),
+              (try? String(contentsOf: marker, encoding: .utf8)) != want,
+              FileManager.default.fileExists(atPath: system.path),
               WineTools.ownedProcesses(contents: contents).isEmpty else { return }
-        try? apply(plan(mode(contents: contents), steam: isSteamEnvironment(contents)),
-                   system: contents.appendingPathComponent("SharedSupport/prefix/system.reg"))
+        if (try? apply(plan(effective(mode(contents: contents), contents: contents), steam: isSteamEnvironment(contents)), system: system)) != nil {
+            try? Data(want.utf8).write(to: marker, options: .atomic)
+        }
     }
 
     // MARK: What's plugged in

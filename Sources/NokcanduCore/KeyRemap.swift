@@ -76,7 +76,16 @@ public enum KeyRemap {
     static func folder(_ contents: URL) -> URL { contents.appendingPathComponent("SharedSupport/nokcandu", isDirectory: true) }
     static func file(_ contents: URL) -> URL { folder(contents).appendingPathComponent("key-remap") }
     /// Same scope as raw mouse capture: the game's own environment, or its launcher's.
-    public static func contents(for g: InstalledGame) -> URL? { WineTools.hostContents(for: g) }
+    public static func contents(for g: InstalledGame) -> URL? {
+        if let n = g.native { return macGameContents(n) }
+        return WineTools.hostContents(for: g)
+    }
+    /// A Mac game's keys live in Nokcandu's own folder (its app is left untouched); Nokcandu applies them while
+    /// the game is in front.
+    public static func macGameContents(_ n: NativeGame) -> URL {
+        let safe = n.id.map { $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" ? $0 : "_" }
+        return NokPaths.support.appendingPathComponent("Mac Games/\(String(safe))/Contents", isDirectory: true)
+    }
 
     public static func load(contents: URL) -> [Mapping] {
         guard let text = try? String(contentsOf: file(contents), encoding: .utf8) else { return [] }
@@ -243,7 +252,7 @@ public enum KeyRemap {
 
     /// The Windows environments of these games (each once), and the own folders of games inside launchers.
     public static func environments(_ games: [InstalledGame]) -> [URL] {
-        Array(Set(games.compactMap { $0.native == nil ? contents(for: $0) : nil }))
+        Array(Set(games.compactMap { contents(for: $0) }))
     }
     /// The own folders of games inside launchers (where their keys live when they don't use the launcher's).
     public static func sharedFolders(_ games: [InstalledGame]) -> [URL] { games.filter(isShared).map(\.contents) }
@@ -297,6 +306,58 @@ public enum KeyRemap {
         try? FileManager.default.removeItem(at: activeMarker)
         return true
     }
+    // MARK: Mac games (applied by Nokcandu itself)
+
+    /// hidutil's JSON for a key-remap file: fn is mapped from both of its forms, and to the one Mac keyboards send.
+    public static func hidutilJSON(_ text: String) -> String? {
+        var pairs: [(UInt64, UInt64)] = []
+        for line in text.split(separator: "\n") {
+            let p = line.split(separator: " ").compactMap { UInt64($0.replacingOccurrences(of: "0x", with: ""), radix: 16) }
+            guard p.count == 2 else { continue }
+            let dst = p[1] == fnVendorUsage ? fnUsage : p[1]
+            if p[0] == fnUsage || p[0] == fnVendorUsage { pairs += [(fnUsage, dst), (fnVendorUsage, dst)] } else { pairs.append((p[0], dst)) }
+        }
+        guard !pairs.isEmpty else { return nil }
+        return "{\"UserKeyMapping\":[" + pairs.map { "{\"HIDKeyboardModifierMappingSrc\":\($0.0),\"HIDKeyboardModifierMappingDst\":\($0.1)}" }.joined(separator: ",") + "]}"
+    }
+
+    /// The first keyboard's mapping from `hidutil property --get UserKeyMapping`, as JSON pairs ("[]" when none).
+    static func previousMapping(_ output: String) -> String {
+        guard let open = output.firstIndex(of: "(") else { return "[]" }
+        let block = output[open...].prefix { $0 != ")" }
+        var pairs: [String] = [], src: UInt64?, dst: UInt64?
+        for line in block.split(separator: "\n") {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            func value() -> UInt64? { t.split(separator: "=").last.flatMap { UInt64($0.trimmingCharacters(in: CharacterSet(charactersIn: " ;"))) } }
+            if t.hasPrefix("HIDKeyboardModifierMappingSrc") { src = value() }
+            if t.hasPrefix("HIDKeyboardModifierMappingDst") { dst = value() }
+            if let s = src, let d = dst { pairs.append("{\"HIDKeyboardModifierMappingSrc\":\(s),\"HIDKeyboardModifierMappingDst\":\(d)}"); src = nil; dst = nil }
+        }
+        return "[" + pairs.joined(separator: ",") + "]"
+    }
+
+    /// Applies a Mac game's keys (it came to the front). Returns false when it has none.
+    @discardableResult
+    public static func applyForMacGame(_ n: NativeGame) -> Bool {
+        guard let text = try? String(contentsOf: file(macGameContents(n)), encoding: .utf8), let json = hidutilJSON(text) else { return false }
+        if !FileManager.default.fileExists(atPath: activeMarker.path) {
+            let before = (try? Shell.run("/usr/bin/hidutil", ["property", "--get", "UserKeyMapping"], timeout: 10))?.combined ?? ""
+            try? Data("\(getpid())\n\(previousMapping(before))\n".utf8).write(to: activeMarker, options: .atomic)
+        }
+        _ = try? Shell.run("/usr/bin/hidutil", ["property", "--set", json], timeout: 10)
+        return true
+    }
+
+    /// Puts the keyboard back after a Mac game (only a mapping Nokcandu itself applied).
+    public static func restoreAfterMacGame() {
+        guard let text = try? String(contentsOf: activeMarker, encoding: .utf8) else { return }
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        guard lines.first.flatMap({ Int32($0) }) == getpid() else { return }
+        let previous = lines.count > 1 && lines[1].hasPrefix("[") ? String(lines[1]) : "[]"
+        _ = try? Shell.run("/usr/bin/hidutil", ["property", "--set", "{\"UserKeyMapping\":\(previous)}"], timeout: 10)
+        try? FileManager.default.removeItem(at: activeMarker)
+    }
+
     public static func save(_ m: [Mapping], contents: URL) throws {
         let clean = m.filter { $0.to != $0.from }
         if clean.isEmpty { try? FileManager.default.removeItem(at: file(contents)); return }

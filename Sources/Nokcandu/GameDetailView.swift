@@ -365,6 +365,7 @@ struct GameDetailView: View {
             MouseSection(game: game).id("mouse-\(game.id)")
             KeyboardSection(game: game).id("keyboard-\(game.id)")
             GameControllersSection(game: game).id("controllers-\(game.id)")
+            ControllerProfileSection(game: game).id("padprofile-\(game.id)")
         }
     }
 
@@ -708,11 +709,12 @@ struct NativeGameDetail: View {
                 GroupBox {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(game.appURL.path).font(.callout).textSelection(.enabled)
-                        Text("On " + Storage.driveName(game.appURL) + ". Nokcandu only opens this app; its settings live in the game itself. Graphics, mouse and Wine settings don't apply to Mac games.")
+                        Text("On " + Storage.driveName(game.appURL) + ". Nokcandu only opens this app; its settings live in the game itself. Keys below apply while it's in front; graphics, mouse and Wine settings don't apply to Mac games.")
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(6).frame(maxWidth: .infinity, alignment: .leading)
                 } label: { Text("Location").font(.headline) }
+                KeyboardSection(game: game).id("keyboard-\(game.id)")
                 GroupBox {
                     HStack(alignment: .top) {
                         Text(native.installFolder != nil
