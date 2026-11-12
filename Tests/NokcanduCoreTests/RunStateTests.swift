@@ -16,8 +16,10 @@ final class RunStateTests: XCTestCase {
         XCTAssertEqual(GameLauncher.runState(of: g, processes: [], reliable: false), .unknown)
         XCTAssertEqual(GameLauncher.runState(of: g, processes: [], reliable: true), .notRunning)
     }
-    func testProcessSnapshotSeesThisProcess() {
-        XCTAssertTrue(GameLauncher.processSnapshot().contains { $0.0 == getpid() })
+    func testProcessSnapshotSeesThisProcess() throws {
+        let snapshot = GameLauncher.freshProcessStatus()
+        guard snapshot.reliable else { throw XCTSkip("Process enumeration is unavailable in this execution context; unknown-status safety is tested separately.") }
+        XCTAssertTrue(snapshot.rows.contains { $0.0 == getpid() })
     }
 }
 

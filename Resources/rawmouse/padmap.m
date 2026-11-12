@@ -55,6 +55,8 @@ static uint16_t (*real_device_vendor)(int), (*real_device_product)(int);
 // there the main engine waits with which = -1 (keys and mouse still work; controller outputs go nowhere).
 static struct { int32_t which; pe_engine *e; bool used, main; } pads[PAD_MAX];
 static bool pad_has_devices;
+static int32_t slot_sources[PE_MAX_DEVICES + 1];
+static bool slot_source_valid[PE_MAX_DEVICES + 1];
 static struct { int32_t which; int slot; } slot_cache[16]; static int slot_cached;
 static char pad_profile_text[65536];
 static char pad_profile_path[PATH_MAX];
@@ -161,6 +163,10 @@ static int pad_slot_for(int32_t which) {
         }
         if (slot) fprintf(stderr, "nokcandu: device %04x:%04x #%d is the profile's device %d\n", vid, pid, nth + 1, slot);
     }
+    if (slot) {
+        if (slot_source_valid[slot] && slot_sources[slot] != which && e) pe_release_device(e, slot, pad_now());
+        slot_sources[slot] = which; slot_source_valid[slot] = true;
+    }
     if (slot_cached < 16) { slot_cache[slot_cached].which = which; slot_cache[slot_cached].slot = slot; slot_cached++; }
     return slot;
 }
@@ -173,7 +179,7 @@ static void pad_drop_engines(void) {
     for (int i = 0; i < PAD_MAX; i++) if (pads[i].used) {
         pe_release_all(pads[i].e, now); pe_destroy(pads[i].e); pads[i].used = false; pads[i].main = false;
     }
-    slot_cached = 0;
+    slot_cached = 0; memset(slot_source_valid, 0, sizeof slot_source_valid);
     pad_send((padmsg){ PADMSG_RELEASE, 0, 0, 0, 0 });
 }
 static bool pad_changed(const char *path, time_t *mt, long *ns) {
@@ -215,11 +221,14 @@ static void pad_check(void) {
     if (pad_game_pid > 0 && kill(pad_game_pid, 0) != 0) { pad_drop_engines(); pad_game_pid = 0; pad_profile_path[0] = 0; pad_profile_text[0] = 0; }
     if (!pad_profile_text[0]) pad_has_devices = false;
     if (pad_profile_path[0] && pad_changed(pad_profile_path, &pad_profile_mtime, &pad_profile_ns)) {
-        pad_drop_engines();
         pad_profile_text[0] = 0;
         FILE *f = fopen(pad_profile_path, "r");
         if (f) { size_t n = fread(pad_profile_text, 1, sizeof pad_profile_text - 1, f); pad_profile_text[n] = 0; fclose(f); }
         if (strncmp(pad_profile_text, "nokpad ", 7)) pad_profile_text[0] = 0;
+        bool live = pad_profile_text[0] != 0;
+        for (int i = 0; i < PAD_MAX && live; i++) if (pads[i].used)
+            live = pe_update_profile(pads[i].e, pad_profile_text);
+        if (!live) pad_drop_engines();
         pad_has_devices = strstr(pad_profile_text, "\ndevice ") != NULL;
         fprintf(stderr, "nokcandu: controller profile %s\n", pad_profile_text[0] ? pad_profile_path : "off");
     }
@@ -249,6 +258,14 @@ static int nok_wait(nok_sdl_event *ev, int timeout) {
     int r = real_wait(ev, pad_next_wait_ms(now, timeout));
     now = pad_now();
     if (r) {
+        if (ev->type == NOK_SDL_CREMOVED || ev->type == NOK_SDL_JREMOVED) {
+            for (int slot = 1; slot <= PE_MAX_DEVICES; slot++) if (slot_source_valid[slot] && slot_sources[slot] == ev->cbutton.which) {
+                pe_engine *main = pad_main_engine();
+                if (main) pe_release_device(main, slot, now);
+                slot_source_valid[slot] = false;
+            }
+            slot_cached = 0;
+        }
         int slot = 0;
         switch (ev->type) {
         case NOK_SDL_CAXIS: case NOK_SDL_CBDOWN: case NOK_SDL_CBUP: case NOK_SDL_CSENSOR:
@@ -306,11 +323,13 @@ static int nok_wait(nok_sdl_event *ev, int timeout) {
             pe_engine *e = pad_engine_for(ev->ctouch.which, true);
             if (e && pe_uses_touch(e) && ev->ctouch.touchpad == 0)
                 pe_touch(e, ev->ctouch.finger, ev->type != NOK_SDL_CTOUCHUP, ev->ctouch.x, ev->ctouch.y, now);
+            if (e && !pe_touch_passthrough(e)) r = 0;
             break; }
         case NOK_SDL_CREMOVED:
             slot_cached = 0;
             for (int i = 0; i < PAD_MAX; i++) if (pads[i].used && pads[i].which == ev->cbutton.which) {
-                pe_release_all(pads[i].e, now); pe_destroy(pads[i].e); pads[i].used = false; pads[i].main = false;
+                if (pads[i].main && pad_has_devices) { pe_release_main(pads[i].e, now); pads[i].which = -1; }
+                else { pe_release_all(pads[i].e, now); pe_destroy(pads[i].e); pads[i].used = false; pads[i].main = false; }
             }
             break;
         }
@@ -326,10 +345,17 @@ static void *nok_open(int index) {
     return c;
 }
 
-// Wine finds SDL's functions with dlsym; for the two that matter, hand back ours.
+// Only replace Wine's driver lookups. SDL also resolves its own public symbols
+// internally; intercepting those puts our forwarding hook into SDL's dispatch
+// table and recurses until the Wine driver hangs/crashes (including native HID).
 static void *nok_dlsym(void *handle, const char *name) {
     void *real = dlsym(handle, name);
     if (!pad_bus || !real || !name) return real;
+    Dl_info caller;
+    if (!dladdr(__builtin_return_address(0), &caller) || !caller.dli_fname) return real;
+    const char *base = strrchr(caller.dli_fname, '/');
+    base = base ? base + 1 : caller.dli_fname;
+    if (strcmp(base, "winebus.so") && strcmp(base, "winebus.sys.so")) return real;
     if (!strcmp(name, "SDL_WaitEventTimeout")) {
         real_wait = real;
         if (!real_open) real_open = (void *(*)(int))dlsym(handle, "SDL_GameControllerOpen");
@@ -365,7 +391,7 @@ static int pad_listen = -1;
 static dispatch_source_t pad_src;
 static CGEventFlags pad_flags;
 static int pad_keys_down[128];
-static int pad_buttons_down[PE_MOUSE_BUTTONS];
+static atomic_int pad_buttons_down[PE_MOUSE_BUTTONS];
 
 static CGEventFlags pad_flag_for(int k) {
     switch (k) {
@@ -404,6 +430,12 @@ static CGPoint pad_cursor(void) { CGEventRef e = CGEventCreate(NULL); CGPoint p 
 static void pad_mouse_button(int b, bool down) {
     if (b < 0 || b >= PE_MOUSE_BUTTONS) return;
     pad_buttons_down[b] = down;
+    id ctl = controller();
+    SEL buttonOnly = sel_registerName("nokcanduPostControllerButton:pressed:");
+    if ([ctl respondsToSelector:buttonOnly]) {
+        ((BOOL (*)(id, SEL, int, BOOL))objc_msgSend)(ctl, buttonOnly, b, down);
+        return;
+    }
     CGEventType t = b == 0 ? (down ? kCGEventLeftMouseDown : kCGEventLeftMouseUp) : b == 1 ? (down ? kCGEventRightMouseDown : kCGEventRightMouseUp)
                                                                                            : (down ? kCGEventOtherMouseDown : kCGEventOtherMouseUp);
     CGMouseButton mb = b == 0 ? kCGMouseButtonLeft : b == 1 ? kCGMouseButtonRight : (CGMouseButton)(b == 2 ? 2 : b == 3 ? 3 : 4);
@@ -431,11 +463,12 @@ static bool pad_post_relative(int dx, int dy) {
     *(int *)(ev + kY) = dy;
     *(int *)(ev + kDrag) = NSEvent.pressedMouseButtons != 0 || pad_buttons_down[0] || pad_buttons_down[1];
     *(unsigned long *)(ev + kTime) = ((unsigned long (*)(id, SEL, NSTimeInterval))objc_msgSend)(ctl, sel_registerName("ticksForEventTime:"), NSProcessInfo.processInfo.systemUptime);
+    cursor_left_pointer(ctl);
     ((void (*)(id, SEL, void *))orig_postEvent)(q, sel_registerName("postEvent:"), ev);
     release_ours(ev);
     return true;
 }
-static void pad_mouse_move(int dx, int dy) {
+static void pad_mouse_move(int dx, int dy, bool force_relative) {
     pad_moves_in++;
     if (atomic_load(&armed)) {                         // the game has the mouse captured: same path as raw mouse
         pad_moves_relative++;
@@ -446,7 +479,7 @@ static void pad_mouse_move(int dx, int dy) {
     // movement goes straight into the game.
     id ctl = controller();
     bool cursor_hidden = ctl && hidden_ivar >= 0 && *(BOOL *)((char *)(__bridge void *)ctl + hidden_ivar);
-    if (cursor_hidden && pad_post_relative(dx, dy)) { pad_moves_relative++; return; }
+    if ((force_relative || cursor_hidden) && pad_post_relative(dx, dy)) { pad_moves_relative++; return; }
     pad_moves_warp++;
     CGPoint p = pad_cursor(); p.x += dx; p.y += dy;
     NSWindow *kw = NSApp.keyWindow;
@@ -516,7 +549,7 @@ static void pad_activate(void) {
                     switch (m.kind) {
                     case PADMSG_KEY: pad_key(m.code, m.down); break;
                     case PADMSG_MOUSE_BUTTON: pad_mouse_button(m.code, m.down); break;
-                    case PADMSG_MOUSE_MOVE: pad_mouse_move(m.dx, m.dy); pad_game_status(); break;
+                    case PADMSG_MOUSE_MOVE: pad_mouse_move(m.dx, m.dy, m.code == 1); pad_game_status(); break;
                     case PADMSG_WHEEL: pad_wheel(m.code); break;
                     case PADMSG_RELEASE: pad_release_local(); break;
                     }
@@ -524,7 +557,11 @@ static void pad_activate(void) {
             });
             dispatch_resume(pad_src);
             static char sockpath[104]; strlcpy(sockpath, path, sizeof sockpath);
-            atexit_b(^{ unlink(sockpath); });
+            static char capability[120]; snprintf(capability, sizeof capability, "%s.buttons", path);
+            if ([controller() respondsToSelector:sel_registerName("nokcanduPostControllerButton:pressed:")]) {
+                FILE *f = fopen(capability, "w"); if (f) { fputs("1\n", f); fclose(f); }
+            } else unlink(capability);
+            atexit_b(^{ unlink(sockpath); unlink(capability); });
         } else if (s >= 0) close(s);
     }
     pad_write_active(driver);

@@ -72,15 +72,29 @@ public enum Controllers {
 
     /// Saves and applies the choice. The environment must be closed (Wine rewrites its registry while running).
     public static func set(_ mode: Mode, contents: URL) throws {
-        guard WineTools.ownedProcesses(contents: contents).isEmpty else {
+        try set(mode, contents: contents, snapshot: GameLauncher.freshProcessStatus())
+    }
+    static func environmentClosed(contents: URL, snapshot: ProcessSnapshot) -> Bool {
+        snapshot.reliable && !snapshot.rows.contains { WineTools.owns(pid: $0.0, contents: contents) }
+    }
+    static func preserveBeforeRoutingRepair(_ system: URL) throws {
+        let backup = system.appendingPathExtension("pre-controller-routing-v2")
+        if !FileManager.default.fileExists(atPath: backup.path) {
+            try Data(contentsOf: system).write(to: backup, options: .withoutOverwriting)
+        }
+    }
+    static func set(_ mode: Mode, contents: URL, snapshot: ProcessSnapshot) throws {
+        guard environmentClosed(contents: contents, snapshot: snapshot) else {
             throw NokError("Quit the games and launcher using this Windows environment first; controllers are set up when it starts.")
         }
         let system = contents.appendingPathComponent("SharedSupport/prefix/system.reg")
         guard FileManager.default.fileExists(atPath: system.path) else { throw NokError("This Windows environment hasn't been set up yet.") }
+        try preserveBeforeRoutingRepair(system)
         try apply(plan(effective(mode, contents: contents), steam: isSteamEnvironment(contents)), system: system)
         try applyHidden(mode == .hidden, system: system)
         try NokPaths.ensure(settingsURL(contents).deletingLastPathComponent())
         try JSONEncoder().encode(Saved(mode: mode)).write(to: settingsURL(contents), options: .atomic)
+        try Data("v2:\(effective(mode, contents: contents).rawValue)".utf8).write(to: settingsURL(contents).deletingLastPathComponent().appendingPathComponent("controllers-applied"), options: .atomic)
     }
 
     /// "Not at all": Wine's controller driver offers no controllers or joysticks to Windows programs, so a game
@@ -104,22 +118,29 @@ public enum Controllers {
         }
     }
 
-    /// With a controller profile in use, every controller goes through Wine's SDL driver (where the profile is
-    /// applied) and reaches the game as an Xbox controller.
-    public static func effective(_ mode: Mode, contents: URL) -> Mode { PadProfiles.driverInUse(contents: contents) && mode != .hidden ? .xbox : mode }
+    /// Automatic may choose the SDL/Xbox driver for profiles. An explicit native
+    /// policy must not be silently overridden by another game's shared profile.
+    public static func effective(_ mode: Mode, contents: URL) -> Mode {
+        mode == .automatic && PadProfiles.driverInUse(contents: contents) ? .xbox : mode
+    }
 
     /// Re-applies a saved choice (and a controller profile's needs) when the registry is out of step — after Repair,
     /// or a profile set while the game was open. Only while the environment is closed; cheap when nothing changes.
     public static func refresh(contents: URL) {
+        ControllerHIDFix.refresh(contents: contents)
+        refresh(contents: contents, snapshot: GameLauncher.freshProcessStatus())
+    }
+    static func refresh(contents: URL, snapshot: ProcessSnapshot) {
         let system = contents.appendingPathComponent("SharedSupport/prefix/system.reg")
         let saved = FileManager.default.fileExists(atPath: settingsURL(contents).path)
         let profile = PadProfiles.inUse(contents: contents)
         let marker = contents.appendingPathComponent("SharedSupport/nokcandu/controllers-applied")
-        let want = "\(effective(mode(contents: contents), contents: contents).rawValue)"
+        let want = "v2:\(effective(mode(contents: contents), contents: contents).rawValue)"
         guard saved || profile || FileManager.default.fileExists(atPath: marker.path),
               (try? String(contentsOf: marker, encoding: .utf8)) != want,
               FileManager.default.fileExists(atPath: system.path),
-              WineTools.ownedProcesses(contents: contents).isEmpty else { return }
+              environmentClosed(contents: contents, snapshot: snapshot) else { return }
+        guard (try? preserveBeforeRoutingRepair(system)) != nil else { return }
         if (try? apply(plan(effective(mode(contents: contents), contents: contents), steam: isSteamEnvironment(contents)), system: system)) != nil,
            (try? applyHidden(mode(contents: contents) == .hidden, system: system)) != nil {
             try? Data(want.utf8).write(to: marker, options: .atomic)
@@ -141,9 +162,17 @@ public enum Controllers {
         /// Its primary usage page (1 generic desktop, 2 simulation controls).
         public var usagePage: Int = 1
         public var usage: Int = 0
+        /// Original wireless dongle, not proof that any paired controller is awake.
+        public var isSteamControllerReceiver: Bool { vendorID == 0x28DE && productID == 0x1142 && !bluetooth }
+        public var displayName: String {
+            if isSteamControllerReceiver { return "Steam Controller receiver" }
+            if vendorID == 0x28de && productID == 0x1102 && !bluetooth { return "Steam Controller (2015 · USB)" }
+            return name
+        }
         public var family: Family? { Family.of(vendorID: vendorID) }
         public var kind: Kind { Controllers.kind(vendorID: vendorID, productID: productID, usagePage: usagePage, usage: usage) }
         public var hasMotion: Bool {
+            guard !isSteamControllerReceiver else { return false }
             switch family {
             case .nintendo: return [0x2006, 0x2007, 0x2009, 0x200E, 0x2066, 0x2067, 0x2069].contains(productID)
             case .playstation: return true
@@ -217,18 +246,27 @@ public enum Controllers {
         return byDevice.values.sorted { $0.name < $1.name }
     }
 
-    /// How this controller reaches Windows programs here, in words.
+    /// Requested policy from macOS inventory, not proof of Wine device enumeration.
     public static func describe(_ c: Connected, mode: Mode, steam: Bool) -> String {
+        if c.isSteamControllerReceiver {
+            return "Wireless receiver detected; this inventory does not confirm controller power or input. For Nokcandu mappings, select Steam Controller (2015 · USB / receiver) in a profile and check its live Test status. Native wireless passthrough to Windows Steam remains unverified; receiver presence alone is not Windows controller detection. No re-pairing is needed for an already paired controller."
+        }
+        if c.vendorID == 0x28de && c.productID == 0x1102 && !c.bluetooth {
+            if passesThrough(.valve,mode:mode,steam:steam) {
+                return "Original wired Steam Controller: native vendor HID access is available with Nokcandu’s Wine 11 controller compatibility module. Verify recognition in Windows Steam’s Controller settings; a proprietary HID device need not appear as a joystick in Test Controllers. Physical controls and Steam Input output still require testing."
+            }
+            return "Original wired Steam Controller: Xbox conversion is not verified. Use As itself with compatible Windows Steam support, or select the experimental USB source in a Nokcandu profile for keyboard/mouse mappings."
+        }
         guard c.isGamepad else {
             return "Not seen by Windows programs yet: Wine on the Mac only takes devices that present themselves as gamepads or joysticks."
         }
         if c.family == nil, c.kind != .gamepad {
             // Wheels, pedals and flight gear keep their own axes and buttons (Wine passes many through as the real device).
-            return "As itself: its own axes and buttons, for games with \(c.kind == .wheel ? "wheel" : "joystick") support."
+            return "Requested: its own axes and buttons, for games with \(c.kind == .wheel ? "wheel" : "joystick") support. Verify detection in Test Controllers."
         }
         if passesThrough(c.family, mode: mode, steam: steam) {
-            return "As itself" + (c.hasMotion ? ", with gyro" : "") + (steam ? ". Steam Input handles it; set it up in Steam's controller settings." : ". Only games that support this controller can use it.")
+            return "Requested: as itself. " + (steam ? "Steam Input can use it if Wine detects it. " : "Requires compatible Windows device support. ") + "Verify detection in Test Controllers; motion channels are not verified here."
         }
-        return "As an Xbox controller" + (c.hasMotion ? " (gyro isn't passed on this way)" : "") + "."
+        return "Requested: as an Xbox controller" + (c.hasMotion ? " (gyro isn't passed on this way)" : "") + "."
     }
 }

@@ -142,7 +142,7 @@ struct PerformanceSection: View {
                         ForEach(LowLatency.caps, id: \.self) { f in
                             Text(f == 0 ? "Unlimited" : f == autoFPS ? "\(f) FPS (recommended)" : "\(f) FPS").tag(f)
                         }
-                    }.labelsHidden().frame(width: settingControlWidth)
+                    }.labelsHidden().settingControl()
                 }
             }
             SettingToggle(title: "Vsync",
@@ -158,14 +158,14 @@ struct PerformanceSection: View {
                     // DXMT paces through the screen's refresh: limits above it act like the refresh itself.
                     ForEach([30, 60, 90, 120].filter { !dxmt || $0 <= max(refresh, 60) || $0 == s.fpsLimit }, id: \.self) { Text("\($0) FPS").tag($0) }
                 }
-                .labelsHidden().frame(width: settingControlWidth).disabled(d3dmetal)
+                .labelsHidden().settingControl().disabled(d3dmetal)
             }
             if let b = buffer {
                 SettingRow(title: "Audio buffer",
                            info: "If sound crackles or has static, choose Large: games get a bigger sound buffer, so a busy moment doesn't cause gaps (adds a little sound delay). \(steam ? "Applies to all Steam games; quit Steam first." : "Quit the game first.")") {
                     Picker("Audio buffer", selection: Binding(get: { b }, set: { setBuffer($0) })) {
                         Text("Normal (10 ms)").tag(10); Text("Large (20 ms)").tag(20); Text("Extra large (40 ms)").tag(40)
-                    }.labelsHidden().frame(width: settingControlWidth)
+                    }.labelsHidden().settingControl()
                 }
             }
             if GameMicrophone.supported(game) { MicrophoneSettingRow(game: game) }
@@ -397,7 +397,7 @@ struct GameResolutionSection: View {
                                 Text("\(r.width) × \(r.height)\(i == 0 ? " — native" : "")").tag(r.id)
                             }
                         }
-                    }.labelsHidden().frame(width: settingControlWidth)
+                    }.labelsHidden().settingControl()
                         .disabled(WindowedPresentation.setting(for: game) != nil)
                 }
                 if WindowedPresentation.setting(for: game) != nil {
@@ -407,7 +407,7 @@ struct GameResolutionSection: View {
                            info: CompatibilityFixes.unavailable(.borderless, for: game) ?? "Game default: the game decides. Fullscreen (Borderless): the game's window fills its screen without borders, leaving the Mac's display mode alone. Fullscreen: the same, and with the resizable window the game opens in Mac full screen in its own Space (Control-Command-F switches back); without it, the borderless window covers the whole Mac screen. For either fullscreen style, choose Windowed inside the game.") {
                     Picker("Window style", selection: Binding(get: { GameWindowStyle.current(game) }, set: windowStyle)) {
                         ForEach(GameWindowStyle.allCases) { Text($0.title).tag($0) }
-                    }.labelsHidden().frame(width: settingControlWidth)
+                    }.labelsHidden().settingControl()
                         .disabled(CompatibilityFixes.unavailable(.borderless, for: game) != nil && game.custom?.borderless != true)
                 }
                 if OpenUASettings.supports(game) {
@@ -946,7 +946,7 @@ struct ResizableWindowSection: View {
                         Text("Automatic").tag("auto")
                         if let w = size, w != WindowedPresentation.automatic, !WindowedPresentation.resolutions.contains(w) { Text("\(w[0]) × \(w[1])").tag(tag) }
                         ForEach(WindowedPresentation.resolutions, id: \.self) { r in Text("\(r[0]) × \(r[1])").tag("\(r[0])x\(r[1])") }
-                    }.labelsHidden().frame(width: settingControlWidth)
+                    }.labelsHidden().settingControl()
                 }
                 .disabled(working)
             }

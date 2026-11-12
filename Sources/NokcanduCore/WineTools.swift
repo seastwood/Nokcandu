@@ -62,6 +62,9 @@ public enum WineTools {
     /// Starts a Wine tool or Windows program detached; it keeps running after Nokcandu returns.
     public static func run(_ args: [String], for g: InstalledGame, cwd: URL? = nil) throws {
         guard let c = hostContents(for: g) else { throw NokError("This game has no Windows environment to open.") }
+        // Tools may be the first Windows process after a saved route change. Apply
+        // the same idle-only policy used before game launch; a live prefix is untouched.
+        Controllers.refresh(contents: c)
         let p = Process()
         p.executableURL = c.appendingPathComponent("SharedSupport/wine/bin/wine")
         p.arguments = args

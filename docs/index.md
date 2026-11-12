@@ -82,3 +82,30 @@ Keep credentials, account identifiers, raw session logs, copyrighted game/runtim
 - [CI monitor crash and refused-connection probe](investigations/ci-pending-monitor-and-refusal-2026-11-04.md) — runner/local differences, callback compatibility and synchronous versus asynchronous Winsock errors.
 
 - [Shared-launcher game compatibility components](investigations/shared-launcher-compatibility-2026-11-04.md) — Steam/Battle.net/EA/Ubisoft program isolation, generic fix installation, profiles, recovery and Undo.
+
+- [Controller overhaul implementation and progress](investigations/controller-overhaul-2026-11-10.md) — architecture, capability boundaries, incremental changes, test evidence, remaining hardware gates, migration and Undo.
+
+- [Controller overhaul testing](controller-overhaul-testing.md) — staged app, in-app input test, feature checklist, game/hardware procedures and Undo.
+- [Controller capabilities](controller-capabilities.md) — connection-specific evidence, unsupported output boundaries and hardware/virtual-device validation gates.
+- [Signing, motion pause, routing and sidebar follow-up](investigations/signing-routing-sidebar-drives-2026-11-10.md) — permission identity, profile headphone sources, held-output tester, shared motion-off behavior, real Wine routing/enumeration fixes, layout issues and duplicate external-drive investigation.
+
+- [Original Steam Controller receiver and Wine research](investigations/steam-controller-2015-2026-11-10.md) — receiver-off inventory, opt-in native vendor HID feasibility, profile-mapping gaps and controller-on acceptance gates.
+
+- [Controller field-test follow-up](investigations/controller-field-tests-2026-11-10.md) — headphone hold/layer activation, Overwatch coordinate validation, BF1942 capture routing and reproduced Pro Controller false button transitions.
+
+- [Wired Steam Controller and general headphone mappings (November 11)](investigations/steam-wired-head-mappings-2026-11-11.md)
+- [November 11 field-test report](investigations/controller-field-tests-2026-11-11.md) — screenshot-backed regression checklist and follow-up validation.
+
+- [BF2 missing deployment menu](investigations/bf2-deployment-menu-2026-11-11.md) — supported DXVK focus-loss workaround, opt-in component and acceptance limits.
+
+- [Mouse/gyro radial menus](investigations/controller-mouse-menus-2026-11-11.md) — directional selection, action titles and cancellation/compatibility checks.
+
+- [Afternoon controller priorities](investigations/controller-priorities-2026-11-11.md) — current user priority list, routing investigation and deferred BF2 handoff.
+
+- [Controller handoff — November 11](investigations/controller-handoff-2026-11-11.md) — verified controller routing/takeover, independent trackball behavior, installation evidence and remaining priorities.
+
+- [Steam Controller wireless profile source](investigations/steam-wireless-profiles-2026-11-11.md) — receiver slots, verified mode exchange and input receipt, connection safety, testing and Undo.
+
+- [Settings alignment and per-profile controller labels](investigations/settings-profile-labels-2026-11-11.md) — shared control alignment, label persistence, migration and installed verification.
+
+- [Controller click jump, Steam pad feel and library/editor polish](investigations/controller-click-jump-and-polish-2026-11-11.md) — why clicks moved the cursor (three causes), the Steam Controller's built-in button actions, the stale-pointer driver fix, pad smoothing/angle, categories and the responsive editor.

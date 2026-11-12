@@ -1,0 +1,20 @@
+--- a/dlls/winebus.sys/bus_iohid.c
++++ b/dlls/winebus.sys/bus_iohid.c
+@@ -295,8 +295,15 @@
+             desc.bus_type = BUS_TYPE_USB;
+     }
+ 
+-    if (usages.UsagePage != HID_USAGE_PAGE_GENERIC ||
+-        !(usages.Usage == HID_USAGE_GENERIC_JOYSTICK || usages.Usage == HID_USAGE_GENERIC_GAMEPAD))
++    /* Research-only opt-in: original Steam Controller vendor interface, never
++     * its keyboard/mouse interfaces or other Valve products. Not enabled in shipped builds. */
++    const char *steam_opt_in = getenv("NOKCANDU_EXPERIMENTAL_STEAM_VENDOR_HID");
++    BOOL steam_vendor_hid = steam_opt_in && !strcmp(steam_opt_in, "1") &&
++        desc.vid == 0x28de && (desc.pid == 0x1102 || desc.pid == 0x1142) &&
++        usages.UsagePage == 0xff00 && usages.Usage == 0x0001;
++
++    if (!steam_vendor_hid && (usages.UsagePage != HID_USAGE_PAGE_GENERIC ||
++        !(usages.Usage == HID_USAGE_GENERIC_JOYSTICK || usages.Usage == HID_USAGE_GENERIC_GAMEPAD)))
+     {
+         /* winebus isn't currently meant to handle anything but these, and
+          * opening keyboards, mice, or the Touch Bar on older MacBooks triggers

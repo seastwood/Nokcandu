@@ -148,9 +148,13 @@ public enum GameLauncher {
         request.cancel()
     }
 
+    /// Test fixtures may supply process observations for their own temporary app IDs.
+    /// Unregistered apps always use the real process scan and retain unknown-state safety.
+    static let fixtureProcessSnapshots = LockedCache<InstalledGame.ID, ProcessSnapshot>(limit: 256)
+
     /// Reads the launcher's single-instance lock (Logs/game.lock/pid).
     public static func runState(of game: InstalledGame) -> RunState {
-        let snapshot = processStatus()
+        let snapshot = fixtureProcessSnapshots[game.id] ?? processStatus()
         return runState(of: game, processes: snapshot.rows, reliable: snapshot.reliable)
     }
 

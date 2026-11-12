@@ -86,13 +86,15 @@ public enum HelperPatch {
     @discardableResult
     public static func refresh(_ games: [InstalledGame]) -> [String] {
         var changed: [String] = []
-        for g in games {
+        for saved in games {
+            let g = GameLibrary.inspect(saved.appURL) ?? saved
             guard let url = g.launcherURL, let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
             if GameLauncher.runState(of: g) != .notRunning { continue }
             do { try BF1942DisplayFix.refreshMenuCopies(g) } catch { continue }
             CompatibilityFixes.refreshBundledHelpers(g)
             do { try EACompatibility.stage(g) } catch { continue }
-            if let config = g.custom {
+            if let current = g.custom {
+                let config = CompatibilityFixes.preservingInstalledSettings(current, for: g)
                 guard config.launcherSHA == Hashing.sha256(data: Data(text.utf8)), CustomGames.launcherScript(for: config) != text else { continue }
                 do { try CustomGames.save(config, to: g); changed.append(g.name) } catch { continue }
                 continue

@@ -19,7 +19,7 @@
 //   tilt angle=30 invx=0 invy=0
 //   macro <n> down:<out> up:<out> wait:<ms> text:<hex utf8> …      (outs: macro:<n>)
 //   seq <n> in=<input>,<input>… step=0.4 out=<outs>
-//   menu <n> stick=0|1 s0=<outs> … s7=<outs>                       (outs: menu:<n>; keyboard)
+//   menu <n> stick=0|1|2 s0=<outs> … s7=<outs> (2: mouse direction)
 //   gyro … euro=1 mincut=5 beta=0.05 (a One Euro filter: steady when slow, quick when fast)
 // Layer 0 is the base. A button with no binding in any active layer stays itself (a controller button).
 #include "padengine.h"
@@ -27,6 +27,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
+#include <stddef.h>
 
 #define MAX_LAYERS 8
 #define MAX_OUTS 6
@@ -40,7 +41,7 @@
 #define MAX_MENUS 8
 
 enum { O_NONE, O_PAD, O_TRIG, O_KEY, O_MOUSE, O_WHEEL, O_GYRO_ON, O_GYRO_OFF, O_GYRO_TOGGLE, O_LAYER_HOLD, O_LAYER_TOGGLE,
-       O_MACRO, O_MENU, O_KEYBOARD, O_CALIBRATE, O_RUMBLE };
+       O_MACRO, O_MENU, O_KEYBOARD, O_CALIBRATE, O_RUMBLE, O_KEY_TOGGLE, O_MOUSE_TOGGLE, O_PAD_TOGGLE, O_TRIG_TOGGLE };
 typedef struct { unsigned char kind; short code; } out_t;
 typedef struct { out_t o[MAX_OUTS]; int n; } outs_t;
 typedef struct {
@@ -58,9 +59,10 @@ typedef struct {
     int keys[4];
     bool invy;
     double xs, ys;               // left/right and up/down speed (1 = as set)
-    double ramp, ramptime, edge, ramp_t;   // mouse: speed up the longer it's held at the edge
+    double ramp, ramptime, edge;   // mouse: speed up the longer it's held at the edge
     // state
     double x, y;                 // −1…1, y up
+    double ramp_t;
     bool flicking; double flick_left, flick_rate, last_angle; bool in_flick;
     int keys_down[4];
     double rest_x, rest_y;
@@ -91,6 +93,7 @@ typedef struct {
 enum { MS_DOWN, MS_UP, MS_WAIT, MS_TEXT };
 typedef struct { unsigned char kind; out_t o; int ms; char *text; } mstep_t;
 typedef struct { mstep_t step[MAX_STEPS]; int n; } macro_t;
+typedef struct { out_t o[MAX_STEPS]; int n; } macro_hold_t;
 typedef struct { int in[8]; int n; double step; outs_t out; } seq_t;
 typedef struct { bool set; int stick; int n; outs_t slice[8]; } menu_t;
 enum { TM_OFF, TM_MOUSE, TM_SCROLL, TM_ZONES };
@@ -103,12 +106,18 @@ typedef struct {
     double since;
     outs_t active;              // outputs held down for this input
     bool passthrough;
+    bool turbo_off;             // active describes the binding, not an output held during this phase
 } press_t;
 
 struct pe_engine {
+    char *source_text;
+    bool releasing;
+    int control_route[7];        // left/right sticks, left/right triggers, gyro, touch, tilt
+    int route[PE_PAD_BUTTONS]; bool route_down[PE_PAD_BUTTONS];
     pe_sink sink;
     binding_t bind[MAX_LAYERS][PE_ALL_INPUTS];
     bool layer_toggled[MAX_LAYERS];
+    int layer_toggle_owner[MAX_LAYERS], gyro_toggle_owner, menu_owner;
     int layer_holds[MAX_LAYERS];
     press_t press[PE_ALL_INPUTS];
     bool physical[PE_ALL_INPUTS];
@@ -116,12 +125,17 @@ struct pe_engine {
     int ndev;
     // outputs (reference counts)
     int pad_ref[PE_PAD_BUTTONS], trig_ref[2], key_ref[KEYS], mouse_ref[PE_MOUSE_BUTTONS];
+    bool key_toggle[KEYS], mouse_toggle[PE_MOUSE_BUTTONS];
+    bool pad_toggle[PE_PAD_BUTTONS], trig_toggle[2];
+    int pad_toggle_owner[PE_PAD_BUTTONS], trig_toggle_owner[2];
+    int current_input, key_toggle_owner[KEYS], mouse_toggle_owner[PE_MOUSE_BUTTONS];
     int axis_out[PE_AXES];
     int raw_axis[PE_AXES];
     stick_t stick[2];
     int trig_mode[2]; double trig_soft[2], trig_full[2];
     // gyro
     int gyro_out, gyro_yaw; bool gyro_default, gyro_toggled; int gyro_on_holds, gyro_off_holds;
+    bool gyro_touch_required, gyro_touched;
     double g_min, g_max, g_lo, g_hi, g_smooth, g_tight, g_stickfull, g_stickmin;
     bool g_invx, g_invy, g_autocal, uses_gyro;
     double g_xs, g_ys, g_yw, g_rw;     // how much turning (yaw) and tilting (roll) move left and right
@@ -131,6 +145,7 @@ struct pe_engine {
     double last_tick;
     timer_t_ timers[MAX_TIMERS]; int ntimers;
     double m_rest_x, m_rest_y;
+    int pulse_owner[MAX_TIMERS];
     outs_t pulse_store[MAX_TIMERS];      // outputs of taps waiting to be released
     int shown_layer, shown_gyro;          // last state reported to sink.state
     // Layers with their own stick or gyro settings, and which layer's apply now.
@@ -143,10 +158,12 @@ struct pe_engine {
     // tilt
     bool tilt_on; double tilt_angle, pitch_neutral; bool tilt_invx, tilt_invy, pitch_init;
     // macros, sequences, radial menus
-    macro_t macros[MAX_MACROS]; int macro_pos[MAX_MACROS]; bool macro_run[MAX_MACROS]; outs_t macro_held[MAX_MACROS];
+    int macro_owner[MAX_MACROS];
+    macro_t macros[MAX_MACROS]; int macro_pos[MAX_MACROS]; bool macro_run[MAX_MACROS]; macro_hold_t macro_held[MAX_MACROS];
     seq_t seqs[MAX_SEQS]; int hist_in[8]; double hist_t[8]; int nhist;
     menu_t menus[MAX_MENUS]; int menu_open, menu_sel;
     // calibration: 1 automatic (set down), 2 asked for
+    bool cal_manual;
     int cal_mode; double cal_start, cal_sum[3], cal_prev[3]; int cal_n; bool cal_done; float cal_shown;
 };
 static void apply_layers(pe_engine *e);
@@ -200,7 +217,7 @@ static bool parse_out(const char *s, out_t *o) {
     char *c = strchr(buf, ':');
     char *v = c ? c + 1 : NULL;
     if (c) *c = 0;
-    o->code = 0;
+    memset(o, 0, sizeof *o);
     if (!strcmp(buf, "none")) { o->kind = O_NONE; return true; }
     if (!strcmp(buf, "keyboard")) { o->kind = O_KEYBOARD; return true; }
     if (!strcmp(buf, "calibrate")) { o->kind = O_CALIBRATE; return true; }
@@ -208,12 +225,13 @@ static bool parse_out(const char *s, out_t *o) {
     if (!v) return false;
     if (!strcmp(buf, "macro")) { int n = atoi(v); if (n < 0 || n >= MAX_MACROS) return false; o->kind = O_MACRO; o->code = n; return true; }
     if (!strcmp(buf, "menu")) { int n = atoi(v); if (n < 0 || n >= MAX_MENUS) return false; o->kind = O_MENU; o->code = n; return true; }
-    if (!strcmp(buf, "pad")) { int i = pe_input_named(v); if (i < 0 || i >= PE_PAD_BUTTONS) return false; o->kind = O_PAD; o->code = i; return true; }
-    if (!strcmp(buf, "trig")) { o->kind = O_TRIG; o->code = v[0] == 'r'; return true; }
+    if (!strcmp(buf, "pad") || !strcmp(buf, "padtoggle")) { int i = pe_input_named(v); if (i < 0 || i >= PE_PAD_BUTTONS) return false; o->kind = !strcmp(buf, "padtoggle") ? O_PAD_TOGGLE : O_PAD; o->code = i; return true; }
+    if (!strcmp(buf, "trig") || !strcmp(buf, "trigtoggle")) { o->kind = !strcmp(buf, "trigtoggle") ? O_TRIG_TOGGLE : O_TRIG; o->code = v[0] == 'r'; return true; }
+    if (!strcmp(buf, "keytoggle")) { int k = atoi(v); if (k < 0 || k >= KEYS) return false; o->kind = O_KEY_TOGGLE; o->code = k; return true; }
     if (!strcmp(buf, "key")) { int k = atoi(v); if (k < 0 || k >= KEYS) return false; o->kind = O_KEY; o->code = k; return true; }
-    if (!strcmp(buf, "mouse")) {
+    if (!strcmp(buf, "mouse") || !strcmp(buf, "mousetoggle")) {
         static const char *m[] = {"left", "right", "middle", "back", "forward"};
-        for (int i = 0; i < PE_MOUSE_BUTTONS; i++) if (!strcmp(v, m[i])) { o->kind = O_MOUSE; o->code = i; return true; }
+        for (int i = 0; i < PE_MOUSE_BUTTONS; i++) if (!strcmp(v, m[i])) { o->kind = !strcmp(buf, "mousetoggle") ? O_MOUSE_TOGGLE : O_MOUSE; o->code = i; return true; }
         return false;
     }
     if (!strcmp(buf, "wheel")) { o->kind = O_WHEEL; o->code = strcmp(v, "down") ? 1 : -1; return true; }
@@ -249,7 +267,9 @@ pe_engine *pe_create(const char *text, pe_sink sink) {
     if (!text || strncmp(text, "nokpad ", 7)) return NULL;
     pe_engine *e = calloc(1, sizeof *e);
     if (!e) return NULL;
-    e->sink = sink;
+    e->sink = sink; e->current_input = -1;
+    for (int k = 0; k < KEYS; k++) e->key_toggle_owner[k] = -1;
+    for (int b = 0; b < PE_MOUSE_BUTTONS; b++) e->mouse_toggle_owner[b] = -1;
     for (int s = 0; s < 2; s++) {
         stick_t *k = &e->stick[s];
         k->mode = S_PAD; k->to = s; k->dz = 0.12; k->outer = 0.95; k->sens = 1500; k->power = 1.5;
@@ -262,11 +282,21 @@ pe_engine *pe_create(const char *text, pe_sink sink) {
     for (int l = 0; l < MAX_LAYERS; l++) for (int s2 = 0; s2 < 2; s2++) e->stick_cfg[l][s2] = e->stick[s2];
     e->touch_sens = 1500; e->touch_scroll = 12; e->touch_zone = -1; e->touch_click_in = -1;
     e->tilt_angle = 30; e->menu_open = -1; e->menu_sel = -1;
+    e->source_text = strdup(text);
     char *copy = strdup(text), *lsave;
     for (char *line = strtok_r(copy, "\n", &lsave); line; line = strtok_r(NULL, "\n", &lsave)) {
         char *words[64]; int nw = 0; char *wsave;
         for (char *w = strtok_r(line, " \t\r", &wsave); w && nw < 64; w = strtok_r(NULL, " \t\r", &wsave)) words[nw++] = w;
         if (!nw) continue;
+        if (!strcmp(words[0], "route") && nw >= 3) {
+            int in = pe_input_named(words[1]);
+            const char *v = words[2];
+            int route = !strcmp(v, "native") ? 1 : !strcmp(v, "both") ? 2 : !strcmp(v, "disabled") ? 3 : !strcmp(v, "mapped") ? 4 : 0;
+            static const char *names[] = { "lstick", "rstick", "lt", "rt", "gyro", "touch", "tilt" };
+            for (int c = 0; c < 7; c++) if (!strcmp(words[1], names[c])) e->control_route[c] = route;
+            if (in >= 0 && in < PE_PAD_BUTTONS) e->route[in] = route;
+            continue;
+        }
         // A macro's steps are words of their own ("down:key:13"), not options.
         if (!strcmp(words[0], "macro") && nw > 1) {
             int n = atoi(words[1]); if (n < 0 || n >= MAX_MACROS) continue;
@@ -350,7 +380,8 @@ pe_engine *pe_create(const char *text, pe_sink sink) {
             if (q->n < 2) q->n = 0;
         } else if (!strcmp(words[0], "menu") && nw > 1) {
             int n = atoi(words[1]); if (n < 0 || n >= MAX_MENUS) continue;
-            menu_t *mn = &e->menus[n]; mn->set = true; mn->stick = (int)opt_d(OPT("stick"), 1) ? 1 : 0; mn->n = 0;
+            menu_t *mn = &e->menus[n]; mn->set = true;
+            double pick = opt_d(OPT("stick"), 1); mn->stick = pick == 0 ? 0 : pick == 2 ? 2 : 1; mn->n = 0;
             for (int i = 0; i < 8; i++) {
                 char key[4]; snprintf(key, sizeof key, "s%d", i);
                 const char *o = OPT(key); if (!o) break;
@@ -419,11 +450,12 @@ pe_engine *pe_create(const char *text, pe_sink sink) {
 void pe_destroy(pe_engine *e) {
     if (!e) return;
     for (int m = 0; m < MAX_MACROS; m++) for (int i = 0; i < e->macros[m].n; i++) free(e->macros[m].step[i].text);
+    free(e->source_text);
     free(e);
 }
-bool pe_uses_touch(const pe_engine *e) { return e && e->touch_mode != TM_OFF; }
-bool pe_uses_tilt(const pe_engine *e) { return e && e->tilt_on; }
-bool pe_uses_gyro(const pe_engine *e) { return e && e->uses_gyro; }
+bool pe_uses_touch(const pe_engine *e) { return e && e->touch_mode != TM_OFF && e->control_route[5] != 1 && e->control_route[5] != 3; }
+bool pe_uses_tilt(const pe_engine *e) { return e && e->tilt_on && e->control_route[6] != 1 && e->control_route[6] != 3; }
+bool pe_uses_gyro(const pe_engine *e) { return e && e->uses_gyro && e->control_route[4] != 1 && e->control_route[4] != 3; }
 
 // MARK: Outputs
 
@@ -458,6 +490,7 @@ static void report_state(pe_engine *e) {
 }
 
 static void out_set(pe_engine *e, out_t o, bool down) {
+    if (e->releasing && down) return;
     int d = down ? 1 : -1;
     switch (o.kind) {
     case O_PAD: {
@@ -473,16 +506,28 @@ static void out_set(pe_engine *e, out_t o, bool down) {
         int r = e->mouse_ref[o.code] += d; if (r < 0) e->mouse_ref[o.code] = r = 0;
         if ((down && r == 1) || (!down && r == 0)) if (e->sink.mouse_button) e->sink.mouse_button(e->sink.ctx, o.code, down);
         break; }
+    case O_PAD_TOGGLE:
+        if (down) { e->pad_toggle[o.code] = !e->pad_toggle[o.code]; e->pad_toggle_owner[o.code] = e->pad_toggle[o.code] ? e->current_input : -1; out_set(e, (out_t){ O_PAD, o.code }, e->pad_toggle[o.code]); }
+        break;
+    case O_TRIG_TOGGLE:
+        if (down) { e->trig_toggle[o.code] = !e->trig_toggle[o.code]; e->trig_toggle_owner[o.code] = e->trig_toggle[o.code] ? e->current_input : -1; out_set(e, (out_t){ O_TRIG, o.code }, e->trig_toggle[o.code]); }
+        break;
+    case O_KEY_TOGGLE:
+        if (down) { e->key_toggle[o.code] = !e->key_toggle[o.code]; e->key_toggle_owner[o.code] = e->key_toggle[o.code] ? e->current_input : -1; out_set(e, (out_t){ O_KEY, o.code }, e->key_toggle[o.code]); }
+        break;
+    case O_MOUSE_TOGGLE:
+        if (down) { e->mouse_toggle[o.code] = !e->mouse_toggle[o.code]; e->mouse_toggle_owner[o.code] = e->mouse_toggle[o.code] ? e->current_input : -1; out_set(e, (out_t){ O_MOUSE, o.code }, e->mouse_toggle[o.code]); }
+        break;
     case O_WHEEL: if (down && e->sink.wheel) e->sink.wheel(e->sink.ctx, o.code); break;
     case O_GYRO_ON: e->gyro_on_holds += d; if (e->gyro_on_holds < 0) e->gyro_on_holds = 0; break;
     case O_GYRO_OFF: e->gyro_off_holds += d; if (e->gyro_off_holds < 0) e->gyro_off_holds = 0; break;
-    case O_GYRO_TOGGLE: if (down) e->gyro_toggled = !e->gyro_toggled; break;
+    case O_GYRO_TOGGLE: if (down) { e->gyro_toggled = !e->gyro_toggled; e->gyro_toggle_owner = e->gyro_toggled ? e->current_input : -1; } break;
     case O_LAYER_HOLD: e->layer_holds[o.code] += d; if (e->layer_holds[o.code] < 0) e->layer_holds[o.code] = 0; break;
-    case O_LAYER_TOGGLE: if (down) e->layer_toggled[o.code] = !e->layer_toggled[o.code]; break;
+    case O_LAYER_TOGGLE: if (down) { e->layer_toggled[o.code] = !e->layer_toggled[o.code]; e->layer_toggle_owner[o.code] = e->layer_toggled[o.code] ? e->current_input : -1; } break;
     case O_MACRO:
-        if (down && !e->macro_run[o.code] && e->macros[o.code].n) { e->macro_run[o.code] = true; e->macro_pos[o.code] = 0; e->macro_held[o.code].n = 0; run_macro(e, o.code, e->last_tick); }
+        if (down && !e->macro_run[o.code] && e->macros[o.code].n) { e->macro_owner[o.code] = e->current_input; e->macro_run[o.code] = true; e->macro_pos[o.code] = 0; e->macro_held[o.code].n = 0; run_macro(e, o.code, e->last_tick); }
         break;
-    case O_MENU: if (down) menu_begin(e, o.code); else if (e->menu_open == o.code) menu_end(e); break;
+    case O_MENU: if (down) { e->menu_owner = e->current_input; menu_begin(e, o.code); } else if (e->menu_open == o.code) menu_end(e); break;
     case O_KEYBOARD: if (down && e->sink.menu) e->sink.menu(e->sink.ctx, PE_KEYBOARD_MENU, 1); break;
     case O_CALIBRATE: if (down) pe_calibrate(e, e->last_tick); break;
     case O_RUMBLE: if (down && e->sink.menu) e->sink.menu(e->sink.ctx, PE_RUMBLE_MENU, 1); break;
@@ -495,13 +540,31 @@ static void outs_set(pe_engine *e, const outs_t *o, bool down) {
     if (down) for (int i = 0; i < o->n; i++) out_set(e, o->o[i], true);
     else for (int i = o->n - 1; i >= 0; i--) out_set(e, o->o[i], false);
 }
+// Persistent controller outputs have the same independent ownership as key/mouse latches.
+static void clear_controller_toggles(pe_engine *e, const bool *affected) {
+    for (int b = 0; b < PE_PAD_BUTTONS; b++) {
+        int owner = e->pad_toggle_owner[b];
+        if (e->pad_toggle[b] && owner >= 0 && owner < PE_ALL_INPUTS && affected[owner]) {
+            e->pad_toggle[b] = false; e->pad_toggle_owner[b] = -1;
+            out_set(e, (out_t){ O_PAD, (short)b }, false);
+        }
+    }
+    for (int t = 0; t < 2; t++) {
+        int owner = e->trig_toggle_owner[t];
+        if (e->trig_toggle[t] && owner >= 0 && owner < PE_ALL_INPUTS && affected[owner]) {
+            e->trig_toggle[t] = false; e->trig_toggle_owner[t] = -1;
+            out_set(e, (out_t){ O_TRIG, (short)t }, false);
+        }
+    }
+}
 // Down now, up after a short pulse (taps). Stored in a timer by value.
 static void pulse(pe_engine *e, const outs_t *o, double now) {
+    if (e->releasing || e->ntimers >= MAX_TIMERS) return;
     outs_set(e, o, true);
     int slot = -1;
     for (int i = 0; i < MAX_TIMERS; i++) { bool used = false; for (int t = 0; t < e->ntimers; t++) if (e->timers[t].kind == T_RELEASE_OUTS && e->timers[t].a == i) used = true; if (!used) { slot = i; break; } }
     if (slot < 0) { outs_set(e, o, false); return; }
-    e->pulse_store[slot] = *o;
+    e->pulse_store[slot] = *o; e->pulse_owner[slot] = e->current_input;
     timer_add(e, now + PULSE, T_RELEASE_OUTS, slot, 0);
 }
 
@@ -523,7 +586,7 @@ static void input_up(pe_engine *e, int in, double now);
 // The controller button an input stays when nothing is set for it: the controller's own, and the buttons of a
 // device that joins it. -1: nothing.
 static int pass_target(const pe_engine *e, int in) {
-    if (in < PE_PAD_BUTTONS) return in;
+    if (in < PE_PAD_BUTTONS) return e->route[in] == 4 ? -1 : in;
     int slot = dev_slot(in);
     if (slot && e->dev[slot].join && dev_key(in) < PE_PAD_BUTTONS) return dev_key(in);
     return -1;
@@ -533,7 +596,7 @@ static void begin_press(pe_engine *e, int in, const binding_t *b, double now) {
     press_t *p = &e->press[in];
     // A binding that only has a simultaneous-press part leaves the button as itself otherwise.
     if (b && !b->press.n && !b->tap.n && !b->hold.n && !b->dbl.n) b = NULL;
-    p->b = b; p->since = now; p->passthrough = false;
+    p->b = b; p->since = now; p->passthrough = false; p->turbo_off = false;
     if (!b) {
         p->phase = P_PRESS; p->passthrough = true;
         int t = pass_target(e, in);
@@ -572,7 +635,12 @@ static void check_sequences(pe_engine *e, int in, double now) {
         if (ok) { e->nhist = 0; pulse(e, &sq->out, now); return; }
     }
 }
+static void input_down_impl(pe_engine *e, int in, double now);
 static void input_down(pe_engine *e, int in, double now) {
+    int old = e->current_input; e->current_input = in;
+    input_down_impl(e, in, now); e->current_input = old;
+}
+static void input_down_impl(pe_engine *e, int in, double now) {
     press_t *p = &e->press[in];
     check_sequences(e, in, now);
     if (p->phase == P_WAIT_DOUBLE && p->b && p->b->dbl.n && now - p->since <= p->b->double_time) {
@@ -588,6 +656,7 @@ static void input_down(pe_engine *e, int in, double now) {
         p->phase = P_IDLE;
     }
     if (p->phase != P_IDLE) return;
+    p->turbo_off = false;
     const binding_t *b = lookup(e, in);
     // Simultaneous press: wait briefly for the partner.
     if (b && b->sim_with >= 0) {
@@ -620,7 +689,12 @@ static void input_down(pe_engine *e, int in, double now) {
     begin_press(e, in, b, now);
 }
 
+static void input_up_impl(pe_engine *e, int in, double now);
 static void input_up(pe_engine *e, int in, double now) {
+    int old = e->current_input; e->current_input = in;
+    input_up_impl(e, in, now); e->current_input = old;
+}
+static void input_up_impl(pe_engine *e, int in, double now) {
     press_t *p = &e->press[in];
     switch (p->phase) {
     case P_IDLE: return;
@@ -645,7 +719,7 @@ static void input_up(pe_engine *e, int in, double now) {
     default:
         timers_cancel(e, T_TURBO, in);
         if (p->passthrough) { int t = pass_target(e, in); if (t >= 0) { out_t o = { O_PAD, (short)t }; out_set(e, o, false); } }
-        else outs_set(e, &p->active, false);
+        else if (!p->turbo_off) outs_set(e, &p->active, false);
         p->active.n = 0; p->phase = P_IDLE; p->passthrough = false;
         return;
     }
@@ -661,6 +735,13 @@ static int touch_zone_of(double x, double y) { return (x >= 0.5) + 2 * (y >= 0.5
 
 void pe_button(pe_engine *e, int button, bool down, double now) {
     if (!e || button < 0 || button >= PE_PAD_BUTTONS) return;
+    if (e->route[button]) {
+        if (e->route_down[button] == down) return;
+        e->route_down[button] = down;
+        if (e->route[button] == 1 || e->route[button] == 2)
+            out_set(e, (out_t){ O_PAD, (short)button }, down);
+        if (e->route[button] != 2 && e->route[button] != 4) return;
+    }
     // With touchpad zones, a click counts as a click in the zone under the finger (when that's set to something).
     if (button == PE_TOUCHPAD && e->touch_mode == TM_ZONES) {
         if (down && e->f_down[0] && e->touch_click_in < 0) {
@@ -689,12 +770,15 @@ static void update_triggers(pe_engine *e) {
     for (int t = 0; t < 2; t++) {
         int v = 0;
         if (e->trig_ref[t] > 0) v = 32767;
-        else if (e->trig_mode[t] == 0 && !trigger_bound(e, t)) v = e->raw_axis[PE_AXIS_LT + t];
+        int route = e->control_route[2 + t];
+        if (route == 1 || route == 2) { if (e->raw_axis[PE_AXIS_LT + t] > v) v = e->raw_axis[PE_AXIS_LT + t]; }
+        else if (route == 0 && e->trig_mode[t] == 0 && !trigger_bound(e, t) && v == 0) v = e->raw_axis[PE_AXIS_LT + t];
         if (e->ndev) { int dv = (int)lround(fmin(1, dev_pad(e, 4 + t)) * 32767); if (dv > v) v = dv; }
         emit_axis(e, PE_AXIS_LT + t, v);
     }
 }
 static void trigger_input(pe_engine *e, int t, double now) {
+    if (e->control_route[2 + t] == 1 || e->control_route[2 + t] == 3) return;
     double v = e->raw_axis[PE_AXIS_LT + t] / 32767.0;
     int soft = PE_LT + t, full = PE_LT_FULL + t;
     bool sdown = v >= e->trig_soft[t], fdown = v >= e->trig_full[t];
@@ -716,7 +800,7 @@ static void update_pad_sticks(pe_engine *e) {
     double sx[2] = {0, 0}, sy[2] = {0, 0};
     for (int s = 0; s < 2; s++) {
         stick_t *k = &e->stick[s];
-        if (k->mode != S_PAD) continue;
+        if (k->mode != S_PAD || e->control_route[s] == 1 || e->control_route[s] == 3) continue;
         double x, y, m; stick_shape(k, k->x, k->y, &x, &y, &m);
         sx[k->to] += x * k->xs; sy[k->to] += (k->invy ? -y : y) * k->ys;
     }
@@ -725,11 +809,17 @@ static void update_pad_sticks(pe_engine *e) {
     for (int s = 0; s < 2; s++) {
         double dx = e->ndev ? dev_pad(e, 2 * s) : 0, dy = e->ndev ? dev_pad(e, 2 * s + 1) : 0;
         double x = fmax(-1, fmin(1, sx[s] + dx)), y = fmax(-1, fmin(1, -sy[s] + dy));
+        if (e->control_route[s] == 1 || e->control_route[s] == 2) {
+            double nx = e->raw_axis[2 * s] / 32767.0, ny = e->raw_axis[2 * s + 1] / 32767.0;
+            if (fabs(nx) > fabs(x)) x = nx;
+            if (fabs(ny) > fabs(y)) y = ny;
+        }
         emit_axis(e, s ? PE_AXIS_RX : PE_AXIS_LX, (int)lround(x * 32767));
         emit_axis(e, s ? PE_AXIS_RY : PE_AXIS_LY, (int)lround(y * 32767));      // SDL: y down
     }
 }
 static void mouse_out(pe_engine *e, double dx, double dy) {
+    if (pe_menu_mouse(e, dx, dy)) { e->m_rest_x = e->m_rest_y = 0; return; }
     e->m_rest_x += dx; e->m_rest_y += dy;
     int x = (int)e->m_rest_x, y = (int)e->m_rest_y;
     if (!x && !y) return;
@@ -746,7 +836,9 @@ static void stick_keys(pe_engine *e, stick_t *k) {
     }
     for (int i = 0; i < 4; i++) if (want[i] != (k->keys_down[i] != 0)) {
         k->keys_down[i] = want[i];
-        out_t o = { O_KEY, (short)k->keys[i] }; out_set(e, o, want[i]);
+        if (k->keys[i] >= 0 && k->keys[i] < KEYS) {
+            out_t o = { O_KEY, (short)k->keys[i] }; out_set(e, o, want[i]);
+        }
     }
 }
 // The stick as four buttons (eight ways: up-right holds both), each set like any button.
@@ -826,6 +918,7 @@ void pe_axis(pe_engine *e, int axis, int value, double now) {
     if (axis == PE_AXIS_LT || axis == PE_AXIS_RT) { int t = axis - PE_AXIS_LT; trigger_input(e, t, now); update_triggers(e); return; }
     int s = axis >= PE_AXIS_RX;
     stick_t *k = &e->stick[s];
+    if (e->control_route[s] == 1 || e->control_route[s] == 3) { k->x = k->y = 0; update_pad_sticks(e); return; }
     k->x = e->raw_axis[s ? PE_AXIS_RX : PE_AXIS_LX] / 32767.0;
     k->y = -e->raw_axis[s ? PE_AXIS_RY : PE_AXIS_LY] / 32767.0;       // y up
     // A radial menu is open on this stick: the stick points at a slice and does nothing else.
@@ -848,9 +941,20 @@ void pe_axis(pe_engine *e, int axis, int value, double now) {
 // MARK: Gyro
 
 static bool gyro_enabled(const pe_engine *e) {
+    if (e->control_route[4] == 1 || e->control_route[4] == 3) return false;
     if (e->gyro_off_holds > 0) return false;
+    if (e->gyro_touch_required) return e->gyro_touched;
     if (e->gyro_on_holds > 0) return true;
     return e->gyro_default != e->gyro_toggled;
+}
+void pe_gyro_touch(pe_engine *e, bool required, bool touched) {
+    if (!e || (e->gyro_touch_required == required && e->gyro_touched == touched)) return;
+    e->gyro_touch_required = required; e->gyro_touched = touched;
+    e->last_gyro = 0; e->eu_init = false;
+    memset(e->smooth_buf, 0, sizeof e->smooth_buf); e->smooth_i = 0;
+    e->m_rest_x = e->m_rest_y = 0;
+    e->gyro_stick_x = e->gyro_stick_y = 0;
+    update_pad_sticks(e); report_state(e);
 }
 
 // MARK: Calibration
@@ -863,6 +967,7 @@ static void cal_report(pe_engine *e, float p) {
 }
 void pe_calibrate(pe_engine *e, double now) {
     if (!e) return;
+    e->cal_manual = true;
     e->cal_mode = 2; e->cal_start = now; e->cal_n = 0; e->cal_sum[0] = e->cal_sum[1] = e->cal_sum[2] = 0;
     e->cal_shown = -1; cal_report(e, 0);
 }
@@ -875,6 +980,7 @@ static void calibration_sample(pe_engine *e, double x, double y, double z, doubl
     if (still) { if (!e->still_since) { e->still_since = now; e->cal_done = false; } }
     else { e->still_since = 0; }
     if (e->cal_mode == 0 && e->g_autocal && still && !e->cal_done && now - e->still_since > 0.5) {
+        e->cal_manual = false;
         e->cal_mode = 1; e->cal_start = now; e->cal_n = 0; e->cal_sum[0] = e->cal_sum[1] = e->cal_sum[2] = 0; e->cal_shown = -1;
     }
     if (!e->cal_mode) return;
@@ -894,7 +1000,7 @@ static void calibration_sample(pe_engine *e, double x, double y, double z, doubl
 }
 
 void pe_gyro(pe_engine *e, float gx, float gy, float gz, double now) {
-    if (!e || e->gyro_out == G_OFF) return;
+    if (!e || e->gyro_out == G_OFF || e->control_route[4] == 1 || e->control_route[4] == 3) return;
     pe_tick(e, now);
     double dt = e->last_gyro > 0 ? now - e->last_gyro : 0;
     e->last_gyro = now;
@@ -978,6 +1084,8 @@ void pe_tick(pe_engine *e, double now) {
             e->timers[i] = e->timers[--e->ntimers];
             again = true;
             press_t *p = t.kind == T_RELEASE_OUTS || t.kind == T_MACRO ? NULL : &e->press[t.a];
+            int old_origin = e->current_input;
+            e->current_input = t.kind == T_RELEASE_OUTS ? -1 : t.kind == T_MACRO ? e->macro_owner[t.a] : t.a;
             switch (t.kind) {
             case T_RELEASE_OUTS: outs_set(e, &e->pulse_store[t.a], false); break;
             case T_HOLD:
@@ -999,6 +1107,7 @@ void pe_tick(pe_engine *e, double now) {
                 if (p->phase == P_PRESS && p->b && p->b->turbo > 0) {
                     bool down = t.b == 0;
                     outs_set(e, &p->active, down);
+                    p->turbo_off = !down;
                     timer_add(e, t.at + p->b->turbo / 2, T_TURBO, t.a, down ? 1 : 0);
                 }
                 break;
@@ -1007,6 +1116,7 @@ void pe_tick(pe_engine *e, double now) {
                 break;
             case T_MACRO: run_macro(e, t.a, t.at); break;
             }
+            e->current_input = old_origin;
             break;
         }
     }
@@ -1029,19 +1139,30 @@ double pe_next_deadline(const pe_engine *e) {
     return d;
 }
 
+static void close_menu_without_action(pe_engine *e) {
+    if (e->menu_open < 0) return;
+    int menu = e->menu_open; e->menu_open = e->menu_sel = -1;
+    if (e->sink.menu) e->sink.menu(e->sink.ctx, menu, -2);
+}
 void pe_release_all(pe_engine *e, double now) {
-    if (!e) return;
+    if (!e || e->releasing) return;
+    e->releasing = true;
+    e->gyro_touched = false;
+    close_menu_without_action(e);
+    memset(e->raw_axis, 0, sizeof e->raw_axis);
+    for (int s = 0; s < 2; s++) e->stick[s].x = e->stick[s].y = 0;
+    for (int d = 1; d <= PE_MAX_DEVICES; d++) for (int a = 0; a < PE_DEV_AXES; a++) e->dev[d].ax[a].v = 0;
     for (int i = 0; i < PE_ALL_INPUTS; i++) if (e->physical[i] || e->press[i].phase != P_IDLE) {
         e->physical[i] = false;
         press_t *p = &e->press[i];
         int t = p->passthrough ? pass_target(e, i) : -1;
         if (t >= 0) { out_t o = { O_PAD, (short)t }; out_set(e, o, false); }
-        else outs_set(e, &p->active, false);
+        else if (!p->turbo_off) outs_set(e, &p->active, false);
         p->active.n = 0; p->phase = P_IDLE; p->passthrough = false;
     }
     for (int i = 0; i < e->ntimers; i++) if (e->timers[i].kind == T_RELEASE_OUTS) outs_set(e, &e->pulse_store[e->timers[i].a], false);
     e->ntimers = 0;
-    for (int m = 0; m < MAX_MACROS; m++) if (e->macro_run[m]) { outs_set(e, &e->macro_held[m], false); e->macro_held[m].n = 0; e->macro_run[m] = false; }
+    for (int m = 0; m < MAX_MACROS; m++) if (e->macro_run[m]) { for (int i = e->macro_held[m].n - 1; i >= 0; i--) out_set(e, e->macro_held[m].o[i], false); e->macro_held[m].n = 0; e->macro_run[m] = false; }
     if (e->menu_open >= 0) { int n = e->menu_open; e->menu_open = -1; e->menu_sel = -1; if (e->sink.menu) e->sink.menu(e->sink.ctx, n, -2); }
     e->f_down[0] = e->f_down[1] = false; e->touch_zone = -1; e->touch_click_in = -1; e->nhist = 0;
     for (int s = 0; s < 2; s++) { stick_t *k = &e->stick[s]; k->x = k->y = 0; if (k->mode == S_KEYS) stick_keys(e, k); k->in_flick = k->flicking = false; }
@@ -1053,13 +1174,21 @@ void pe_release_all(pe_engine *e, double now) {
     for (int m = 0; m < PE_MOUSE_BUTTONS; m++) if (e->mouse_ref[m]) { e->mouse_ref[m] = 1; out_t o = { O_MOUSE, (short)m }; out_set(e, o, false); }
     e->trig_ref[0] = e->trig_ref[1] = 0;
     memset(e->layer_holds, 0, sizeof e->layer_holds);
+    memset(e->route_down, 0, sizeof e->route_down);
+    memset(e->key_toggle, 0, sizeof e->key_toggle);
+    memset(e->mouse_toggle, 0, sizeof e->mouse_toggle);
+    memset(e->pad_toggle, 0, sizeof e->pad_toggle);
+    memset(e->trig_toggle, 0, sizeof e->trig_toggle);
     memset(e->layer_toggled, 0, sizeof e->layer_toggled);
     e->gyro_on_holds = e->gyro_off_holds = 0;
+    e->gyro_toggled = false; e->gyro_toggle_owner = -1;
     apply_layers(e);
     update_triggers(e);
     update_pad_sticks(e);
     report_state(e);
     (void)now;
+    memset(e->press, 0, sizeof e->press); memset(e->physical, 0, sizeof e->physical); e->ntimers = 0;
+    e->releasing = false;
 }
 
 // MARK: Extra devices
@@ -1152,35 +1281,55 @@ static void apply_layers(pe_engine *e) {
 static void run_macro(pe_engine *e, int n, double now) {
     if (n < 0 || n >= MAX_MACROS || !e->macro_run[n]) return;
     macro_t *m = &e->macros[n];
-    outs_t *held = &e->macro_held[n];
+    macro_hold_t *held = &e->macro_held[n];
     while (e->macro_pos[n] < m->n) {
         const mstep_t *st = &m->step[e->macro_pos[n]++];
         switch (st->kind) {
         case MS_DOWN:
             if (st->o.kind == O_MACRO) break;                 // no macros inside macros
             out_set(e, st->o, true);
-            if (held->n < MAX_OUTS) held->o[held->n++] = st->o;
+            if (held->n < MAX_STEPS) held->o[held->n++] = st->o;
             break;
         case MS_UP:
             for (int i = 0; i < held->n; i++) if (held->o[i].kind == st->o.kind && held->o[i].code == st->o.code) {
                 out_set(e, st->o, false); held->o[i] = held->o[--held->n]; break;
             }
             break;
-        case MS_WAIT: timer_add(e, now + st->ms / 1000.0, T_MACRO, n, 0); return;
+        case MS_WAIT:
+            if (e->ntimers >= MAX_TIMERS) goto complete;
+            timer_add(e, now + st->ms / 1000.0, T_MACRO, n, 0); return;
         case MS_TEXT: if (st->text && e->sink.text) e->sink.text(e->sink.ctx, st->text); break;
         }
     }
-    outs_set(e, held, false); held->n = 0;                   // nothing stays held after a macro
+complete:
+    for (int i = held->n - 1; i >= 0; i--) out_set(e, held->o[i], false);
+    held->n = 0;                   // nothing stays held after a macro
     e->macro_run[n] = false;
 }
 
 // MARK: Radial menus
 
+bool pe_menu_mouse(pe_engine *e, double dx, double dy) {
+    if (!e || e->menu_open < 0 || e->menus[e->menu_open].stick != 2) return false;
+    const menu_t *mn = &e->menus[e->menu_open];
+    if (!mn->n || !isfinite(dx) || !isfinite(dy) || (dx == 0 && dy == 0)) return true;
+    double angle = atan2(dx, -dy) * 180 / M_PI;
+    if (angle < 0) angle += 360;
+    double width = 360.0 / mn->n;
+    int selected = (int)floor((angle + width / 2) / width) % mn->n;
+    if (selected != e->menu_sel) {
+        e->menu_sel = selected;
+        if (e->sink.menu) e->sink.menu(e->sink.ctx, e->menu_open, selected);
+    }
+    return true;
+}
+
 static void menu_begin(pe_engine *e, int n) {
     if (n < 0 || n >= MAX_MENUS || !e->menus[n].set || e->menu_open >= 0) return;
     e->menu_open = n; e->menu_sel = -1;
     int s = e->menus[n].stick;
-    stick_t *k = &e->stick[s]; k->x = k->y = 0; stick_mode_update(e, s); update_pad_sticks(e);
+    if (s < 2) { stick_t *k = &e->stick[s]; k->x = k->y = 0; stick_mode_update(e, s); update_pad_sticks(e); }
+    else e->m_rest_x = e->m_rest_y = 0;
     if (e->sink.menu) e->sink.menu(e->sink.ctx, n, -1);
 }
 static void menu_end(pe_engine *e) {
@@ -1191,6 +1340,7 @@ static void menu_end(pe_engine *e) {
     if (sel >= 0 && sel < e->menus[n].n) pulse(e, &e->menus[n].slice[sel], e->last_tick);
     // The stick goes back to what it does, where it is now.
     int s = e->menus[n].stick;
+    if (s == 2) return;
     stick_t *k = &e->stick[s];
     k->x = e->raw_axis[s ? PE_AXIS_RX : PE_AXIS_LX] / 32767.0; k->y = -e->raw_axis[s ? PE_AXIS_RY : PE_AXIS_LY] / 32767.0;
     stick_mode_update(e, s); update_pad_sticks(e);
@@ -1199,7 +1349,7 @@ static void menu_end(pe_engine *e) {
 // MARK: Touchpad
 
 void pe_touch(pe_engine *e, int f, bool down, float fx, float fy, double now) {
-    if (!e || f < 0 || f > 1 || e->touch_mode == TM_OFF) return;
+    if (!e || f < 0 || f > 1 || !pe_uses_touch(e)) return;
     pe_tick(e, now);
     bool was = e->f_down[f]; double px = e->f_x[f], py = e->f_y[f];
     double x = fmin(1, fmax(0, fx)), y = fmin(1, fmax(0, fy));
@@ -1237,7 +1387,7 @@ void pe_touch(pe_engine *e, int f, bool down, float fx, float fy, double now) {
 // MARK: Tilt
 
 void pe_accel(pe_engine *e, float ax, float ay, float az, double now) {
-    if (!e || !e->tilt_on) return;
+    if (!e || !pe_uses_tilt(e)) return;
     pe_tick(e, now);
     double g = sqrt(ax * ax + ay * ay + az * az);
     if (g <= 0) return;
@@ -1254,3 +1404,264 @@ void pe_accel(pe_engine *e, float ax, float ay, float az, double now) {
     set_input(e, PE_TILT_RIGHT, r, now); set_input(e, PE_TILT_LEFT, l, now);
     set_input(e, PE_TILT_FWD, fw, now); set_input(e, PE_TILT_BACK, bk, now);
 }
+
+// Only binding lines may differ. All other settings must match byte-for-byte.
+static const char *next_config_line(const char *p, size_t *length) {
+    while (*p) {
+        const char *end = strchr(p, '\n'); if (!end) end = p + strlen(p);
+        if (strncmp(p, "bind ", 5)) { *length = (size_t)(end - p); return p; }
+        p = *end ? end + 1 : end;
+    }
+    *length = 0; return p;
+}
+bool pe_update_bindings(pe_engine *e, const char *text) {
+    if (!e || !text || !e->source_text) return false;
+    // Re-saving equivalent runtime text must never cancel a toggle, pulse or sequence.
+    if (!strcmp(e->source_text, text)) return true;
+    const char *a = e->source_text, *b = text;
+    while (*a || *b) {
+        size_t na, nb; a = next_config_line(a, &na); b = next_config_line(b, &nb);
+        if (na != nb || memcmp(a, b, na)) return false;
+        if (!*a || !*b) { if (*a != *b) return false; break; }
+        a += na; b += nb; if (*a) a++; if (*b) b++;
+    }
+    pe_engine *next = pe_create(text, (pe_sink){0});
+    if (!next) return false;
+    bool changed[PE_ALL_INPUTS] = {0};
+    for (int i = 0; i < PE_ALL_INPUTS; i++) {
+        for (int l = 0; l < MAX_LAYERS; l++)
+            if (memcmp(&e->bind[l][i], &next->bind[l][i], sizeof(binding_t))) changed[i] = true;
+        if (changed[i] && e->press[i].phase == P_SIM) { pe_destroy(next); return false; }
+    }
+    // Actions copy their output values or retain stable binding-table addresses. An
+    // unrelated edit can keep them alive; only editing their owner needs replacement.
+    if (e->menu_open >= 0 && (e->menu_owner < 0 || e->menu_owner >= PE_ALL_INPUTS || changed[e->menu_owner])) { pe_destroy(next); return false; }
+    for (int m = 0; m < MAX_MACROS; m++) if (e->macro_run[m]) {
+        int owner = e->macro_owner[m];
+        if (owner < 0 || owner >= PE_ALL_INPUTS || changed[owner]) { pe_destroy(next); return false; }
+    }
+    for (int t = 0; t < e->ntimers; t++) {
+        const timer_t_ *timer = &e->timers[t];
+        if (timer->kind == T_RELEASE_OUTS) {
+            int owner = e->pulse_owner[timer->a];
+            if (owner < 0 || owner >= PE_ALL_INPUTS || changed[owner]) { pe_destroy(next); return false; }
+        }
+    }
+    for (int i = 0; i < PE_ALL_INPUTS; i++) {
+        const press_t *p = &e->press[i];
+        if (p->phase != P_SIM && p->phase != P_SIM_PENDING) continue;
+        int peer = p->b ? p->b->sim_with : -1;
+        if (changed[i] || (peer >= 0 && peer < PE_ALL_INPUTS && changed[peer])) { pe_destroy(next); return false; }
+    }
+    for (int k = 0; k < KEYS; k++) if (e->key_toggle[k] && (e->key_toggle_owner[k] < 0 || e->key_toggle_owner[k] >= PE_ALL_INPUTS)) { pe_destroy(next); return false; }
+    for (int b = 0; b < PE_MOUSE_BUTTONS; b++) if (e->mouse_toggle[b] && (e->mouse_toggle_owner[b] < 0 || e->mouse_toggle_owner[b] >= PE_ALL_INPUTS)) { pe_destroy(next); return false; }
+    for (int k = 0; k < KEYS; k++) if (e->key_toggle[k] && changed[e->key_toggle_owner[k]]) {
+        e->key_toggle[k] = false; e->key_toggle_owner[k] = -1; out_set(e, (out_t){ O_KEY, (short)k }, false);
+    }
+    for (int b = 0; b < PE_MOUSE_BUTTONS; b++) if (e->mouse_toggle[b] && changed[e->mouse_toggle_owner[b]]) {
+        e->mouse_toggle[b] = false; e->mouse_toggle_owner[b] = -1; out_set(e, (out_t){ O_MOUSE, (short)b }, false);
+    }
+    clear_controller_toggles(e, changed);
+    // Captured bindings stay at the same address after the table copy.
+    for (int i = 0; i < PE_ALL_INPUTS; i++) {
+        if (!changed[i]) continue;
+        timers_cancel(e, T_TURBO, i);
+        timers_cancel(e, T_HOLD, i);
+        timers_cancel(e, T_DOUBLE_WAIT, i);
+        press_t *p = &e->press[i];
+        if (p->passthrough) {
+            int t = pass_target(e, i); if (t >= 0) out_set(e, (out_t){ O_PAD, (short)t }, false);
+        } else if (!p->turbo_off) outs_set(e, &p->active, false);
+        memset(p, 0, sizeof *p);
+        // Keep physical state until release; a changed hold cannot spuriously press its replacement.
+    }
+    memcpy(e->bind, next->bind, sizeof e->bind);
+    // Persistent mode actions outlive the physical press, so their captured active
+    // outputs above cannot release them. Clear only a replaced binding's latch.
+    for (int l = 1; l < MAX_LAYERS; l++) {
+        int owner = e->layer_toggle_owner[l];
+        if (e->layer_toggled[l] && owner >= 0 && owner < PE_ALL_INPUTS && changed[owner]) {
+            e->layer_toggled[l] = false; e->layer_toggle_owner[l] = -1;
+        }
+    }
+    int gyro_owner = e->gyro_toggle_owner;
+    if (e->gyro_toggled && gyro_owner >= 0 && gyro_owner < PE_ALL_INPUTS && changed[gyro_owner]) {
+        e->gyro_toggled = false; e->gyro_toggle_owner = -1;
+    }
+    apply_layers(e); report_state(e);
+    free(e->source_text); e->source_text = next->source_text; next->source_text = NULL;
+    pe_destroy(next);
+    return true;
+}
+
+bool pe_calibration_is_manual(const pe_engine *e) { return e && e->cal_manual; }
+
+bool pe_motion_paused(const pe_engine *e) { return e && e->gyro_off_holds > 0; }
+
+int pe_active_layer(const pe_engine *e) { return e ? top_layer(e) : 0; }
+int pe_active_gyro(const pe_engine *e) { return !e || !e->gyro_out ? -1 : gyro_enabled(e) ? 1 : 0; }
+
+// Tuning-only swaps retain every runtime owner; structural output changes still rebuild.
+static const char *next_tuning_line(const char *p, size_t *length) {
+    while (*p) {
+        const char *end = strchr(p, '\n'); if (!end) end = p + strlen(p);
+        if (strncmp(p, "stick ", 6) && strncmp(p, "gyro ", 5)) {
+            *length = (size_t)(end - p); return p;
+        }
+        p = *end ? end + 1 : end;
+    }
+    *length = 0; return p;
+}
+static bool same_gyro_config(const gyro_cfg_t *a, const gyro_cfg_t *b) {
+    return a->out == b->out && a->yaw == b->yaw && a->def == b->def &&
+        a->invx == b->invx && a->invy == b->invy && a->autocal == b->autocal && a->euro == b->euro &&
+        a->min == b->min && a->max == b->max && a->lo == b->lo && a->hi == b->hi &&
+        a->smooth == b->smooth && a->tight == b->tight && a->stickfull == b->stickfull &&
+        a->stickmin == b->stickmin && a->xs == b->xs && a->ys == b->ys && a->yw == b->yw &&
+        a->rw == b->rw && a->mincut == b->mincut && a->beta == b->beta;
+}
+static bool update_tuning(pe_engine *e, const char *text) {
+    const char *a = e->source_text, *b = text;
+    while (*a || *b) {
+        size_t na, nb; a = next_tuning_line(a, &na); b = next_tuning_line(b, &nb);
+        if (na != nb || memcmp(a, b, na)) return false;
+        if (!*a || !*b) { if (*a != *b) return false; break; }
+        a += na; b += nb; if (*a) a++; if (*b) b++;
+    }
+    pe_engine *next = pe_create(text, (pe_sink){0});
+    if (!next) return false;
+    bool compatible = true;
+    for (int l = 0; l < MAX_LAYERS; l++) {
+        for (int s = 0; s < 2; s++) {
+            const stick_t *old = &e->stick_cfg[l][s], *n = &next->stick_cfg[l][s];
+            bool old_simple = old->mode == S_PAD || old->mode == S_MOUSE || old->mode == S_SCROLL || old->mode == S_NONE || old->mode == S_KEYS;
+            bool new_simple = n->mode == S_PAD || n->mode == S_MOUSE || n->mode == S_SCROLL || n->mode == S_NONE || n->mode == S_KEYS;
+            bool structure_changed = old->mode != n->mode || old->to != n->to || memcmp(old->keys, n->keys, sizeof old->keys);
+            if (e->stick_has[l][s] != next->stick_has[l][s] ||
+                (structure_changed && !(old_simple && new_simple)) || old->mode == S_FLICK) compatible = false;
+        }
+        const gyro_cfg_t *old = &e->gyro_cfg[l], *n = &next->gyro_cfg[l];
+        if (e->gyro_has[l] != next->gyro_has[l] || old->def != n->def || old->autocal != n->autocal) compatible = false;
+    }
+    if (!compatible) { pe_destroy(next); return false; }
+    bool gyro_changed = !same_gyro_config(&e->gyro_cfg[e->gyro_layer], &next->gyro_cfg[e->gyro_layer]);
+    bool gyro_output_changed = e->gyro_cfg[e->gyro_layer].out != next->gyro_cfg[e->gyro_layer].out;
+    bool gyro_was_off = e->gyro_out == G_OFF;
+    memcpy(e->stick_cfg, next->stick_cfg, sizeof e->stick_cfg);
+    memcpy(e->gyro_cfg, next->gyro_cfg, sizeof e->gyro_cfg);
+    e->uses_gyro = next->uses_gyro;
+    // The configuration ends before x; the input position, holds and integrators follow it.
+    for (int s = 0; s < 2; s++) {
+        stick_t *old = &e->stick[s];
+        const stick_t *config = &e->stick_cfg[e->stick_layer[s]][s];
+        if (old->mode == S_KEYS && (old->mode != config->mode || memcmp(old->keys, config->keys, sizeof old->keys))) {
+            // Release with the old key codes before installing their replacement.
+            double x = old->x, y = old->y;
+            old->x = old->y = 0; stick_keys(e, old); old->x = x; old->y = y;
+        }
+        memcpy(old, config, offsetof(stick_t, x));
+        stick_mode_update(e, s);
+    }
+    if (gyro_changed) {
+        load_gyro(e, &e->gyro_cfg[e->gyro_layer]);
+        if (gyro_output_changed) { e->gyro_stick_x = e->gyro_stick_y = 0; if (gyro_was_off) e->last_gyro = 0; }
+        memset(e->smooth_buf, 0, sizeof e->smooth_buf); e->smooth_i = 0; e->eu_init = false;
+    }
+    update_pad_sticks(e);
+    free(e->source_text); e->source_text = next->source_text; next->source_text = NULL;
+    pe_destroy(next);
+    return true;
+}
+bool pe_update_profile(pe_engine *e, const char *text) {
+    if (!e || !text || !e->source_text) return false;
+    return pe_update_bindings(e, text) || update_tuning(e, text);
+}
+
+static void release_input_range(pe_engine *e, int first, int end) {
+    bool affected[PE_ALL_INPUTS] = {0};
+    for (int i = first; i < end; i++) affected[i] = true;
+    for (int i = 0; i < PE_ALL_INPUTS; i++) if (e->press[i].phase == P_SIM && e->press[i].b) {
+        int peer = e->press[i].b->sim_with;
+        if (peer >= 0 && peer < PE_ALL_INPUTS && (affected[i] || affected[peer])) affected[i] = affected[peer] = true;
+    }
+    if (e->menu_open >= 0 && e->menu_owner >= 0 && e->menu_owner < PE_ALL_INPUTS && affected[e->menu_owner]) close_menu_without_action(e);
+    for (int i = 0; i < PE_ALL_INPUTS; i++) if (affected[i]) {
+        timers_cancel(e, T_HOLD, i); timers_cancel(e, T_TURBO, i);
+        timers_cancel(e, T_DOUBLE_WAIT, i); timers_cancel(e, T_SIM_WAIT, i);
+        press_t *p = &e->press[i];
+        if (p->passthrough) { int out = pass_target(e, i); if (out >= 0) out_set(e, (out_t){ O_PAD, (short)out }, false); }
+        else if (!p->turbo_off) outs_set(e, &p->active, false);
+        memset(p, 0, sizeof *p); e->physical[i] = false;
+    }
+    for (int t = 0; t < e->ntimers; t++) if (e->timers[t].kind == T_RELEASE_OUTS) {
+        int pulse = e->timers[t].a, owner = e->pulse_owner[pulse];
+        if (owner >= 0 && owner < PE_ALL_INPUTS && affected[owner]) {
+            outs_set(e, &e->pulse_store[pulse], false);
+            e->timers[t] = e->timers[--e->ntimers]; t--;
+        }
+    }
+    for (int m = 0; m < MAX_MACROS; m++) {
+        int owner = e->macro_owner[m];
+        if (e->macro_run[m] && owner >= 0 && owner < PE_ALL_INPUTS && affected[owner]) {
+            timers_cancel(e, T_MACRO, m);
+            for (int i = e->macro_held[m].n - 1; i >= 0; i--) out_set(e, e->macro_held[m].o[i], false);
+            e->macro_held[m].n = 0; e->macro_run[m] = false;
+        }
+    }
+    for (int k = 0; k < KEYS; k++) {
+        int owner = e->key_toggle_owner[k];
+        if (e->key_toggle[k] && owner >= 0 && owner < PE_ALL_INPUTS && affected[owner]) {
+            e->key_toggle[k] = false; e->key_toggle_owner[k] = -1; out_set(e, (out_t){ O_KEY, (short)k }, false);
+        }
+    }
+    for (int b = 0; b < PE_MOUSE_BUTTONS; b++) {
+        int owner = e->mouse_toggle_owner[b];
+        if (e->mouse_toggle[b] && owner >= 0 && owner < PE_ALL_INPUTS && affected[owner]) {
+            e->mouse_toggle[b] = false; e->mouse_toggle_owner[b] = -1; out_set(e, (out_t){ O_MOUSE, (short)b }, false);
+        }
+    }
+    clear_controller_toggles(e, affected);
+    for (int l = 1; l < MAX_LAYERS; l++) {
+        int owner = e->layer_toggle_owner[l];
+        if (e->layer_toggled[l] && owner >= 0 && owner < PE_ALL_INPUTS && affected[owner]) e->layer_toggled[l] = false;
+    }
+    if (e->gyro_toggled && e->gyro_toggle_owner >= 0 && e->gyro_toggle_owner < PE_ALL_INPUTS && affected[e->gyro_toggle_owner]) e->gyro_toggled = false;
+    if (e->menu_open >= 0 && e->menu_owner >= 0 && e->menu_owner < PE_ALL_INPUTS && affected[e->menu_owner]) {
+        int menu = e->menu_open; e->menu_open = e->menu_sel = -1;
+        if (e->sink.menu) e->sink.menu(e->sink.ctx, menu, -2);
+    }
+    for (int i = 0; i < e->nhist; i++) if (affected[e->hist_in[i]]) { e->nhist = 0; break; }
+    apply_layers(e); update_triggers(e); report_state(e);
+}
+void pe_release_device(pe_engine *e, int slot, double now) {
+    if (!e || slot < 1 || slot > PE_MAX_DEVICES) return;
+    (void)now; // Never run pending actions while removing their source.
+    e->dev[slot].hat = 0;
+    for (int a = 0; a < PE_DEV_AXES; a++) { e->dev[slot].ax[a].v = 0; e->dev[slot].ax[a].pos = e->dev[slot].ax[a].neg = false; }
+    int first = PE_INPUTS + (slot - 1) * PE_DEV_INPUTS;
+    release_input_range(e, first, first + PE_DEV_INPUTS);
+}
+void pe_release_main(pe_engine *e, double now) {
+    if (!e) return;
+    e->gyro_touched = false;
+    (void)now;
+    for (int b = 0; b < PE_PAD_BUTTONS; b++) if (e->route_down[b]) {
+        if (e->route[b] == 1 || e->route[b] == 2) out_set(e, (out_t){ O_PAD, (short)b }, false);
+        e->route_down[b] = false;
+    }
+    for (int s = 0; s < 2; s++) {
+        e->stick[s].x = e->stick[s].y = 0;
+        if (e->stick[s].mode == S_KEYS) stick_keys(e, &e->stick[s]);
+        e->stick[s].flicking = e->stick[s].in_flick = false;
+        e->stick[s].rest_x = e->stick[s].rest_y = e->stick[s].ramp_t = 0;
+    }
+    memset(e->raw_axis, 0, sizeof e->raw_axis);
+    e->gyro_stick_x = e->gyro_stick_y = 0; e->last_gyro = 0;
+    e->cal_mode = 0; e->still_since = 0; e->eu_init = false;
+    memset(e->smooth_buf, 0, sizeof e->smooth_buf); e->smooth_i = 0;
+    e->f_down[0] = e->f_down[1] = false; e->touch_zone = e->touch_click_in = -1;
+    e->pitch_init = false;
+    release_input_range(e, 0, PE_INPUTS);
+}
+
+bool pe_touch_passthrough(const pe_engine *e) { return !e || e->control_route[5] == 0 || e->control_route[5] == 1 || e->control_route[5] == 2; }

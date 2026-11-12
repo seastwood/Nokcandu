@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import NokcanduCore
 
 /// A small note near the bottom of the screen when a controller layer or the gyro switches — over any app,
 /// full-screen games included. It never takes clicks or the keyboard, and fades after a moment.
@@ -12,18 +13,38 @@ final class PadHUD {
         set { UserDefaults.standard.set(!newValue, forKey: key) }
     }
 
-    private var panel: NSPanel?
-    private var hide: DispatchWorkItem?
-
-    /// Gyro calibration: a bar while it measures, then "Gyro calibrated" (or "Hold still…" when it was moved).
-    func calibration(_ progress: Float) {
-        if progress >= 1 { show("Gyro calibrated", symbol: "checkmark.circle") }
-        else if progress < 0 { show("Keep it still — starting over", symbol: "gyroscope", progress: 0, stay: 2.5) }
-        else { show("Calibrating the gyro…", symbol: "gyroscope", progress: Double(progress), stay: 2.5) }
+    static var automaticCalibration: Bool {
+        get { UserDefaults.standard.object(forKey: "padAutomaticCalibrationNotifications") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "padAutomaticCalibrationNotifications") }
+    }
+    static var gyroSwitches: Bool {
+        get { PadNotificationPreferences.gyroSwitches() }
+        set {
+            PadNotificationPreferences.setGyroSwitches(newValue)
+            if !newValue && shared.lastWasGyro { shared.hide?.cancel(); shared.panel?.orderOut(nil) }
+        }
     }
 
-    func show(_ text: String, symbol: String, progress: Double? = nil, stay: Double = 1.2) {
-        guard Self.enabled else { return }
+    private var panel: NSPanel?
+    private var hide: DispatchWorkItem?
+    private var lastWasGyro = false
+    func gyroChanged(_ on: Bool) {
+        guard PadNotificationPreferences.shouldShowGyro() else { return }
+        show(on ? "Gyro on" : "Gyro off", symbol: "gyroscope")
+        lastWasGyro = true
+    }
+
+    /// Gyro calibration: a bar while it measures, then "Gyro calibrated" (or "Hold still…" when it was moved).
+    func calibration(_ progress: Float, manual: Bool = false) {
+        guard manual || Self.automaticCalibration else { return }
+        if progress >= 1 { show("Gyro calibrated", symbol: "checkmark.circle", force: manual) }
+        else if progress < 0 { show("Keep it still — starting over", symbol: "gyroscope", progress: 0, stay: 2.5, force: manual) }
+        else { show("Calibrating the gyro…", symbol: "gyroscope", progress: Double(progress), stay: 2.5, force: manual) }
+    }
+
+    func show(_ text: String, symbol: String, progress: Double? = nil, stay: Double = 1.2, force: Bool = false) {
+        guard force || Self.enabled else { return }
+        lastWasGyro = false
         let p = panel ?? make()
         panel = p
         let host = NSHostingView(rootView: HUDView(text: text, symbol: symbol, progress: progress))

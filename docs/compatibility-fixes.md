@@ -4,6 +4,7 @@ Components are usually opt-in per managed Windows app. Dedicated launcher setup 
 
 | Profile ID | Files/settings owned | Source |
 | --- | --- | --- |
+| `bf2-deployment-ui` | Private BF2 environment flag; launcher appends supported DXVK focus-loss setting without replacing other options; independent Undo | DXVK PR 3797; gameplay acceptance pending |
 | `bundled-vc-runtime` | Selects matching-architecture C++ libraries already beside the program; individual native/builtin rules | App-bundled libraries; no download |
 | `cross-process-windows` | `DXMT_ALLOW_CROSS_PROCESS_SWAPCHAIN=1`, with independent Undo | Nokcandu settings; requires DXMT |
 | `ubisoft-browser` | Exact-version browser library edit, `--in-process-gpu`, DXMT cross-process setting; original backed up | Built-in verified Ubisoft-only compatibility definition |
@@ -421,3 +422,205 @@ November 4 profile follow-up: an isolated end-to-end run installed all five BF19
 Pending compatibility installs/removals and other queued game settings now apply automatically when Nokcandu observes the entire Windows environment idle, without reopening the game. Active store clients/installers/other games and unknown process status defer safely. Existing durable requests need no conversion. A Pending badge identifies each affected control; failures retain requests with explicit retry/discard. Private virtual-window on/off choices also reconcile after exit; shared hosts preserve their per-game launch choices. [Implementation, tests and Undo](investigations/pending-settings-idle-2026-11-04.md).
 
 CI follow-up: pending-setting monitoring no longer uses default async callback values, avoiding the crash localized to that call on GitHub's Xcode 26.6 runner while preserving the same protected application path. The runner's full Swift test step passed after the change. The real Winsock probe now distinguishes synchronous WSAECONNREFUSED from asynchronous exceptional readiness; no shared socket filtering or game configuration changed. [Evidence, limits and verification](investigations/ci-pending-monitor-and-refusal-2026-11-04.md).
+
+## Desktop controller drag identity (November 10, 2026)
+
+Shared Mac fallback movement now pairs drag type with the selected button (left, right, then lowest extra held button). Applies to standalone/native/external apps and Wine socket fallback; direct Wine relative movement is unchanged. Automated event-construction coverage is separate from target-app acceptance. No game-specific override, capture policy, profile schema or launcher change. Existing profiles gain behavior on app update, with no data migration; app rollback restores previous behavior. No installation in this iteration. [Assessment and verification matrix](investigations/controller-overhaul-2026-11-10.md).
+
+## Controller capture routing and profile additions (November 10, 2026)
+
+Shared app/Core/C engine changes apply centrally to all applicable profiles and the generated Wine helper, with no one-game workaround. New app-scoped capture directs only mapped mouse events to a foreground PID at a stable anchor; physical mouse capture, target event acceptance and Overwatch/BF1942 gameplay resolution are unverified. Button routing suppression is limited to the Wine engine path; native macOS controllers remain visible. New toggle/chord/routing data receives a one-time pre-v2 profile backup; absent fields retain legacy behavior. Existing running Wine helpers need normal managed update/restart before using new tokens. No installation occurred. [Detailed checklist, validation boundaries, migration and Undo](investigations/controller-overhaul-2026-11-10.md#continued-implementation-november-10).
+
+### Live timers and capture recovery follow-up
+
+The shared engine now preserves unaffected hold/double/turbo deadlines during binding edits, cancels edited deadlines, and preserves equivalent-text saves. Turbo off-phase cleanup respects other inputs holding the same output. Manual pointer routing requires new activation after permission/window loss; Disabled rules avoid window scans. No new persistence schema or installation migration; app and helper must continue to be updated together through the managed path. New tests passed; target-game acceptance remains pending. [Evidence and Undo](investigations/controller-overhaul-2026-11-10.md#live-timers-and-authorized-mac-inspection-continuation).
+
+### Compatible tuning and wrapper capture follow-up
+
+The central profile-update API now handles compatible stick/gyro tuning without releasing unrelated outputs; app, preview and Wine helper share it. Structural/flick/mixed changes retain safe replacement. Capture can inherit an explicitly selected Nokcandu wrapper's rule for its exact direct GameApp helper, with child Disabled rules winning. Removed name-only game fallback. New selection-path preference is opt-in on app selection; existing modes/profiles/launchers are preserved. Controller tests passed; target-game aiming remains unverified. [Scope, tests, migration and Undo](investigations/controller-overhaul-2026-11-10.md#compatible-live-tuning-and-exact-wrapper-targeting).
+
+### Selective axis routing and editor persistence
+
+New optional controlRoutes cover stick groups, triggers and gyro within the shared mapping engine. Existing absent fields and button-only Hybrid/Remapping presets retain behavior. New-field saves preserve the pre-v2 backup; app/helper must be updated together before use. Editor commits update runtime immediately and persist after a 250 ms pause, with close/quit/structural-action flushing. No launcher/game migration or installation was performed. User-confirmed Pro Controller receipt was verified in a temporary GUI probe alongside Steam/Nokcandu; target games and original Steam Controller remain unverified. [Details and remaining gates](investigations/controller-overhaul-2026-11-10.md#axis-routing-persistence-and-real-pro-controller-receipt).
+
+### Controller ownership, recovery and test delivery
+
+Shared engine partial disconnect now unwinds only owned actions, full cleanup cannot select a menu action, and exhausted timers cannot strand pulse/sequence outputs. Primary-input presets include selective touch/tilt policies; native sensor passthrough/virtual identity remain unavailable. Canonical own-source overlays apply inherited launcher edits immediately. Malformed profiles and unexpected map directories/symbolic links are preserved and errors surfaced; own profiles receive the same first-new-feature backup as shared profiles. Confirmed in deterministic controller/storage tests; no installed update/game hardware certification. [Current checklist and evidence](investigations/controller-overhaul-2026-11-10.md#ownership-recovery-and-test-delivery-continuation), [user test procedures and Undo](controller-overhaul-testing.md).
+
+The controller input-test window is available from Help in the development app. Its isolated preview received clicks/key codes, reset and quit normally; it is not hardware/game certification. Full app launch uses the user's normal settings and managed maintenance, so the staged test guide explicitly requires quitting the installed copy first and recommends duplicate profiles.
+
+### Unrelated running actions during profile edits
+
+The shared live-binding update now preserves unrelated sequences, tap pulses, simultaneous pairs and menus instead of forcing a profile restart solely because one exists. Affected owners retain safe replacement. No schema/launcher migration; app/helper update together. Automated continuity/rejection tests passed; hardware/editor performance remains pending. [Evidence and Undo](investigations/controller-overhaul-2026-11-10.md#unrelated-running-actions-during-editing).
+
+Changed layer-toggle/gyro-toggle bindings now clear their own old persistent activation during live editing; unrelated latches/held outputs remain. Reproduced and tested centrally; no profile migration or one-game setting. App/helper roll back together. [Evidence](investigations/controller-overhaul-2026-11-10.md#replacing-latched-mode-bindings).
+
+### Visible Toggle behavior, directional keys and diagnostics
+
+The button editor now exposes Toggle directly, with optional backed-up metadata and persistent key/mouse/controller/trigger outputs. Core controller latches respect overlapping holds, changed-owner and partial-disconnect cleanup; controller output remains Wine-only. Compatible live key-stick changes release old key codes centrally without resetting unrelated outputs. Opt-in diagnostics distinguish callback receipt/nonzero rotation and local processing/cadence timing. Targeted and 155-test selected regression passed (one environment skip); isolated editor UI verified mode selection/output compilation. Actual game/hardware timing remains pending. [Scope, evidence and Undo](investigations/controller-overhaul-2026-11-10.md#directional-key-updates-visible-toggle-behavior-and-timing-diagnostics).
+
+Toggle output controls are now individually accessible in the actual preview AX tree. Recorder cancellation/reset/ordering is tested through its Core decision state; disappearance removes the local monitor. An automated Escape comparison was confounded by a preceding click and is not claimed as user-input integration proof. Final selected regression executed 159 tests with one environment skip and no failures; sanitized offline engine-update smoke passed.
+
+The staged test app was rebuilt with the visible Toggle UI and final recorder state. Signature/plist, release executable identity and current-source helper fingerprint checks passed; the universal helper is included. Installed app/settings/profiles were not replaced. [Testing instructions](controller-overhaul-testing.md) identify the staged copy and remaining game/hardware gates.
+
+### Installed controller update
+
+User-authorized app-only installation now places the verified controller build in the usual `~/Applications/Nokcandu.app`. The actual Overwatch editor exposes Toggle. Recovery app/restore command verified, and controller-profile bytes were unchanged by replacement; the user subsequently began editing. Updated ad-hoc signing requires renewed Accessibility authorization, pending specific permission. This supersedes staged-only delivery, without certifying game/controller acceptance. [Installation evidence](investigations/controller-overhaul-2026-11-10.md#user-authorized-installation-and-actual-editor-verification).
+
+Toggle labels on the controller picture now identify the actual key/mouse/controller/trigger output, matching the inspector; full hover/accessibility text accompanies compact display. UI-only change, no profile or game migration. [Scope and Undo](investigations/controller-overhaul-2026-11-10.md#toggle-output-labels-on-the-controller-picture).
+
+Installed label correction verified in the actual Overwatch picture as Toggle Space; 42 relevant tests passed. Following explicit permission and user-performed macOS authentication, re-adding only the exact installed app restored effective Accessibility trust (normal Everywhere status, no permission warning). No other app permissions changed. Physical controller/game validation remains pending.
+
+## Permission identity, shared motion pause and native-route follow-up
+
+Development builds now refuse silent ad-hoc fallback from configured signing and guard local installs against signer changes. Head input is lazily initialized after opt-in, and explicit gyro-off holds pause/recenter it. Shared sidebar footers are separated from scrolling lists; search is being placed below section selection. Offline controller routing now follows Wine's actual CurrentControlSet link and migrates only with reliable idle evidence, retaining a first-repair registry backup. Deterministic/shell tests passed; actual signed-update permission retention, sidebar visuals and restarted Wine enumeration remain separate gates. Duplicate external-SSD aliases were diagnosed but not removed or claimed fixed. [Full checklist, scope and Undo](investigations/signing-routing-sidebar-drives-2026-11-10.md).
+
+Explicit As itself now takes precedence over shared-profile Xbox adaptation; Automatic retains profile-aware behavior. Native routing bypasses mapped SDL controller outputs as explained in the UI. Actual restart/device enumeration remains pending. Installed sidebar ordering/footer/filter/Command-F checks passed. First stable-signed app recognizes Accessibility without a new grant; update-to-update retention check remains in progress. [Evidence](investigations/signing-routing-sidebar-drives-2026-11-10.md#explicit-native-precedence-and-actual-installed-ui-checks).
+
+
+## Native controller enumeration: SDL internal lookup recursion
+
+Fixed the shared helper intercepting SDL's own internal symbol lookup, which
+recursed/hung Wine's controller driver and left even native controllers absent
+from Windows. Hooks now apply only to Wine driver callers. This preserves profile
+routing and the keyboard/mouse helper. The actual-helper regression passes and
+fails on the original code; 176 related controller/privacy/process/storage tests
+and nine signing checks passed before installation. Installed real Steam **As
+itself** now visibly lists the connected **Pro Controller** under DirectInput,
+with original Nintendo 057e:2009 identity verified by a read-only Windows probe.
+Native mode legitimately has no XInput slot. An isolated Xbox-route check passes
+both APIs. Buttons, motion and individual games still require acceptance; original
+Steam Controller transport support remains unresolved. Owned helpers refresh
+centrally; running Wine environments must close normally to load the update.
+Same-signer app updates retained Accessibility. [Evidence, limitations and Undo](investigations/signing-routing-sidebar-drives-2026-11-10.md#real-installed-prefix-acceptance-result).
+
+
+## Headphone source in profiles and improved test receipt
+
+Experimental AirPods/headphone motion is now selectable through profile Add Device,
+with saved source membership, mapping enablement and per-profile tuning. Existing
+profiles stay opted out. Inheritance/disable/removal, partial decoding, tuning
+bounds and first-feature-save recovery have automated coverage. Global settings
+show status/directions; this supersedes the earlier session-only tuning design.
+Input Test adds observed holds and a bounded timed transition history for toggle,
+sequence and release trials, plus local Copy Test Report. Focus loss explicitly
+invalidates held-state observation. Installed source-chip/inspector/disable/remove and ordinary input-test
+key/click/focus/reset checks passed. Real headphone/audio acceptance remains pending. [Evidence and Undo](investigations/signing-routing-sidebar-drives-2026-11-10.md#preparation-for-user-testing-held-output-receipt-and-profile-headphone-source).
+
+
+## Original Steam Controller receiver diagnostics
+
+The exact original USB dongle now appears as **Steam Controller receiver**, with
+power/pairing/input unconfirmed rather than implying an awake controller or gyro
+source. Existing profile/routing behavior is preserved. Tests cover exact-ID and
+transport classification; 185 related regressions, signing and helper checks pass.
+A separate research-only native vendor HID bridge exposed four receiver channels
+to Windows in a disposable engine, but remains unshipped pending actual controller
+and Windows Steam feature/report testing. Full original-controller profile mapping
+is still pending. [Scope, comparisons, gates and Undo](investigations/steam-controller-2015-2026-11-10.md).
+
+
+## November 10 field-test corrections
+
+Installed headphone per-profile activation adds physical hold or selected-layer
+admission alongside Always, preserving controller gyro and old profiles. Installed
+UI and 195 related controller/presentation/privacy/process/storage tests passed.
+Shared Wine 10/11 mouse validation now accounts for virtual-screen/Retina coordinate
+conversion; captured Wine movement prefers its relative helper queue. Existing
+owned-driver migration/Undo is retained and now refuses unknown process scans.
+Overwatch virtual aiming/clicks and BF1942 edge behavior still need game retests.
+User isolated the mystery gyro mouse output to Steam Input. Pro Controller false
+buttons were independently reproduced; a full-SDL exact USB descriptor correction
+is installed and passes native idle receipt (18 buttons/four axes, zero held or
+transitioning buttons in 375 samples) and guarded migration/Undo tests (200 related
+tests pass). It applies only to the known Wine 11.0 r1 module when closed; unknown or
+edited modules remain intact. Physical button/stick mapping, WGI, Steam and games
+are still pending acceptance. [Evidence, current gates and Undo](investigations/controller-field-tests-2026-11-10.md).
+
+## November 11: wired Steam Controller and general headset outputs
+
+Known Wine 11.0 controller compatibility now admits the original wired Steam
+Controller's FF00:1 interface only, retaining SDL, keyboard/mouse exclusions and
+verified original-driver Undo. Actual Windows vendor HID open, feature read and
+input receipt passed; Windows Steam recognition/game output remain separate gates.
+Profiles add an explicit experimental passive USB source and original-controller
+layout; full controls, sensors and standalone ownership are not hardware-certified.
+Headsets add left/right stick mapping outputs alongside legacy Mouse, with real
+C-engine WASD, physical-stick restoration and held-radial selection tests passing.
+Old profiles remain opted out of the USB reader and retain Mouse headset output.
+[Scope, validation, migration and Undo](investigations/steam-wired-head-mappings-2026-11-11.md).
+
+
+## Controller gyro focus transition — November 11, 2026
+
+Shared desktop controller runtime now retains calibration when moving between foreground applications using the same compiled profile and controller source. Existing release-before-handoff remains; fresh reports restore physical input state. No profile migration, game edits or system setting changes. Focus contract automated tests pass; physical Overwatch acceptance and transitions to different/no profiles remain pending. Undo: previous signed application. See [field-test checklist](investigations/controller-field-tests-2026-11-11.md).
+
+
+## BF2 deployment menu candidate — November 11, 2026
+
+The installed legacy renderer predates DXVK's BF2 menu-loss default but supports its option. An explicit, reversible BF2-only component backports that configuration without changing the renderer, BF2Hub route or files. Actual shell/component/Undo tests pass; missing-menu game acceptance is pending. [Scope, sources, migration and Undo](investigations/bf2-deployment-menu-2026-11-11.md).
+
+
+Component preservation follow-up: automatic private launcher/helper maintenance now reads current settings and reconciles receipt-owned requirements; queued custom edits retain those installed requirements. Existing receipts safely repair the observed dropped BF2 flag when closed, without undoing later arguments or changing manually edited launchers. Explicit component Undo still removes the flag. Final 267-test regression run has zero failures/two optional skips, plus 12 native checks. Signed app installed and post-Play live configuration verified. Dalian Plant had a positive user test, but final activation's Wake Island/repeated focus acceptance remains pending.
+
+
+BF2 activation transport correction: flag-only/inline-only component receipts are superseded and offer Update. The older Sikarugir bridge reads a journal-owned BF2-scoped dxvk.conf through a Windows DXVK_CONFIG_FILE path; actual isolated renderer initialization confirms parsing. Existing user config files/selections are preserved and block installation. Linked managed external game folders are supported without following a file-level config symlink. The normal newer renderer comparison and performance remain under evaluation.
+
+## Mouse/gyro radial menus — November 11, 2026
+
+The existing mapping engine adds a relative pointer picker without changing left/right stick menu defaults. Gyro, mapped stick/touchpad and headphone mouse motion can select, and the active runtime observes physical-pointer direction. Held release commits; focus/source cancellation does not. New blank titles show their actions automatically; existing/custom titles are preserved. [Tests, limits and Undo](investigations/controller-mouse-menus-2026-11-11.md).
+
+
+Final durability rule: private CustomGames.save preserves receipt-owned environment/DLL rules for every ordinary settings writer. Explicit component Undo opts out; unrelated settings retain their old behavior. Full suite: 589 tests, zero failures/19 explicit optional integrations skipped, including all privacy regressions passing. Live renderer-file receipt is separately verified; BF2 performance/game acceptance remains limited as documented.
+
+### Wine 11 controller SDL runtime selection
+
+The controller module build now preserves the stock engine dependency on `libSDL2-2.0.0.dylib` and rejects substitution of the coexisting old `libSDL2.dylib`. Isolated default routing exposes one Pro, Xbox and wired Steam gamepad with three XInput slots; native Nintendo/Valve routing retains their native distinction. Existing fingerprinted idle-only migration, first-original backup, manual-edit preservation and persistent Undo apply. Physical game receipt and installed duplicate cleanup remain acceptance gates. [Evidence and status](investigations/controller-priorities-2026-11-11.md).
+
+### Positionless controller clicks and reusable layers
+
+Shared Wine 10/11 controller-click delivery now has a capability-gated button-only path that preserves Wine's current cursor instead of replaying the Mac pointer position. Real mouse behavior stays on Wine's ordinary path. Actual patched-handler tests and process-pinned release tests pass; affected-game acceptance remains pending. Profiles gain explicit Import Layer with private dependency copies, collision-safe names and atomic rejection of missing dependencies. [Validation, migration and Undo](investigations/controller-priorities-2026-11-11.md).
+
+### Original wired Steam Controller mode ownership
+
+The explicit USB profile/test source gains a verified volatile mode handoff: disable firmware desktop keyboard/mouse and enable raw motion, then restore its original selected settings on release. Unknown/failed mode exchange pauses input; other-owner settings are preserved and interrupted leases have a local recovery receipt. This supersedes the passive-only reader description. The actual controller accepted and restored the bounded trial. Full profile motion, duplicate-keyboard behavior and concurrent Steam ownership still require acceptance. [Scope, recovery and testing](investigations/controller-priorities-2026-11-11.md).
+
+### Independent Steam Controller trackpad and trackball mouse
+
+The explicit original USB source gains independent left/right pad behavior choices: existing mappings, relative trackpad mouse, or trackball mouse with adjustable sensitivity and decay. Optional fields preserve legacy profiles, including left touchpad/right stick behavior until explicitly changed. Both preview and runtime use the same processor; mouse modes exclude the right-pad joystick contribution, retain pad click bindings, and respect native/disabled routes. Six focused trackpad tests, two reader-ownership tests and 605 total Swift tests pass. The signed update and independent-pad UI are installed/verified; physical aiming acceptance remains pending in the [handoff](investigations/controller-handoff-2026-11-11.md). Undo: select Existing touchpad settings / Joystick settings for the associated pad.
+
+### Steam pad tuning and noisy release tails
+
+Independent X/Y pad sensitivity, optional touch-controlled controller gyro and short movement haptics extend the explicit USB source. Optional profile fields retain old settings. The gyro gate preserves calibration and honors off holds/native routing; haptics require owned, verified USB capture, are rate limited and cease on error. A measured horizontal swipe exposed reversal/vertical spikes immediately before touch-up; robust history-based coast estimation replaces the final-sample derivative without adding direct-aim latency. Eleven focused tests pass; installed hardware follow-up is tracked in the [handoff](investigations/controller-handoff-2026-11-11.md). Undo: uncheck touch gyro/haptics, restore axis sliders to the prior shared sensitivity, or choose existing pad mappings.
+
+### Steam pad pulse tuning and gyro-note control
+
+Either pad's mouse modes now independently tune strength, movement pulse rate (5–40/s) and burst spacing (0.1–3 ms). Optional fields preserve prior 40/s, 1 ms defaults; finite bursts and ownership guards remain. A global Gyro on/off notifications switch suppresses gyro notes while preserving layer/calibration settings. Installed UI verified; gyro notes switched off for the user. User confirmed the preceding fling correction, right-pad haptics and touch-only gyro. Final suite: 615 tests, zero failures, 19 optional skips. New pulse texture acceptance remains pending. Undo: restore pulse defaults/disable movement haptics and re-enable gyro notes. [Full scope and handoff](investigations/controller-handoff-2026-11-11.md).
+
+### Movement-linked Steam pad feedback and diagram
+
+Enabled trackpad/trackball haptics now default to **Match cursor movement**: bursts follow emitted cursor travel, bounded by the chosen Pulse rate. Turn the new per-pad switch off to retain fixed cadence. Existing strength/spacing, enablement and bindings are preserved. The Steam diagram has corrected center-row/pad/stick/ABXY placement, outward mapping captions and explicit rear-grip labels; other controller layouts retain their positions. Signed update installed and visually checked. Full suite: 616 tests, zero failures, 19 optional skips; new cadence feel still needs user acceptance. [Scope, evidence and Undo](investigations/controller-handoff-2026-11-11.md).
+
+### Original Steam Controller 2.4 GHz receiver profile source
+
+The existing explicit Steam source now accepts the original receiver's FF00:1 interfaces 1–4, selecting one responsive controller while ignoring keyboard/BLE/Deck interfaces. It reuses trackball, touch gyro, X/Y tuning and movement haptics; existing profile raw values and settings stay valid. Verified transient mode capture/restoration and 17,969 wireless reports establish hardware feasibility. Installed user retest passed aiming, haptics and normal typing; off/wake UI releases and resumes receipt. The initial memory-only recovery policy proved incomplete across off/wake; remote-identity recovery and renewed duplicate-input testing are tracked in the current wireless notes. Native wireless Windows Steam discovery is still unverified. Undo and remaining checks: [wireless profile notes](investigations/steam-wireless-profiles-2026-11-11.md).
+
+### Receiver capture recovery, pad steadiness and profile editor alignment
+
+Original Steam Controller receiver profiles now retain identity-checked recovery and verify capture even when full reports continue. A bounded hardware mode-loss trial recaptured within four seconds; normal release read back the measured original 3/0/1/0/2. Slow vertical pad tracking was accepted as improved after edge-coast correction, optional steadiness and user X/Y tuning. Intermittent physical-keyboard doubling remains a separate active investigation; native Windows Steam receiver passthrough remains unverified. [Current evidence and Undo](investigations/steam-wireless-profiles-2026-11-11.md).
+
+Settings control slots now share a trailing edge. Controller Labels are stored per profile, with compatible fallback for older profiles; Steam schematic controls and face captions were repositioned. These changes affect presentation, not mappings or game files. [Installed checks and migration](investigations/settings-profile-labels-2026-11-11.md).
+
+### Steam Controller pad contact feedback
+
+Either pad now has independent Touch haptics and Touch strength, including Existing mappings mode. This is separate from Movement haptics; old profiles remain off until explicitly enabled. The user confirmed one pulse per stationary right-pad contact over the original wireless receiver, with no repeating pulse while held. Two contact tests and the full 630-test suite passed. Undo: switch Touch haptics off on that pad. [Validation limits and implementation](investigations/steam-wireless-profiles-2026-11-11.md).
+
+## Cursor jumps on a click (controller mouse, raw mouse capture)
+
+Shared, not per game. Applies to every Windows game on Nokcandu's Wine 10.0/11.0 Mac driver.
+
+- Controller clicks and, while raw capture is aiming, physical clicks reach Wine without a position, so they act where the game's cursor is.
+- While input is relative, the driver no longer answers cursor queries with the stale Mac pointer (0015).
+- Original Steam Controller: its built-in button actions are cleared while Nokcandu reads it. Map the trigger or pad click to Left click in the profile.
+- Stock or manually changed drivers keep the old behavior. Raw capture can still be turned off per game as before.
+- Hardware/game acceptance for the Steam Controller and raw-capture cases is pending. [Investigation](investigations/controller-click-jump-and-polish-2026-11-11.md).

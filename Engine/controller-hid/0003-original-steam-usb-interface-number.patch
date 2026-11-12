@@ -1,0 +1,23 @@
+--- a/dlls/winebus.sys/bus_iohid.c
++++ b/dlls/winebus.sys/bus_iohid.c
+@@ -302,6 +302,20 @@
+      * still enforced by winebus; keyboard/mouse interfaces remain excluded. */
+     BOOL steam_vendor = nok_steam_wired_interface(desc.vid, desc.pid, desc.bus_type == BUS_TYPE_USB,
+                                                 usages.UsagePage, usages.Usage);
++    if (steam_vendor)
++    {
++        /* Steam's wired driver selects USB interface 2. Preserve the actual
++         * parent-interface metadata instead of fabricating a gamepad identity. */
++        CFTypeRef number = IORegistryEntrySearchCFProperty(IOHIDDeviceGetService(IOHIDDevice),
++            kIOServicePlane, CFSTR("bInterfaceNumber"), kCFAllocatorDefault,
++            kIORegistryIterateRecursively | kIORegistryIterateParents);
++        int value;
++        if (number && CFGetTypeID(number) == CFNumberGetTypeID() &&
++            CFNumberGetValue(number, kCFNumberIntType, &value) && value >= 0 && value <= 255)
++            desc.input = value;
++        if (number) CFRelease(number);
++    }
++
+     if (!steam_vendor && (usages.UsagePage != HID_USAGE_PAGE_GENERIC ||
+         !(usages.Usage == HID_USAGE_GENERIC_JOYSTICK || usages.Usage == HID_USAGE_GENERIC_GAMEPAD)))
+     {

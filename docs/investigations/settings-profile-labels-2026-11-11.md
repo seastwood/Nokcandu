@@ -1,0 +1,17 @@
+# Settings alignment and profile labels — November 11, 2026
+
+## Confirmed causes and changes
+
+The user supplied Display/Performance screenshots with uneven right edges, a shared Labels selector, and distant Steam face-button captions. Native macOS pickers can hug their intrinsic text width; the previous fixed-width frame centered that narrower control. Shared `View.settingControl()` now anchors the control at the trailing edge of the same 220-point slot. Existing shared-width call sites (including Display/Performance, Battle.net, hosted games, game settings and the installer) use it. Control values, game launch generation, saves and graphics settings are unchanged. Installed screenshots verify Performance and Display menu/switch edges align.
+
+The previous editor label choice was saved in UserDefaults under `padEditorLabels.<connected controller name>`, so changing one profile affected others viewed with that device. `Profile.controllerLabels` is now optional display metadata stored with the individual profile. Explicit Xbox/Nintendo/PlayStation/Steam styles persist independently. Missing/unknown values fall back to the profile's source (Steam for the explicit original source), then the connected controller. Labels are intentionally not inherited from a base mapping profile. The old shared preference remains untouched but is no longer replayed into unrelated profiles; its originating profile cannot be reconstructed reliably. No mappings are inferred or rewritten from a label name.
+
+Tests prove independent profiles, JSON round-trip/older JSON, future unknown style fallback, source inheritance versus label independence, and unchanged compiled mappings when only labels change. Installed UI test changed Overwatch to Xbox, switched to Steam Controller (still Steam), and returned to Overwatch (still Xbox). Overwatch was then restored to Nintendo labels, now saved explicitly; mappings/tuning were preserved.
+
+Steam-only controls were shifted upward by 6% body height in the preceding wireless increment. Face-button mapping captions now sit 22 points above/below the Y/A buttons; X/B caption text aligns toward its button within its allocated box, avoiding the excessive visual gap for short labels. The cluster's mapping identities and click targets are unchanged. Non-Steam diagrams retain their previous arrangement.
+
+## Validation, migration and Undo
+
+This increment passed **622 Swift tests, zero failures, 19 optional integration skips**, including privacy tests. Two profile-label tests were added. The first older-JSON test fixture omitted the existing required layer bindings field; the fixture was corrected and all checks rerun. Stable signature/deep verification/continuity passed; the app was installed through the recoverable installer. Display and Performance right-edge alignment and profile isolation were verified in the installed UI. The later receiver-identity/coast increment has additional tests and will supersede the final suite count.
+
+Fresh profiles default to source/connected-device labels; existing explicit mapping data is preserved. The new optional field travels with profile duplication/export/import and supports normal editor Undo. Rechoose Labels in that profile to change it; removing its optional metadata through a prior profile revision restores automatic display choice. The old shared preference is preserved for downgrade, not copied to every profile. Undo the UI layout with the prior signed app; no game/runtime migration is involved.

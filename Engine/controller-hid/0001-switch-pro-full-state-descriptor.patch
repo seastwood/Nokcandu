@@ -1,0 +1,33 @@
+--- a/dlls/winebus.sys/bus_iohid.c
++++ b/dlls/winebus.sys/bus_iohid.c
+@@ -22,6 +22,7 @@
+ #endif
+ 
+ #include "config.h"
++#include "pro-hid-descriptor.h"
+ 
+ #include <stdarg.h>
+ #include <sys/types.h>
+@@ -187,14 +188,15 @@
+ {
+     struct iohid_device *impl = impl_from_unix_device(iface);
+     CFDataRef data = IOHIDDeviceGetProperty(impl->device, CFSTR(kIOHIDReportDescriptorKey));
+-    int data_length = CFDataGetLength(data);
+-    const UInt8 *ptr;
+-
++    size_t data_length = CFDataGetLength(data);
++    const UInt8 *ptr = CFDataGetBytePtr(data);
++    CFStringRef transport = IOHIDDeviceGetProperty(impl->device, CFSTR(kIOHIDTransportKey));
++    bool usb = transport && CFEqual(transport, CFSTR(kIOHIDTransportUSBValue));
++    ptr = nok_pro_descriptor(CFNumberToDWORD(IOHIDDeviceGetProperty(impl->device, CFSTR(kIOHIDVendorIDKey))),
++        CFNumberToDWORD(IOHIDDeviceGetProperty(impl->device, CFSTR(kIOHIDProductIDKey))), usb, ptr, data_length, &data_length);
+     *out_length = data_length;
+-    if (length < data_length)
+-        return STATUS_BUFFER_TOO_SMALL;
+-
+-    ptr = CFDataGetBytePtr(data);
++    if (length < data_length) return STATUS_BUFFER_TOO_SMALL;
++
+     memcpy(buffer, ptr, data_length);
+     return STATUS_SUCCESS;
+ }

@@ -5,10 +5,11 @@ on:
   pull_request:
 jobs:
   build-and-test:
-    runs-on: macos-latest
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
+      - uses: ./.github/actions/xcode
       - name: Toolchain
         run: swift --version && xcodebuild -version
       - name: Check shared profile fix IDs and schemas
@@ -17,6 +18,10 @@ jobs:
           python3 Tools/profile-check/check-fix-ids.py "$RUNNER_TEMP/profile-validator.py"
       - name: Test
         run: swift test
+      - name: Build full-SDL controller driver
+        run: |
+          sudo /usr/sbin/softwareupdate --install-rosetta --agree-to-license
+          bash Engine/controller-hid/ci-build.sh
       - name: Build app
         run: ./build-app.sh
       - name: Ensure x86 Windows execution on Apple Silicon

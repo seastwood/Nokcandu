@@ -345,7 +345,7 @@ struct RecipeSettingsSection: View {
                 Picker("Graphics", selection: $draft.graphics) {
                     Text("Recipe default").tag(nil as GraphicsPreset?)
                     ForEach(GraphicsPreset.allCases) { Text($0.title).tag(Optional($0)) }
-                }.labelsHidden().frame(width: settingControlWidth)
+                }.labelsHidden().settingControl()
             }
             SettingRow(title: "Program") {
                 HStack {

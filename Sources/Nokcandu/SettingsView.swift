@@ -32,6 +32,14 @@ struct GeneralSettings: View {
 
     var body: some View {
         Form {
+            Section("Startup") {
+                Toggle("Open Nokcandu at login, in the menu bar", isOn: Binding(get: { SMAppService.mainApp.status == .enabled }, set: { on in
+                    if on { try? SMAppService.mainApp.register(); UserDefaults.standard.set(true, forKey: MenuBarSetting.key) } else { try? SMAppService.mainApp.unregister() }
+                    model.objectWillChange.send()
+                }))
+                .help("So your controller works on the Mac from the moment you sign in, without opening Nokcandu.")
+
+            }
             Section("Library") {
                 Picker("Sort games by", selection: Binding(get: { model.sortMode }, set: { model.setSort($0) })) {
                     ForEach(LibraryOrganizer.Sort.allCases) { Text($0.title).tag($0) }
@@ -62,6 +70,9 @@ struct GeneralSettings: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             DesktopPadSettings()
+            PadCaptureSettings()
+            PadHeadTrackingSettings()
+            PadDiagnosticsSettings()
             Section("Discord") {
                 Toggle("Show what you're playing in Discord", isOn: Binding(get: { DiscordBridge.enabled }, set: { DiscordBridge.enabled = $0; discordTick += 1 }))
                 Text("Windows games that support Discord Rich Presence show up in your Discord status. Nokcandu adds a small bridge (rpc-bridge, the one Sikarugir uses) to each game's Windows environment the next time it starts; turning this off removes it.")
@@ -287,6 +298,7 @@ struct NetworkSteadySetting: View {
 
 /// Settings → General → Controller on the Mac: a controller profile for the Mac itself and per-app choices.
 struct DesktopPadSettings: View {
+    @EnvironmentObject private var model: AppModel
     @ObservedObject var pad = DesktopPad.shared
     @Environment(\.openWindow) private var openWindow
     @State private var profiles = PadProfiles.profiles()
@@ -332,14 +344,12 @@ struct DesktopPadSettings: View {
                 }
                 ControllerLinks(pad: pad, profiles: profiles)
                 ShortcutRecorder(title: "Calibrate the gyro", shortcut: $pad.calibrateShortcut)
+                Toggle("Show automatic gyro calibration notifications", isOn: Binding(get: { PadHUD.automaticCalibration }, set: { PadHUD.automaticCalibration = $0; pad.objectWillChange.send() }))
                 Toggle("Show a note when a layer or the gyro switches", isOn: Binding(get: { PadHUD.enabled }, set: { PadHUD.enabled = $0; pad.objectWillChange.send() }))
+                Toggle("Gyro on/off notifications", isOn: Binding(get: { PadHUD.gyroSwitches }, set: { PadHUD.gyroSwitches = $0; pad.objectWillChange.send() }))
+                    .disabled(!PadHUD.enabled)
                 Button("Add an App…") { addApp() }
-                Toggle("Open Nokcandu at login, in the menu bar", isOn: Binding(get: { SMAppService.mainApp.status == .enabled }, set: { on in
-                    if on { try? SMAppService.mainApp.register(); UserDefaults.standard.set(true, forKey: MenuBarSetting.key) } else { try? SMAppService.mainApp.unregister() }
-                    pad.objectWillChange.send()
-                }))
-                .help("So your controller works on the Mac from the moment you sign in, without opening Nokcandu.")
-                    .help("Choose an app to give its own profile, or to turn the controller profile off in (for example games with their own controller support).")
+
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .padProfilesChanged)) { _ in profiles = PadProfiles.profiles() }
@@ -361,7 +371,8 @@ struct DesktopPadSettings: View {
         var n = p.name, i = 2
         while profiles.contains(where: { $0.name == n }) { n = "\(p.name) \(i)"; i += 1 }
         p.name = n
-        try? PadProfiles.store(p, environments: [])
+        do { try PadProfiles.store(p, environments: []) }
+        catch { model.fail(error); return }
         profiles = PadProfiles.profiles()
         pad.profileID = p.id
         openWindow(id: "padprofile", value: PadEditorTarget(gameID: "", profileID: p.id))

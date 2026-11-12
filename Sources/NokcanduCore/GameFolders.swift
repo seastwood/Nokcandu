@@ -456,6 +456,11 @@ public enum LibraryOrganizer {
         var subtitles: [String: String]? = nil
         /// Names you gave Mac games (their app isn't Nokcandu's to rename).
         var names: [String: String]? = nil
+        /// Your own sidebar categories, in the order shown, and which one each item is in.
+        var categories: [String]? = nil
+        var categoryOf: [String: String]? = nil
+        /// Sidebar sections you collapsed.
+        var collapsed: [String]? = nil
     }
     static var file: URL { NokPaths.support.appendingPathComponent("library-order.json") }
     static func load() -> Saved {
@@ -514,6 +519,61 @@ public enum LibraryOrganizer {
     public static func setFavorite(_ g: InstalledGame, _ on: Bool) {
         var v = load(); v.favorites.removeAll { $0 == key(g) }; if on { v.favorites.append(key(g)) }; save(v)
     }
+
+    // MARK: Categories (your own sidebar sections, for games, launchers or anything else)
+
+    public static var categories: [String] { load().categories ?? [] }
+    /// Each categorized item's category, by `key`. Entries for a removed category are ignored.
+    public static var categoryKeys: [String: String] {
+        let v = load(); let known = Set(v.categories ?? [])
+        return (v.categoryOf ?? [:]).filter { known.contains($0.value) }
+    }
+    static func cleanCategory(_ name: String) -> String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
+    /// Adds a category (keeping an existing one that differs only by case). Returns the name in use.
+    @discardableResult public static func addCategory(_ name: String) throws -> String {
+        let n = cleanCategory(name)
+        guard !n.isEmpty else { throw NokError("Give the category a name.") }
+        var v = load(); var list = v.categories ?? []
+        if let same = list.first(where: { $0.caseInsensitiveCompare(n) == .orderedSame }) { return same }
+        list.append(n); v.categories = list; save(v)
+        return n
+    }
+    public static func renameCategory(_ old: String, to name: String) throws {
+        let n = cleanCategory(name)
+        guard !n.isEmpty else { throw NokError("Give the category a name.") }
+        var v = load(); var list = v.categories ?? []
+        guard let i = list.firstIndex(of: old) else { return }
+        if list.contains(where: { $0 != old && $0.caseInsensitiveCompare(n) == .orderedSame }) { throw NokError("There is already a category called “\(n)”.") }
+        list[i] = n; v.categories = list
+        v.categoryOf = (v.categoryOf ?? [:]).mapValues { $0 == old ? n : $0 }
+        if let c = v.collapsed { v.collapsed = c.map { $0 == "category:" + old ? "category:" + n : $0 } }
+        save(v)
+    }
+    /// Removes the category only; its items return to Games or Launchers.
+    public static func removeCategory(_ name: String) {
+        var v = load()
+        v.categories = (v.categories ?? []).filter { $0 != name }
+        v.categoryOf = (v.categoryOf ?? [:]).filter { $0.value != name }
+        v.collapsed = v.collapsed?.filter { $0 != "category:" + name }
+        save(v)
+    }
+    public static func moveCategory(_ name: String, by offset: Int) {
+        var v = load(); var list = v.categories ?? []
+        guard let i = list.firstIndex(of: name), list.indices.contains(i + offset) else { return }
+        list.swapAt(i, i + offset); v.categories = list; save(v)
+    }
+    public static func setCategory(_ g: InstalledGame, _ name: String?) {
+        var v = load(); var map = v.categoryOf ?? [:]
+        map[key(g)] = name.flatMap { n in (v.categories ?? []).contains(n) ? n : nil }
+        v.categoryOf = map; save(v)
+    }
+    public static var collapsedSections: Set<String> { Set(load().collapsed ?? []) }
+    public static func setCollapsed(_ section: String, _ collapsed: Bool) {
+        var v = load(); var list = (v.collapsed ?? []).filter { $0 != section }
+        if collapsed { list.append(section) }
+        v.collapsed = list.isEmpty ? nil : list; save(v)
+    }
+
     public static func notePlayed(_ g: InstalledGame, at date: Date = Date()) {
         var v = load(); v.played[key(g)] = date; save(v)
     }

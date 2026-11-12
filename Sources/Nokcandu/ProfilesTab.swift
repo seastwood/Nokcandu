@@ -61,7 +61,7 @@ struct ProfilesSidebar: View {
             Button("Rename") { finishRename() }.disabled(renameText.trimmingCharacters(in: .whitespaces).isEmpty)
             Button("Cancel", role: .cancel) { renaming = nil }
         } message: { Text("Games using it keep using it.") }
-        .safeAreaInset(edge: .bottom) {
+        .modifier(SidebarFooter {
             VStack(alignment: .leading, spacing: 8) {
                 Menu {
                     Button("Blank Profile") { newPad(PadProfiles.Profile(name: "New Profile")) }
@@ -86,7 +86,7 @@ struct ProfilesSidebar: View {
             .foregroundStyle(.primary)
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
-        }
+        })
         .onAppear(perform: load)
         .onReceive(NotificationCenter.default.publisher(for: .padProfilesChanged)) { _ in load() }
         .onChange(of: model.libraryRevision) { _, _ in load() }
@@ -157,11 +157,13 @@ struct ProfilesSidebar: View {
     }
 
     func finishRename() {
+        PadProfileEdits.shared.flushAll()
         let n = renameText.trimmingCharacters(in: .whitespaces)
         guard let id = renaming, !n.isEmpty else { return }
-        if id.hasPrefix("pad:"), var p = pads.first(where: { $0.id == String(id.dropFirst(4)) }) {
+        if id.hasPrefix("pad:"), var p = PadProfiles.profiles().first(where: { $0.id == String(id.dropFirst(4)) }) {
             p.name = n
-            try? PadProfiles.store(p, environments: KeyRemap.environments(model.games), shared: KeyRemap.sharedFolders(model.games))
+            do { try PadProfiles.store(p, environments: KeyRemap.environments(model.games), shared: KeyRemap.sharedFolders(model.games)) }
+            catch { model.fail(error); return }
         } else if id.hasPrefix("keys:"), var l = layouts.first(where: { $0.id == String(id.dropFirst(5)) }) {
             l.name = n
             try? KeyRemap.store(l, environments: [])
@@ -188,12 +190,14 @@ struct ProfilesSidebar: View {
     }
 
     func newPad(_ starter: PadProfiles.Profile, keepName: Bool = false) {
+        PadProfileEdits.shared.flushAll()
         var p = starter
         if !keepName { p.id = UUID().uuidString }
         var n = p.name, i = 2
         while pads.contains(where: { $0.name == n }) { n = "\(starter.name) \(i)"; i += 1 }
         p.name = n
-        try? PadProfiles.store(p, environments: [])
+        do { try PadProfiles.store(p, environments: []) }
+        catch { model.fail(error); return }
         NotificationCenter.default.post(name: .padProfilesChanged, object: nil)
         model.profileSelection = "pad:" + p.id
     }
@@ -212,22 +216,29 @@ struct ProfilesSidebar: View {
 enum ProfileActions {
     /// A copy with a free name ("CS2 copy", "CS2 copy 2"…), selected so it can be changed straight away.
     @MainActor static func duplicate(_ p: PadProfiles.Profile, model: AppModel) {
+        PadProfileEdits.shared.flushAll()
+        let p = PadProfiles.profiles().first { $0.id == p.id } ?? p
         let names = Set(PadProfiles.profiles().map(\.name))
         var c = p; c.id = UUID().uuidString
         var n = p.name + " copy", i = 2
         while names.contains(n) { n = "\(p.name) copy \(i)"; i += 1 }
         c.name = n
-        try? PadProfiles.store(c, environments: [])
+        do { try PadProfiles.store(c, environments: []) }
+        catch { model.fail(error); return }
         NotificationCenter.default.post(name: .padProfilesChanged, object: nil)
         model.profileSelection = "pad:" + c.id
         model.say("Made \(n). Change it, then choose it on the other game's Controls tab.")
     }
     @MainActor static func copy(_ p: PadProfiles.Profile, model: AppModel) {
+        PadProfileEdits.shared.flushAll()
+        let p = PadProfiles.profiles().first { $0.id == p.id } ?? p
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(PadProfiles.exportText(p, all: PadProfiles.profiles()), forType: .string)
         model.say("Copied \(p.name). Paste it into a message; the other person chooses New Controller Profile → Paste Shared Profile.")
     }
     @MainActor static func export(_ p: PadProfiles.Profile, model: AppModel) {
+        PadProfileEdits.shared.flushAll()
+        let p = PadProfiles.profiles().first { $0.id == p.id } ?? p
         let panel = NSSavePanel()
         panel.nameFieldStringValue = p.name + ".nokpad.json"
         panel.allowedContentTypes = [.json]
@@ -242,6 +253,7 @@ enum ProfileActions {
         importText(text, model: model)
     }
     @MainActor static func importText(_ text: String, model: AppModel) {
+        PadProfileEdits.shared.flushAll()
         do {
             let new = try PadProfiles.importText(text, existing: PadProfiles.profiles())
             for p in new { try PadProfiles.store(p, environments: []) }
@@ -250,6 +262,7 @@ enum ProfileActions {
         } catch { model.fail(error) }
     }
     @MainActor static func setDefault(_ p: PadProfiles.Profile?, model: AppModel) {
+        PadProfileEdits.shared.flushAll()
         do {
             try PadProfiles.setDefault(p, environments: KeyRemap.environments(model.games), shared: KeyRemap.sharedFolders(model.games))
             NotificationCenter.default.post(name: .padProfilesChanged, object: nil)
@@ -257,6 +270,8 @@ enum ProfileActions {
         } catch { model.fail(error) }
     }
     @MainActor static func delete(_ p: PadProfiles.Profile, model: AppModel) {
+        PadProfileEdits.shared.flushAll()
+        let p = PadProfiles.profiles().first { $0.id == p.id } ?? p
         do {
             try PadProfiles.delete(p, environments: KeyRemap.environments(model.games), shared: KeyRemap.sharedFolders(model.games))
             if DesktopPad.shared.profileID == p.id { DesktopPad.shared.profileID = nil }
@@ -294,33 +309,71 @@ struct PadProfilePage: View {
         return model.games.filter { !LibraryOrganizer.isLauncher($0) && DesktopPad.profile(for: $0, all: all)?.id == profile.id }.map(\.name).sorted()
     }
 
+    var isDefault: Bool { PadProfiles.defaultID() == profile.id }
+    func toggleDefault() { ProfileActions.setDefault(isDefault ? nil : profile, model: model) }
+    func remove() { ProfileActions.delete(profile, model: model); model.profileSelection = "mac" }
+
+    var usage: some View {
+        Text(users.isEmpty ? "Not used by any game yet. Choose it on a game's Controls tab, set it as the default, or use it on the Mac."
+                           : "Used by " + ListFormatter.localizedString(byJoining: users) + ".")
+            .font(.callout).foregroundStyle(.secondary).lineLimit(2)
+            .frame(minWidth: 200, alignment: .leading)
+    }
+    var everywhereButton: some View {
+        Button(pad.everywhereID == profile.id ? "Stop Using Everywhere" : "Use Everywhere") {
+            pad.everywhereID = pad.everywhereID == profile.id ? nil : profile.id
+            if pad.everywhereID != nil { pad.enabled = true }
+        }
+        .fixedSize()
+        .help("Use this profile in every app and game, until you stop it — for streaming, or trying it anywhere.")
+    }
+    var macButton: some View {
+        Button(pad.profileID == profile.id && pad.on ? "Used on the Mac" : "Use on the Mac") { pad.profileID = profile.id; pad.on = true }
+            .disabled(pad.profileID == profile.id && pad.on).fixedSize()
+    }
+    @ViewBuilder var shareItems: some View {
+        Button("Copy to Clipboard") { ProfileActions.copy(profile, model: model) }
+        Button("Save as File…") { ProfileActions.export(profile, model: model) }
+    }
+    var moreMenu: some View {
+        Menu {
+            Button("Duplicate") { ProfileActions.duplicate(profile, model: model) }
+            Menu("Share") { shareItems }
+            Button(isDefault ? "Stop Using as Default" : "Set as Default") { toggleDefault() }
+            Divider()
+            Button("Delete Profile", role: .destructive) { remove() }
+        } label: { Image(systemName: "ellipsis.circle") }
+        .menuIndicator(.hidden).fixedSize()
+        .help("Duplicate, share, set as the default or delete this profile")
+        .accessibilityLabel("More profile actions")
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                Text(users.isEmpty ? "Not used by any game yet. Choose it on a game's Controls tab, set it as the default, or use it on the Mac."
-                                   : "Used by " + ListFormatter.localizedString(byJoining: users) + ".")
-                    .font(.callout).foregroundStyle(.secondary).lineLimit(2)
-                Spacer()
-                Button(pad.everywhereID == profile.id ? "Stop Using Everywhere" : "Use Everywhere") {
-                    pad.everywhereID = pad.everywhereID == profile.id ? nil : profile.id
-                    if pad.everywhereID != nil { pad.enabled = true }
+            // Everything on one line while it fits; otherwise the less-used actions fold into a menu.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) {
+                    usage
+                    Spacer(minLength: 8)
+                    everywhereButton; macButton
+                    Button("Duplicate") { ProfileActions.duplicate(profile, model: model) }
+                        .help("A copy to change for another game, leaving this one as it is.")
+                    Menu("Share") { shareItems }
+                        .fixedSize()
+                        .help("Send this profile to someone: they add it with New Controller Profile → Import.")
+                    Button(isDefault ? "Stop Using as Default" : "Set as Default") { toggleDefault() }
+                    Button(role: .destructive) { remove() } label: { Image(systemName: "trash") }
+                        .help("Delete this profile")
                 }
-                .help("Use this profile in every app and game, until you stop it — for streaming, or trying it anywhere.")
-                Button(pad.profileID == profile.id && pad.on ? "Used on the Mac" : "Use on the Mac") { pad.profileID = profile.id; pad.on = true }
-                    .disabled(pad.profileID == profile.id && pad.on)
-                Button("Duplicate") { ProfileActions.duplicate(profile, model: model) }
-                    .help("A copy to change for another game, leaving this one as it is.")
-                Menu("Share") {
-                    Button("Copy to Clipboard") { ProfileActions.copy(profile, model: model) }
-                    Button("Save as File…") { ProfileActions.export(profile, model: model) }
+                HStack(spacing: 10) {
+                    usage
+                    Spacer(minLength: 8)
+                    everywhereButton; macButton; moreMenu
                 }
-                .fixedSize()
-                .help("Send this profile to someone: they add it with New Controller Profile → Import.")
-                Button(PadProfiles.defaultID() == profile.id ? "Stop Using as Default" : "Set as Default") {
-                    ProfileActions.setDefault(PadProfiles.defaultID() == profile.id ? nil : profile, model: model)
+                VStack(alignment: .leading, spacing: 8) {
+                    usage
+                    HStack(spacing: 10) { everywhereButton; macButton; moreMenu; Spacer(minLength: 0) }
                 }
-                Button(role: .destructive) { ProfileActions.delete(profile, model: model); model.profileSelection = "mac" } label: { Image(systemName: "trash") }
-                    .help("Delete this profile")
             }
             .padding(.horizontal, 16).padding(.top, 12)
             ControllerProfileEditor(profile: profile, own: false, gameName: "", all: PadProfiles.profiles(), embedded: true) { p in

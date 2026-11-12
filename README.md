@@ -36,7 +36,7 @@ with tested settings, one-click fixes and safe updates.
 
 ## Controller profiles — for any game, anywhere on your Mac
 
-![The Profiles tab: a controller profile with its layers, a picture of the controller showing what each button does, and the selected button's settings](docs/controller-profiles.png)
+![The Controls tab: a controller profile with its layers, a picture of the controller showing what each button does, and the selected button's settings](docs/controller-profiles.png)
 
 Nokcandu has a full controller remapper built in, and **it works system-wide**: not just in games you run with Nokcandu,
 but in Mac games, games from launchers you already use, and any other Mac app. If you only want the remapping,
@@ -76,7 +76,7 @@ that's fine — you never have to install a game in Nokcandu to use it.
 - **Use Everywhere** — activate any profile for every app and game until you stop it, from the profile's page, its right-click
   menu or the menu bar (for streaming, or trying a profile without a game).
 - **A controller can pick the profile** — the Mac can use a different profile while a particular controller is connected.
-- **One switch turns it all off** (Profiles tab, Settings or the menu bar), so your controller works untouched.
+- **One switch turns it all off** (Controls tab, Settings or the menu bar), so your controller works untouched.
 
 Using a profile outside Windows games needs Accessibility access (macOS asks the first time), and Nokcandu can open at login
 in the menu bar so profiles are always ready. **Keyboard layouts** work the same way: remap keys (including fn/Globe)

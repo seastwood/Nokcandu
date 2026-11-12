@@ -1,0 +1,21 @@
+--- a/dlls/winemac.drv/cocoa_app.m
++++ b/dlls/winemac.drv/cocoa_app.m
+@@ -1371,6 +1371,18 @@
+             event->window_drag_begin.no_activate = [NSEvent wine_commandKeyDown];
+         [window.queue postEvent:event];
+         macdrv_release_event(event);
++    }
++
++    /* Controller helper validation uses the exact active presentation/Retina
++       conversion, rather than comparing Windows positions with Mac points. */
++    - (CGPoint) nokcanduWindowsMousePoint:(CGPoint)point
++    {
++        return cgpoint_win_from_mac_global(point);
++    }
++
++    - (CGPoint) nokcanduMacMousePoint:(CGPoint)point
++    {
++        return cgpoint_mac_from_win_global(point);
+     }
+ 
+     - (void) handleMouseMove:(NSEvent*)anEvent

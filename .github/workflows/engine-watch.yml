@@ -40,10 +40,11 @@ jobs:
   watch:
     needs: check
     if: needs.check.outputs.new == 'true' && needs.check.outputs.open == '0'
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
+      - uses: ./.github/actions/xcode
       - name: Try the driver patches on it
         id: try
         continue-on-error: true

@@ -20,14 +20,15 @@ struct ControllerPicture: View {
     /// The drawn body's proportions (width ÷ height). Places are fractions of the body's box.
     static let aspect: CGFloat = 1.55
 
+    var steamLayout: Bool { family == .valve }
     var psLayout: Bool { family == .playstation }
     /// Xbox and Nintendo: left stick high, d-pad low. PlayStation: d-pad high, both sticks low.
     var dpadCenter: CGPoint { psLayout ? CGPoint(x: 0.24, y: 0.36) : CGPoint(x: 0.37, y: 0.585) }
-    var stickPlaces: [CGPoint] { [psLayout ? CGPoint(x: 0.37, y: 0.585) : CGPoint(x: 0.24, y: 0.36), CGPoint(x: 0.63, y: 0.585)] }
+    var stickPlaces: [CGPoint] { steamLayout ? [CGPoint(x:0.34,y:0.68),CGPoint(x:0.76,y:0.38)] : [psLayout ? CGPoint(x: 0.37, y: 0.585) : CGPoint(x: 0.24, y: 0.36), CGPoint(x: 0.63, y: 0.585)] }
 
     func place(_ i: I) -> CGPoint {
-        let d = dpadCenter, face = CGPoint(x: 0.76, y: 0.36)
-        let dx: CGFloat = 0.058, dy: CGFloat = 0.09
+        let d = dpadCenter, face = steamLayout ? CGPoint(x:0.65,y:0.68) : CGPoint(x: 0.76, y: 0.36)
+        let dx: CGFloat = steamLayout ? 0.048 : 0.058, dy: CGFloat = steamLayout ? 0.075 : 0.09
         switch i {
         case .up: return CGPoint(x: d.x, y: d.y - dy)
         case .down: return CGPoint(x: d.x, y: d.y + dy)
@@ -38,9 +39,11 @@ struct ControllerPicture: View {
         case .a: return family == .nintendo ? CGPoint(x: face.x + dx, y: face.y) : CGPoint(x: face.x, y: face.y + dy)
         case .x: return family == .nintendo ? CGPoint(x: face.x, y: face.y - dy) : CGPoint(x: face.x - dx, y: face.y)
         case .b: return family == .nintendo ? CGPoint(x: face.x, y: face.y + dy) : CGPoint(x: face.x + dx, y: face.y)
-        case .back: return CGPoint(x: 0.42, y: 0.33)
-        case .start: return CGPoint(x: 0.58, y: 0.33)
-        case .guide: return CGPoint(x: 0.5, y: psLayout ? 0.47 : 0.19)
+        case .back: return steamLayout ? CGPoint(x: 0.41, y: 0.43) : CGPoint(x: 0.42, y: 0.33)
+        case .start: return steamLayout ? CGPoint(x: 0.59, y: 0.43) : CGPoint(x: 0.58, y: 0.33)
+        case .guide: return CGPoint(x: 0.5, y: steamLayout ? 0.43 : psLayout ? 0.47 : 0.19)
+        case .paddle1: return CGPoint(x:0.7,y:0.91)
+        case .paddle2: return CGPoint(x:0.3,y:0.91)
         case .lb: return CGPoint(x: 0.22, y: -0.07)
         case .rb: return CGPoint(x: 0.78, y: -0.07)
         case .lt: return CGPoint(x: 0.22, y: -0.24)
@@ -50,14 +53,16 @@ struct ControllerPicture: View {
         default: return CGPoint(x: -1, y: -1)
         }
     }
-    var shown: [I] { [.lt, .rt, .ltfull, .rtfull, .lb, .rb, .up, .down, .left, .right, .y, .a, .x, .b, .back, .start, .guide] }
+    var shown: [I] { (steamLayout ? [.lt, .rt, .ltfull, .rtfull, .lb, .rb, .y, .a, .x, .b, .back, .start, .guide, .paddle1, .paddle2] : [.lt, .rt, .ltfull, .rtfull, .lb, .rb, .up, .down, .left, .right, .y, .a, .x, .b, .back, .start, .guide]) }
 
     var body: some View {
         GeometryReader { geo in
             let sw = min(geo.size.width * 0.92, (geo.size.height * 0.74) * Self.aspect)
             let sh = sw / Self.aspect
             let x0 = (geo.size.width - sw) / 2, y0 = geo.size.height - sh - 2
-            let at = { (p: CGPoint) in CGPoint(x: x0 + p.x * sw, y: y0 + p.y * sh) }
+            // Controls keep their size down to a point, then shrink with the body so they never run into each other.
+            let k = max(0.62, min(1, sw / 420))
+            let at = { (p: CGPoint) in CGPoint(x: x0 + p.x * sw, y: y0 + (steamLayout && p.y >= 0 ? p.y - 0.06 : p.y) * sh) }
             ZStack {
                 ControllerShape()
                     .fill(LinearGradient(colors: [Color.primary.opacity(0.16), Color.primary.opacity(0.07)], startPoint: .top, endPoint: .bottom))
@@ -67,15 +72,26 @@ struct ControllerPicture: View {
                     .position(x: x0 + sw / 2, y: y0 + sh / 2)
                     .accessibilityHidden(true)
                 // the d-pad's cross, under its four buttons
-                DPadWell().fill(Color.primary.opacity(0.08))
+                if steamLayout {
+                    Button { selection = .touchpad } label: {
+                        ZStack {
+                            Circle().fill(Color.accentColor.opacity(0.18)).frame(width:76*k,height:76*k)
+                            Circle().stroke(selection == .touchpad ? Color.accentColor : Color.secondary.opacity(0.35),lineWidth:1.5).frame(width:76*k,height:76*k)
+                            Circle().fill(Color.primary.opacity(0.55)).frame(width:10,height:10)
+                                .offset(x:tester.leftSteamPad.x*28*k,y:-tester.leftSteamPad.y*28*k)
+                            Text("Left trackpad").font(.caption2).lineLimit(1).fixedSize().offset(y:38*k+11)
+                        }
+                    }.buttonStyle(.plain).accessibilityLabel("Left trackpad settings")
+                        .position(at(CGPoint(x:0.24,y:0.38)))
+                } else { DPadWell().fill(Color.primary.opacity(0.08))
                     .frame(width: sw * 0.17, height: sh * 0.265)
                     .position(at(dpadCenter))
-                    .accessibilityHidden(true)
-                ForEach(shown, id: \.self) { i in spot(i).position(at(place(i))) }
-                ForEach(0..<2, id: \.self) { s in stick(s).position(at(stickPlaces[s])) }
+                    .accessibilityHidden(true) }
+                ForEach(shown, id: \.self) { i in spot(i, k).position(at(place(i))) }
+                ForEach(0..<2, id: \.self) { s in stick(s, k).position(at(stickPlaces[s])) }
                 Button { selection = .gyro } label: {
                     Label("Gyro", systemImage: "gyroscope").font(.callout)
-                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .padding(.horizontal, 10 * k).padding(.vertical, 5 * k)
                         .background(Capsule().fill(selection == .gyro ? Color.accentColor.opacity(0.35) : Color.primary.opacity(0.08)))
                         .overlay(Capsule().stroke(selection == .gyro ? Color.accentColor : .clear, lineWidth: 2))
                 }
@@ -85,25 +101,40 @@ struct ControllerPicture: View {
         }
     }
 
-    func spot(_ i: I) -> some View {
+    func spot(_ i: I, _ k: CGFloat = 1) -> some View {
         let selected = selection == .input(i)
         let on = pressed.contains(i)
         let round = ![.lb, .rb, .lt, .rt, .ltfull, .rtfull].contains(i)
+        let outwardLabel = steamLayout && [.y, .a, .x, .b].contains(i)
+        let captionOffset: CGSize = i == .y ? CGSize(width: 0, height: -14 * k - 8) : i == .a ? CGSize(width: 0, height: 14 * k + 8) : CGSize(width: i == .x ? -12 * k - 32 : 12 * k + 32, height: 0)
         let short: String = {
             switch i {
             case .up: "▲"; case .down: "▼"; case .left: "◀"; case .right: "▶"
             case .ltfull, .rtfull: "full"
+            case .guide where steamLayout: "Steam"
+            case .back where steamLayout: "◀"
+            case .start where steamLayout: "▶"
+            case .paddle1 where steamLayout: "Rear R"
+            case .paddle2 where steamLayout: "Rear L"
             default: i.title(family).count <= 3 ? i.title(family) : String(i.title(family).prefix(1))
             }
         }()
         return Button { selection = .input(i) } label: {
             VStack(spacing: 1) {
-                Text(short).font(.system(size: 11, weight: .semibold))
-                    .frame(minWidth: round ? 28 : 46, minHeight: 28)
+                Text(short).font(.system(size: max(9, 11 * k), weight: .semibold)).lineLimit(1)
+                    .frame(minWidth: (steamLayout && [.guide, .paddle1, .paddle2].contains(i) ? 44 : round ? (steamLayout ? 24 : 28) : 46) * k, minHeight: 28 * k)
                     .background(Capsule().fill(on ? Color.accentColor : mapped(i) ? Color.accentColor.opacity(0.35) : Color(nsColor: .controlBackgroundColor)))
                     .overlay(Capsule().stroke(selected ? Color.accentColor : Color.secondary.opacity(0.35), lineWidth: selected ? 2 : 0.5))
                     .shadow(color: .black.opacity(0.12), radius: 1, y: 0.5)
-                if let l = label(i), l != "—" { Text(l).font(.system(size: 10, weight: .medium)).foregroundStyle(Color.accentColor).lineLimit(1).frame(maxWidth: 64) }
+                if !outwardLabel, let l = label(i), l != "—" { Text(l).font(.system(size: 10, weight: .medium)).foregroundStyle(Color.accentColor).lineLimit(1).minimumScaleFactor(0.7).frame(maxWidth: 64).help(l) }
+            }
+            .overlay {
+                if outwardLabel, let l = label(i), l != "—" {
+                    Text(l).font(.system(size: 9, weight: .medium)).foregroundStyle(Color.accentColor)
+                        .lineLimit(1).minimumScaleFactor(0.7).frame(width: 58, alignment: i == .x ? .trailing : i == .b ? .leading : .center).help(l)
+                        .offset(captionOffset)
+                        .allowsHitTesting(false)
+                }
             }
         }
         .buttonStyle(.plain)
@@ -111,25 +142,26 @@ struct ControllerPicture: View {
         .help(i.title(family))
     }
 
-    func stick(_ s: Int) -> some View {
+    func stick(_ s: Int, _ k: CGFloat = 1) -> some View {
         let p = sticks.indices.contains(s) ? sticks[s] : .zero
         let click: I = s == 0 ? .ls : .rs
         let selected = selection == .stick(s) || selection == .input(click)
+        let diameter: CGFloat = (steamLayout && s == 1 ? 76 : 54) * k
         return Button { selection = .stick(s) } label: {
             ZStack {
-                Circle().fill(pressed.contains(click) ? Color.accentColor.opacity(0.5) : stickLabel(s) != nil ? Color.accentColor.opacity(0.22) : Color(nsColor: .controlBackgroundColor)).frame(width: 54, height: 54)
+                Circle().fill(pressed.contains(click) ? Color.accentColor.opacity(0.5) : stickLabel(s) != nil ? Color.accentColor.opacity(0.22) : Color(nsColor: .controlBackgroundColor)).frame(width: diameter, height: diameter)
                     .shadow(color: .black.opacity(0.15), radius: 1.5, y: 0.5)
-                Circle().stroke(selected ? Color.accentColor : Color.secondary.opacity(0.35), lineWidth: selected ? 2 : 0.5).frame(width: 54, height: 54)
-                Circle().fill(Color.primary.opacity(0.55)).frame(width: 12, height: 12).offset(x: p.x * 20, y: -p.y * 20)
+                Circle().stroke(selected ? Color.accentColor : Color.secondary.opacity(0.35), lineWidth: selected ? 2 : 0.5).frame(width: diameter, height: diameter)
+                Circle().fill(Color.primary.opacity(0.55)).frame(width: 12, height: 12).offset(x: p.x * 20 * k, y: -p.y * 20 * k)
                 VStack(spacing: 0) {
-                    if let m = stickLabel(s) { Text(m).font(.system(size: 10, weight: .semibold)).foregroundStyle(Color.accentColor).lineLimit(1).fixedSize() }
+                    if let m = steamLayout ? (s == 1 ? (stickLabel(s) ?? "Right trackpad") : "Joystick") : stickLabel(s) { Text(m).font(.system(size: 10, weight: .semibold)).foregroundStyle(Color.accentColor).lineLimit(1).fixedSize() }
                     if let l = label(click), l != "—" { Text("click: " + l).font(.system(size: 9, weight: .medium)).foregroundStyle(Color.accentColor.opacity(0.85)).lineLimit(1).fixedSize() }
                 }
-                .offset(y: 42)
+                .offset(y: diameter/2+13)
             }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel((s == 0 ? "Left stick" : "Right stick") + (stickLabel(s).map { ": \($0)" } ?? ""))
+        .accessibilityLabel((s == 0 ? "Left stick" : steamLayout ? "Right trackpad" : "Right stick") + (stickLabel(s).map { ": \($0)" } ?? ""))
     }
 }
 
@@ -155,6 +187,11 @@ final class PadTester: ObservableObject {
         let f = DeviceFeed { [weak self] in self?.engine }
         f.onInput = { [weak self] id, k, down in self?.deviceInput(id, k, down) }
         f.onAxis = { [weak self] id, n, v in self?.deviceAxis(id, n, v) }
+        f.onDisconnect = { [weak self] id in
+            guard let self else { return }
+            self.deviceHeld = self.deviceHeld.filter { !$0.hasPrefix(id + ".") }
+            self.deviceAxes = self.deviceAxes.filter { !$0.key.hasPrefix(id + ".") }
+        }
         return f
     }()
     private var devices: [PadProfiles.Device] = []
@@ -169,10 +206,28 @@ final class PadTester: ObservableObject {
     private var lastButtons: [Int: Bool] = [:]
     private var lastAxes: [Int: Int] = [:]
     private var lastGyroShown = 0.0
+    private var primaryID: ObjectIdentifier?
+    private let steamReaderID = UUID()
+    private var steamSource = false
+    private var steamPadSettings = [PadSteamTrackpadSettings(), PadSteamTrackpadSettings()]
+    private var steamPadMotion = [PadSteamTrackpad(), PadSteamTrackpad()]
+    func configureSteamPads(left: PadSteamTrackpadSettings?, right: PadSteamTrackpadSettings?) {
+        let next = [left ?? PadSteamTrackpadSettings(), right ?? PadSteamTrackpadSettings()]
+        if next != steamPadSettings { steamPadMotion = [PadSteamTrackpad(), PadSteamTrackpad()] }
+        steamPadSettings = next
+    }
+    var isSteamSource: Bool { steamSource }
+    @Published var leftSteamPad = CGPoint.zero
+    func selectSource(_ source: PadProfiles.ControllerSource) {
+        let next = source == .steamUSB
+        guard next != steamSource else { return }
+        if let e = engine { pe_release_main(e,Self.now()) }
+        steamSource = next; lastButtons = [:]; lastAxes = [:]; pressed = []; sticks = [.zero,.zero]
+        if engine != nil { attach() }
+    }
     var family: Controllers.Family?
 
     func start(profile text: String, devices: [PadProfiles.Device] = []) {
-        DesktopPad.testerOpen = true
         reload(text, devices: devices)
         observers.append(NotificationCenter.default.addObserver(forName: .hidDevicesChanged, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.attach() }
@@ -186,19 +241,20 @@ final class PadTester: ObservableObject {
         })
         attach()
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 120, repeats: true) { [weak self] _ in
-            Task { @MainActor in guard let self, let e = self.engine else { return }; pe_tick(e, Self.now()) }
+            Task { @MainActor in guard let self, let e = self.engine else { return }; self.sample(); pe_tick(e, Self.now()) }
         }
     }
     func stop() {
+        steamPadMotion = [PadSteamTrackpad(), PadSteamTrackpad()]
+        SteamControllerUSB.shared.remove(steamReaderID)
         timer?.invalidate(); timer = nil
         observers.forEach(NotificationCenter.default.removeObserver); observers = []
-        for c in GCController.controllers() { c.extendedGamepad?.valueChangedHandler = nil; c.motion?.valueChangedHandler = nil }
         feed.stop()
         if let e = engine { pe_destroy(e) }; engine = nil
-        DesktopPad.testerOpen = false
         DesktopPad.shared.attach()
     }
     func reload(_ text: String, devices: [PadProfiles.Device]? = nil) {
+        if (devices == nil || devices == self.devices), let e = engine, text.withCString({ pe_update_profile(e, $0) }) { return }
         if let e = engine { pe_release_all(e, Self.now()); pe_destroy(e) }
         held = [:]; holding = []; padAxes = [:]
         if let devices, devices != self.devices {
@@ -216,9 +272,10 @@ final class PadTester: ObservableObject {
         sink.wheel = { c, n in PadTester.of(c).flash("wheel:\(n > 0 ? "up" : "down")") }
         sink.text = { c, t in let s = t.map { String(cString: $0) } ?? ""; PadTester.of(c).flash("text:" + s) }
         sink.menu = { c, m, sl in PadTester.of(c).menu(Int(m), Int(sl)) }
-        sink.calibration = { _, p in MainActor.assumeIsolated { PadHUD.shared.calibration(p) } }
+        sink.calibration = { c, p in MainActor.assumeIsolated { PadHUD.shared.calibration(p, manual: pe_calibration_is_manual(PadTester.of(c).engine)) } }
         engine = text.withCString { pe_create($0, sink) }
         lastButtons = [:]; lastAxes = [:]
+        if steamSource { attach() }
     }
     nonisolated static func of(_ c: UnsafeMutableRawPointer?) -> PadTester { Unmanaged<PadTester>.fromOpaque(c!).takeUnretainedValue() }
     nonisolated static func now() -> Double { ProcessInfo.processInfo.systemUptime }
@@ -295,34 +352,106 @@ final class PadTester: ObservableObject {
     }
 
     private func attach() {
-        feed.attachGamepads()
+        feed.reconcile()
+        if steamSource {
+            controllerName = SteamControllerUSB.shared.controllerName; hasMotion = false
+            SteamControllerUSB.shared.listen(steamReaderID) { [weak self] state in self?.readSteam(state) }
+            return
+        }
+        SteamControllerUSB.shared.remove(steamReaderID)
         let c = feed.mainControllers().first
+        let next = c.map(ObjectIdentifier.init)
+        if primaryID != next {
+            if primaryID != nil, let e = engine { pe_release_main(e, Self.now()) }
+            lastButtons = [:]; lastAxes = [:]; pressed = []; sticks = [.zero, .zero]
+            primaryID = next
+        }
         controllerName = c?.vendorName
-        guard let c, let gp = c.extendedGamepad else { hasMotion = false; return }
-        gp.valueChangedHandler = { [weak self] pad, _ in
-            MainActor.assumeIsolated { self?.read(pad) }
+        hasMotion = c?.motion?.hasRotationRate ?? false
+        if let m = c?.motion, m.sensorsRequireManualActivation { m.sensorsActive = true }
+    }
+
+    /// Preview samples state without replacing the active runtime's callbacks. Its
+    /// telemetry rate is independent of the hardware-driven mapping pipeline.
+    private func sample() {
+        feed.sampleGamepads()
+        if steamSource {
+            for side in 0..<2 { steamMouse(steamPadMotion[side].tick(at: Self.now(), settings: steamPadSettings[side]), side: side) }
         }
-        if let m = c.motion {
-            hasMotion = m.hasRotationRate
-            if m.sensorsRequireManualActivation { m.sensorsActive = true }
-            m.valueChangedHandler = { [weak self] motion in
-                let r = motion.rotationRate
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    let speed = (sqrt(r.x * r.x + r.y * r.y + r.z * r.z) * 180 / .pi).rounded()
-                    let t = Self.now()
-                    if speed != self.gyroSpeed, t - self.lastGyroShown > 0.1 { self.gyroSpeed = speed; self.lastGyroShown = t }
-                    if let e = self.engine {
-                        pe_gyro(e, Float(r.x), Float(r.y), Float(r.z), Self.now())
-                        let a = motion.hasGravityAndUserAcceleration ? motion.gravity : motion.acceleration
-                        if pe_uses_tilt(e) { pe_accel(e, Float(a.x), Float(a.y), Float(a.z), Self.now()) }
-                    }
-                }
+        guard !steamSource else { return }
+        guard let c = feed.mainControllers().first, let g = c.extendedGamepad else { return }
+        guard primaryID == ObjectIdentifier(c) else { attach(); return }
+        read(g)
+        if let m = c.motion, let e = engine {
+            let r = m.rotationRate, t = Self.now()
+            pe_gyro(e, Float(r.x), Float(r.y), Float(r.z), t)
+            let a = m.hasGravityAndUserAcceleration ? m.gravity : m.acceleration
+            if pe_uses_tilt(e) { pe_accel(e, Float(a.x), Float(a.y), Float(a.z), t) }
+            if t - lastGyroShown > 0.1 {
+                let speed = (sqrt(r.x * r.x + r.y * r.y + r.z * r.z) * 180 / .pi).rounded()
+                if speed != gyroSpeed { gyroSpeed = speed }
+                lastGyroShown = t
             }
-        } else { hasMotion = false }
-        PadGC.watchTouchpads(c) { [weak self] f, down, x, y in
-            MainActor.assumeIsolated { if let e = self?.engine { pe_touch(e, Int32(f), down, x, y, Self.now()) } }
         }
+        let pads = c.physicalInputProfile.allElements.compactMap { $0 as? GCControllerTouchpad }
+            .sorted { ($0.localizedName ?? "") < ($1.localizedName ?? "") }
+        for (i, tp) in pads.prefix(2).enumerated() {
+            if let e = engine { pe_touch(e, Int32(i), tp.touchState != .up,
+                (tp.touchSurface.xAxis.value + 1) / 2, (1 - tp.touchSurface.yAxis.value) / 2, Self.now()) }
+        }
+    }
+
+    private func readSteam(_ state: SteamControllerReport.State?) {
+        guard steamSource, let e = engine else { return }
+        controllerName = SteamControllerUSB.shared.controllerName
+        hasMotion = state?.gyro.contains(where: { $0 != 0 }) == true
+        guard let state else {
+            steamPadMotion = [PadSteamTrackpad(), PadSteamTrackpad()]
+            pe_release_main(e,Self.now()); lastButtons = [:]; lastAxes = [:]
+            pressed = []; sticks = [.zero,.zero]; leftSteamPad = .zero; return
+        }
+        let now = Self.now()
+        if !DesktopPad.shared.suppliesSteamHaptics {
+            for side in 0..<2 {
+                SteamControllerUSB.shared.touchFeedback(side: side, down: side == 0 ? state.leftTouch : state.rightTouch, strength: steamPadSettings[side].touchFeedback ?? 0)
+            }
+        }
+        let touchRequired = steamPadSettings.contains { $0.gyroWhileTouched == true }
+        let gyroTouch = (steamPadSettings[0].gyroWhileTouched == true && state.leftTouch) || (steamPadSettings[1].gyroWhileTouched == true && state.rightTouch)
+        pe_gyro_touch(e, touchRequired, gyroTouch)
+        pe_touch(e,0,state.leftTouch && steamPadSettings[0].mode == .existing,(state.leftPad.x+1)/2,(1-state.leftPad.y)/2,now)
+        for side in 0..<2 where steamPadSettings[side].mode != .existing {
+            let pad = side == 0 ? state.leftPad : state.rightPad
+            steamMouse(steamPadMotion[side].touch(down: side == 0 ? state.leftTouch : state.rightTouch,
+                x: Double(pad.x+1)/2, y: Double(1-pad.y)/2, at: now, settings: steamPadSettings[side]), side: side)
+        }
+        for input in PadProfiles.Input.padButtons {
+            let n = Int(pe_input_named(input.rawValue)), down = state.buttons.contains(input)
+            if lastButtons[n] != down { lastButtons[n] = down; pe_button(e,Int32(n),down,now) }
+        }
+        let axes = state.mappingAxes(rightTrackpadAsStick: steamPadSettings[1].mode == .existing)
+        for (a,v) in axes where lastAxes[a] != v { lastAxes[a] = v; pe_axis(e,Int32(a),Int32(v),now) }
+        pe_gyro(e,state.gyro[0],state.gyro[1],state.gyro[2],now)
+        if pe_uses_tilt(e) { pe_accel(e,state.acceleration[0],state.acceleration[1],state.acceleration[2],now) }
+        var held = state.buttons
+        if state.leftTrigger > 0.3 { held.insert(.lt) }; if state.leftTrigger > 0.95 { held.insert(.ltfull) }
+        if state.rightTrigger > 0.3 { held.insert(.rt) }; if state.rightTrigger > 0.95 { held.insert(.rtfull) }
+        if pressed != held { pressed = held }
+        func point(_ p: SteamControllerReport.Point) -> CGPoint { CGPoint(x:(Double(p.x)*20).rounded()/20,y:(Double(p.y)*20).rounded()/20) }
+        let positions = [point(state.stick),state.rightTouch ? point(state.rightPad) : .zero]
+        if positions != sticks { sticks = positions }
+        let left = state.leftTouch ? point(state.leftPad) : .zero
+        if leftSteamPad != left { leftSteamPad = left }
+        if now-lastGyroShown > 0.1 {
+            let speed = Double(sqrt(state.gyro.reduce(0) { $0+$1*$1 })*180/Float.pi).rounded()
+            if speed != gyroSpeed { gyroSpeed = speed }; lastGyroShown = now
+        }
+    }
+
+    private func steamMouse(_ motion: PadSteamTrackpad.Motion, side: Int) {
+        guard motion.x != 0 || motion.y != 0, let engine else { return }
+        if !DesktopPad.shared.suppliesSteamHaptics { _ = SteamControllerUSB.shared.movementFeedback(side: side, dx: motion.x, dy: motion.y, strength: steamPadSettings[side].movementFeedback ?? 0, rate: steamPadSettings[side].hapticRate ?? 40, spacingMS: steamPadSettings[side].hapticSpacingMS ?? 1, followsMovement: steamPadSettings[side].hapticFollowsMovement ?? true) }
+        if !pe_menu_mouse(engine, Double(motion.x), Double(motion.y)) { move(motion.x,motion.y) }
     }
 
     private func read(_ g: GCExtendedGamepad) {
@@ -353,6 +482,7 @@ final class PadTester: ObservableObject {
 struct PadTestView: View {
     @ObservedObject var tester: PadTester
     let family: Controllers.Family?
+    @ObservedObject private var steam = SteamControllerUSB.shared
 
     var body: some View {
         GroupBox {
@@ -360,6 +490,7 @@ struct PadTestView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     if let n = tester.controllerName {
                         Text("Testing with \(n)").font(.caption).foregroundStyle(.secondary)
+                        if tester.isSteamSource { Text(steam.status).font(.caption).foregroundStyle(.secondary) }
                         if tester.holding.isEmpty {
                             Text("Press buttons to see what the game gets.").font(.callout).foregroundStyle(.secondary)
                         } else {

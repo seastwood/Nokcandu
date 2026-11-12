@@ -1,0 +1,121 @@
+--- a/dlls/ntoskrnl.exe/pnp.c
++++ b/dlls/ntoskrnl.exe/pnp.c
+@@ -379,7 +379,7 @@
+     create_dyn_data_key( device );
+ }
+ 
+-static void enumerate_new_device( DEVICE_OBJECT *device, HDEVINFO set )
++static void enumerate_new_device( DEVICE_OBJECT *device, HDEVINFO set, const WCHAR *parent_id )
+ {
+     static const WCHAR infpathW[] = {'I','n','f','P','a','t','h',0};
+ 
+@@ -403,6 +403,10 @@
+ 
+     TRACE("Creating new device %s.\n", debugstr_w(device_instance_id));
+ 
++    if (parent_id && *parent_id)
++        SetupDiSetDevicePropertyW( set, &sp_device, &DEVPKEY_Device_Parent, DEVPROP_TYPE_STRING,
++                (const BYTE *)parent_id, (lstrlenW(parent_id) + 1) * sizeof(WCHAR), 0 );
++
+     /* Check if the device already has a driver registered; if not, find one
+      * and install it. */
+     key = SetupDiOpenDevRegKey( set, &sp_device, DICS_FLAG_GLOBAL, 0, DIREG_DRV, KEY_READ );
+@@ -488,6 +492,7 @@
+ static void handle_bus_relations( DEVICE_OBJECT *parent )
+ {
+     struct wine_device *wine_parent = CONTAINING_RECORD(parent, struct wine_device, device_obj);
++    WCHAR parent_id[MAX_DEVICE_ID_LEN] = {0};
+     SP_DEVINFO_DATA sp_device = {sizeof(sp_device)};
+     DEVICE_RELATIONS *relations;
+     IO_STATUS_BLOCK irp_status;
+@@ -501,6 +506,7 @@
+ 
+     set = SetupDiCreateDeviceInfoList( NULL, NULL );
+ 
++    if (get_device_instance_id(parent, parent_id)) parent_id[0] = 0;
+     parent = IoGetAttachedDevice( parent );
+ 
+     KeInitializeEvent( &event, NotificationEvent, FALSE );
+@@ -535,7 +541,7 @@
+         if (!wine_parent->children || !device_in_list( wine_parent->children, child ))
+         {
+             TRACE("Adding new device %p.\n", child);
+-            enumerate_new_device( child, set );
++            enumerate_new_device( child, set, parent_id );
+         }
+     }
+ 
+--- a/dlls/setupapi/stubs.c
++++ b/dlls/setupapi/stubs.c
+@@ -131,17 +131,6 @@
+ }
+ 
+ /***********************************************************************
+- *              CM_Get_Parent (SETUPAPI.@)
+- */
+-DWORD WINAPI CM_Get_Parent(PDEVINST pdnDevInst, DEVINST dnDevInst, ULONG ulFlags)
+-{
+-    FIXME("%p 0x%08lx 0x%08lx stub\n", pdnDevInst, dnDevInst, ulFlags);
+-    if(pdnDevInst)
+-        *pdnDevInst = 0;
+-    return CR_NO_SUCH_DEVNODE;
+-}
+-
+-/***********************************************************************
+  *		SetupInitializeFileLogW(SETUPAPI.@)
+  */
+ HSPFILELOG WINAPI SetupInitializeFileLogW(LPCWSTR LogFileName, DWORD Flags)
+--- a/dlls/setupapi/devinst.c
++++ b/dlls/setupapi/devinst.c
+@@ -7322,3 +7322,24 @@
+     free(inf_pathW);
+     return hr;
+ }
++
++/***********************************************************************
++ *              CM_Get_Parent (SETUPAPI.@)
++ */
++CONFIGRET WINAPI CM_Get_Parent(PDEVINST result, DEVINST node, ULONG flags)
++{
++    WCHAR parent[MAX_DEVICE_ID_LEN];
++    DEVPROPTYPE type;
++    ULONG size = sizeof(parent);
++    CONFIGRET ret;
++
++    if (!result) return CR_INVALID_POINTER;
++    *result = 0;
++    if (flags) return CR_INVALID_FLAG;
++    ret = CM_Get_DevNode_PropertyW(node, &DEVPKEY_Device_Parent, &type, (BYTE *)parent, &size, 0);
++    if (ret == CR_NO_SUCH_VALUE) return CR_NO_SUCH_DEVNODE;
++    if (ret != CR_SUCCESS) return ret;
++    if (type != DEVPROP_TYPE_STRING || size < sizeof(WCHAR) || size > sizeof(parent) ||
++        size % sizeof(WCHAR) || parent[size / sizeof(WCHAR) - 1] || !parent[0]) return CR_INVALID_DATA;
++    return CM_Locate_DevNodeW(result, parent, 0);
++}
+--- a/dlls/winebus.sys/main.c
++++ b/dlls/winebus.sys/main.c
+@@ -262,16 +262,22 @@
+ {
+     static const WCHAR xinput_compat[] = L"WINEBUS\\WINE_COMP_XINPUT";
+     static const WCHAR hid_compat[] = L"WINEBUS\\WINE_COMP_HID";
++    static const WCHAR steam_usb_compat[] = L"USB\\Class_03&SubClass_00&Prot_00";
+     struct device_extension *ext = (struct device_extension *)device->DeviceExtension;
+     DWORD size = sizeof(hid_compat);
++    BOOL steam_usb = ext->desc.is_hidraw && ext->desc.bus_type == BUS_TYPE_USB &&
++        ext->desc.vid == 0x28de && ext->desc.pid == 0x1102 && ext->desc.input == 2;
+     WCHAR *dst;
+ 
++    if (steam_usb) size += sizeof(steam_usb_compat);
+     if (ext->desc.is_gamepad) size += sizeof(xinput_compat);
+ 
+     if ((dst = ExAllocatePool(PagedPool, size + sizeof(WCHAR))))
+     {
+-        if (ext->desc.is_gamepad) memcpy(dst, xinput_compat, sizeof(xinput_compat));
+-        memcpy((char *)dst + size - sizeof(hid_compat), hid_compat, sizeof(hid_compat));
++        char *cursor = (char *)dst;
++        if (ext->desc.is_gamepad) { memcpy(cursor, xinput_compat, sizeof(xinput_compat)); cursor += sizeof(xinput_compat); }
++        memcpy(cursor, hid_compat, sizeof(hid_compat)); cursor += sizeof(hid_compat);
++        if (steam_usb) memcpy(cursor, steam_usb_compat, sizeof(steam_usb_compat));
+         dst[size / sizeof(WCHAR)] = 0;
+     }
+ 

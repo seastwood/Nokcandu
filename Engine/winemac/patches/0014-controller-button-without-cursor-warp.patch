@@ -1,0 +1,85 @@
+--- a/dlls/winemac.drv/cocoa_app.m
++++ b/dlls/winemac.drv/cocoa_app.m
+@@ -1383,6 +1383,27 @@
+     - (CGPoint) nokcanduMacMousePoint:(CGPoint)point
+     {
+         return cgpoint_mac_from_win_global(point);
++    }
++
++    /* Button-only delivery preserves Wine's current cursor, including
++       relative movement inside a scaled virtual desktop. No Mac warp. */
++    - (BOOL) nokcanduPostControllerButton:(int)button pressed:(BOOL)pressed
++    {
++        static WineWindow* held[5];
++        if (button < 0 || button > 4) return NO;
++        WineWindow* window = pressed ? (WineWindow*)[NSApp keyWindow] : held[button];
++        if (![window isKindOfClass:[WineWindow class]] || (pressed && held[button])) return NO;
++        macdrv_event* event = macdrv_create_event(MOUSE_BUTTON, window);
++        if (!event) return NO;
++        event->mouse_button.button = -button - 1;
++        event->mouse_button.pressed = pressed;
++        event->mouse_button.x = event->mouse_button.y = 0;
++        event->mouse_button.time_ms = [self ticksForEventTime:[[NSProcessInfo processInfo] systemUptime]];
++        if (pressed) held[button] = [window retain];
++        [window.queue postEvent:event];
++        macdrv_release_event(event);
++        if (!pressed) { [held[button] release]; held[button] = nil; }
++        return YES;
+     }
+ 
+     - (void) handleMouseMove:(NSEvent*)anEvent
+--- a/dlls/winemac.drv/mouse.c
++++ b/dlls/winemac.drv/mouse.c
+@@ -853,6 +853,8 @@
+  *
+  * Handler for MOUSE_BUTTON events.
+  */
++#include "controller-mouse-button.h"
++
+ void macdrv_mouse_button(HWND hwnd, const macdrv_event *event)
+ {
+     UINT flags = 0;
+@@ -863,34 +865,38 @@
+           event->mouse_button.x, event->mouse_button.y,
+           event->mouse_button.time_ms, (NtGetTickCount() - event->mouse_button.time_ms));
+ 
++    int button = event->mouse_button.button;
++    BOOL controller = button < 0;
++    if (controller && (button = nokcandu_controller_button(button)) < 0) return;
++
+     if (event->mouse_button.pressed)
+     {
+-        switch (event->mouse_button.button)
++        switch (button)
+         {
+         case 0: flags |= MOUSEEVENTF_LEFTDOWN; break;
+         case 1: flags |= MOUSEEVENTF_RIGHTDOWN; break;
+         case 2: flags |= MOUSEEVENTF_MIDDLEDOWN; break;
+         default:
+             flags |= MOUSEEVENTF_XDOWN;
+-            data = 1 << (event->mouse_button.button - 3);
++            data = 1 << (button - 3);
+             break;
+         }
+     }
+     else
+     {
+-        switch (event->mouse_button.button)
++        switch (button)
+         {
+         case 0: flags |= MOUSEEVENTF_LEFTUP; break;
+         case 1: flags |= MOUSEEVENTF_RIGHTUP; break;
+         case 2: flags |= MOUSEEVENTF_MIDDLEUP; break;
+         default:
+             flags |= MOUSEEVENTF_XUP;
+-            data = 1 << (event->mouse_button.button - 3);
++            data = 1 << (button - 3);
+             break;
+         }
+     }
+ 
+-    send_mouse_input(hwnd, event->window, flags | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE,
++    send_mouse_input(hwnd, event->window, flags | (controller ? 0 : MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE),
+                      event->mouse_button.x, event->mouse_button.y,
+                      data, FALSE, event->mouse_button.time_ms);
+ }

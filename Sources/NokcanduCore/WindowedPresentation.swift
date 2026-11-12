@@ -485,7 +485,9 @@ public enum WindowedPresentation {
         guard bundled != nil else { return }
         var hosts = Set<URL>()
         for g in games where g.native == nil { if let h = WineTools.hostContents(for: g), applied(host: h) != nil { hosts.insert(h) } }
-        for h in hosts where WineTools.ownedProcesses(contents: h).isEmpty {
+        for h in hosts {
+            // A failed process scan is unknown, not permission to replace a loaded driver.
+            guard Controllers.environmentClosed(contents: h, snapshot: GameLauncher.freshProcessStatus()) else { continue }
             let state = engineState(host: h)
             if state == .stock || state == .outdated { try? install(host: h) }
         }

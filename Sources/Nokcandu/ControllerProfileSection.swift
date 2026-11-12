@@ -40,7 +40,7 @@ struct ControllerProfileSection: View {
 
     Profiles are shared: changing one changes every game using it, and one can be the default for all games. A profile can build on others — anything it doesn't set comes from them.
 
-    Nokcandu applies the profile while the game is in front — keys and clicks as a real keyboard and mouse, movement straight into the game. “Controller as it is” leaves the controller to the game's own controls. Changes apply on the next press, even while playing. All profiles are also in the sidebar's Profiles tab.
+    Nokcandu applies the profile while the game is in front — keys and clicks as a real keyboard and mouse, movement straight into the game. “Controller as it is” leaves the controller to the game's own controls. Changes apply on the next press, even while playing. All profiles are also in the sidebar's Controls tab.
     """
 
     var body: some View {
@@ -192,14 +192,16 @@ struct ControllerProfileSection: View {
     }
 
     func finishNaming() {
+        PadProfileEdits.shared.flushAll()
         let n = name.trimmingCharacters(in: .whitespaces)
         guard let c = contents, !n.isEmpty else { return }
         do {
             switch naming {
             case .rename:
-                if var p = shownProfile { p.name = n; try PadProfiles.store(p, environments: []) }
+                if let shown = shownProfile { var p = PadProfiles.profiles().first { $0.id == shown.id } ?? shown; p.name = n; try PadProfiles.store(p, environments: []) }
             case .duplicate:
-                if var p = shownProfile {
+                if let shown = shownProfile {
+                    var p = PadProfiles.profiles().first { $0.id == shown.id } ?? shown
                     p.id = UUID().uuidString; p.name = n
                     try PadProfiles.store(p, environments: [])
                     try PadProfiles.set(.profile(p.id), contents: c)
@@ -272,7 +274,7 @@ struct ControllerProfileWindow: View {
             }
             .navigationTitle(p.name)
         } else if let g = game, let c = KeyRemap.gameContents(for: g), let p = target.profileID.map({ id in PadProfiles.profiles().first { $0.id == id } }) ?? PadProfiles.own(contents: c) {
-            ControllerProfileEditor(profile: p, own: target.profileID == nil, gameName: g.name, all: PadProfiles.profiles()) { new in
+            ControllerProfileEditor(profile: p, own: target.profileID == nil, gameName: g.name, all: PadProfiles.profiles(), editingContents: c) { new in
                 save(new, game: g, contents: c)
             }
             .navigationTitle(target.profileID == nil ? "\(g.name) — Controller Profile" : p.name)

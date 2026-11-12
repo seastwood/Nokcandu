@@ -781,7 +781,7 @@ struct GraphicsPicker: View {
                         Text(p.title + (p == game.custom?.confirmedGraphics ? " ✓" : "")).tag(p)
                     }
                 }
-                .labelsHidden().frame(width: settingControlWidth)
+                .labelsHidden().settingControl()
             }
             if !isGameLauncher {
                 HStack {

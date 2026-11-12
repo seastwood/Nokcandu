@@ -88,6 +88,8 @@ enum SharedGameCompatibility {
         var config = configuration(g, target: target)
         if let graphics { config.graphics = graphics }
         switch fix {
+        case .bf2DeploymentUI:
+            return "This BF2 workaround currently requires its own Windows environment. Shared launchers are left unchanged."
         case .ipxNetworking, .nativeIPXNetworking:
             return "This networking component currently needs a private Windows environment; it cannot change a shared launcher's networking for only one game."
         case .ubisoftBrowser: return "Install this on the Ubisoft Connect launcher itself."

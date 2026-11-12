@@ -33,6 +33,7 @@
 #include <errno.h>
 #include <libgen.h>
 #include <stdatomic.h>
+#include "mouse-coordinate-space.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -161,10 +162,15 @@ static NSWindow *update_aiming(id ctl) {
             CGPoint p = e ? CGEventGetLocation(e) : CGPointMake(NSMidX(f), top - NSMidY(f));
             if (e) CFRelease(e);
             if (game_cursor) {
-            os_unfair_lock_lock(&vcur_lock);
-            vcur_bounds = CGRectMake(NSMinX(f), top - NSMaxY(f), NSWidth(f), NSHeight(f));
-            os_unfair_lock_unlock(&vcur_lock);
-            vcur_set(p.x, p.y);
+                CGPoint first, last, game;
+                if (nokcandu_mouse_point(ctl, CGPointMake(NSMinX(f), top - NSMaxY(f)), true, &first) &&
+                    nokcandu_mouse_point(ctl, CGPointMake(NSMaxX(f), top - NSMinY(f)), true, &last) &&
+                    nokcandu_mouse_point(ctl, p, true, &game)) {
+                    os_unfair_lock_lock(&vcur_lock);
+                    vcur_bounds = CGRectMake(first.x, first.y, last.x - first.x, last.y - first.y);
+                    os_unfair_lock_unlock(&vcur_lock);
+                    vcur_set(game.x, game.y);
+                }
             }
             CGWarpMouseCursorPosition(CGPointMake(NSMidX(f), top - NSMidY(f)));
         } else if (game_cursor) {
@@ -173,7 +179,7 @@ static NSWindow *update_aiming(id ctl) {
             CGPoint p = CGPointMake(vcur_x, vcur_y);
             BOOL known = !CGRectIsEmpty(vcur_bounds);
             os_unfair_lock_unlock(&vcur_lock);
-            if (known) CGWarpMouseCursorPosition(p);
+            if (known && nokcandu_mouse_point(ctl, p, false, &p)) CGWarpMouseCursorPosition(p);
         }
         CGAssociateMouseAndMouseCursorPosition(!aiming);
         if (aiming) {
@@ -212,6 +218,22 @@ static NSWindow *update_aiming(id ctl) {
     return w;
 }
 
+// Relative input moves Wine's cursor and leaves the Mac pointer behind. Tell a driver that knows how
+// (Nokcandu's, from 0015) so it stops answering "where is the cursor?" with the stale Mac pointer —
+// otherwise the game's cursor snaps to it 100 ms after the last movement. The driver itself returns to
+// the Mac pointer on the next real pointer move. Any thread.
+static void cursor_left_pointer(id ctl) {
+    static _Atomic int known;                 // 0 = not checked, 1 = supported, -1 = not
+    static SEL sel;
+    int k = atomic_load(&known);
+    if (!k) {
+        sel = sel_registerName("nokcanduSetCursorDecoupled:");
+        k = [ctl respondsToSelector:sel] ? 1 : -1;
+        atomic_store(&known, k);
+    }
+    if (k == 1) ((void (*)(id, SEL, BOOL))objc_msgSend)(ctl, sel, YES);
+}
+
 static void release_ours(char *ev) {
     // Our reference from creation. The queue holds its own until the game thread has handled it.
     if (atomic_fetch_sub_explicit((_Atomic int *)(ev + kRefs), 1, memory_order_acq_rel) == 1) {
@@ -239,6 +261,7 @@ static void send_relative(int dx, int dy, bool drag) {
             *(int *)(ev + kDrag) = drag;
             *(unsigned long *)(ev + kTime) = ((unsigned long (*)(id, SEL, NSTimeInterval))objc_msgSend)(
                 (__bridge id)c, sel_registerName("ticksForEventTime:"), NSProcessInfo.processInfo.systemUptime);
+            cursor_left_pointer((__bridge id)c);
             ((void (*)(id, SEL, void *))orig_postEvent)((__bridge id)q, sel_registerName("postEvent:"), ev);
             release_ours(ev);
             moves_sent++;
@@ -329,7 +352,7 @@ static void raw_moved(float dx, float dy) {      // on raw_q
 static void my_handleMouseMove(id self, SEL _cmd, NSEvent *event) {
     if (update_aiming(self)) return;      // raw deltas replace pointer-derived moves while aiming
     BOOL learn = relative_type < 0;
-    if (learn) { watching_post = YES; watched_location = CGEventGetLocation(event.CGEvent); }
+    if (learn) watching_post = nokcandu_mouse_point(self, CGEventGetLocation(event.CGEvent), true, &watched_location);
     ((void (*)(id, SEL, NSEvent *))orig_handleMouseMove)(self, _cmd, event);
     if (learn) watching_post = NO;
 }
@@ -340,7 +363,7 @@ static BOOL my_setCursorPosition(id self, SEL _cmd, CGPoint pos) {
     if (aiming) atomic_fetch_add(&warps_while_aiming, 1);
     if (aiming) {
         CGAssociateMouseAndMouseCursorPosition(false);   // winemac re-associates after a warp
-        if (game_cursor) vcur_set(pos.x, pos.y);         // the game moved its cursor itself
+        if (game_cursor) { CGPoint game; if (nokcandu_mouse_point(self, pos, true, &game)) vcur_set(game.x, game.y); } // game cursor stays in Windows coordinates
     }
     return ok;
 }
@@ -356,7 +379,7 @@ static void my_postEvent(id self, SEL _cmd, void *raw) {
                       win && [win isKindOfClass:objc_getClass("WineWindow")];
         if (layout) {
             // Absolute moves carry the pointer position; relative ones are the type just before.
-            BOOL absolute = fabs(x - floor(watched_location.x)) <= 2 && fabs(y - floor(watched_location.y)) <= 2;
+            BOOL absolute = nokcandu_mouse_position_matches(x, y, watched_location, 2);
             if (absolute) {
                 relative_type = type - 1;
                 note(@"ready (absolute move type %d, relative %d, scale %.2f, smooth %@, %lu mice)", type, relative_type, scale,
@@ -371,23 +394,33 @@ static void my_postEvent(id self, SEL _cmd, void *raw) {
             relative_type = -2;            // never arm in this process
         }
     }
-    // Clicks: check the layout once on a normal click (position = the Mac pointer), then while aiming
-    // put each click where the game's cursor is.
-    if (game_cursor && raw && relative_type > 0 && *(int *)((char *)raw + kType) == relative_type - 1 && button_layout >= 0) {
+    // Clicks: check the layout once on a normal click (position = the Mac pointer). While aiming, the Mac
+    // pointer is frozen, so a click must not carry its position: on a driver with position-free clicks the
+    // click keeps Wine's own cursor; otherwise (opt-in) it is moved to where the game's cursor was tracked.
+    if (raw && relative_type > 0 && *(int *)((char *)raw + kType) == relative_type - 1 && *(int *)((char *)raw + kButton) >= 0 && button_layout >= 0) {
         char *ev = raw;
         if (button_layout == 0) {
             CGEventRef e = CGEventCreate(NULL);
             CGPoint p = e ? CGEventGetLocation(e) : CGPointZero;
             if (e) CFRelease(e);
             int b = *(int *)(ev + kButton), pr = *(int *)(ev + kPressed), x = *(int *)(ev + kButtonX), y = *(int *)(ev + kButtonY);
-            button_layout = (b >= 0 && b < 8 && (pr == 0 || pr == 1) && fabs(x - floor(p.x)) <= 3 && fabs(y - floor(p.y)) <= 3) ? 1 : -1;
+            button_layout = (nokcandu_mouse_point(controller(), p, true, &p) && b >= 0 && b < 8 && (pr == 0 || pr == 1) && nokcandu_mouse_position_matches(x, y, p, 3)) ? 1 : -1;
             note(@"clicks: %@", button_layout == 1 ? @"layout recognised" : @"layout not recognised — clicks left as they are");
         }
         if (button_layout == 1 && aiming) {
-            os_unfair_lock_lock(&vcur_lock);
-            *(int *)(ev + kButtonX) = (int)vcur_x;
-            *(int *)(ev + kButtonY) = (int)vcur_y;
-            os_unfair_lock_unlock(&vcur_lock);
+            static int positionless = -1;
+            if (positionless < 0) {
+                positionless = [controller() respondsToSelector:sel_registerName("nokcanduPostControllerButton:pressed:")] ? 1 : 0;
+                note(@"clicks while aiming: %@", positionless ? @"keep the game's cursor (no position)" : game_cursor ? @"moved to the tracked game cursor" : @"at the Mac pointer (this Wine driver has no position-free clicks)");
+            }
+            int b = *(int *)(ev + kButton), sent = nokcandu_click_button(b, true, positionless == 1);
+            if (sent != b) *(int *)(ev + kButton) = sent;
+            else if (game_cursor) {
+                os_unfair_lock_lock(&vcur_lock);
+                *(int *)(ev + kButtonX) = (int)vcur_x;
+                *(int *)(ev + kButtonY) = (int)vcur_y;
+                os_unfair_lock_unlock(&vcur_lock);
+            }
         }
     }
     ((void (*)(id, SEL, void *))orig_postEvent)(self, _cmd, raw);

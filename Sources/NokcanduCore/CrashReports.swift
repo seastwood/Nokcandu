@@ -219,11 +219,47 @@ enum RegistryText {
         return WineRegistry.decode(String(raw.dropFirst().dropLast()))
     }
 
+    /// Wine persists CurrentControlSet as a symbolic registry key. Offline edits must
+    /// target its real control set, just as a live registry API call follows the link.
+    static func resolvedKey(_ key: String, in text: String) throws -> String {
+        let alias = #"System\\CurrentControlSet"#
+        guard key.lowercased().hasPrefix((alias + #"\\"#).lowercased()) else { return key }
+        let lines = text.components(separatedBy: "\n")
+        guard let start = lines.firstIndex(where: { $0.lowercased().hasPrefix("[" + alias.lowercased() + "]") }) else { return key }
+        let end = lines[(start + 1)...].firstIndex(where: { $0.hasPrefix("[") }) ?? lines.endIndex
+        let section = Array(lines[(start + 1)..<end])
+        guard section.contains(where: { $0.trimmingCharacters(in: .whitespaces) == "#link" }) else { return key }
+        guard let value = section.firstIndex(where: { $0.lowercased().hasPrefix("\"symboliclinkvalue\"=hex(6):") }) else {
+            throw NokError("The Windows CurrentControlSet link is unreadable; its registry was preserved.")
+        }
+        var hex = String(section[value].dropFirst("\"SymbolicLinkValue\"=hex(6):".count))
+        var next = value + 1
+        while hex.trimmingCharacters(in: .whitespaces).hasSuffix("\\"), next < section.count {
+            hex = String(hex.trimmingCharacters(in: .whitespaces).dropLast()) + section[next].trimmingCharacters(in: .whitespaces)
+            next += 1
+        }
+        let parts = hex.split(separator: ",", omittingEmptySubsequences: true)
+        let bytes = parts.compactMap { UInt8($0.trimmingCharacters(in: .whitespaces), radix: 16) }
+        guard bytes.count == parts.count, bytes.count % 2 == 0,
+              let decoded = String(data: Data(bytes), encoding: .utf16LittleEndian) else {
+            throw NokError("The Windows CurrentControlSet link is invalid; its registry was preserved.")
+        }
+        let target = decoded.trimmingCharacters(in: CharacterSet(charactersIn: "\0"))
+        let root = #"\Registry\Machine\"#
+        guard target.lowercased().hasPrefix(root.lowercased()) else { throw NokError("The Windows control-set link has an unsupported target; its registry was preserved.") }
+        let path = String(target.dropFirst(root.count))
+        guard path.range(of: #"^System\\ControlSet[0-9]{3}$"#, options: [.regularExpression, .caseInsensitive]) != nil else {
+            throw NokError("The Windows control-set link has an unsupported target; its registry was preserved.")
+        }
+        return path.replacingOccurrences(of: "\\", with: "\\\\") + key.dropFirst(alias.count)
+    }
+
     /// Removes `name` under `key`, if present. Returns true when something changed.
     static func remove(_ file: URL, key: String, name: String) throws -> Bool {
         let text = String(decoding: try Data(contentsOf: file), as: UTF8.self)
         var lines = text.components(separatedBy: "\n")
-        let header = "[" + key.lowercased() + "]"
+        let actualKey = try resolvedKey(key, in: text)
+        let header = "[" + actualKey.lowercased() + "]"
         let valuePrefix = "\"" + name.lowercased() + "\"="
         guard let h = lines.firstIndex(where: { $0.lowercased().hasPrefix(header) }) else { return false }
         var end = h + 1
@@ -242,7 +278,8 @@ enum RegistryText {
         let data = try Data(contentsOf: file)
         let text = String(decoding: data, as: UTF8.self)
         var lines = text.components(separatedBy: "\n")
-        let header = "[" + key.lowercased() + "]"
+        let actualKey = try resolvedKey(key, in: text)
+        let header = "[" + actualKey.lowercased() + "]"
         let valuePrefix = "\"" + name.lowercased() + "\"="
         let line = "\"\(name)\"=\(value)"
         if let h = lines.firstIndex(where: { $0.lowercased().hasPrefix(header) }) {
@@ -262,7 +299,7 @@ enum RegistryText {
         } else {
             guard allow(nil) else { return false }
             if lines.last == "" { lines.removeLast() }
-            lines += ["", "[\(key)] \(Int(Date().timeIntervalSince1970))", line, ""]
+            lines += ["", "[\(actualKey)] \(Int(Date().timeIntervalSince1970))", line, ""]
         }
         let out = lines.joined(separator: "\n")
         guard out != text else { return false }

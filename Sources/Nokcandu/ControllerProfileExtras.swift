@@ -31,6 +31,10 @@ extension ControllerProfileEditor {
     // MARK: Touchpad
 
     @ViewBuilder var touchpadInspector: some View {
+        if inputSource == .steamUSB { steamTrackpadInspector(0) }
+        else { legacyTouchpadInspector }
+    }
+    @ViewBuilder var legacyTouchpadInspector: some View {
         let t = Binding(get: { profile.touchpad ?? PadProfiles.top(profile, all: everything, \.touchpad) ?? PadProfiles.Touchpad() }, set: { profile.touchpad = $0 })
         Section {
             Picker("Works as", selection: t.mode) { ForEach(PadProfiles.TouchMode.allCases, id: \.self) { Text($0.title).tag($0) } }
@@ -45,9 +49,9 @@ extension ControllerProfileEditor {
             default: EmptyView()
             }
         } header: {
-            InspectorTitle(title: "Touchpad", subtitle: nil, symbol: "rectangle.and.hand.point.up.left")
+            InspectorTitle(title: inputSource == .steamUSB ? "Left trackpad" : "Touchpad", subtitle: nil, symbol: "rectangle.and.hand.point.up.left")
         } footer: {
-            Text("DualSense and DualShock 4. Its click is set on the controller (Touchpad click)\(t.wrappedValue.mode == .zones ? "; with zones, clicking a zone set to something does that instead" : "").")
+            Text(inputSource == .steamUSB ? "Original Steam Controller left trackpad. Its click is mapped as Left trackpad click. The right trackpad has its own behavior settings." : "DualSense and DualShock 4. Its click is set on the controller (Touchpad click)\(t.wrappedValue.mode == .zones ? "; with zones, clicking a zone set to something does that instead" : "").")
                 .font(.caption).foregroundStyle(.secondary)
         }
         if t.wrappedValue.mode == .zones {
@@ -92,7 +96,8 @@ extension ControllerProfileEditor {
                                  family: family, remove: { m.steps.remove(at: i) })
                 }
                 HStack {
-                    Menu("Add Step") { ForEach(PadProfiles.Macro.Kind.allCases, id: \.self) { k in Button(k.title) { m.steps.append(.init(k, output: k == .wait || k == .text ? nil : .key(49), ms: k == .wait ? 100 : nil, text: k == .text ? "" : nil)) } } }
+                    Stepper("Between steps: \(m.eventDelayMS ?? 0) ms", value: Binding(get: { m.eventDelayMS ?? 0 }, set: { m.eventDelayMS = $0 }), in: 0...60000, step: 10)
+                    Menu("Add Step") { ForEach(PadProfiles.Macro.Kind.allCases, id: \.self) { k in Button(k.title) { m.steps.append(.init(k, output: k == .wait || k == .text ? nil : .key(49), ms: k == .wait ? 50 : nil, text: k == .text ? "" : nil)) } } }
                         .fixedSize().disabled(m.steps.count >= 40)
                     MacroRecorder { m.steps += $0 }
                     Spacer()
@@ -145,21 +150,21 @@ extension ControllerProfileEditor {
 
     @ViewBuilder var menusInspector: some View {
         Section {
-            Text("Hold a button, point a stick at a choice, let go. Give a button “Radial menu” in its menu to open one; the stick does nothing else while it's open.")
+            Text("Hold a button, point a stick or move the mouse/gyro toward a choice, then let go. Give a button “Radial menu” to open one. The selected stick or mapped mouse movement selects the menu while it is open.")
                 .font(.caption).foregroundStyle(.secondary)
             Button("New Radial Menu") {
-                menusBinding.wrappedValue.append(PadProfiles.RadialMenu(name: "Menu \(menusBinding.wrappedValue.count + 1)", slices: ["Up", "Right", "Down", "Left"].map { .init(title: $0, outputs: [.nothing]) }))
+                menusBinding.wrappedValue.append(PadProfiles.RadialMenu(name: "Menu \(menusBinding.wrappedValue.count + 1)", slices: (0..<4).map { _ in .init(title: "", outputs: [.nothing]) }))
             }.disabled(menusBinding.wrappedValue.count >= 8)
         } header: { InspectorTitle(title: "Radial Menus", subtitle: nil, symbol: "circle.grid.cross") }
         ForEach(menusBinding) { $mn in
             Section {
                 TextField("Name", text: $mn.name)
-                Picker("Pick with", selection: $mn.stick) { Text("Left stick").tag(0); Text("Right stick").tag(1) }
+                Picker("Pick with", selection: $mn.stick) { Text("Left stick").tag(0); Text("Right stick").tag(1); Text("Mouse / gyro direction").tag(2) }
                 ForEach(Array(mn.slices.enumerated()), id: \.offset) { i, _ in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text("\(i + 1)").font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 16)
-                            TextField("Title", text: Binding(get: { mn.slices.indices.contains(i) ? mn.slices[i].title : "" }, set: { if mn.slices.indices.contains(i) { mn.slices[i].title = $0 } }))
+                            TextField("Title", text: Binding(get: { mn.slices.indices.contains(i) ? mn.slices[i].title : "" }, set: { if mn.slices.indices.contains(i) { mn.slices[i].title = $0 } }), prompt: Text(mn.slices[i].displayTitle(family)))
                             Button { mn.slices.remove(at: i) } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless).accessibilityLabel("Remove choice")
                         }
                         OutputsEditor(title: "Does", outputs: Binding(get: { mn.slices.indices.contains(i) ? mn.slices[i].outputs : [] }, set: { if mn.slices.indices.contains(i) { mn.slices[i].outputs = $0 } }),
@@ -167,11 +172,11 @@ extension ControllerProfileEditor {
                     }
                 }
                 HStack {
-                    Button("Add Choice") { mn.slices.append(.init(title: "Choice \(mn.slices.count + 1)", outputs: [.nothing])) }.disabled(mn.slices.count >= 8)
+                    Button("Add Choice") { mn.slices.append(.init(title: "", outputs: [.nothing])) }.disabled(mn.slices.count >= 8)
                     Spacer()
                     Button("Delete Menu", role: .destructive) { menusBinding.wrappedValue.removeAll { $0.id == mn.id } }
                 }
-            } footer: { Text("Choices go clockwise from the top.").font(.caption).foregroundStyle(.secondary) }
+            } footer: { Text("Choices go clockwise from the top. Leave Title blank to use the action’s name, or type your own.").font(.caption).foregroundStyle(.secondary) }
         }
     }
 
@@ -217,14 +222,16 @@ struct MacroStepRow: View {
         HStack(spacing: 8) {
             Picker("", selection: Binding(get: { step.kind }, set: { k in
                 step.kind = k
-                if k == .wait && step.ms == nil { step.ms = 100 }
+                if k == .wait && step.ms == nil { step.ms = 50 }
                 if (k == .press || k == .down || k == .up) && step.output == nil { step.output = .key(49) }
                 if k == .text && step.text == nil { step.text = "" }
             })) { ForEach(PadProfiles.Macro.Kind.allCases, id: \.self) { Text($0.title).tag($0) } }
                 .labelsHidden().frame(width: 110)
             switch step.kind {
+            case .chord:
+                OutputsEditor(title: "Chord", outputs: Binding(get: { step.outputs ?? [] }, set: { step.outputs = $0 }), family: family, layers: [])
             case .wait:
-                Stepper("\(step.ms ?? 100) ms", value: Binding(get: { step.ms ?? 100 }, set: { step.ms = $0 }), in: 10...10000, step: 10)
+                Stepper("\(step.ms ?? 50) ms", value: Binding(get: { step.ms ?? 50 }, set: { step.ms = $0 }), in: 0...60000, step: 10)
             case .text:
                 TextField("Text to type", text: Binding(get: { step.text ?? "" }, set: { step.text = $0 }))
             default:

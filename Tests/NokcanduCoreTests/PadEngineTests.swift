@@ -512,3 +512,668 @@ final class PadExtrasTests: XCTestCase {
         XCTAssertThrowsError(try PadProfiles.importText("hello", existing: []))
     }
 }
+
+final class PadToggleTests: XCTestCase {
+    func testPersistentToggleIsIndependentOfLayerAndPhysicalRelease() {
+        let r = PadRecorder("bind 0 a press=keytoggle:12\nbind 0 b press=layer:toggle:1\nbind 1 x press=mousetoggle:left")
+        r.press("a", true, 1); r.press("a", false, 1.1)
+        XCTAssertEqual(r.take(), ["key 12 down"])
+        r.press("b", true, 2); r.press("b", false, 2.1)
+        r.press("x", true, 3); r.press("x", false, 3.1)
+        XCTAssertEqual(r.take(), ["mouse 0 down"])
+        pe_release_all(r.engine, 4)
+        XCTAssertEqual(Set(r.take()), Set(["key 12 up", "mouse 0 up"]))
+        r.press("a", true, 5); r.press("a", false, 5.1)
+        XCTAssertEqual(r.take(), ["key 12 down"])
+    }
+    func testToggleDoesNotReleaseAnotherButtonsHold() {
+        let r = PadRecorder("bind 0 a press=keytoggle:12\nbind 0 b press=key:12")
+        r.press("a", true, 1); r.press("a", false, 1.1)
+        r.press("b", true, 2)
+        r.press("a", true, 3); r.press("a", false, 3.1)
+        XCTAssertEqual(r.take(), ["key 12 down"])
+        r.press("b", false, 4)
+        XCTAssertEqual(r.take(), ["key 12 up"])
+    }
+}
+
+final class PadLiveBindingTests: XCTestCase {
+    func testEditingHeldBindingReleasesOnlyThatBinding() {
+        let r = PadRecorder("bind 0 a press=key:12\nbind 0 b press=key:13")
+        r.press("a", true, 1); r.press("b", true, 1.1); _ = r.take()
+        XCTAssertTrue(pe_update_bindings(r.engine, "nokpad 1\nbind 0 a press=key:14\nbind 0 b press=key:13"))
+        XCTAssertEqual(r.take(), ["key 12 up"])
+        r.press("a", false, 2); r.press("b", false, 2.1)
+        XCTAssertEqual(r.take(), ["key 13 up"])
+        r.press("a", true, 3); r.press("a", false, 3.1)
+        XCTAssertEqual(r.take(), ["key 14 down", "key 14 up"])
+    }
+    func testUnsupportedUpdateIsNonMutating() {
+        let r = PadRecorder("bind 0 a press=key:12")
+        r.press("a", true, 1); _ = r.take()
+        XCTAssertFalse(pe_update_bindings(r.engine, "nokpad 1\nstick 0 mode=mouse\nbind 0 a press=key:14"))
+        XCTAssertTrue(r.take().isEmpty)
+        r.press("a", false, 2); XCTAssertEqual(r.take(), ["key 12 up"])
+    }
+}
+
+final class PadButtonRouteTests: XCTestCase {
+    func testNativeBothDisabledAndMappedAreDistinct() {
+        let r = PadRecorder("bind 0 a press=key:12\nbind 0 b press=key:13\nbind 0 x press=key:14\nbind 0 y press=key:15\nroute a native\nroute b both\nroute x disabled\nroute y mapped")
+        for name in ["a", "b", "x", "y"] { r.press(name, true, 1); r.press(name, false, 1.1) }
+        XCTAssertEqual(r.take(), ["pad a down", "pad a up", "pad b down", "key 13 down", "pad b up", "key 13 up", "key 15 down", "key 15 up"])
+    }
+    func testBothRouteDisconnectReleasesBothOutputsAndAllowsReconnect() {
+        let r = PadRecorder("bind 0 a press=key:12\nroute a both")
+        r.press("a", true, 1); r.press("a", true, 1.1)
+        XCTAssertEqual(r.take(), ["pad a down", "key 12 down"])
+        pe_release_all(r.engine, 2)
+        XCTAssertEqual(Set(r.take()), Set(["pad a up", "key 12 up"]))
+        r.press("a", true, 3)
+        XCTAssertEqual(r.take(), ["pad a down", "key 12 down"])
+    }
+}
+
+final class PadCalibrationKindTests: XCTestCase {
+    func testFocusReleaseRetainsBiasAndReleasesOldApplicationOutputs() {
+        let r = PadRecorder("gyro out=mouse min=10 max=10 smooth=0 tight=0 cal=off\nbind 0 a press=key:12\nbind 0 b press=keytoggle:13")
+        let drift = Float(2 * Double.pi / 180)
+        pe_calibrate(r.engine, 1)
+        for n in 0...220 { pe_gyro(r.engine, 0, drift, 0, 1 + Double(n) * 0.01) }
+        r.press("a", true, 3.3); r.press("b", true, 3.4); r.press("b", false, 3.5)
+        _ = r.take()
+        pe_release_all(r.engine, 4) // Same compiled profile, new foreground PID.
+        XCTAssertEqual(Set(r.take()), Set(["key 12 up", "key 13 up"]))
+        r.mouse = (0, 0)
+        for n in 0...50 { pe_gyro(r.engine, 0, drift, 0, 5 + Double(n) * 0.01) }
+        XCTAssertEqual(r.mouse.x, 0, "Window changes must not discard measured sensor bias")
+        XCTAssertEqual(r.mouse.y, 0)
+        r.press("a", true, 5.6)
+        XCTAssertEqual(r.take(), ["key 12 down"], "Fresh physical state must work after releasing the old application")
+        for n in 0...20 { pe_gyro(r.engine, 0, drift + 1, 0, 6 + Double(n) * 0.01) }
+        XCTAssertNotEqual(r.mouse.x, 0, "Retained calibration must not disable intentional motion")
+    }
+
+    func testManualCalibrationKindSurvivesCompletionThenAutoResetsIt() {
+        let r = PadRecorder("gyro out=mouse min=8 max=8 cal=auto")
+        pe_calibrate(r.engine, 1)
+        XCTAssertTrue(pe_calibration_is_manual(r.engine))
+        for n in 0...220 { pe_gyro(r.engine, 0, 0, 0, 1 + Double(n) * 0.01) }
+        XCTAssertTrue(pe_calibration_is_manual(r.engine))
+        pe_gyro(r.engine, 10, 10, 10, 4)
+        for n in 0...100 { pe_gyro(r.engine, 0, 0, 0, 5 + Double(n) * 0.01) }
+        XCTAssertFalse(pe_calibration_is_manual(r.engine))
+    }
+}
+
+final class PadUnboundRouteTests: XCTestCase {
+    func testMappedOnlyNeverFallsBackToNativeWhenUnbound() {
+        let r = PadRecorder("route a mapped\nroute b both\nroute x native\nroute y disabled")
+        for name in ["a", "b", "x", "y"] { r.press(name, true, 1); r.press(name, false, 1.1) }
+        XCTAssertEqual(r.take(), ["pad b down", "pad b up", "pad x down", "pad x up"])
+    }
+}
+
+final class PadMacroCleanupTests: XCTestCase {
+    func testSequenceTracksMoreThanSixHeldOutputsThroughCompletionAndCancellation() {
+        let downs = (10...17).map { "down:key:\($0)" }.joined(separator: " ")
+        for cancel in [false, true] {
+            let r = PadRecorder("macro 0 \(downs) wait:100\nbind 0 a press=macro:0")
+            r.press("a", true, 1)
+            XCTAssertEqual(r.take().count, 8)
+            if cancel { pe_release_all(r.engine, 1.05) } else { r.tick(1.2) }
+            XCTAssertEqual(r.take(), (10...17).reversed().map { "key \($0) up" })
+            r.tick(5); XCTAssertTrue(r.take().isEmpty)
+        }
+    }
+}
+
+final class PadLiveTimerTests: XCTestCase {
+    func testUnrelatedHoldDeadlineSurvivesBindingEdit() {
+        let r = PadRecorder("bind 0 a tap=key:12 hold=key:13 holdtime=0.2\nbind 0 b press=key:14")
+        r.press("a", true, 1)
+        XCTAssertTrue(pe_update_bindings(r.engine, "nokpad 1\nbind 0 a tap=key:12 hold=key:13 holdtime=0.2\nbind 0 b press=key:15"))
+        r.tick(1.25); XCTAssertEqual(r.take(), ["key 13 down"])
+        r.press("a", false, 1.3); XCTAssertEqual(r.take(), ["key 13 up"])
+    }
+    func testChangedPendingHoldIsCancelledWithoutOldTapOrDelayedPress() {
+        let r = PadRecorder("bind 0 a tap=key:12 hold=key:13 holdtime=0.2")
+        r.press("a", true, 1)
+        XCTAssertTrue(pe_update_bindings(r.engine, "nokpad 1\nbind 0 a press=key:14"))
+        r.tick(2); r.press("a", false, 2.1); XCTAssertTrue(r.take().isEmpty)
+        r.press("a", true, 3); r.press("a", false, 3.1)
+        XCTAssertEqual(r.take(), ["key 14 down", "key 14 up"])
+    }
+    func testUnrelatedTurboKeepsItsCadence() {
+        let r = PadRecorder("bind 0 a press=key:12 turbo=100\nbind 0 b press=key:13")
+        r.press("a", true, 1); _ = r.take()
+        XCTAssertTrue(pe_update_bindings(r.engine, "nokpad 1\nbind 0 a press=key:12 turbo=100\nbind 0 b press=key:14"))
+        XCTAssertTrue(r.take().isEmpty)
+        r.tick(1.11); XCTAssertEqual(r.take(), ["key 12 up"])
+        r.tick(1.16); XCTAssertEqual(r.take(), ["key 12 down"])
+        r.press("a", false, 1.17); XCTAssertEqual(r.take(), ["key 12 up"])
+    }
+    func testEditingActiveTurboReleasesOldOutputAndCancelsItsTimer() {
+        let r = PadRecorder("bind 0 a press=key:12 turbo=100")
+        r.press("a", true, 1); _ = r.take()
+        XCTAssertTrue(pe_update_bindings(r.engine, "nokpad 1\nbind 0 a press=key:14"))
+        XCTAssertEqual(r.take(), ["key 12 up"])
+        r.tick(2); r.press("a", false, 2.01); XCTAssertTrue(r.take().isEmpty)
+    }
+}
+
+final class PadTurboOwnershipTests: XCTestCase {
+    func testReleasingOffPhaseTurboDoesNotReleaseAnotherHold() {
+        let r = PadRecorder("bind 0 a press=key:12 turbo=100\nbind 0 b press=key:12")
+        r.press("a", true, 1); r.press("b", true, 1.01); _ = r.take()
+        r.tick(1.11); XCTAssertTrue(r.take().isEmpty)
+        r.press("a", false, 1.12); XCTAssertTrue(r.take().isEmpty)
+        r.press("b", false, 1.13); XCTAssertEqual(r.take(), ["key 12 up"])
+    }
+    func testEditingOffPhaseTurboPreservesOtherHoldAndCancelsRepeats() {
+        let r = PadRecorder("bind 0 a press=key:12 turbo=100\nbind 0 b press=key:12")
+        r.press("a", true, 1); r.press("b", true, 1.01); _ = r.take()
+        r.tick(1.11)
+        XCTAssertTrue(pe_update_bindings(r.engine, "nokpad 1\nbind 0 a press=key:14\nbind 0 b press=key:12"))
+        r.tick(2); r.press("a", false, 2.01); XCTAssertTrue(r.take().isEmpty)
+        r.press("b", false, 2.02); XCTAssertEqual(r.take(), ["key 12 up"])
+    }
+}
+
+final class PadEquivalentUpdateTests: XCTestCase {
+    func testEquivalentSavePreservesLatchedKey() {
+        let profile = "bind 0 a press=keytoggle:12"
+        let r = PadRecorder(profile)
+        r.press("a", true, 1); r.press("a", false, 1.1); _ = r.take()
+        XCTAssertTrue(pe_update_bindings(r.engine, "nokpad 1\n" + profile))
+        XCTAssertTrue(r.take().isEmpty)
+        r.press("a", true, 2); r.press("a", false, 2.1)
+        XCTAssertEqual(r.take(), ["key 12 up"])
+    }
+    func testEquivalentSavePreservesPendingSequence() {
+        let profile = "macro 0 down:key:12 wait:100 up:key:12\nbind 0 a press=macro:0"
+        let r = PadRecorder(profile)
+        r.press("a", true, 1); _ = r.take()
+        XCTAssertTrue(pe_update_bindings(r.engine, "nokpad 1\n" + profile))
+        XCTAssertTrue(r.take().isEmpty)
+        r.tick(1.2); XCTAssertEqual(r.take(), ["key 12 up"])
+    }
+}
+
+final class PadLiveTuningTests: XCTestCase {
+    func testMouseSpeedEditKeepsStickPositionAndHeldKey() {
+        let r = PadRecorder("stick 1 mode=mouse sens=100 power=1 dz=0 outer=1\nbind 0 a press=key:12")
+        r.press("a", true, 1)
+        pe_axis(r.engine, Int32(PE_AXIS_RX), 32767, 1.01)
+        _ = r.take(); r.mouse = (0, 0)
+        XCTAssertTrue(pe_update_profile(r.engine, "nokpad 1\nstick 1 mode=mouse sens=200 power=1 dz=0 outer=1\nbind 0 a press=key:12"))
+        XCTAssertTrue(r.take().isEmpty)
+        r.tick(1.11); XCTAssertEqual(r.mouse.x, 20)
+        r.press("a", false, 1.12); XCTAssertEqual(r.take(), ["key 12 up"])
+    }
+    func testTuningDuringSequenceAndToggleDoesNotResetEither() {
+        let profile = "gyro out=mouse min=8 max=8\nmacro 0 down:key:13 wait:100 up:key:13\nbind 0 a press=keytoggle:12\nbind 0 b press=macro:0"
+        let r = PadRecorder(profile)
+        r.press("a", true, 1); r.press("a", false, 1.01); r.press("b", true, 1.02); _ = r.take()
+        XCTAssertTrue(pe_update_profile(r.engine, "nokpad 1\n" + profile.replacingOccurrences(of: "min=8 max=8", with: "min=16 max=16")))
+        XCTAssertTrue(r.take().isEmpty)
+        r.tick(1.2); XCTAssertEqual(r.take(), ["key 13 up"])
+        r.press("a", true, 2); r.press("a", false, 2.01); XCTAssertEqual(r.take(), ["key 12 up"])
+    }
+    func testFlickOutputChangeRejectsWithoutReleasingHeldKey() {
+        let r = PadRecorder("stick 1 mode=mouse sens=100\nbind 0 a press=key:12")
+        r.press("a", true, 1); _ = r.take()
+        XCTAssertFalse(pe_update_profile(r.engine, "nokpad 1\nstick 1 mode=flick sens=100\nbind 0 a press=key:12"))
+        XCTAssertTrue(r.take().isEmpty)
+        r.press("a", false, 2); XCTAssertEqual(r.take(), ["key 12 up"])
+    }
+    func testLayerTuningKeepsActiveLayer() {
+        let profile = "stick 1 mode=mouse sens=100\nstick 1 layer=1 mode=mouse sens=200\nbind 0 lb press=layer:toggle:1"
+        let r = PadRecorder(profile)
+        r.press("lb", true, 1); r.press("lb", false, 1.01)
+        XCTAssertTrue(pe_update_profile(r.engine, "nokpad 1\n" + profile.replacingOccurrences(of: "sens=200", with: "sens=400")))
+        XCTAssertEqual(pe_active_layer(r.engine), 1)
+    }
+}
+
+final class PadLiveTuningContinuityTests: XCTestCase {
+    func testGyroSensitivityTakesEffectAtNextSensorSample() {
+        let r = PadRecorder("gyro out=mouse min=10 max=10 smooth=0 tight=0 cal=off")
+        pe_gyro(r.engine, 0, -1, 0, 1)
+        pe_gyro(r.engine, 0, -1, 0, 1.05)
+        let before = r.mouse.x; r.mouse = (0, 0)
+        XCTAssertTrue(pe_update_profile(r.engine, "nokpad 1\ngyro out=mouse min=20 max=20 smooth=0 tight=0 cal=off"))
+        pe_gyro(r.engine, 0, -1, 0, 1.10)
+        XCTAssertGreaterThan(before, 0)
+        XCTAssertEqual(r.mouse.x, before * 2, accuracy: 2)
+    }
+    func testUnrelatedGyroTuningDoesNotRestartStickAcceleration() {
+        let profile = "stick 1 mode=mouse sens=100 power=1 dz=0 outer=1 ramp=2 ramptime=1 edge=0.9\ngyro out=mouse min=8 max=8"
+        let r = PadRecorder(profile)
+        pe_axis(r.engine, Int32(PE_AXIS_RX), 32767, 1)
+        for i in 1...5 { r.tick(1 + Double(i) * 0.1) }
+        r.mouse = (0, 0)
+        XCTAssertTrue(pe_update_profile(r.engine, "nokpad 1\n" + profile.replacingOccurrences(of: "min=8 max=8", with: "min=16 max=16")))
+        r.tick(1.6)
+        XCTAssertEqual(r.mouse.x, 22, accuracy: 1)
+    }
+}
+
+final class PadControlRouteTests: XCTestCase {
+    func testNativeStickBypassesMouseMappingAndBothProducesBothWithoutDoublingAxes() {
+        for route in ["native", "both", "mapped", "disabled"] {
+            let r = PadRecorder("stick 1 mode=mouse sens=100 power=1 dz=0 outer=1\nroute rstick \(route)")
+            pe_axis(r.engine, Int32(PE_AXIS_RX), 20000, 1)
+            r.tick(1.1)
+            XCTAssertEqual(r.axes[2], ["native", "both"].contains(route) ? 20000 : 0)
+            XCTAssertEqual(r.mouse.x > 0, ["both", "mapped"].contains(route))
+        }
+        let r = PadRecorder("stick 0 mode=pad dz=0 outer=1\nroute lstick both")
+        pe_axis(r.engine, Int32(PE_AXIS_LX), 12000, 1)
+        XCTAssertEqual(r.axes[0], 12000)
+    }
+    func testTriggerNativeMappedBothDisabledAndCleanup() {
+        for route in ["native", "both", "mapped", "disabled"] {
+            let r = PadRecorder("bind 0 rt press=mouse:left\nroute rt \(route)")
+            pe_axis(r.engine, Int32(PE_AXIS_RT), 24000, 1)
+            XCTAssertEqual(r.axes[5], ["native", "both"].contains(route) ? 24000 : 0)
+            XCTAssertEqual(r.take(), ["both", "mapped"].contains(route) ? ["mouse 0 down"] : [])
+            pe_release_all(r.engine, 2)
+            XCTAssertEqual(r.axes[5], 0)
+            XCTAssertEqual(r.take(), ["both", "mapped"].contains(route) ? ["mouse 0 up"] : [])
+        }
+    }
+    func testGyroRoutesOnlyControlMappedEmission() {
+        for route in ["native", "both", "mapped", "disabled"] {
+            let r = PadRecorder("gyro out=mouse min=10 max=10 smooth=0 tight=0 cal=off\nroute gyro \(route)")
+            pe_gyro(r.engine, 0, -1, 0, 1); pe_gyro(r.engine, 0, -1, 0, 1.05)
+            XCTAssertEqual(r.mouse.x > 0, ["both", "mapped"].contains(route))
+        }
+    }
+}
+
+final class PadToggleEditOwnershipTests: XCTestCase {
+    func testUnrelatedBindingEditPreservesLatchedKeyAndMouse() {
+        let text = "bind 0 a press=keytoggle:12\nbind 0 b press=mousetoggle:left\nbind 0 x press=key:13"
+        let r = PadRecorder(text)
+        for n in ["a", "b"] { r.press(n, true, 1); r.press(n, false, 1.01) }; _ = r.take()
+        XCTAssertTrue(pe_update_profile(r.engine, "nokpad 1\n" + text.replacingOccurrences(of: "press=key:13", with: "press=key:14")))
+        XCTAssertTrue(r.take().isEmpty)
+        for n in ["a", "b"] { r.press(n, true, 2); r.press(n, false, 2.01) }
+        XCTAssertEqual(r.take(), ["key 12 up", "mouse 0 up"])
+    }
+    func testRemovingToggleOwnerReleasesItsOutputButNotAnotherHold() {
+        let r = PadRecorder("bind 0 a press=keytoggle:12\nbind 0 b press=key:12")
+        r.press("a", true, 1); r.press("a", false, 1.01); r.press("b", true, 1.02); _ = r.take()
+        XCTAssertTrue(pe_update_profile(r.engine, "nokpad 1\nbind 0 a press=key:14\nbind 0 b press=key:12"))
+        XCTAssertTrue(r.take().isEmpty)
+        r.press("b", false, 2); XCTAssertEqual(r.take(), ["key 12 up"])
+    }
+    func testChangedOwnerReleasesLatchEvenAfterPhysicalRelease() {
+        let r = PadRecorder("bind 0 a press=mousetoggle:right")
+        r.press("a", true, 1); r.press("a", false, 1.01); _ = r.take()
+        XCTAssertTrue(pe_update_profile(r.engine, "nokpad 1\nbind 0 a press=key:14"))
+        XCTAssertEqual(r.take(), ["mouse 1 up"])
+    }
+    func testTimedHoldToggleCarriesPhysicalOrigin() {
+        let r = PadRecorder("bind 0 a hold=keytoggle:12 holdtime=0.2\nbind 0 b press=key:13")
+        r.press("a", true, 1); r.tick(1.3); r.press("a", false, 1.31); _ = r.take()
+        XCTAssertTrue(pe_update_profile(r.engine, "nokpad 1\nbind 0 a press=none\nbind 0 b press=key:13"))
+        XCTAssertEqual(r.take(), ["key 12 up"])
+    }
+}
+
+final class PadDeviceReleaseTests: XCTestCase {
+    func testDisconnectReleasesSlotLatchAndMacroButPreservesMainHold() {
+        let r = PadRecorder("device 1 vendor=1 product=2 kind=joystick\nmacro 0 down:key:14 wait:1000 up:key:14\nbind 0 d1b0 press=keytoggle:12\nbind 0 d1b1 press=macro:0\nbind 0 a press=key:13")
+        r.press("a", true, 1)
+        pe_dev_button(r.engine, 1, 0, true, 1.01); pe_dev_button(r.engine, 1, 0, false, 1.02)
+        pe_dev_button(r.engine, 1, 1, true, 1.03); _ = r.take()
+        pe_release_device(r.engine, 1, 1.04)
+        XCTAssertEqual(Set(r.take()), Set(["key 12 up", "key 14 up"]))
+        r.tick(5); XCTAssertTrue(r.take().isEmpty)
+        r.press("a", false, 5.1); XCTAssertEqual(r.take(), ["key 13 up"])
+        pe_dev_button(r.engine, 1, 0, true, 6); XCTAssertEqual(r.take(), ["key 12 down"])
+    }
+    func testDisconnectNeutralizesOnlyItsAxisContribution() {
+        let r = PadRecorder("device 1 vendor=1 product=2 kind=joystick\naxis 1 0 mode=pad to=lx dz=0")
+        pe_axis(r.engine, Int32(PE_AXIS_RX), 16000, 1)
+        pe_dev_axis(r.engine, 1, 0, 22000, 1.01)
+        XCTAssertGreaterThan(r.axes[0], 0); let right = r.axes[2]
+        pe_release_device(r.engine, 1, 2)
+        XCTAssertEqual(r.axes[0], 0); XCTAssertEqual(r.axes[2], right)
+    }
+    func testPendingTapOnDisconnectedDeviceDoesNotFire() {
+        let r = PadRecorder("device 1 vendor=1 product=2 kind=joystick\nbind 0 d1b0 tap=key:12 hold=key:13 holdtime=0.2")
+        pe_dev_button(r.engine, 1, 0, true, 1)
+        pe_release_device(r.engine, 1, 1.1)
+        r.tick(2); XCTAssertTrue(r.take().isEmpty)
+    }
+}
+
+final class PadMainReleaseTests: XCTestCase {
+    func testPrimaryDisconnectReleasesOwnLatchButPreservesDeviceSlot() {
+        let r = PadRecorder("device 1 vendor=1 product=2 kind=joystick\nbind 0 a press=keytoggle:12\nbind 0 d1b0 press=key:13")
+        r.press("a", true, 1); r.press("a", false, 1.01)
+        pe_dev_button(r.engine, 1, 0, true, 1.02); _ = r.take()
+        pe_release_main(r.engine, 2); XCTAssertEqual(r.take(), ["key 12 up"])
+        pe_dev_button(r.engine, 1, 0, false, 2.01); XCTAssertEqual(r.take(), ["key 13 up"])
+    }
+    func testPrimaryDisconnectRetainsAdditionalAxisAndClearsNativeBothReference() {
+        let r = PadRecorder("device 1 vendor=1 product=2 kind=joystick\naxis 1 0 mode=pad to=lx dz=0\nbind 0 a press=key:12\nroute a both")
+        pe_dev_axis(r.engine, 1, 0, 20000, 1)
+        r.press("a", true, 1.01); _ = r.take()
+        pe_release_main(r.engine, 2)
+        XCTAssertEqual(r.axes[0], 20000)
+        XCTAssertEqual(Set(r.take()), Set(["pad a up", "key 12 up"]))
+        r.press("a", true, 3)
+        XCTAssertEqual(r.take(), ["pad a down", "key 12 down"])
+    }
+}
+
+final class PadCleanupNoActionTests: XCTestCase {
+    func testCleanupClosesRadialMenuWithoutSelectingItsAction() {
+        for device in [false, true] {
+            let binding = device ? "device 1 vendor=1 product=2 kind=joystick\nbind 0 d1b0 press=menu:0" : "bind 0 rb press=menu:0"
+            let r = PadRecorder("menu 0 stick=1 s0=mouse:left\n" + binding)
+            if device { pe_dev_button(r.engine, 1, 0, true, 1) } else { r.press("rb", true, 1) }
+            pe_axis(r.engine, Int32(PE_AXIS_RY), -32767, 1.01); _ = r.take()
+            if device { pe_release_device(r.engine, 1, 2) } else { pe_release_all(r.engine, 2) }
+            XCTAssertTrue(r.take().isEmpty, "Disconnect/cleanup must not click the selected radial slice")
+        }
+    }
+    func testCleanupDoesNotFirePendingVirtualTapDuringLayerRelease() {
+        let r = PadRecorder("stick 0 mode=dirs\nstick 0 layer=1 mode=dirs\nbind 0 lb press=layer:hold:1\nbind 1 lsup tap=mouse:left hold=key:12 holdtime=10")
+        r.press("lb", true, 1); pe_axis(r.engine, Int32(PE_AXIS_LY), -32767, 1.01); _ = r.take()
+        pe_release_all(r.engine, 1.02)
+        XCTAssertFalse(r.take().contains("mouse 0 down"))
+    }
+}
+
+final class PadTimerCapacityTests: XCTestCase {
+    func saturate(_ r: PadRecorder) {
+        for slot in 1...2 { for button in 0..<32 { pe_dev_button(r.engine, Int32(slot), Int32(button), true, 1) } }
+    }
+    var pending: String {
+        (1...2).flatMap { slot in (0..<32).map { "bind 0 d\(slot)b\($0) hold=key:13 holdtime=1000" } }.joined(separator: "\n")
+    }
+    func testTapDoesNotEmitDownWhenNoReleaseCanBeScheduled() {
+        let r = PadRecorder(pending + "\nbind 0 a tap=key:12 hold=key:15 holdtime=0.2")
+        saturate(r); _ = r.take()
+        r.press("a", true, 1.01); r.press("a", false, 1.02)
+        XCTAssertTrue(r.take().isEmpty)
+        pe_release_all(r.engine, 2); XCTAssertTrue(r.take().isEmpty)
+    }
+    func testSequenceReleasesHeldOutputsWhenContinuationQueueIsFull() {
+        let r = PadRecorder(pending + "\nmacro 0 down:key:12 wait:100 up:key:12\nbind 0 a press=macro:0")
+        saturate(r); _ = r.take()
+        r.press("a", true, 1.01)
+        XCTAssertEqual(r.take(), ["key 12 down", "key 12 up"])
+        r.press("a", false, 1.02); r.tick(2); XCTAssertTrue(r.take().isEmpty)
+    }
+}
+
+final class PadDelayedToggleOwnerTests: XCTestCase {
+    func testCompletedMacroToggleRetainsDeviceOriginForDisconnectCleanup() {
+        let r = PadRecorder("device 1 vendor=1 product=2 kind=joystick\nmacro 0 wait:100 down:keytoggle:12\nbind 0 d1b0 press=macro:0")
+        pe_dev_button(r.engine, 1, 0, true, 1)
+        r.tick(1.2); XCTAssertEqual(r.take(), ["key 12 down"])
+        pe_release_device(r.engine, 1, 1.3)
+        XCTAssertEqual(r.take(), ["key 12 up"])
+    }
+}
+
+final class PadSensorRouteTests: XCTestCase {
+    func testTouchRoutingControlsMappingAndWinePassthroughIndependently() {
+        for route in ["native", "both", "mapped", "disabled"] {
+            let r = PadRecorder("touch mode=zones\nbind 0 tz1 press=key:12\nroute touch \(route)")
+            pe_touch(r.engine, 0, true, 0.2, 0.2, 1); pe_touch(r.engine, 0, false, 0.2, 0.2, 1.1)
+            XCTAssertEqual(r.take(), ["both", "mapped"].contains(route) ? ["key 12 down", "key 12 up"] : [])
+            XCTAssertEqual(pe_touch_passthrough(r.engine), ["native", "both"].contains(route))
+        }
+    }
+    func testTiltRouteAndReportedGyroStateRespectDisabledMapping() {
+        for route in ["native", "both", "mapped", "disabled"] {
+            let r = PadRecorder("bind 0 tiltright press=key:12\ngyro out=mouse on=1\nroute tilt \(route)\nroute gyro \(route)")
+            pe_accel(r.engine, 1, 1, 0, 1); pe_accel(r.engine, 0, 1, 0, 1.1)
+            let maps = ["both", "mapped"].contains(route)
+            XCTAssertEqual(r.take(), maps ? ["key 12 down", "key 12 up"] : [])
+            XCTAssertEqual(pe_active_gyro(r.engine), maps ? 1 : 0)
+        }
+    }
+}
+
+final class PadLiveOutputTransitionTests: XCTestCase {
+    func testPadToMouseAndBackPreservesPositionAndHeldButton() {
+        let r = PadRecorder("stick 1 mode=pad dz=0 outer=1 sens=100 power=1\nbind 0 a press=key:12")
+        pe_axis(r.engine, Int32(PE_AXIS_RX), 32767, 1); r.press("a", true, 1.01); _ = r.take()
+        XCTAssertTrue(pe_update_profile(r.engine, "nokpad 1\nstick 1 mode=mouse dz=0 outer=1 sens=100 power=1\nbind 0 a press=key:12"))
+        XCTAssertEqual(r.axes[2], 0); XCTAssertTrue(r.take().isEmpty)
+        r.tick(1.11); XCTAssertGreaterThan(r.mouse.x, 0)
+        XCTAssertTrue(pe_update_profile(r.engine, "nokpad 1\nstick 1 mode=pad dz=0 outer=1 sens=100 power=1\nbind 0 a press=key:12"))
+        XCTAssertEqual(r.axes[2], 32767)
+        r.press("a", false, 2); XCTAssertEqual(r.take(), ["key 12 up"])
+    }
+    func testGyroOutputOffClearsOnlyItsAnalogContribution() {
+        let r = PadRecorder("gyro out=rstick min=8 max=8 stickfull=100 stickmin=0 cal=off\nbind 0 a press=keytoggle:12")
+        r.press("a", true, 1); r.press("a", false, 1.01); _ = r.take()
+        pe_gyro(r.engine, 0, -1, 0, 1.02)
+        XCTAssertGreaterThan(r.axes[2], 0)
+        XCTAssertTrue(pe_update_profile(r.engine, "nokpad 1\ngyro out=off min=8 max=8 stickfull=100 stickmin=0 cal=off\nbind 0 a press=keytoggle:12"))
+        XCTAssertEqual(r.axes[2], 0); XCTAssertTrue(r.take().isEmpty)
+        r.press("a", true, 2); r.press("a", false, 2.01); XCTAssertEqual(r.take(), ["key 12 up"])
+    }
+}
+
+final class PadLiveIndependentActionTests: XCTestCase {
+    func testUnrelatedEditPreservesRunningMacroAndDeadline() {
+        let text = "macro 0 down:key:12 wait:100 up:key:12\nbind 0 a press=macro:0\nbind 0 b press=key:13"
+        let r = PadRecorder(text)
+        r.press("a", true, 1); r.press("a", false, 1.01)
+        XCTAssertEqual(r.take(), ["key 12 down"])
+        XCTAssertTrue(pe_update_profile(r.engine, "nokpad 1\n" + text.replacingOccurrences(of: "press=key:13", with: "press=key:14")))
+        XCTAssertTrue(r.take().isEmpty)
+        r.press("b", true, 1.02); r.press("b", false, 1.03)
+        XCTAssertEqual(r.take(), ["key 14 down", "key 14 up"])
+        r.tick(1.11); XCTAssertEqual(r.take(), ["key 12 up"])
+        r.tick(2); XCTAssertTrue(r.take().isEmpty)
+    }
+    func testUnrelatedEditPreservesTapPulse() {
+        let text = "bind 0 a tap=key:12 hold=key:13 holdtime=0.2\nbind 0 b press=key:14"
+        let r = PadRecorder(text)
+        r.press("a", true, 1); r.press("a", false, 1.01)
+        XCTAssertEqual(r.take(), ["key 12 down"])
+        XCTAssertTrue(pe_update_profile(r.engine, "nokpad 1\n" + text.replacingOccurrences(of: "press=key:14", with: "press=key:15")))
+        XCTAssertTrue(r.take().isEmpty)
+        r.tick(1.05); XCTAssertEqual(r.take(), ["key 12 up"])
+    }
+    func testUnrelatedEditPreservesSimultaneousPendingAndActivePair() {
+        let text = "bind 0 a press=key:12 sim=b simout=key:13\nbind 0 b press=key:14\nbind 0 x press=key:15"
+        let r = PadRecorder(text)
+        r.press("a", true, 1)
+        let updated = "nokpad 1\n" + text.replacingOccurrences(of: "press=key:15", with: "press=key:16")
+        XCTAssertTrue(pe_update_profile(r.engine, updated))
+        r.press("b", true, 1.02); XCTAssertEqual(r.take(), ["key 13 down"])
+        XCTAssertTrue(pe_update_profile(r.engine, updated.replacingOccurrences(of: "press=key:16", with: "press=key:17")))
+        XCTAssertTrue(r.take().isEmpty)
+        r.press("b", false, 1.03); r.press("a", false, 1.04)
+        XCTAssertEqual(r.take(), ["key 13 up"])
+        r.tick(2); XCTAssertTrue(r.take().isEmpty)
+    }
+    func testEditingMacroOwnerStillRejectsWithoutCancellingIt() {
+        let text = "macro 0 down:key:12 wait:100 up:key:12\nbind 0 a press=macro:0"
+        let r = PadRecorder(text)
+        r.press("a", true, 1); _ = r.take()
+        XCTAssertFalse(pe_update_profile(r.engine, "nokpad 1\n" + text.replacingOccurrences(of: "press=macro:0", with: "press=key:14")))
+        XCTAssertTrue(r.take().isEmpty)
+        r.tick(1.11); XCTAssertEqual(r.take(), ["key 12 up"])
+    }
+    func testEditingSimultaneousPeerRejectsWithoutMutation() {
+        let text = "bind 0 a press=key:12 sim=b simout=key:13\nbind 0 b press=key:14"
+        let r = PadRecorder(text)
+        r.press("a", true, 1)
+        XCTAssertFalse(pe_update_profile(r.engine, "nokpad 1\n" + text.replacingOccurrences(of: "press=key:14", with: "press=key:15")))
+        r.press("b", true, 1.02); XCTAssertEqual(r.take(), ["key 13 down"])
+        r.press("b", false, 1.03); r.press("a", false, 1.04)
+        XCTAssertEqual(r.take(), ["key 13 up"])
+    }
+}
+
+final class PadLiveLatchedModeTests: XCTestCase {
+    func testReplacingLatchedLayerOwnerReturnsToBaseWithoutReleasingOtherHold() {
+        let text = "bind 0 lb press=layer:toggle:1\nbind 0 a press=key:12\nbind 1 a press=key:13"
+        let r = PadRecorder(text)
+        r.press("lb", true, 1); r.press("lb", false, 1.01)
+        r.press("a", true, 1.02); XCTAssertEqual(r.take(), ["key 13 down"])
+        XCTAssertTrue(pe_update_profile(r.engine, "nokpad 1\n" + text.replacingOccurrences(of: "press=layer:toggle:1", with: "press=key:14")))
+        XCTAssertEqual(pe_active_layer(r.engine), 0)
+        XCTAssertTrue(r.take().isEmpty)
+        r.press("a", false, 1.03); XCTAssertEqual(r.take(), ["key 13 up"])
+        r.press("a", true, 1.04); r.press("a", false, 1.05)
+        XCTAssertEqual(r.take(), ["key 12 down", "key 12 up"])
+    }
+    func testReplacingGyroToggleOwnerClearsOnlyItsLatchedState() {
+        let text = "gyro out=mouse on=0 cal=off\nbind 0 a press=gyro:toggle\nbind 0 b press=key:12"
+        let r = PadRecorder(text)
+        r.press("a", true, 1); r.press("a", false, 1.01)
+        XCTAssertEqual(pe_active_gyro(r.engine), 1)
+        r.press("b", true, 1.02); _ = r.take()
+        XCTAssertTrue(pe_update_profile(r.engine, "nokpad 1\n" + text.replacingOccurrences(of: "press=gyro:toggle", with: "press=key:14")))
+        XCTAssertEqual(pe_active_gyro(r.engine), 0)
+        XCTAssertTrue(r.take().isEmpty)
+        r.press("b", false, 1.03); XCTAssertEqual(r.take(), ["key 12 up"])
+    }
+    func testUnrelatedEditPreservesLatchedLayerAndGyro() {
+        let text = "gyro out=mouse on=0 cal=off\nbind 0 a press=gyro:toggle\nbind 0 lb press=layer:toggle:1\nbind 0 b press=key:12"
+        let r = PadRecorder(text)
+        r.press("a", true, 1); r.press("a", false, 1.01)
+        r.press("lb", true, 1.02); r.press("lb", false, 1.03)
+        XCTAssertTrue(pe_update_profile(r.engine, "nokpad 1\n" + text.replacingOccurrences(of: "press=key:12", with: "press=key:14")))
+        XCTAssertEqual(pe_active_layer(r.engine), 1)
+        XCTAssertEqual(pe_active_gyro(r.engine), 1)
+    }
+}
+
+final class PadLiveKeyStickTests: XCTestCase {
+    func testKeyReplacementReleasesOldDirectionAndRetainsOtherHold() {
+        let text = "stick 0 mode=keys keys=13,1,0,2\nbind 0 a press=key:12"
+        let r = PadRecorder(text)
+        r.press("a", true, 1)
+        pe_axis(r.engine, Int32(PE_AXIS_LY), -32767, 1.01)
+        XCTAssertEqual(r.take(), ["key 12 down", "key 13 down"])
+        XCTAssertTrue(pe_update_profile(r.engine, "nokpad 1\n" + text.replacingOccurrences(of: "13,1,0,2", with: "14,1,0,2")))
+        XCTAssertEqual(r.take(), ["key 13 up", "key 14 down"])
+        pe_axis(r.engine, Int32(PE_AXIS_LY), 0, 1.02)
+        r.press("a", false, 1.03)
+        XCTAssertEqual(r.take(), ["key 14 up", "key 12 up"])
+    }
+    func testLeavingKeysDoesNotReleaseSameKeyHeldByAnotherButton() {
+        let text = "stick 0 mode=keys keys=13,1,0,2\nbind 0 a press=key:13"
+        let r = PadRecorder(text)
+        r.press("a", true, 1); pe_axis(r.engine, Int32(PE_AXIS_LY), -32767, 1.01); _ = r.take()
+        XCTAssertTrue(pe_update_profile(r.engine, "nokpad 1\n" + text.replacingOccurrences(of: "mode=keys", with: "mode=mouse")))
+        XCTAssertTrue(r.take().isEmpty)
+        r.press("a", false, 1.02); XCTAssertEqual(r.take(), ["key 13 up"])
+        pe_axis(r.engine, Int32(PE_AXIS_LY), 0, 1.03)
+        XCTAssertTrue(r.take().isEmpty)
+    }
+    func testEnteringKeysFromMouseUsesCurrentPositionWithoutInterruptingToggle() {
+        let text = "stick 0 mode=mouse keys=13,1,0,2\nbind 0 a press=keytoggle:12"
+        let r = PadRecorder(text)
+        r.press("a", true, 1); r.press("a", false, 1.01)
+        pe_axis(r.engine, Int32(PE_AXIS_LY), -32767, 1.02); _ = r.take()
+        XCTAssertTrue(pe_update_profile(r.engine, "nokpad 1\n" + text.replacingOccurrences(of: "mode=mouse", with: "mode=keys")))
+        XCTAssertEqual(r.take(), ["key 13 down"])
+        pe_release_all(r.engine, 1.03)
+        XCTAssertEqual(Set(r.take()), Set(["key 13 up", "key 12 up"]))
+    }
+    func testInvalidDirectionalKeyCodesAreIgnoredOnPressAndRelease() {
+        let r = PadRecorder("stick 0 mode=keys keys=-1,128,9999,-1000")
+        for axis in [PE_AXIS_LX, PE_AXIS_LY] {
+            for value in [-32767, 32767, 0] { pe_axis(r.engine, Int32(axis), Int32(value), 1) }
+        }
+        pe_release_all(r.engine, 2)
+        XCTAssertTrue(r.take().isEmpty)
+    }
+}
+
+final class PadControllerOutputToggleTests: XCTestCase {
+    func testControllerButtonStaysHeldUntilSecondPressAndIgnoresDuplicateDown() {
+        let r = PadRecorder("bind 0 a press=padtoggle:b")
+        r.press("a", true, 1); r.press("a", true, 1.01); r.press("a", false, 1.02)
+        XCTAssertEqual(r.take(), ["pad b down"])
+        r.press("a", true, 2); r.press("a", false, 2.01)
+        XCTAssertEqual(r.take(), ["pad b up"])
+    }
+    func testToggleReleaseDoesNotReleaseAnotherButtonsHold() {
+        let r = PadRecorder("bind 0 a press=padtoggle:x\nbind 0 b press=pad:x")
+        r.press("a", true, 1); r.press("a", false, 1.01)
+        r.press("b", true, 1.02); XCTAssertEqual(r.take(), ["pad x down"])
+        r.press("a", true, 1.03); r.press("a", false, 1.04)
+        XCTAssertTrue(r.take().isEmpty)
+        r.press("b", false, 1.05); XCTAssertEqual(r.take(), ["pad x up"])
+    }
+    func testTriggerToggleAndCleanupRetainAnotherTriggerHold() {
+        let r = PadRecorder("bind 0 a press=trigtoggle:r\nbind 0 b press=trig:r")
+        r.press("a", true, 1); r.press("a", false, 1.01)
+        XCTAssertEqual(r.axes[Int(PE_AXIS_RT)], 32767)
+        r.press("b", true, 1.02)
+        r.press("a", true, 1.03); r.press("a", false, 1.04)
+        XCTAssertEqual(r.axes[Int(PE_AXIS_RT)], 32767)
+        r.press("b", false, 1.05); XCTAssertEqual(r.axes[Int(PE_AXIS_RT)], 0)
+        r.press("a", true, 2); r.press("a", false, 2.01)
+        pe_release_all(r.engine, 2.02); XCTAssertEqual(r.axes[Int(PE_AXIS_RT)], 0)
+        r.press("a", true, 3); r.press("a", false, 3.01)
+        XCTAssertEqual(r.axes[Int(PE_AXIS_RT)], 32767)
+    }
+    func testChangedOwnerReleasesControllerTogglesAndUnrelatedOwnerSurvives() {
+        let text = "bind 0 a press=padtoggle:x,trigtoggle:l\nbind 0 b press=padtoggle:y"
+        let r = PadRecorder(text)
+        for button in ["a", "b"] { r.press(button, true, 1); r.press(button, false, 1.01) }
+        _ = r.take()
+        XCTAssertTrue(pe_update_profile(r.engine, "nokpad 1\n" + text.replacingOccurrences(of: "padtoggle:x,trigtoggle:l", with: "key:12")))
+        XCTAssertEqual(r.take(), ["pad x up"])
+        XCTAssertEqual(r.axes[Int(PE_AXIS_LT)], 0)
+        r.press("b", true, 2); r.press("b", false, 2.01)
+        XCTAssertEqual(r.take(), ["pad y up"])
+    }
+    func testDeviceDisconnectClearsOnlyItsLatchedControllerOutputs() {
+        let r = PadRecorder("device 1 vendor=1 product=2\nbind 0 d1b0 press=padtoggle:x,trigtoggle:r\nbind 0 a press=padtoggle:y")
+        pe_dev_button(r.engine, 1, 0, true, 1); pe_dev_button(r.engine, 1, 0, false, 1.01)
+        r.press("a", true, 1.02); r.press("a", false, 1.03); _ = r.take()
+        pe_release_device(r.engine, 1, 1.04)
+        XCTAssertEqual(r.take(), ["pad x up"])
+        XCTAssertEqual(r.axes[Int(PE_AXIS_RT)], 0)
+        pe_release_all(r.engine, 1.05); XCTAssertEqual(r.take(), ["pad y up"])
+    }
+    func testFullCleanupResetsGyroToggleToItsDefault() {
+        let r = PadRecorder("gyro out=mouse on=0 cal=off\nbind 0 a press=gyro:toggle")
+        r.press("a", true, 1); r.press("a", false, 1.01)
+        XCTAssertEqual(pe_active_gyro(r.engine), 1)
+        pe_release_all(r.engine, 1.02)
+        XCTAssertEqual(pe_active_gyro(r.engine), 0)
+        r.press("a", true, 2); r.press("a", false, 2.01)
+        XCTAssertEqual(pe_active_gyro(r.engine), 1)
+    }
+}
+
+final class PadSharedMotionPauseTests: XCTestCase {
+    func testOffHoldsPauseHeadMotionEvenWithControllerGyroUnconfigured() {
+        let r = PadRecorder("gyro out=off\nbind 0 a press=gyro:off\nbind 0 b press=gyro:off\nbind 0 x press=gyro:on")
+        XCTAssertFalse(pe_motion_paused(r.engine))
+        r.press("a", true, 1); r.press("b", true, 1.01); r.press("x", true, 1.02)
+        XCTAssertTrue(pe_motion_paused(r.engine))
+        r.press("a", false, 1.03); XCTAssertTrue(pe_motion_paused(r.engine))
+        r.press("b", false, 1.04); XCTAssertFalse(pe_motion_paused(r.engine))
+    }
+    func testPauseOwnershipClearsOnEditDisconnectAndFullRelease() {
+        let text = "device 1 vendor=1 product=2\nbind 0 d1b0 press=gyro:off\nbind 0 a press=gyro:off"
+        let r = PadRecorder(text)
+        pe_dev_button(r.engine, 1, 0, true, 1); r.press("a", true, 1.01)
+        pe_release_device(r.engine, 1, 1.02); XCTAssertTrue(pe_motion_paused(r.engine))
+        XCTAssertTrue(pe_update_profile(r.engine, "nokpad 1\n" + text.replacingOccurrences(of: "bind 0 a press=gyro:off", with: "bind 0 a press=key:12")))
+        XCTAssertFalse(pe_motion_paused(r.engine))
+        pe_dev_button(r.engine, 1, 0, true, 2); XCTAssertTrue(pe_motion_paused(r.engine))
+        pe_release_all(r.engine, 2.01); XCTAssertFalse(pe_motion_paused(r.engine))
+    }
+}

@@ -1,0 +1,27 @@
+--- a/dlls/winebus.sys/main.c
++++ b/dlls/winebus.sys/main.c
+@@ -262,16 +262,22 @@
+ {
+     static const WCHAR xinput_compat[] = L"WINEBUS\\WINE_COMP_XINPUT";
+     static const WCHAR hid_compat[] = L"WINEBUS\\WINE_COMP_HID";
++    static const WCHAR steam_usb_compat[] = L"USB\\Class_03&SubClass_00&Prot_00";
+     struct device_extension *ext = (struct device_extension *)device->DeviceExtension;
+     DWORD size = sizeof(hid_compat);
++    BOOL steam_usb = ext->desc.is_hidraw && ext->desc.bus_type == BUS_TYPE_USB &&
++        ext->desc.vid == 0x28de && ext->desc.pid == 0x1102 && ext->desc.input == 2;
+     WCHAR *dst;
+ 
++    if (steam_usb) size += sizeof(steam_usb_compat);
+     if (ext->desc.is_gamepad) size += sizeof(xinput_compat);
+ 
+     if ((dst = ExAllocatePool(PagedPool, size + sizeof(WCHAR))))
+     {
+-        if (ext->desc.is_gamepad) memcpy(dst, xinput_compat, sizeof(xinput_compat));
+-        memcpy((char *)dst + size - sizeof(hid_compat), hid_compat, sizeof(hid_compat));
++        char *cursor = (char *)dst;
++        if (ext->desc.is_gamepad) { memcpy(cursor, xinput_compat, sizeof(xinput_compat)); cursor += sizeof(xinput_compat); }
++        memcpy(cursor, hid_compat, sizeof(hid_compat)); cursor += sizeof(hid_compat);
++        if (steam_usb) memcpy(cursor, steam_usb_compat, sizeof(steam_usb_compat));
+         dst[size / sizeof(WCHAR)] = 0;
+     }
+ 

@@ -440,6 +440,7 @@ public enum CustomGames {
                 s += "export \(k)=\(shellQuote(value))\n"
             }
         }
+        if c.environment?[BF2DeploymentUI.flag] == "1", c.graphics == .classic3D { s += BF2DeploymentUI.launcherExports }
         if c.environment?[NativeIPXNetworking.flag] == "1" { s += NativeIPXNetworking.launcherExports }
         s += GameMicrophone.launcherExports(allowed: c.microphone == true) + "\n"
         s += EAAppInstaller.gameRendererExports(c)
@@ -562,8 +563,13 @@ public enum CustomGames {
     @discardableResult
     public static func upgradeLaunchers(_ games: [InstalledGame]) -> Int {
         var changed = 0
-        for g in games {
-            guard let c = g.custom, let l = g.launcherURL, let sha = try? Hashing.sha256(file: l), sha == c.launcherSHA else { continue }
+        for saved in games {
+            // Maintenance may outlive the library snapshot and a compatibility
+            // install. Always regenerate from current disk settings, restoring
+            // owned component requirements through their existing receipts.
+            guard let g = GameLibrary.inspect(saved.appURL), let current = g.custom,
+                  let l = g.launcherURL, let sha = try? Hashing.sha256(file: l), sha == current.launcherSHA else { continue }
+            let c = CompatibilityFixes.preservingInstalledSettings(current, for: g)
             if Hashing.sha256(data: Data(launcherScript(for: c).utf8)) == sha, !BF1942DisplayFix.ownsProgram(for: g) { continue }
             if GameLauncher.runState(of: g) != .notRunning { continue }
             do { try BF1942DisplayFix.refreshMenuCopies(g) } catch { continue }
@@ -583,11 +589,17 @@ public enum CustomGames {
     }
 
     /// `force` rewrites the launcher even if it was edited outside Nokcandu (the old one is kept in the journal).
-    public static func save(_ config: CustomGameConfig, to game: InstalledGame, force: Bool = false, allowDisplayProgramChange: Bool = false) throws {
+    public static func save(_ config: CustomGameConfig, to game: InstalledGame, force: Bool = false, allowDisplayProgramChange: Bool = false, preserveInstalledFixes: Bool = true) throws {
         // Never write settings into a place the app has moved away from (that leaves an empty "ghost" app).
         guard AppPresence.exists(game.contents) else { throw NokError("\(game.name) isn't at \(game.appURL.path) any more. Nothing was changed.") }
         if GameLauncher.runState(of: game) != .notRunning { throw NokError("Quit \(game.name) first.") }
+        // All ordinary writers (including queued/background snapshots) retain
+        // installed component requirements. Only the component's explicit Undo
+        // may remove them. This also covers writers outside maintenance paths.
         var c = config
+        if preserveInstalledFixes {
+            c.environment = CompatibilityFixes.preservingInstalledSettings(config, for: game).environment
+        }
         let installed = CompatibilityFixes.installedIDs(for: game)
         if !allowDisplayProgramChange, BF1942DisplayFix.ownsProgram(for: game),
            let old = CustomGameConfig.load(contents: game.contents), old.exe != c.exe {

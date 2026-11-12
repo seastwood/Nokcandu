@@ -5,20 +5,21 @@ name: Wine Mac driver
 on:
   push:
     branches: [main]
-    paths: ['Engine/winemac/**', '.github/workflows/winemac.yml']
+    paths: ['Engine/winemac/**', '.github/workflows/winemac.yml', '.github/actions/xcode/**', 'scripts/check-xcode-toolchain.sh']
   workflow_dispatch:
 jobs:
   driver:
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
+      - uses: ./.github/actions/xcode
       - name: Kept driver for these patches
         id: kept
         uses: actions/cache@v6
         with:
           path: build/winemac-[0-9]*
-          key: winemac-v2-${{ hashFiles('Engine/winemac/**') }}
+          key: winemac-v3-xcode27.2-27B52-${{ hashFiles('Engine/winemac/**') }}
       - name: Wine source and tools (downloads, checksummed)
         if: steps.kept.outputs.cache-hit != 'true'
         uses: actions/cache@v6

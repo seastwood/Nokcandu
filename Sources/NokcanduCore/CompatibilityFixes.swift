@@ -4,6 +4,7 @@ import Foundation
 /// downloads or patch bytes. Components own only documented private game/prefix destinations;
 /// file and registry Undo preserve later user changes. Global engines are untouched.
 public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable, Sendable {
+    case bf2DeploymentUI = "bf2-deployment-ui"
     case bf1942SoftwareAudio = "bf1942-software-audio"
     case shaderCompiler47 = "shader-compiler-47", ubisoftBrowser = "ubisoft-browser"
     case directx9Extras = "directx9-extras", d3d8to9, borderless, cursorVisibility = "cursor-visibility", openUA = "openua-display", bundledVC = "bundled-vc-runtime", crossProcessWindows = "cross-process-windows"
@@ -12,6 +13,7 @@ public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable, Senda
     public var id: String { rawValue }
     public var title: String {
         switch self {
+        case .bf2DeploymentUI: "BF2 deployment menu recovery"
         case .bf1942SoftwareAudio: "BF1942 software sound"
         case .ipxNetworking: "IPX networking (legacy games)"
         case .nativeIPXNetworking: "Native IPX for original LAN games"
@@ -29,6 +31,7 @@ public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable, Senda
     }
     public var detail: String {
         switch self {
+        case .bf2DeploymentUI: "Experimental gameplay verification. Uses DXVK’s documented BF2 focus-loss workaround for disappearing spawn and kit-selection menus. Keeps your graphics mode and performance settings. Restart BF2 and BF2Hub after applying. Undo removes only this option. This does not address missing map assets or controller input."
         case .bf1942SoftwareAudio: "Turns off BF1942 hardware-accelerated sound for the current player profile. This resolved a repeated menu crash in the Moongamers installation; online joining was verified. Keeps volume and other sound settings. Saved/shared profiles include it. Restart after applying; reapply if you switch player profiles. Undo restores the previous hardware-sound setting."
         case .nativeIPXNetworking: "Connects to original IPX computers, including Windows 98, using your Mac’s LAN adapter. Requires the legacy IPX component and Wine 11; they are checked before installation. Uses 802.2 frames by default. macOS asks for packet access when you launch. Access lasts while IPX games are active, with no match timer, and ends after the last IPX game closes. The game stays unprivileged. Saved/shared profiles include this requirement; adapter choices and permissions stay on this Mac. SPX is not supported. Undo returns to the previous IPX transport."
         case .ipxNetworking: "Adds IPX-over-LAN support with IPXWrapper 0.7.2 and Microsoft's legacy DirectPlay library for 32-bit legacy Winsock/DirectPlay games. Other computers need compatible IPXWrapper support too. Choose IPX inside the game. Network Settings lets you select a physical adapter if virtual adapters interfere. Preserves TCP/IP support; does not enable real Ethernet IPX frames. Restart after installing or Undo. Saved and shared profiles include this fix."
@@ -87,7 +90,7 @@ public enum CompatibilityFixes {
         CompatibilityFix.allCases.filter { isInstalled($0, for: g) }.map(\.rawValue)
     }
     public static func needsUpdate(_ fix: CompatibilityFix, for g: InstalledGame) -> Bool {
-        switch fix { case .ipxNetworking: IPXNetworking.needsUpdate(g); case .nativeIPXNetworking: NativeIPXNetworking.needsUpdate(g); default: false }
+        switch fix { case .bf2DeploymentUI: BF2DeploymentUI.needsUpdate(g); case .ipxNetworking: IPXNetworking.needsUpdate(g); case .nativeIPXNetworking: NativeIPXNetworking.needsUpdate(g); default: false }
     }
     static func fresh(_ g: InstalledGame) -> InstalledGame { GameLibrary.inspect(g.appURL) ?? g }
     static func program(_ g: InstalledGame) -> URL? {
@@ -160,6 +163,7 @@ public enum CompatibilityFixes {
     }
     public static func visible(_ fix: CompatibilityFix, for g:InstalledGame) -> Bool {
         if isInstalled(fix,for:g) { return true }
+        if fix == .bf2DeploymentUI { return BF2DeploymentUI.supports(g) }
         if fix == .bf1942SoftwareAudio { return BF1942AudioFix.supports(g) }
         if fix == .ipxNetworking || fix == .nativeIPXNetworking { return IPXNetworking.supports(g) }
         if fix == .openUA { return OpenUASettings.supports(g) }
@@ -173,6 +177,7 @@ public enum CompatibilityFixes {
         guard let exe = managedProgram(g), PEFile.inspect(exe) != nil else {
             return "The selected program is missing or outside this game's C: folders. Choose it under Settings → Program."
         }
+        if fix == .bf2DeploymentUI, let reason = BF2DeploymentUI.unavailable(g) { return reason }
         if fix == .bf1942SoftwareAudio, !BF1942AudioFix.supports(g) { return "Requires a standalone BF1942 installation with identifiable current-player sound settings." }
         if fix == .nativeIPXNetworking, !NativeIPXNetworking.supports(g) { return "Requires Wine 11 and Nokcandu’s native packet module for a private 32-bit game." }
         if fix == .ipxNetworking, !IPXNetworking.supports(g) { return "Requires a 32-bit legacy Winsock/DirectPlay game in its own Windows environment." }
@@ -391,6 +396,9 @@ public enum CompatibilityFixes {
         try NokPaths.ensure(work); defer { try? FileManager.default.removeItem(at: work) }
         var files: [URL: Data] = [:], applied: [String: String] = [:], appliedEnv: [String: String] = [:]
         switch fix {
+        case .bf2DeploymentUI:
+            files = try BF2DeploymentUI.plannedFiles(g)
+            appliedEnv = try BF2DeploymentUI.environment(g)
         case .bf1942SoftwareAudio: files = try BF1942AudioFix.plannedFiles(g)
         case .nativeIPXNetworking:
             files = try NativeIPXNetworking.plannedFiles(for: g)
@@ -529,7 +537,7 @@ public enum CompatibilityFixes {
         }
         try j.validateForUndo()
         if let changes = st.registryChanges { try NativeIPXNetworking.restore(changes, for: g) }
-        try CustomGames.save(c, to: g)
+        try CustomGames.save(c, to: g, preserveInstalledFixes: false)
         let report = j.revertAll(); log(report.summary)
         guard report.skipped.isEmpty else { throw NokError(report.summary) }
         try FileManager.default.removeItem(at: marker(fix, g))

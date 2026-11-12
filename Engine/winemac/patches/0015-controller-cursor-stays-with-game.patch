@@ -1,0 +1,51 @@
+--- a/dlls/winemac.drv/cocoa_app.m
++++ b/dlls/winemac.drv/cocoa_app.m
+@@ -136,6 +136,9 @@
+ CGSize present_desktop;
+ 
+ int present_released = FALSE;
++/* Controller or raw relative input moved Wine's cursor without the Mac pointer. Until a real
++   pointer move arrives, the Mac pointer's position says nothing about the game's cursor. */
++int nokcandu_cursor_decoupled = FALSE;
+ int present_auto = FALSE;    /* Automatic: the virtual screen grows to a game window that's bigger than it. */
+ double present_user_scale;   /* The picture's scale the user chose (by resizing); resolution changes keep it. */
+ double present_window_scale = 1;   /* The scale chosen for the game's own windows (menus etc. run windowed). */
+@@ -1387,6 +1390,11 @@
+ 
+     /* Button-only delivery preserves Wine's current cursor, including
+        relative movement inside a scaled virtual desktop. No Mac warp. */
++    - (void) nokcanduSetCursorDecoupled:(BOOL)decoupled
++    {
++        nokcandu_cursor_decoupled = decoupled;
++    }
++
+     - (BOOL) nokcanduPostControllerButton:(int)button pressed:(BOOL)pressed
+     {
+         static WineWindow* held[5];
+@@ -1510,6 +1518,7 @@
+                     [clipCursorHandler clipCursorLocation:&point];
+                 point = cgpoint_win_from_mac_global(point);
+ 
++                nokcandu_cursor_decoupled = FALSE;   /* the Mac pointer leads again */
+                 event = macdrv_create_event(MOUSE_MOVED_ABSOLUTE, targetWindow);
+                 event->mouse_moved.x = floor(point.x);
+                 event->mouse_moved.y = floor(point.y);
+--- a/dlls/winemac.drv/mouse.c
++++ b/dlls/winemac.drv/mouse.c
+@@ -685,10 +685,16 @@
+ /***********************************************************************
+  *              GetCursorPos (MACDRV.@)
+  */
++extern int nokcandu_cursor_decoupled;
++
+ BOOL macdrv_GetCursorPos(LPPOINT pos)
+ {
+     CGPoint pt;
+     BOOL ret;
++
++    /* win32u asks the driver once input has been quiet for 100 ms. After controller or raw relative
++       input the Mac pointer is stale: keep the position Wine already has. */
++    if (nokcandu_cursor_decoupled) return TRUE;
+ 
+     ret = macdrv_get_cursor_position(&pt);
+     if (ret)

@@ -84,7 +84,7 @@ struct BattleNetGameInfo: View {
                     })) {
                         Text("Same as Battle.net (\(h.custom?.graphics.title ?? "its setting"))").tag(GraphicsPreset?.none)
                         ForEach(GraphicsPreset.allCases) { Text($0.title).tag(Optional($0)) }
-                    }.labelsHidden().frame(width: settingControlWidth)
+                    }.labelsHidden().settingControl()
                 }
             }
         }

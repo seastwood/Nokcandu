@@ -13,6 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
+      - uses: ./.github/actions/xcode
       - name: Show build environment
         run: |
           echo "=== macOS ==="
@@ -31,6 +32,13 @@ jobs:
         run: |
           V="$(tr -d '[:space:]' < VERSION)"
           [ "v$V" = "${GITHUB_REF_NAME}" ] || { echo "Tag ${GITHUB_REF_NAME} doesn't match VERSION $V"; exit 1; }
+      - name: Require signing for a public release
+        if: github.event_name == 'push'
+        env:
+          P12: ${{ secrets.NOKCANDU_SIGNING_P12 }}
+          DEVID_P12: ${{ secrets.DEVELOPER_ID_P12 }}
+        run: |
+          [ -n "$P12" ] || [ -n "$DEVID_P12" ] || { echo "Configure release signing before publishing; refusing an ad-hoc update."; exit 1; }
       - name: Signing identity (keeps macOS permissions across updates)
         env:
           P12: ${{ secrets.NOKCANDU_SIGNING_P12 }}
@@ -67,7 +75,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: build/winemac-[0-9]*
-          key: winemac-v2-${{ hashFiles('Engine/winemac/**') }}
+          key: winemac-v3-xcode27.2-27B52-${{ hashFiles('Engine/winemac/**') }}
       - name: Wine source and tools for the driver (only when it must be built here)
         if: steps.driver.outputs.cache-hit != 'true'
         uses: actions/cache@v6
@@ -91,6 +99,10 @@ jobs:
           WINE_VERSION=11.0 bash Engine/wpcap/build.sh
           python3 Tools/native-ipx/check-patches.py 11.0
           bash Engine/wpcap/package-source.sh
+      - name: Build full-SDL controller driver
+        run: |
+          sudo /usr/sbin/softwareupdate --install-rosetta --agree-to-license
+          bash Engine/controller-hid/ci-build.sh
       - name: Build, test and package
         env:
           NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}

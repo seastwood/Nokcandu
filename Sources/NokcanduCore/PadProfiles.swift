@@ -40,6 +40,10 @@ public enum PadProfiles {
             case (.ltfull, .playstation): "L2 (full pull)"; case (.rtfull, .playstation): "R2 (full pull)"
             case (.ls, .playstation): "L3"; case (.rs, .playstation): "R3"
             case (.back, .playstation): "Create"; case (.start, .playstation): "Options"; case (.guide, .playstation): "PS"
+            case (.touchpad, .valve): "Left trackpad click"
+            case (.rs, .valve): "Right trackpad click"
+            case (.guide, .valve): "Steam"
+            case (.back, .valve): "Back"; case (.start, .valve): "Start"
             case (.misc, .playstation): "Mute"; case (.touchpad, _): "Touchpad click"
             case (.lb, .nintendo): "L"; case (.rb, .nintendo): "R"; case (.lt, .nintendo): "ZL"; case (.rt, .nintendo): "ZR"
             case (.ltfull, .nintendo): "ZL (full pull)"; case (.rtfull, .nintendo): "ZR (full pull)"
@@ -72,6 +76,7 @@ public enum PadProfiles {
     public enum Output: Hashable, Codable, Sendable {
         case pad(Input)                 // a controller button (not a trigger)
         case trigger(right: Bool)       // a trigger pulled all the way
+        case keyToggle(Int), mouseToggle(MouseButton), padToggle(Input), triggerToggle(right: Bool)
         case key(Int)                   // Mac key code
         case mouse(MouseButton)
         case wheel(up: Bool)
@@ -84,10 +89,37 @@ public enum PadProfiles {
         case rumble                                     // buzz the controller
         case nothing
 
+        /// Outputs that can remain down between two physical presses.
+        public var toggledOutput: Output? {
+            switch self {
+            case .key(let k): .keyToggle(k)
+            case .mouse(let m): .mouseToggle(m)
+            case .pad(let i): .padToggle(i)
+            case .trigger(let r): .triggerToggle(right: r)
+            case .keyToggle, .mouseToggle, .padToggle, .triggerToggle, .nothing: self
+            default: nil
+            }
+        }
+        public var heldOutput: Output {
+            switch self {
+            case .keyToggle(let k): .key(k)
+            case .mouseToggle(let m): .mouse(m)
+            case .padToggle(let i): .pad(i)
+            case .triggerToggle(let r): .trigger(right: r)
+            default: self
+            }
+        }
+        public var isHeldToggle: Bool {
+            switch self { case .keyToggle, .mouseToggle, .padToggle, .triggerToggle: true; default: false }
+        }
         public var token: String {
             switch self {
             case .pad(let i): "pad:\(i.rawValue)"
             case .trigger(let r): "trig:\(r ? "r" : "l")"
+            case .padToggle(let i): "padtoggle:\(i.rawValue)"
+            case .triggerToggle(let r): "trigtoggle:\(r ? "r" : "l")"
+            case .keyToggle(let k): "keytoggle:\(k)"
+            case .mouseToggle(let m): "mousetoggle:\(m.rawValue)"
             case .key(let k): "key:\(k)"
             case .mouse(let m): "mouse:\(m.rawValue)"
             case .wheel(let up): "wheel:\(up ? "up" : "down")"
@@ -108,6 +140,10 @@ public enum PadProfiles {
             case "calibrate": self = .calibrate
             case "rumble": self = .rumble
             case "trig": self = .trigger(right: v == "r")
+            case "padtoggle": guard let i = Input(rawValue: v), Input.padButtons.contains(i) else { return nil }; self = .padToggle(i)
+            case "trigtoggle": guard v == "l" || v == "r" else { return nil }; self = .triggerToggle(right: v == "r")
+            case "keytoggle": guard let k = Int(v), (0..<128).contains(k) else { return nil }; self = .keyToggle(k)
+            case "mousetoggle": guard let m = MouseButton(rawValue: v) else { return nil }; self = .mouseToggle(m)
             case "key": guard let k = Int(v) else { return nil }; self = .key(k)
             case "mouse": guard let m = MouseButton(rawValue: v) else { return nil }; self = .mouse(m)
             case "wheel": self = .wheel(up: v != "down")
@@ -129,6 +165,10 @@ public enum PadProfiles {
             switch self {
             case .pad(let i): i.title(family)
             case .trigger(let r): Input(rawValue: r ? "rt" : "lt")!.title(family)
+            case .padToggle(let i): "Toggle " + i.title(family)
+            case .triggerToggle(let r): "Toggle " + Input(rawValue: r ? "rt" : "lt")!.title(family)
+            case .keyToggle(let k): "Toggle " + PadProfiles.keyTitle(k)
+            case .mouseToggle(let m): "Toggle " + m.title
             case .key(let k): PadProfiles.keyTitle(k)
             case .mouse(let m): m.title
             case .wheel(let up): up ? "Scroll up" : "Scroll down"
@@ -156,6 +196,14 @@ public enum PadProfiles {
         public var double: [Output] = []
         /// Repeats while held (milliseconds between presses).
         public var turbo: Int?
+        /// Explicit editor behavior; nil preserves existing output-specific semantics.
+        public var togglePress: Bool?
+        public var togglesOnPress: Bool { togglePress == true || (press.contains(where: \.isHeldToggle) && press.allSatisfy { $0.isHeldToggle || $0 == .nothing }) }
+        public var pressOutputs: [Output] {
+            guard togglePress == true else { return press }
+            let outputs = press.compactMap(\.toggledOutput)
+            return outputs.isEmpty ? [.nothing] : outputs
+        }
         public var together: Input?
         public var togetherOutputs: [Output] = []
         public var holdTime: Double?
@@ -405,20 +453,24 @@ public enum PadProfiles {
     /// A series of things done one after another by one press.
     public struct Macro: Codable, Hashable, Identifiable, Sendable {
         public enum Kind: String, Codable, CaseIterable, Sendable {
-            case press, down, up, wait, text
-            public var title: String { switch self { case .press: "Press"; case .down: "Hold down"; case .up: "Let go"; case .wait: "Wait"; case .text: "Type" } }
+            case press, down, up, wait, text, chord
+            public var title: String { switch self { case .press: "Press"; case .down: "Hold down"; case .up: "Let go"; case .wait: "Wait"; case .text: "Type"; case .chord: "Simultaneous chord" } }
         }
         public struct Step: Codable, Hashable, Sendable {
             public var kind: Kind
             public var output: Output?
             public var ms: Int?
             public var text: String?
+            public var outputs: [Output]?
             public init(_ kind: Kind, output: Output? = nil, ms: Int? = nil, text: String? = nil) { self.kind = kind; self.output = output; self.ms = ms; self.text = text }
         }
         public var id: String
         public var name: String
         public var steps: [Step]
-        public init(id: String = UUID().uuidString, name: String, steps: [Step] = []) { self.id = id; self.name = name; self.steps = steps }
+        public var eventDelayMS: Int?
+        public init(id: String = UUID().uuidString, name: String, steps: [Step] = [], eventDelayMS: Int? = 50) {
+            self.id = id; self.name = name; self.steps = steps; self.eventDelayMS = eventDelayMS
+        }
     }
     /// Buttons pressed one after another (up, up, down…) doing something.
     public struct Sequence: Codable, Hashable, Identifiable, Sendable {
@@ -436,10 +488,15 @@ public enum PadProfiles {
             public var title: String
             public var outputs: [Output]
             public init(title: String, outputs: [Output] = []) { self.title = title; self.outputs = outputs }
+            public func displayTitle(_ family: Controllers.Family? = nil) -> String {
+                if !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return title }
+                let actions = outputs.filter { $0 != .nothing }.map { $0.title(family) }
+                return actions.isEmpty ? "Choose an action" : actions.joined(separator: " + ")
+            }
         }
         public var id: String
         public var name: String
-        /// 0 the left stick, 1 the right.
+        /// 0 the left stick, 1 the right, 2 relative mouse/gyro direction.
         public var stick: Int
         public var slices: [Slice]
         public init(id: String = UUID().uuidString, name: String, stick: Int = 1, slices: [Slice] = []) { self.id = id; self.name = name; self.stick = stick; self.slices = slices }
@@ -450,6 +507,21 @@ public enum PadProfiles {
         public var soft = 0.3, full = 0.95
         public init() {}
     }
+
+    public enum ControllerSource: String, Codable, CaseIterable, Sendable { case automatic, steamUSB }
+
+    /// Display metadata belongs to this profile, not to whichever device is connected.
+    /// Do not inherit it from a base mapping profile or replay a shared legacy UI choice.
+    public static func controllerLabelFamily(_ profile: Profile, all: [Profile], connected: Controllers.Family?) -> Controllers.Family? {
+        if let saved = profile.controllerLabels {
+            if saved == "xbox" { return nil }
+            if let family = Controllers.Family(rawValue:saved) { return family }
+        }
+        return top(profile,all:all,\.controllerSource) == .steamUSB ? .valve : connected
+    }
+
+    public enum RoutingMode: String, Codable, CaseIterable, Sendable { case legacy, native, hybrid, remapping, selective, hybridAll, remappingAll }
+    public enum ButtonRoute: String, Codable, CaseIterable, Sendable { case native, mapped, both, disabled }
 
     public struct Profile: Codable, Hashable, Identifiable, Sendable {
         public var id: String
@@ -464,12 +536,24 @@ public enum PadProfiles {
         public var triggers: Triggers?
         /// Devices combined with the controller in this profile (up to four).
         public var devices: [Device]?
+        /// Compatible headphone motion is a separate singleton source, not a fabricated HID slot.
+        public var headMotion: PadHeadMotionSettings?
+        /// Explicit original wired-controller source; absent retains existing GameController behavior.
+        public var controllerSource: ControllerSource?
+        /// UI names/diagram style for this profile only; nil follows its source/connected device.
+        public var controllerLabels: String?
+        /// Original Steam Controller right pad: nil preserves the existing stick mapping.
+        public var steamRightTrackpad: PadSteamTrackpadSettings?
+        public var steamLeftTrackpad: PadSteamTrackpadSettings?
         public var touchpad: Touchpad?
         public var tilt: Tilt?
         public var macros: [Macro]?
         public var sequences: [Sequence]?
         public var menus: [RadialMenu]?
         /// A short rumble when the layer changes.
+        public var routingMode: RoutingMode?
+        public var buttonRoutes: [String: ButtonRoute]?
+        public var controlRoutes: [String: ButtonRoute]?
         public var rumbleOnLayer: Bool?
         public init(id: String = UUID().uuidString, name: String, buildsOn: [String] = [], layers: [Layer] = [Layer(id: "base", name: "Base")],
                     leftStick: Stick? = nil, rightStick: Stick? = nil, gyro: Gyro? = nil, triggers: Triggers? = nil) {
@@ -559,6 +643,8 @@ public enum PadProfiles {
     }
 
     public static func compile(_ p: Profile, all: [Profile]) -> String {
+        let routing = top(p, all: all, \.routingMode) ?? .legacy
+        if routing == .native { return "nokpad 1\n" }
         let m = merged(p, all: all)
         let layerIndex = Dictionary(m.layers.enumerated().map { ($0.element.name.lowercased(), $0.offset) }, uniquingKeysWith: { a, _ in a })
         let macros = Array(collected(p, all: all, \.macros).prefix(16)), menus = Array(collected(p, all: all, \.menus).prefix(8))
@@ -616,14 +702,23 @@ public enum PadProfiles {
         }
         for (i, mac) in macros.enumerated() {
             var parts = ["macro \(i)"]
-            for st in mac.steps where parts.count < 46 {
+            for (stepIndex, st) in mac.steps.enumerated() {
+                var stepParts: [String] = []
+                if stepIndex > 0, st.kind != .wait, mac.steps[stepIndex - 1].kind != .wait, let delay = mac.eventDelayMS, delay > 0 { stepParts.append("wait:\(min(60000, delay))") }
                 switch st.kind {
-                case .press: if let o = st.output, o.macroFree, let t = token(o) { parts += ["down:\(t)", "wait:30", "up:\(t)"] }
-                case .down: if let o = st.output, o.macroFree, let t = token(o) { parts.append("down:\(t)") }
-                case .up: if let o = st.output, o.macroFree, let t = token(o) { parts.append("up:\(t)") }
-                case .wait: parts.append("wait:\(max(0, min(60000, st.ms ?? 100)))")
-                case .text: if let t = st.text, !t.isEmpty { parts.append("text:" + t.utf8.map { String(format: "%02x", $0) }.joined()) }
+                case .chord:
+                    let chord = (st.outputs ?? []).filter(\.macroFree).prefix(6).compactMap(token)
+                    stepParts += chord.map { "down:\($0)" }
+                    stepParts.append("wait:30")
+                    stepParts += chord.reversed().map { "up:\($0)" }
+                case .press: if let o = st.output, o.macroFree, let t = token(o) { stepParts += ["down:\(t)", "wait:30", "up:\(t)"] }
+                case .down: if let o = st.output, o.macroFree, let t = token(o) { stepParts.append("down:\(t)") }
+                case .up: if let o = st.output, o.macroFree, let t = token(o) { stepParts.append("up:\(t)") }
+                case .wait: stepParts.append("wait:\(max(0, min(60000, st.ms ?? 100)))")
+                case .text: if let t = st.text, !t.isEmpty { stepParts.append("text:" + t.utf8.map { String(format: "%02x", $0) }.joined()) }
                 }
+                guard parts.count + stepParts.count <= 49 else { break }
+                parts += stepParts
             }
             lines.append(parts.joined(separator: " "))
         }
@@ -631,7 +726,7 @@ public enum PadProfiles {
             if let o = outs(q.outputs) { lines.append("seq \(i) in=\(q.inputs.prefix(8).map(\.rawValue).joined(separator: ",")) step=\(n(q.stepTime ?? 0.4)) out=\(o)") }
         }
         for (i, mn) in menus.enumerated() {
-            var parts = ["menu \(i) stick=\(mn.stick == 0 ? 0 : 1)"]
+            var parts = ["menu \(i) stick=\(mn.stick == 0 ? 0 : mn.stick == 2 ? 2 : 1)"]
             for (j, sl) in mn.slices.prefix(8).enumerated() { parts.append("s\(j)=\(outs(sl.outputs) ?? "none")") }
             lines.append(parts.joined(separator: " "))
         }
@@ -663,17 +758,39 @@ public enum PadProfiles {
             for (name, b) in entries {
                 guard !b.isEmpty else { continue }
                 var parts = ["bind \(l) \(name)"]
-                if let s = outs(b.press) { parts.append("press=\(s)") }
+                if let s = outs(b.pressOutputs) { parts.append("press=\(s)") }
                 if let s = outs(b.tap) { parts.append("tap=\(s)") }
                 if let s = outs(b.hold) { parts.append("hold=\(s)") }
                 if let s = outs(b.double) { parts.append("double=\(s)") }
-                if let t = b.turbo, t > 0 { parts.append("turbo=\(t)") }
+                if let t = b.turbo, t > 0, !b.togglesOnPress { parts.append("turbo=\(t)") }
                 if let w = b.together, let s = outs(b.togetherOutputs) { parts.append("sim=\(w.rawValue)"); parts.append("simout=\(s)") }
                 if let h = b.holdTime { parts.append("holdtime=\(n(h))") }
                 if let d = b.doubleTime { parts.append("doubletime=\(n(d))") }
                 // A binding whose outputs all vanished (a removed layer) leaves the button as itself.
                 if parts.count > 1 { lines.append(parts.joined(separator: " ")) }
             }
+        }
+        if routing == .hybrid || routing == .hybridAll {
+            for i in Input.padButtons { lines.append("route \(i.rawValue) both") }
+        } else if routing == .remapping || routing == .remappingAll {
+            for i in Input.padButtons { lines.append("route \(i.rawValue) mapped") }
+        } else if routing == .selective {
+            var routes: [String: ButtonRoute] = [:]
+            for q in stack(p, all: all) { routes.merge(q.buttonRoutes ?? [:]) { _, new in new } }
+            for i in Input.padButtons {
+                lines.append("route \(i.rawValue) \((routes[i.rawValue] ?? .mapped).rawValue)")
+            }
+        }
+        if routing == .selective {
+            var routes: [String: ButtonRoute] = [:]
+            for q in stack(p, all: all) { routes.merge(q.controlRoutes ?? [:]) { _, new in new } }
+            for key in ["lstick", "rstick", "lt", "rt", "gyro", "touch", "tilt"] {
+                if let route = routes[key] { lines.append("route \(key) \(route.rawValue)") }
+            }
+        }
+        if routing == .hybridAll || routing == .remappingAll {
+            let route = routing == .hybridAll ? "both" : "mapped"
+            for key in ["lstick", "rstick", "lt", "rt", "gyro", "touch", "tilt"] { lines.append("route \(key) \(route)") }
         }
         return lines.joined(separator: "\n") + "\n"
     }
@@ -762,10 +879,34 @@ public enum PadProfiles {
     public static func profiles(file: URL = profilesFile) -> [Profile] {
         (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode([Profile].self, from: $0) } ?? []
     }
+    private static func preserveBeforeV2(_ encoded: Data, file: URL) throws {
+        guard let text = String(data: encoded, encoding: .utf8),
+              ["keytoggle:", "mousetoggle:", "padtoggle:", "trigtoggle:", "togglePress", "routingMode", "controlRoutes", "eventDelayMS", "\"chord\"", "\"headMotion\""].contains(where: text.contains) else { return }
+        let backup = file.appendingPathExtension("pre-controller-v2")
+        if FileManager.default.fileExists(atPath: file.path), !FileManager.default.fileExists(atPath: backup.path) {
+            try Data(contentsOf: file).write(to: backup, options: .withoutOverwriting)
+        }
+    }
     static func saveProfiles(_ p: [Profile], file: URL = profilesFile) throws {
         try NokPaths.ensure(file.deletingLastPathComponent())
+        // A read failure is not an empty library. Preserve damaged/newer data for recovery.
+        if FileManager.default.fileExists(atPath: file.path) {
+            _ = try JSONDecoder().decode([Profile].self, from: Data(contentsOf: file))
+        }
         let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try enc.encode(p.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }).write(to: file, options: .atomic)
+        let encoded = try enc.encode(p.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending })
+        try preserveBeforeV2(encoded, file: file)
+        try encoded.write(to: file, options: .atomic)
+    }
+    private static func saveOwn(_ p: Profile, contents: URL) throws {
+        let file = ownFile(contents)
+        if FileManager.default.fileExists(atPath: file.path) {
+            _ = try JSONDecoder().decode(Profile.self, from: Data(contentsOf: file))
+        }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(p)
+        try preserveBeforeV2(data, file: file)
+        try data.write(to: file, options: .atomic)
     }
     public static func defaultID(file: URL = defaultFile) -> String? {
         (try? String(contentsOf: file, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
@@ -804,6 +945,18 @@ public enum PadProfiles {
         }
     }
 
+    /// The own-profile persistence scope supplying this game, including shared-launcher inheritance.
+    public static func ownSource(contents: URL, shared: Bool, inheritedHost: URL?) -> URL? {
+        switch choice(contents: contents, shared: shared) {
+        case .own: return contents
+        case .sameAsLauncher:
+            guard let host = inheritedHost, host.resolvingSymlinksInPath().standardizedFileURL.path != contents.resolvingSymlinksInPath().standardizedFileURL.path,
+                  choice(contents: host) == .own else { return nil }
+            return host
+        default: return nil
+        }
+    }
+
     /// Sets what an environment follows and writes its pad-map.
     public static func set(_ c: Choice, contents: URL, own p: Profile? = nil, file lf: URL = profilesFile, defaultFile df: URL = defaultFile) throws {
         try NokPaths.ensure(folder(contents))
@@ -811,27 +964,36 @@ public enum PadProfiles {
         case .followDefault: try Data("default\n".utf8).write(to: choiceFile(contents), options: .atomic)
         case .normal: try Data("none\n".utf8).write(to: choiceFile(contents), options: .atomic)
         case .own:
-            let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try enc.encode(p ?? own(contents: contents) ?? Profile(name: "This game")).write(to: ownFile(contents), options: .atomic)
+            try saveOwn(p ?? own(contents: contents) ?? Profile(name: "This game"), contents: contents)
             try Data("own\n".utf8).write(to: choiceFile(contents), options: .atomic)
         case .profile(let id): try Data((id + "\n").utf8).write(to: choiceFile(contents), options: .atomic)
         case .sameAsLauncher: try? FileManager.default.removeItem(at: choiceFile(contents))
         }
-        write(contents: contents, shared: c == .sameAsLauncher, file: lf, defaultFile: df)
+        _ = try writeChecked(contents: contents, shared: c == .sameAsLauncher, file: lf, defaultFile: df)
     }
 
     @discardableResult
     static func write(contents: URL, shared: Bool, all: [Profile]? = nil, file lf: URL = profilesFile, defaultFile df: URL = defaultFile) -> Bool {
+        (try? writeChecked(contents: contents, shared: shared, all: all, file: lf, defaultFile: df)) ?? false
+    }
+    @discardableResult
+    static func writeChecked(contents: URL, shared: Bool, all: [Profile]? = nil, file lf: URL = profilesFile, defaultFile df: URL = defaultFile) throws -> Bool {
         let list = all ?? profiles(file: lf)
-        let f = mapFile(contents)
+        let f = mapFile(contents), fm = FileManager.default
+        if (try? fm.destinationOfSymbolicLink(atPath: f.path)) != nil {
+            throw NokError("The controller map is linked. It was preserved; restore a regular managed map before updating it.")
+        }
+        if fm.fileExists(atPath: f.path), try fm.attributesOfItem(atPath: f.path)[.type] as? FileAttributeType != .typeRegular {
+            throw NokError("The controller map path is not a regular file. It was preserved.")
+        }
         guard let p = effective(contents: contents, shared: shared, all: list, defaultFile: df, file: lf) else {
-            if FileManager.default.fileExists(atPath: f.path) { try? FileManager.default.removeItem(at: f); return true }
+            if fm.fileExists(atPath: f.path) { try fm.removeItem(at: f); return true }
             return false
         }
         let text = compile(p, all: list)
         if (try? String(contentsOf: f, encoding: .utf8)) == text { return false }
-        try? NokPaths.ensure(folder(contents))
-        try? Data(text.utf8).write(to: f, options: .atomic)
+        try NokPaths.ensure(folder(contents))
+        try Data(text.utf8).write(to: f, options: .atomic)
         return true
     }
 
@@ -845,17 +1007,29 @@ public enum PadProfiles {
     }
 
     @discardableResult
+    static func refreshChecked(environments: [URL], shared: [URL], file: URL, defaultFile: URL) throws -> Int {
+        let list = profiles(file: file), sharedSet = Set(shared)
+        var changed = 0, failed = 0
+        for c in Set(environments).union(sharedSet) {
+            do { if try writeChecked(contents: c, shared: sharedSet.contains(c), all: list, file: file, defaultFile: defaultFile) { changed += 1 } }
+            catch { failed += 1 }
+        }
+        guard failed == 0 else { throw NokError("Profile settings were saved, but \(failed) game controller map(s) could not be updated. Check the game folders and retry; linked or non-file maps are preserved.") }
+        return changed
+    }
+
+    @discardableResult
     public static func store(_ p: Profile, environments: [URL], shared: [URL] = [], file: URL = profilesFile, defaultFile df: URL = defaultFile) throws -> Int {
         var all = profiles(file: file)
         if let i = all.firstIndex(where: { $0.id == p.id }) { all[i] = p } else { all.append(p) }
         try saveProfiles(all, file: file)
-        return refresh(environments: environments, shared: shared, file: file, defaultFile: df)
+        return try refreshChecked(environments: environments, shared: shared, file: file, defaultFile: df)
     }
 
     public static func setDefault(_ p: Profile?, environments: [URL], shared: [URL] = [], file df: URL = defaultFile, profilesFile lf: URL = profilesFile) throws {
         if let p { try NokPaths.ensure(df.deletingLastPathComponent()); try Data((p.id + "\n").utf8).write(to: df, options: .atomic) }
         else { try? FileManager.default.removeItem(at: df) }
-        refresh(environments: environments, shared: shared, file: lf, defaultFile: df)
+        _ = try refreshChecked(environments: environments, shared: shared, file: lf, defaultFile: df)
     }
 
     /// Removes a shared profile. Games using it keep a copy as their own; profiles built on it stop building on it.
@@ -869,7 +1043,7 @@ public enum PadProfiles {
             try set(.own, contents: c, own: copy, file: file, defaultFile: df)
         }
         if defaultID(file: df) == p.id { try setDefault(nil, environments: environments, shared: shared, file: df, profilesFile: file) }
-        else { refresh(environments: environments, shared: shared, file: file, defaultFile: df) }
+        else { _ = try refreshChecked(environments: environments, shared: shared, file: file, defaultFile: df) }
     }
 
     /// Profiles also applied inside Wine's controller driver (what the game sees as the controller), unless

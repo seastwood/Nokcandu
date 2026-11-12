@@ -11,6 +11,13 @@ final class AppModel: ObservableObject {
     @Published var favoriteGames: [InstalledGame] = []
     @Published var sortedGames: [InstalledGame] = []
     @Published var launcherApps: [InstalledGame] = []
+    /// Your own categories with their items (games, launchers or anything else installed).
+    struct LibraryCategory: Identifiable { var name: String; var games: [InstalledGame]; var id: String { name } }
+    @Published var libraryCategories: [LibraryCategory] = []
+    @Published var collapsedSections: Set<String> = LibraryOrganizer.collapsedSections
+    /// The category being named: a new one (optionally for a game) or a rename.
+    struct CategoryPrompt { var renaming: String?; var game: InstalledGame? }
+    @Published var categoryPrompt: CategoryPrompt?
     /// Games on a drive that isn't plugged in: whole apps (not listed otherwise) and games whose files are there.
     @Published var offlineApps: [(name: String, drive: String)] = []
     @Published var missingDrive: [InstalledGame.ID: String] = [:]
@@ -43,7 +50,8 @@ final class AppModel: ObservableObject {
     @Published var launchProblems: [String: String] = [:]
     @Published var showWhatsNew = false
     @Published var showSeveralGames = false
-    enum SidebarTab: String { case games, profiles }
+    /// "profiles" is the Controls tab; its saved name predates the rename.
+    enum SidebarTab: String { case games, profiles, streams }
     @Published var sidebarTab: SidebarTab = SidebarTab(rawValue: UserDefaults.standard.string(forKey: "sidebarTab") ?? "") ?? .games {
         didSet { UserDefaults.standard.set(sidebarTab.rawValue, forKey: "sidebarTab") }
     }
@@ -819,8 +827,14 @@ final class AppModel: ObservableObject {
         let keys = LibraryOrganizer.favoriteKeys
         let favs = rest.filter { keys.contains(LibraryOrganizer.key($0)) }
         favoriteGames = LibraryOrganizer.sorted(favs)
-        sortedGames = LibraryOrganizer.sorted(rest.filter { !favs.contains($0) })
-        launcherApps = launchers.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        let favIDs = Set(favs.map(\.id)), placed = LibraryOrganizer.categoryKeys
+        func category(_ g: InstalledGame) -> String? { favIDs.contains(g.id) ? nil : placed[LibraryOrganizer.key(g)] }
+        libraryCategories = LibraryOrganizer.categories.map { name in
+            LibraryCategory(name: name, games: LibraryOrganizer.sorted(games.filter { category($0) == name }))
+        }
+        sortedGames = LibraryOrganizer.sorted(rest.filter { !favIDs.contains($0.id) && category($0) == nil })
+        launcherApps = launchers.filter { category($0) == nil }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        collapsedSections = LibraryOrganizer.collapsedSections
         offlineApps = libraryExtras.offline
         refreshDrives()
         subtitles = LibraryOrganizer.subtitles(for: games)
@@ -829,6 +843,34 @@ final class AppModel: ObservableObject {
 
     func setSort(_ s: LibraryOrganizer.Sort) { LibraryOrganizer.setSort(s); reorganize() }
     func setFavorite(_ g: InstalledGame, _ on: Bool) { LibraryOrganizer.setFavorite(g, on); reorganize() }
+    func setCategory(_ g: InstalledGame, _ name: String?) { LibraryOrganizer.setCategory(g, name); reorganize() }
+    func finishCategoryPrompt(_ text: String) {
+        guard let prompt = categoryPrompt else { return }
+        categoryPrompt = nil
+        do {
+            if let old = prompt.renaming { try LibraryOrganizer.renameCategory(old, to: text) }
+            else {
+                let name = try LibraryOrganizer.addCategory(text)
+                if let g = prompt.game { LibraryOrganizer.setCategory(g, name) }
+            }
+            reorganize()
+        } catch { fail(error) }
+    }
+    func removeCategory(_ name: String) { LibraryOrganizer.removeCategory(name); reorganize() }
+    func moveCategory(_ name: String, by offset: Int) { LibraryOrganizer.moveCategory(name, by: offset); reorganize() }
+    func sectionExpanded(_ id: String) -> Binding<Bool> {
+        Binding(get: { !self.collapsedSections.contains(id) }, set: { open in
+            if open { self.collapsedSections.remove(id) } else { self.collapsedSections.insert(id) }
+            LibraryOrganizer.setCollapsed(id, !open)
+        })
+    }
+    /// Everything running through Nokcandu right now, launchers first.
+    var runningApps: [InstalledGame] {
+        games.filter(isRunning).sorted { a, b in
+            let (x, y) = (LibraryOrganizer.isLauncher(a), LibraryOrganizer.isLauncher(b))
+            return x != y ? x : a.name.localizedStandardCompare(b.name) == .orderedAscending
+        }
+    }
     func moveGames(from: IndexSet, to: Int) {
         var list = sortedGames
         list.move(fromOffsets: from, toOffset: to)

@@ -81,26 +81,8 @@ struct GameCommands: View {
         }
         Divider()
         Button("Change Several Games…") { model.showSeveralGames = true }
-        Button("Search Games") { model.focusSearch = true }
+        Button("Search Games") { model.sidebarTab = .games; model.focusSearch = true }
             .keyboardShortcut("f", modifiers: .command)
-    }
-}
-
-/// Puts the cursor in the sidebar's search field when asked (⌘F). macOS 15 and later.
-struct SearchFocusModifier: ViewModifier {
-    @Binding var request: Bool
-    func body(content: Content) -> some View {
-        if #available(macOS 15.0, *) { Focused(content: content, request: $request) } else { content }
-    }
-    @available(macOS 15.0, *)
-    struct Focused<C: View>: View {
-        let content: C
-        @Binding var request: Bool
-        @FocusState private var focused: Bool
-        var body: some View {
-            content.searchFocused($focused)
-                .onChange(of: request) { if request { focused = true; request = false } }
-        }
     }
 }
 

@@ -52,8 +52,24 @@ typedef struct pe_engine pe_engine;
 /// NULL when the text isn't a profile. Unknown words are skipped, so older engines read newer profiles.
 pe_engine *pe_create(const char *profile_text, pe_sink sink);
 void pe_destroy(pe_engine *e);
+/// Applies binding-only edits in place, preserving unaffected holds. Returns false
+/// for other settings or unsupported pulse/simultaneous/macro/toggle transitions;
+/// equivalent text is a no-op. Caller must use safe full replacement on false.
+bool pe_update_bindings(pe_engine *e, const char *profile_text);
+/// Binding edits or compatible stick/gyro tuning, preserving unrelated runtime state.
+bool pe_update_profile(pe_engine *e, const char *profile_text);
+int pe_active_layer(const pe_engine *e);
+int pe_active_gyro(const pe_engine *e);
+/// Explicit Gyro off holds pause other motion sources independently of controller gyro output mode.
+bool pe_motion_paused(const pe_engine *e);
+/// Optional source touch gate. An explicit gyro-off hold still wins.
+void pe_gyro_touch(pe_engine *e, bool required, bool touched);
 /// Releases everything the engine is holding down (keys, mouse buttons, controller buttons) and centres the sticks.
 void pe_release_all(pe_engine *e, double now);
+/// Releases only actions owned by an additional device slot and neutralizes its axes.
+void pe_release_device(pe_engine *e, int slot, double now);
+/// Releases the primary controller group, preserving configured additional device slots.
+void pe_release_main(pe_engine *e, double now);
 
 void pe_button(pe_engine *e, int button, bool down, double now);     // SDL button numbers (0…20)
 #define PE_ALL_INPUTS (PE_INPUTS + PE_MAX_DEVICES * PE_DEV_INPUTS)
@@ -70,11 +86,17 @@ enum { PE_KEYBOARD_MENU = 255, PE_RUMBLE_MENU = 254 };   // sink.menu ids: the o
 /// The touchpad: finger 0 or 1 touching (or lifted), at x, y 0…1 (y down).
 void pe_touch(pe_engine *e, int finger, bool down, float x, float y, double now);
 bool pe_uses_touch(const pe_engine *e);
+/// Native touch event visibility in the intercepted Wine SDL path only.
+bool pe_touch_passthrough(const pe_engine *e);
 /// The accelerometer (any unit; only its direction counts), the gyro's axes: x right, y up out of the face, z towards you.
 void pe_accel(pe_engine *e, float x, float y, float z, double now);
 bool pe_uses_tilt(const pe_engine *e);
 /// Measures the gyro's resting drift now (2 seconds; put the controller down or hold it still).
 void pe_calibrate(pe_engine *e, double now);
+bool pe_calibration_is_manual(const pe_engine *e);
+/* Relative pointer motion, y down. Returns true only while a pointer-picked
+ * radial menu consumes it; never posts OS events. Zero motion keeps selection. */
+bool pe_menu_mouse(pe_engine *e, double dx, double dy);
 
 // MARK: Extra devices (joysticks, throttles, pedals, wheels, button boxes, a second controller)
 // A profile can combine up to PE_MAX_DEVICES more devices (slots 1…4) with the controller. Their buttons, hat and

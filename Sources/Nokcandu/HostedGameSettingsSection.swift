@@ -14,14 +14,14 @@ struct HostedGameSettingsSection: View {
                     Picker("Graphics", selection: $settings.graphics) {
                         Text("Same as launcher").tag(GraphicsPreset?.none)
                         ForEach(GraphicsPreset.allCases) { Text($0.title).tag(Optional($0)) }
-                    }.labelsHidden().frame(width: settingControlWidth)
+                    }.labelsHidden().settingControl()
                 }
                 SettingNote((settings.graphics ?? HostedSettings.graphics(game)).detail)
                 if game.hosted?.launcher == .ea {
                     SettingRow(title: "Window style") {
                         Picker("Window style", selection: Binding(get: { !styleEdited && CompatibilityFixes.isEnabled(.borderless, for: game) ? (settings.macFullScreen == true ? .fullScreen : .borderless) : GameWindowStyle.current(settings) }, set: { styleEdited = true; GameWindowStyle.set($0, in: &settings) })) {
                             ForEach(GameWindowStyle.allCases) { Text($0.title).tag($0) }
-                        }.labelsHidden().frame(width: settingControlWidth)
+                        }.labelsHidden().settingControl()
                     }
                     SettingNote("For either fullscreen style, select Windowed in the game first. Fullscreen also opens the resizable window in Mac full screen.")
                 }

@@ -144,6 +144,9 @@ final class DeviceFeed {
     /// Something on a device was pressed or moved (device id, input key: "b3", "hu", "a2p"…), for picking it by pressing.
     var onInput: ((String, String, Bool) -> Void)?
     var onAxis: ((String, Int, Double) -> Void)?
+    var onDisconnect: ((String) -> Void)?
+    private var connections = PadDeviceConnections()
+    private var connectedIDs: [Int: String] = [:]
     var paused = false
     private var lastButtons: [String: Bool] = [:], lastAxes: [String: Int] = [:]
 
@@ -156,7 +159,33 @@ final class DeviceFeed {
             token = HIDDevices.shared.listen { [weak self] info, ev in self?.hid(info, ev) }
         } else if devices.isEmpty && !always, let t = token { HIDDevices.shared.stopListening(t); token = nil }
     }
-    func stop() { HIDDevices.shared.stopListening(token); token = nil }
+    func stop() {
+        for slot in connections.update([:]) {
+            if let e = engine() { pe_release_device(e, Int32(slot), DesktopPad.now()) }
+            if let id = connectedIDs[slot] { onDisconnect?(id) }
+        }
+        connectedIDs = [:]
+        HIDDevices.shared.stopListening(token); token = nil
+    }
+    func reconcile() {
+        var sources: [Int: String] = [:], ids: [Int: String] = [:]
+        for (c, slot, d) in gamepadSlots() {
+            sources[Int(slot)] = "gc:" + String(describing: ObjectIdentifier(c)); ids[Int(slot)] = d.id
+        }
+        for (i, d) in devices.enumerated() where !d.isGamepad {
+            if let info = HIDDevices.shared.connected.first(where: { $0.matches(d) }) {
+                sources[i + 1] = "hid:\(info.id)"; ids[i + 1] = d.id
+            }
+        }
+        for slot in connections.update(sources) {
+            if let e = engine() { pe_release_device(e, Int32(slot), DesktopPad.now()) }
+            if let id = connectedIDs[slot] { onDisconnect?(id) }
+            let prefix = "\(slot)."
+            lastButtons = lastButtons.filter { !$0.key.hasPrefix(prefix) }
+            lastAxes = lastAxes.filter { !$0.key.hasPrefix(prefix) }
+        }
+        connectedIDs = ids
+    }
 
     private func slot(of info: HIDDevices.Info) -> (Int32, PadProfiles.Device)? {
         devices.enumerated().first { !$0.element.isGamepad && info.matches($0.element) }.map { (Int32($0.offset + 1), $0.element) }
@@ -193,7 +222,14 @@ final class DeviceFeed {
         let taken = Set(gamepadSlots().map { ObjectIdentifier($0.0) })
         return GCController.controllers().filter { $0.extendedGamepad != nil && !taken.contains(ObjectIdentifier($0)) }
     }
+    func sampleGamepads() {
+        reconcile()
+        for (c, slot, d) in gamepadSlots() {
+            if let pad = c.extendedGamepad { read(pad, slot: slot, id: d.id) }
+        }
+    }
     func attachGamepads() {
+        reconcile()
         for (c, slot, d) in gamepadSlots() {
             c.motion?.valueChangedHandler = nil
             c.extendedGamepad?.valueChangedHandler = { [weak self] pad, _ in MainActor.assumeIsolated { self?.read(pad, slot: slot, id: d.id) } }

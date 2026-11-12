@@ -59,6 +59,7 @@ for p in "$PATCHES"/*.patch; do
     (cd "$SRC/wine-$WINE_VERSION" && patch -p1 --quiet < "$p") || { echo "PATCH FAILED: $(basename "$p") on Wine $WINE_VERSION"; exit 2; }
 done
 
+cp "$ROOT/Engine/winemac/controller-mouse-button.h" "$SRC/wine-$WINE_VERSION/dlls/winemac.drv/"
 mkdir -p "$OBJ"; cd "$OBJ"
 if [ ! -f Makefile ]; then
     arch -x86_64 ../$SRC/wine-$WINE_VERSION/configure --enable-archs=i386,x86_64 --with-mingw="$WORK/$LLVM_MINGW/bin/clang" \

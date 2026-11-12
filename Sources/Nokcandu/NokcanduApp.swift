@@ -6,6 +6,7 @@ import NokcanduCore
 struct NokcanduApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var model = AppModel()
+    @Environment(\.openWindow) private var openWindow
     @AppStorage(MenuBarSetting.key) private var menuBarMenu = true
     init() { ListCache.installImageCache() }      // store artwork loads once, not on every visit
 
@@ -33,10 +34,12 @@ struct NokcanduApp: App {
                 GameCommands(model: model)
             }
             CommandGroup(after: .help) {
+                Button("Controller Input Test…") { openWindow(id: "pad-input-test") }
                 Button("What's New in Nokcandu") { model.showWhatsNew = true }
                 Button("Report a Problem…") { model.showReport = true }
             }
         }
+        Window("Controller Input Test", id: "pad-input-test") { PadInputTest() }
         Settings {
             SettingsView().environmentObject(model)
         }
@@ -70,7 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
     /// With the menu bar menu on, Nokcandu keeps running after its window closes (the menu brings it back).
-    func applicationWillTerminate(_ notification: Notification) { MainActor.assumeIsolated { MacGameKeys.shared.stop() } }
+    func applicationWillTerminate(_ notification: Notification) { MainActor.assumeIsolated { PadProfileEdits.shared.flushAll(); MacGameKeys.shared.stop(); DesktopPad.shared.stop() } }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !MenuBarSetting.on }
 }
 
@@ -78,6 +81,12 @@ struct LibraryView: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
+    @State private var categoryName = ""
+
+    func expanded(_ id: String) -> Binding<Bool> {
+        // Searching shows matches even inside a collapsed section.
+        filtering ? .constant(true) : model.sectionExpanded(id)
+    }
 
     func showSettings(_ tab: String) {
         UserDefaults.standard.set(tab, forKey: "settingsTab")
@@ -91,7 +100,21 @@ struct LibraryView: View {
                     ForEach(model.favoriteGames.filter(model.matchesLibrary)) { g in row(g) }
                 }
             }
-            Section {
+            ForEach(model.libraryCategories) { c in
+                // While searching or filtering, a category with nothing to show steps aside.
+                if !filtering || c.games.contains(where: model.matchesLibrary) {
+                    Section(isExpanded: expanded("category:" + c.name)) {
+                        ForEach(c.games.filter(model.matchesLibrary)) { g in row(g) }
+                        if c.games.isEmpty {
+                            Text("Right-click anything in the library to put it here.")
+                                .font(.caption).foregroundStyle(.secondary).selectionDisabled()
+                        }
+                    } header: {
+                        Text(c.name).contextMenu { CategoryMenu(name: c.name) }
+                    }
+                }
+            }
+            Section(isExpanded: expanded("games")) {
                 ForEach(model.sortedGames.filter(model.matchesLibrary)) { g in row(g) }
                     .onMove { model.moveGames(from: $0, to: $1) }
                     .moveDisabled(filtering)
@@ -115,8 +138,10 @@ struct LibraryView: View {
                 }
             }
             if !model.launcherApps.filter(model.matchesLibrary).isEmpty {
-                Section("Launchers") {
+                Section(isExpanded: expanded("launchers")) {
                     ForEach(model.launcherApps.filter(model.matchesLibrary)) { g in row(g) }
+                } header: {
+                    Text("Launchers")
                 }
             }
         }
@@ -128,8 +153,6 @@ struct LibraryView: View {
             guard let id = ids.first, let g = model.games.first(where: { $0.id == id }) else { return }
             if !model.isRunning(g) || g.isSteamHost { model.play(g) }
         }
-        .searchable(text: $model.librarySearch, placement: .sidebar, prompt: "Search games")
-        .modifier(SearchFocusModifier(request: $model.focusSearch))
         .modifier(SoftTopEdge())
         .overlay {
             if filtering && model.games.allSatisfy({ !model.matchesLibrary($0) }) {
@@ -139,7 +162,7 @@ struct LibraryView: View {
                                        description: Text("Install a game or set up Steam with the buttons below. Game apps live in \(NokPaths.gameAppsFolder.path.replacingOccurrences(of: NokPaths.home.path, with: "~"))."))
             }
         }
-        .safeAreaInset(edge: .bottom) {
+        .modifier(SidebarFooter {
             VStack(alignment: .leading, spacing: 8) {
                 Button { model.openStores() } label: {
                     Label("Game Stores…", systemImage: "bag")
@@ -156,21 +179,32 @@ struct LibraryView: View {
             .labelStyle(AlignedIconLabelStyle())
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
-        }
+        })
     }
 
     var body: some View {
         NavigationSplitView {
-            Group {
-                if model.sidebarTab == .profiles { ProfilesSidebar() } else { gamesList }
-            }
-            .safeAreaInset(edge: .top) {
-                Picker("Show", selection: $model.sidebarTab) {
-                    Text("Games").tag(AppModel.SidebarTab.games)
-                    Text("Profiles").tag(AppModel.SidebarTab.profiles)
+            VStack(spacing: 0) {
+                VStack(spacing: 8) {
+                    Picker("Show", selection: $model.sidebarTab) {
+                        Text("Games").tag(AppModel.SidebarTab.games)
+                        Text("Controls").tag(AppModel.SidebarTab.profiles)
+                        Text("Streams").tag(AppModel.SidebarTab.streams)
+                    }
+                    .pickerStyle(.segmented).labelsHidden()
+                    if model.sidebarTab == .games {
+                        SidebarGameSearch(query: $model.librarySearch, focusRequest: $model.focusSearch)
+                    }
                 }
-                .pickerStyle(.segmented).labelsHidden()
                 .padding(.horizontal, 10).padding(.vertical, 6)
+                Group {
+                    switch model.sidebarTab {
+                    case .profiles: ProfilesSidebar()
+                    case .streams: StreamsSidebar()
+                    case .games: gamesList
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
             }
             .navigationSplitViewColumnWidth(min: 236, ideal: 260)
             .toolbar {
@@ -187,6 +221,8 @@ struct LibraryView: View {
                         }
                         .pickerStyle(.inline)
                         Text("Drag games to put them in your own order.")
+                        Divider()
+                        Button("New Category…") { model.categoryPrompt = .init(renaming: nil, game: nil) }
                     } label: {
                         Image(systemName: model.libraryFilter == .all ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
                     }
@@ -208,6 +244,8 @@ struct LibraryView: View {
         } detail: {
             if model.sidebarTab == .profiles {
                 ProfilesTabDetail()
+            } else if model.sidebarTab == .streams {
+                StreamsComingSoon()
             } else if let g = model.selectedGame {
                 GameDetailView(game: g).id(g.id)
             } else {
@@ -215,10 +253,21 @@ struct LibraryView: View {
             }
         }
         .toolbar {
+            ToolbarItem(placement: .principal) { RunningStrip() }
             ToolbarItem {
                 Button { model.refresh() } label: { Label("Refresh", systemImage: "arrow.clockwise") }
             }
         }
+        .alert(model.categoryPrompt?.renaming == nil ? "New Category" : "Rename Category",
+               isPresented: Binding(get: { model.categoryPrompt != nil }, set: { if !$0 { model.categoryPrompt = nil } })) {
+            TextField("Name", text: $categoryName)
+            Button(model.categoryPrompt?.renaming == nil ? "Add" : "Rename") { model.finishCategoryPrompt(categoryName) }
+                .disabled(categoryName.trimmingCharacters(in: .whitespaces).isEmpty)
+            Button("Cancel", role: .cancel) { model.categoryPrompt = nil }
+        } message: {
+            Text("A category is a section of your own in the sidebar, for games, launchers or anything else you installed.")
+        }
+        .onChange(of: model.categoryPrompt != nil) { _, open in if open { categoryName = model.categoryPrompt?.renaming ?? "" } }
         .onChange(of: model.showInstaller) {
             if model.showInstaller { openWindow(id: "installer"); model.showInstaller = false }
         }
@@ -280,6 +329,15 @@ struct GameContextMenu: View {
             let fav = model.favoriteGames.contains(game)
             Button(fav ? "Remove from Favorites" : "Add to Favorites") { model.setFavorite(game, !fav) }
         }
+        let current = model.libraryCategories.first { $0.games.contains(game) }?.name
+        Menu("Category") {
+            Toggle("None", isOn: Binding(get: { current == nil }, set: { if $0 { model.setCategory(game, nil) } }))
+            ForEach(model.libraryCategories) { c in
+                Toggle(c.name, isOn: Binding(get: { current == c.name }, set: { model.setCategory(game, $0 ? c.name : nil) }))
+            }
+            Divider()
+            Button("New Category…") { model.categoryPrompt = .init(renaming: nil, game: game) }
+        }
         Button("Rename…") { model.renaming = game }
         Button("Show in Finder") { model.reveal(game.appURL) }
         if game.native == nil {
@@ -296,13 +354,19 @@ struct GameRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(nsImage: game.icon).resizable().frame(width: 32, height: 32)
+                .overlay(alignment: .bottomTrailing) { if running { RunningDot(size: 10).offset(x: 2, y: 2) } }
             VStack(alignment: .leading, spacing: 2) {
-                Text(game.name).font(.headline)
-                Text(subtitle).font(.caption).foregroundStyle(model.missingDrive[game.id] != nil ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                Text(game.name).font(.headline).lineLimit(1)
+                Text(subtitle).font(.caption).lineLimit(1)
+                    .foregroundStyle(running ? AnyShapeStyle(.green) : model.missingDrive[game.id] != nil ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
             }
         }
         .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(running ? "Running" : "")
     }
+
+    var running: Bool { if case .launcherRunning = state { return true }; return false }
 
     var subtitle: String {
         if case .launcherRunning = state { return "Running" }
@@ -507,5 +571,91 @@ struct LibrarySheets: ViewModifier {
             .sheet(isPresented: $model.showProfiles) {
                 ProfilesView(focusNumber: model.profileFocus).environmentObject(model)
             }
+    }
+}
+
+
+/// The green mark for something running through Nokcandu, ringed so it reads on any icon.
+struct RunningDot: View {
+    var size: CGFloat = 8
+    var body: some View {
+        Circle().fill(.green).frame(width: size, height: size)
+            .overlay(Circle().stroke(Color(nsColor: .windowBackgroundColor), lineWidth: 2))
+    }
+}
+
+/// Beside the window title, on every tab: what is running through Nokcandu right now. Click one to go to it.
+struct RunningStrip: View {
+    @EnvironmentObject var model: AppModel
+    private let limit = 6
+
+    var body: some View {
+        let running = model.runningApps
+        if !running.isEmpty {
+            HStack(spacing: 6) {
+                Text("Running").font(.caption).foregroundStyle(.secondary)
+                ForEach(running.prefix(limit)) { g in
+                    Button { show(g) } label: {
+                        Image(nsImage: g.icon).resizable().frame(width: 22, height: 22)
+                            .overlay(alignment: .bottomTrailing) { RunningDot(size: 7).offset(x: 2, y: 2) }
+                    }
+                    .buttonStyle(.plain)
+                    .help("\(g.name) is running")
+                    .accessibilityLabel("\(g.name), running")
+                    .contextMenu {
+                        Button("Show in Library") { show(g) }
+                        if g.isSteamHost { Button("Show Steam") { model.play(g) } }
+                        Button("Quit…") { model.requestQuit(g) }
+                    }
+                }
+                if running.count > limit {
+                    Menu("+\(running.count - limit)") {
+                        ForEach(running.dropFirst(limit)) { g in Button(g.name) { show(g) } }
+                    }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                }
+            }
+            .padding(.horizontal, 8)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Running now")
+        }
+    }
+
+    func show(_ g: InstalledGame) {
+        model.sidebarTab = .games
+        if !model.matchesLibrary(g) { model.librarySearch = ""; model.libraryFilter = .all }
+        model.selection = g.id
+    }
+}
+
+/// A category's own menu (right-click its title in the sidebar).
+struct CategoryMenu: View {
+    @EnvironmentObject var model: AppModel
+    let name: String
+    var body: some View {
+        let names = model.libraryCategories.map(\.name)
+        Button("Rename…") { model.categoryPrompt = .init(renaming: name, game: nil) }
+        Button("Move Up") { model.moveCategory(name, by: -1) }.disabled(names.first == name)
+        Button("Move Down") { model.moveCategory(name, by: 1) }.disabled(names.last == name)
+        Divider()
+        Button("Remove Category", role: .destructive) { model.removeCategory(name) }
+    }
+}
+
+/// The Streams tab, reserved for what comes after the current features are polished.
+struct StreamsSidebar: View {
+    var body: some View {
+        VStack(spacing: 6) {
+            Spacer()
+            Image(systemName: "dot.radiowaves.left.and.right").font(.title).foregroundStyle(.secondary)
+            Text("Coming soon…").foregroundStyle(.secondary)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+struct StreamsComingSoon: View {
+    var body: some View {
+        ContentUnavailableView("Streams", systemImage: "dot.radiowaves.left.and.right", description: Text("Coming soon…"))
     }
 }

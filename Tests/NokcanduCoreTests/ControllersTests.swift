@@ -39,10 +39,20 @@ final class ControllersTests: XCTestCase {
 
     func testDescriptionsSayWhatWindowsSees() {
         let pro = Controllers.Connected(name: "Pro Controller", vendorID: 0x057E, productID: 0x2009, location: 1, bluetooth: true, isGamepad: true)
-        XCTAssertEqual(Controllers.describe(pro, mode: .automatic, steam: false), "As an Xbox controller (gyro isn't passed on this way).")
-        XCTAssertTrue(Controllers.describe(pro, mode: .automatic, steam: true).hasPrefix("As itself, with gyro. Steam Input"))
+        XCTAssertEqual(Controllers.describe(pro, mode: .automatic, steam: false), "Requested: as an Xbox controller (gyro isn't passed on this way).")
+        XCTAssertTrue(Controllers.describe(pro, mode: .automatic, steam: true).hasPrefix("Requested: as itself. Steam Input"))
         let steamController = Controllers.Connected(name: "Steam Controller", vendorID: 0x28DE, productID: 0x1142, location: 2, bluetooth: false, isGamepad: false)
-        XCTAssertTrue(Controllers.describe(steamController, mode: .native, steam: true).hasPrefix("Not seen by Windows programs yet"))
+        XCTAssertTrue(Controllers.describe(steamController, mode: .native, steam: true).hasPrefix("Wireless receiver detected"))
+        XCTAssertEqual(steamController.displayName, "Steam Controller receiver")
+        XCTAssertFalse(steamController.hasMotion, "Receiver inventory is not controller motion capability")
+        XCTAssertTrue(steamController.isSteamControllerReceiver)
+        var wired = steamController; wired.productID = 0x1102
+        XCTAssertFalse(wired.isSteamControllerReceiver)
+        XCTAssertEqual(wired.displayName, "Steam Controller (2015 · USB)")
+        var other = steamController; other.vendorID = 0x1234
+        XCTAssertFalse(other.isSteamControllerReceiver)
+        var bluetooth = steamController; bluetooth.bluetooth = true
+        XCTAssertFalse(bluetooth.isSteamControllerReceiver)
         XCTAssertEqual(pro.ids, "057E:2009")
     }
 }
@@ -90,7 +100,7 @@ final class ControllerKindTests: XCTestCase {
         let pedals = Controllers.Connected(name: "Pedals", vendorID: 0x1234, productID: 1, location: 3, bluetooth: false, isGamepad: false, usagePage: 2, usage: 0xBB)
         XCTAssertTrue(Controllers.describe(pedals, mode: .automatic, steam: false).hasPrefix("Not seen by Windows programs yet"))
         let wheel = Controllers.Connected(name: "G29", vendorID: 0x046D, productID: 0xC24F, location: 4, bluetooth: false, isGamepad: true, usagePage: 1, usage: 4)
-        XCTAssertEqual(Controllers.describe(wheel, mode: .xbox, steam: false), "As itself: its own axes and buttons, for games with wheel support.")
+        XCTAssertEqual(Controllers.describe(wheel, mode: .xbox, steam: false), "Requested: its own axes and buttons, for games with wheel support. Verify detection in Test Controllers.")
     }
 }
 

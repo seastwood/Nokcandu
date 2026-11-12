@@ -32,7 +32,7 @@ final class RadialHUD {
     private var name = ""
 
     func open(_ menu: PadProfiles.RadialMenu) {
-        titles = menu.slices.map(\.title); name = menu.name
+        titles = menu.slices.map { $0.displayTitle() }; name = menu.name
         update(-1)
     }
     func update(_ selected: Int) {

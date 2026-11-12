@@ -14,6 +14,7 @@ struct ControllerProfileEditor: View {
     let onChange: (PadProfiles.Profile) -> Void
     /// Shown inside the Profiles tab (no Done button; stacks when narrow).
     var embedded = false
+    let editingContents: URL?
 
     @State var layerIndex = 0
     @State var selection: Part = .input(.a)
@@ -27,17 +28,18 @@ struct ControllerProfileEditor: View {
     @State private var newLayerName = ""
     @State private var addingLayer = false
     @State private var renamingLayer = false
+    @State private var layerImportError: String?
 
-    static let labelsKey = "padEditorLabels"
     enum Part: Hashable {
         case input(PadProfiles.Input), stick(Int), gyro, triggers, deviceInput(String, String), deviceAxis(String, Int)
-        case touchpad, tilt, macros, sequences, menus, feedback
+        case touchpad, tilt, macros, sequences, menus, feedback, headMotion
     }
     /// The device shown on the left instead of the controller (nil: the controller).
     @State private var shownDevice: String?
 
-    init(profile: PadProfiles.Profile, own: Bool, gameName: String, all: [PadProfiles.Profile], embedded: Bool = false, onChange: @escaping (PadProfiles.Profile) -> Void) {
+    init(profile: PadProfiles.Profile, own: Bool, gameName: String, all: [PadProfiles.Profile], embedded: Bool = false, editingContents: URL? = nil, onChange: @escaping (PadProfiles.Profile) -> Void) {
         _profile = State(initialValue: profile)
+        self.editingContents = editingContents
         self.own = own; self.gameName = gameName; self.all = all; self.onChange = onChange; self.embedded = embedded
     }
 
@@ -56,11 +58,103 @@ struct ControllerProfileEditor: View {
         return profile.layers[0][i] ?? m.layers.first?.bindings[i]
     }
 
+    var inputSource: PadProfiles.ControllerSource { PadProfiles.top(profile, all: everything, \.controllerSource) ?? .automatic }
+
+    var effectiveRouting: PadProfiles.RoutingMode { PadProfiles.top(profile, all: everything, \.routingMode) ?? .legacy }
+
+    var selectedControlRoutes: [String] {
+        switch selection {
+        case .stick(let n): return [n == 0 ? "lstick" : "rstick"]
+        case .gyro: return ["gyro"]
+        case .touchpad: return ["touch"]
+        case .tilt: return ["tilt"]
+        case .triggers: return ["lt", "rt"]
+        case .input(let input) where input.isTrigger: return [input == .lt || input == .ltfull ? "lt" : "rt"]
+        default: return []
+        }
+    }
+
+    static let routeTitles = ["lstick": "Left stick", "rstick": "Right stick", "gyro": "Gyro", "touch": "Touchpad", "tilt": "Tilt", "lt": "Left trigger", "rt": "Right trigger"]
+
+    /// One row above the picture: its name (with the explanation behind an (i)), then its menu, which
+    /// shortens its own text rather than pushing the row wider than the pane.
+    func sourceRow<Control: View>(_ title: String, info: String? = nil, @ViewBuilder control: () -> Control) -> some View {
+        HStack(spacing: 6) {
+            Text(title).lineLimit(1).fixedSize()
+            if let info { InfoButton(info) }
+            Spacer(minLength: 4)
+            control().labelsHidden().frame(maxWidth: 260, alignment: .trailing)
+        }
+    }
+
+    /// The picture, layers and live test in their own scrolling pane.
+    func picturePane(width: CGFloat) -> some View {
+        ScrollView {
+            // The inset keeps content clear of the pane's rounded edge and of its scroll bar.
+            left(max(240, width - 36)).padding(.leading, 14).padding(.trailing, 22).padding(.vertical, 12)
+        }
+        .scrollIndicators(.visible)
+        .scrollIndicatorsFlash(onAppear: true)
+        .frame(width: width)
+        .background(.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(.secondary.opacity(0.16), lineWidth: 1))
+    }
+
     func left(_ width: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 10) {
+            sourceRow("Input controller", info: inputSource == .steamUSB
+                      ? "Experimental USB cable / wireless receiver source for the 2015 Steam Controller. One active controller is selected automatically; plug the cable in before selecting the source to prefer USB.\n\nWhile this source is being read, Nokcandu turns off the controller’s built-in desktop mouse and keyboard controls and turns on motion reporting. Its original mode is restored on normal release; another app’s changed mode is preserved. Wireless recovery checks the remote controller’s identity before restoring its mode, even after reconnecting.\n\nClick either trackpad to choose its behavior independently: existing mappings, trackpad mouse or trackball mouse. Grips and pad clicks can be mapped separately.\n\nThe controller’s built-in button actions (a trigger as a mouse click, A as Return and so on) are switched off too, so only what this profile maps reaches the Mac or the game; they return when Nokcandu releases the controller. No pairing or firmware change is performed."
+                      : "Automatic uses the controllers macOS recognizes. Choose Steam Controller for the original 2015 controller on its cable or wireless receiver.") {
+                Picker("Input controller", selection: Binding(get: { inputSource }, set: { profile.controllerSource = $0 })) {
+                    Text("Automatic (macOS controllers)").tag(PadProfiles.ControllerSource.automatic)
+                    Text("Steam Controller (2015 · USB / receiver)").tag(PadProfiles.ControllerSource.steamUSB)
+                }
+            }
+            sourceRow("Routing", info: "Native devices remain visible on macOS. Button suppression applies only through Nokcandu’s Wine mapping path. Select a stick, trigger or gyro to route it individually. Hybrid buttons can cause duplicate actions. Wine profiles use the existing Xbox-style controller path; Native input values does not promise the original device identity.") {
+                Picker("Routing", selection: Binding(get: { effectiveRouting }, set: { profile.routingMode = $0 })) {
+                    Text("Existing behavior").tag(PadProfiles.RoutingMode.legacy)
+                    Text("Native input values").tag(PadProfiles.RoutingMode.native)
+                    Text("Hybrid primary inputs").tag(PadProfiles.RoutingMode.hybridAll)
+                    Text("Mapped primary inputs only").tag(PadProfiles.RoutingMode.remappingAll)
+                    Text("Hybrid buttons").tag(PadProfiles.RoutingMode.hybrid)
+                    Text("Mapped buttons only").tag(PadProfiles.RoutingMode.remapping)
+                    Text("Selective inputs").tag(PadProfiles.RoutingMode.selective)
+                }
+            }
+            if effectiveRouting == .selective, case .input(let input) = selection, PadProfiles.Input.padButtons.contains(input) {
+                sourceRow("\(input.title(family)) routing") {
+                    Picker("\(input.title(family)) routing", selection: Binding(get: { profile.buttonRoutes?[input.rawValue] ?? .mapped }, set: { route in
+                        if profile.buttonRoutes == nil { profile.buttonRoutes = [:] }; profile.buttonRoutes?[input.rawValue] = route
+                    })) {
+                        ForEach(PadProfiles.ButtonRoute.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
+                    }
+                }
+            }
+            if effectiveRouting == .selective {
+                ForEach(selectedControlRoutes, id: \.self) { control in
+                    sourceRow(Self.routeTitles[control, default: control.capitalized] + " routing",
+                              info: "Native gyro and tilt delivery through Wine is unverified. Touch routing covers finger movement; touchpad clicks keep their button setting. Native routing leaves macOS device visibility unchanged; it does not create a gyro or virtual gamepad for the target.") {
+                        Picker(Self.routeTitles[control, default: control.capitalized] + " routing", selection: Binding(get: { profile.controlRoutes?[control] }, set: { route in
+                            if profile.controlRoutes == nil { profile.controlRoutes = [:] }; profile.controlRoutes?[control] = route
+                        })) {
+                            Text("Existing settings").tag(Optional<PadProfiles.ButtonRoute>.none)
+                            ForEach(PadProfiles.ButtonRoute.allCases, id: \.self) { Text($0.rawValue.capitalized).tag(Optional($0)) }
+                        }
+                    }
+                }
+            }
             layerBar
-            DeviceStrip(devices: devicesBinding, shown: $shownDevice, selection: $selection)
-            if let id = shownDevice, let i = devicesBinding.wrappedValue.firstIndex(where: { $0.id == id }) {
+            DeviceStrip(mainTitle: inputSource == .steamUSB ? "Steam Controller" : "Controller", devices: devicesBinding, hasHead: headSourceBinding, shown: $shownDevice, selection: $selection)
+            if selection == .headMotion {
+                VStack(spacing: 12) {
+                    Image(systemName: "airpodspro").font(.system(size: 68))
+                    Text("AirPods / Headphones").font(.headline)
+                    Text("Head motion → " + headSettingsBinding.wrappedValue.output.title).foregroundStyle(.secondary)
+                    Text("A separate input source in this profile. Compatible headphones are selected by macOS.")
+                        .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                }.frame(width: width, height: 230)
+            } else if let id = shownDevice, let i = devicesBinding.wrappedValue.firstIndex(where: { $0.id == id }) {
                 DevicePanel(device: devicesBinding[i], tester: tester, family: family, selection: $selection,
                             mapped: { k in let key = "dev.\(id).\(k)"; return profile.layers[layerIndex][key: key] != nil || inheritedDevice(key) != nil },
                             label: { k in let key = "dev.\(id).\(k)"; return shortLabel(profile.layers[layerIndex][key: key] ?? inheritedDevice(key)) },
@@ -76,10 +170,21 @@ struct ControllerProfileEditor: View {
             }
             PadTestView(tester: tester, family: family)
         }
-        .frame(width: width)
+        .frame(width: width, alignment: .leading)
     }
 
     // MARK: Devices
+
+    var headSourceBinding: Binding<Bool> {
+        Binding(get: { PadProfiles.headMotion(profile, all: everything)?.included == true }, set: { added in
+            profile.headMotion = PadHeadMotionSettings(included: added, enabled: added)
+            shownDevice = nil; selection = added ? .headMotion : .input(.a)
+        })
+    }
+    var headSettingsBinding: Binding<PadHeadMotionSettings> {
+        Binding(get: { PadProfiles.headMotion(profile, all: everything) ?? PadHeadMotionSettings() },
+                set: { profile.headMotion = $0 })
+    }
 
     /// The profile's devices (until it sets its own, the ones of the profile it builds on).
     var devicesBinding: Binding<[PadProfiles.Device]> {
@@ -173,11 +278,17 @@ struct ControllerProfileEditor: View {
             header
             // The picture shrinks to leave the settings their room.
             GeometryReader { geo in
-                HStack(alignment: .top, spacing: 16) {
-                    ScrollView { left(max(330, min(560, geo.size.width - 416))) }
-                        .scrollIndicators(.never)
-                        .frame(width: max(330, min(560, geo.size.width - 416)))
-                    Form { inspector }.formStyle(.grouped).frame(minWidth: 380, maxWidth: .infinity)
+                if geo.size.width >= 880 {
+                    HStack(alignment: .top, spacing: 16) {
+                        picturePane(width: min(560, geo.size.width - 416))
+                        Form { inspector }.formStyle(.grouped).frame(minWidth: 380, maxWidth: .infinity)
+                    }
+                } else {
+                    // Too narrow for both side by side at a usable size: the picture above its settings.
+                    VStack(spacing: 12) {
+                        picturePane(width: geo.size.width).frame(height: max(200, geo.size.height * 0.5))
+                        Form { inspector }.formStyle(.grouped)
+                    }
                 }
             }
             if !embedded {
@@ -190,17 +301,17 @@ struct ControllerProfileEditor: View {
             }
         }
         .padding(embedded ? 16 : 20)
-        .frame(minWidth: embedded ? 720 : 1020, minHeight: embedded ? 500 : 720)
+        .frame(minWidth: embedded ? 420 : 1020, minHeight: embedded ? 500 : 720)
         .onAppear {
-            // The labels you chose last time; until then, the connected controller's.
-            if let saved = UserDefaults.standard.string(forKey: Self.labelsKey + "." + PadGC.connectedName) {
-                family = saved == "xbox" ? nil : Controllers.Family(rawValue: saved)
-            } else {
-                family = PadGC.connectedFamily()
-            }
+            family = PadProfiles.controllerLabelFamily(profile, all: everything, connected: PadGC.connectedFamily())
+            tester.selectSource(inputSource)
+            tester.configureSteamPads(left: PadProfiles.steamTrackpad(0, profile: profile, all: everything), right: PadProfiles.steamTrackpad(1, profile: profile, all: everything))
             tester.start(profile: PadProfiles.compile(profile, all: everything), devices: PadProfiles.devices(profile, all: everything))
         }
-        .onDisappear { tester.stop() }
+        .onDisappear {
+            PadProfileEdits.shared.flush(PadProfileEdits.scope(profileID: profile.id, contents: own ? editingContents : nil))
+            tester.stop()
+        }
         .environment(\.padExtras, PadExtras(macros: PadProfiles.collected(profile, all: everything, \.macros).map { ($0.id, $0.name) },
                                               menus: PadProfiles.collected(profile, all: everything, \.menus).map { ($0.id, $0.name) }))
         .onChange(of: profile) { old, p in
@@ -211,43 +322,67 @@ struct ControllerProfileEditor: View {
                 lastUndoPush = t
             }
             undoing = false
-            onChange(p)
+            PadProfileEdits.shared.submit(p, contents: own ? editingContents : nil, persist: onChange)
+            tester.selectSource(inputSource)
+            tester.configureSteamPads(left: PadProfiles.steamTrackpad(0, profile: p, all: everything), right: PadProfiles.steamTrackpad(1, profile: p, all: everything))
+            family = PadProfiles.controllerLabelFamily(p, all: everything, connected: PadGC.connectedFamily())
             tester.reload(PadProfiles.compile(p, all: everything), devices: PadProfiles.devices(p, all: all.filter { $0.id != p.id } + [p]))
         }
-        .alert(renamingLayer ? "Rename Layer" : "New Layer", isPresented: Binding(get: { addingLayer || renamingLayer }, set: { if !$0 { addingLayer = false; renamingLayer = false } })) {
-            TextField("Name", text: $newLayerName)
-            Button(renamingLayer ? "Rename" : "Add") { finishLayer() }.disabled(newLayerName.trimmingCharacters(in: .whitespaces).isEmpty)
-            Button("Cancel", role: .cancel) { addingLayer = false; renamingLayer = false }
-        } message: {
-            Text(renamingLayer ? "Buttons that switch to it follow the new name." : "Then give a button “\(newLayerName.isEmpty ? "the layer" : newLayerName) while held” or “on/off” in the base layer to reach it.")
+        .sheet(isPresented: Binding(get: { addingLayer || renamingLayer }, set: { if !$0 { addingLayer = false; renamingLayer = false } })) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text(renamingLayer ? "Rename Layer" : "New Layer").font(.headline)
+                Text(renamingLayer ? "Buttons that switch to it follow the new name." : "Give a button this layer while held, or switch it on/off, in the base layer to reach it.")
+                    .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                LayerNameField(text: $newLayerName) { finishLayer() }
+                    .frame(height: 24)
+                HStack {
+                    Spacer()
+                    Button("Cancel", role: .cancel) { addingLayer = false; renamingLayer = false }
+                        .keyboardShortcut(.cancelAction)
+                    Button(renamingLayer ? "Rename" : "Add") { finishLayer() }
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(newLayerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .padding(24).frame(width: 400)
         }
     }
 
     // MARK: Header and layers
 
     var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            if own {
-                Text("\(gameName)'s Controller Profile").font(.title2.bold())
-            } else {
-                TextField("Name", text: $profile.name).textFieldStyle(.plain).font(.title2.bold()).frame(maxWidth: 320)
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) { headerTitle; Spacer(minLength: 0); headerControls }
+            VStack(alignment: .leading, spacing: 8) {
+                headerTitle
+                HStack(spacing: 12) { headerControls; Spacer(minLength: 0) }
             }
-            Spacer()
-            ControlGroup {
-                Button { guard let last = undoStack.popLast() else { return }; redoStack.append(profile); undoing = true; profile = last } label: { Image(systemName: "arrow.uturn.backward") }
-                    .disabled(undoStack.isEmpty).keyboardShortcut("z", modifiers: .command).help("Undo")
-                Button { guard let next = redoStack.popLast() else { return }; undoStack.append(profile); undoing = true; profile = next } label: { Image(systemName: "arrow.uturn.forward") }
-                    .disabled(redoStack.isEmpty).keyboardShortcut("z", modifiers: [.command, .shift]).help("Redo")
-            }
-            .fixedSize()
-            Picker("Labels", selection: Binding(get: { family }, set: { family = $0; UserDefaults.standard.set($0?.rawValue ?? "xbox", forKey: Self.labelsKey + "." + PadGC.connectedName) })) {
-                Text("Xbox").tag(Controllers.Family?.none)
-                Text("PlayStation").tag(Controllers.Family?.some(.playstation))
-                Text("Nintendo").tag(Controllers.Family?.some(.nintendo))
-                Text("Steam").tag(Controllers.Family?.some(.valve))
-            }.frame(width: 200).help("Button names as printed on your controller")
-            buildsOnMenu
         }
+    }
+
+    @ViewBuilder var headerTitle: some View {
+        if own {
+            Text("\(gameName)'s Controller Profile").font(.title2.bold()).lineLimit(1)
+        } else {
+            TextField("Name", text: $profile.name).textFieldStyle(.plain).font(.title2.bold()).frame(minWidth: 160, maxWidth: 320)
+        }
+    }
+
+    @ViewBuilder var headerControls: some View {
+        ControlGroup {
+            Button { guard let last = undoStack.popLast() else { return }; redoStack.append(profile); undoing = true; profile = last } label: { Image(systemName: "arrow.uturn.backward") }
+                .disabled(undoStack.isEmpty).keyboardShortcut("z", modifiers: .command).help("Undo")
+            Button { guard let next = redoStack.popLast() else { return }; undoStack.append(profile); undoing = true; profile = next } label: { Image(systemName: "arrow.uturn.forward") }
+                .disabled(redoStack.isEmpty).keyboardShortcut("z", modifiers: [.command, .shift]).help("Redo")
+        }
+        .fixedSize()
+        Picker("Labels", selection: Binding(get: { family }, set: { family = $0; profile.controllerLabels = $0?.rawValue ?? "xbox" })) {
+            Text("Xbox").tag(Controllers.Family?.none)
+            Text("PlayStation").tag(Controllers.Family?.some(.playstation))
+            Text("Nintendo").tag(Controllers.Family?.some(.nintendo))
+            Text("Steam").tag(Controllers.Family?.some(.valve))
+        }.fixedSize().help("Button names and diagram style for this profile only. Other profiles keep their own choice.")
+        buildsOnMenu
     }
 
     var buildsOnMenu: some View {
@@ -266,13 +401,33 @@ struct ControllerProfileEditor: View {
     }
 
     var layerBar: some View {
-        HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 8) {
             Picker("Layer", selection: $layerIndex) {
                 ForEach(profile.layers.indices, id: \.self) { i in Text(i == 0 ? "Base" : profile.layers[i].name).tag(i) }
             }
-            .pickerStyle(.segmented).frame(maxWidth: 320)
+            .pickerStyle(.segmented).frame(maxWidth: .infinity)
+            FlowRow(spacing: 8) {
             Button { newLayerName = ""; addingLayer = true } label: { Image(systemName: "plus") }
                 .help("Add a layer").disabled(profile.layers.count >= 8)
+            Menu("Import Layer") {
+                ForEach(all.filter { $0.id != profile.id }) { source in
+                    Menu(source.name) {
+                        ForEach(source.layers) { layer in
+                            Button(layer.name) {
+                                do {
+                                    profile = try PadProfiles.importingLayer(from: source, layerID: layer.id, into: profile, all: everything)
+                                    layerIndex = profile.layers.count - 1
+                                } catch { layerImportError = error.localizedDescription }
+                            }
+                        }
+                    }
+                }
+            }
+            .fixedSize().disabled(profile.layers.count >= 8 || all.allSatisfy { $0.id == profile.id })
+            .help("Copy another profile's layer settings and its macros and radial menus. Inherited base settings stay with their original profile.")
+            .alert("Couldn’t Import Layer", isPresented: Binding(get: { layerImportError != nil }, set: { if !$0 { layerImportError = nil } })) {
+                Button("OK", role: .cancel) { layerImportError = nil }
+            } message: { Text(layerImportError ?? "") }
             if layerIndex > 0 {
                 Menu {
                     Button("Rename…") { newLayerName = profile.layers[layerIndex].name; renamingLayer = true }
@@ -280,7 +435,6 @@ struct ControllerProfileEditor: View {
                 } label: { Image(systemName: "ellipsis.circle") }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
             }
-            Spacer()
             Menu("Quick Setup") {
                 Button(swapped(.a, .b) ? "Unswap A and B" : "Swap A and B") { swap(.a, .b) }
                 Button(swapped(.x, .y) ? "Unswap X and Y" : "Swap X and Y") { swap(.x, .y) }
@@ -289,6 +443,7 @@ struct ControllerProfileEditor: View {
             }
             .fixedSize()
             .help("Swapped buttons reach Windows games as each other (Nintendo-style A and B, for example).")
+            }
         }
     }
 
@@ -301,7 +456,9 @@ struct ControllerProfileEditor: View {
     }
 
     func finishLayer() {
-        let n = newLayerName.trimmingCharacters(in: .whitespaces)
+        // Default-button and text-field submission can share the same event.
+        guard addingLayer || renamingLayer else { return }
+        let n = newLayerName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !n.isEmpty else { return }
         if renamingLayer {
             let old = profile.layers[layerIndex].name
@@ -314,6 +471,9 @@ struct ControllerProfileEditor: View {
         addingLayer = false; renamingLayer = false
     }
     func renameLayerReferences(_ old: String, to new: String?) {
+        if var head = PadProfiles.headMotion(profile, all: everything), head.activationLayer.caseInsensitiveCompare(old) == .orderedSame {
+            head.activationLayer = new ?? ""; profile.headMotion = head
+        }
         func fix(_ o: [PadProfiles.Output]) -> [PadProfiles.Output] {
             o.compactMap { x in
                 switch x {
@@ -340,6 +500,10 @@ struct ControllerProfileEditor: View {
 
     /// What a stick does, short enough for the picture (nil: it's a stick, as it is).
     func stickLabel(_ s: Int) -> String? {
+        if inputSource == .steamUSB && s == 1 {
+            let mode = steamTrackpadBinding(1).wrappedValue.mode
+            if mode != .existing { return mode == .trackball ? "Trackball" : "Trackpad mouse" }
+        }
         let st = layerStick(s) ?? baseStick(s)
         switch st.mode {
         case .stick: return nil
@@ -364,9 +528,10 @@ struct ControllerProfileEditor: View {
     func shortLabel(_ i: PadProfiles.Input) -> String? { shortLabel(profile.layers[layerIndex][i] ?? inherited(i)) }
     func shortLabel(_ binding: PadProfiles.Binding?) -> String? {
         guard let b = binding else { return nil }
-        let first = b.press.first ?? b.tap.first ?? b.hold.first ?? b.togetherOutputs.first
+        let first = b.pressOutputs.first ?? b.tap.first ?? b.hold.first ?? b.togetherOutputs.first
         guard let o = first else { return nil }
         switch o {
+        case .keyToggle, .mouseToggle, .padToggle, .triggerToggle: return o.title(family)
         case .key(let k): return PadProfiles.keyTitle(k).replacingOccurrences(of: "Left ", with: "L").replacingOccurrences(of: "Right ", with: "R")
         case .mouse(let m): return m == .left ? "LMB" : m == .right ? "RMB" : m == .middle ? "MMB" : m == .back ? "M4" : "M5"
         case .pad(let p): return p.title(family)
@@ -399,6 +564,9 @@ struct ControllerProfileEditor: View {
         case .sequences: sequencesInspector
         case .menus: menusInspector
         case .feedback: feedbackInspector
+        case .headMotion:
+            PadHeadProfileSettings(settings: headSettingsBinding, profileID: profile.id, layers: merged.layers.map(\.name), family: family,
+                remove: { headSourceBinding.wrappedValue = false }, editStick: { selection = .stick($0) })
         }
     }
 
@@ -452,6 +620,10 @@ struct ControllerProfileEditor: View {
     }
 
     @ViewBuilder func stickInspector(_ s: Int) -> some View {
+        if inputSource == .steamUSB && s == 1 { steamTrackpadInspector(1) }
+        else { joystickInspector(s) }
+    }
+    @ViewBuilder func joystickInspector(_ s: Int) -> some View {
         let st = stickBinding(s)
         layerOwnToggle("Own stick settings in \(layerName)", has: layerStick(s) != nil) { on in
             let v: PadProfiles.Stick? = on ? baseStick(s) : nil
@@ -487,7 +659,7 @@ struct ControllerProfileEditor: View {
             default: EmptyView()
             }
         } header: {
-            InspectorTitle(title: s == 0 ? "Left Stick" : "Right Stick", subtitle: nil, symbol: s == 0 ? "l.joystick" : "r.joystick")
+            InspectorTitle(title: s == 0 ? "Left Stick" : inputSource == .steamUSB ? "Right Trackpad (as stick)" : "Right Stick", subtitle: nil, symbol: s == 0 ? "l.joystick" : "r.joystick")
         } footer: {
             if st.wrappedValue.mode == .flick {
                 Text("Push the stick to the edge to turn to face that way; rotate it around the edge to keep turning. Pairs well with gyro aim.").font(.caption).foregroundStyle(.secondary)
@@ -671,21 +843,23 @@ struct BindingEditor: View {
     var sameTitle = "Itself"
     @State private var more = false
 
-    enum Kind: String, CaseIterable { case same, press, taps }
+    enum Kind: String, CaseIterable { case same, press, toggle, taps }
     var kind: Kind {
         guard let b = binding, !(b.press.isEmpty && b.tap.isEmpty && b.hold.isEmpty && b.double.isEmpty) else { return .same }
-        return (!b.tap.isEmpty || !b.hold.isEmpty || !b.double.isEmpty) ? .taps : .press
+        if !b.tap.isEmpty || !b.hold.isEmpty || !b.double.isEmpty { return .taps }
+        return b.togglesOnPress ? .toggle : .press
     }
 
     var body: some View {
         Picker("Does", selection: Binding(get: { kind }, set: setKind)) {
-            Text(inLayer ? "As underneath" : sameTitle).tag(Kind.same)
-            Text("Something else").tag(Kind.press)
+            Text(inLayer ? "Inherited" : sameTitle).tag(Kind.same)
+            Text("While held").tag(Kind.press)
+            Text("Toggle").tag(Kind.toggle)
             Text("Tap / Hold").tag(Kind.taps)
         }
         .pickerStyle(.segmented)
         if kind == .same, let inherited {
-            LabeledContent(inLayer ? "From underneath" : "From the profile underneath") { Text(inherited).foregroundStyle(.secondary) }
+            LabeledContent(inLayer ? "Inherited action" : "Inherited from parent profile") { Text(inherited).foregroundStyle(.secondary) }
         }
         if let b = binding {
             switch kind {
@@ -695,6 +869,14 @@ struct BindingEditor: View {
                 if let t = b.turbo, t > 0 {
                     LabeledContent("Every") { Stepper("\(t) ms", value: Binding(get: { t }, set: { binding?.turbo = $0 }), in: 30...1000, step: 10) }
                 }
+            case .toggle:
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Press once to keep the selected output held. Press again to release it. Turning the profile off releases it too.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    OutputsEditor(title: "Toggle", outputs: field(\.press), family: family, layers: layers, toggled: true)
+                    Text("Keys and mouse buttons work on the Mac. Controller buttons and triggers are output through Nokcandu's Windows-game controller route.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }.accessibilityElement(children: .contain)
             case .taps:
                 OutputsEditor(title: "Tap", outputs: field(\.tap), family: family, layers: layers)
                 OutputsEditor(title: "Hold", outputs: field(\.hold), family: family, layers: layers)
@@ -724,7 +906,11 @@ struct BindingEditor: View {
     }
 
     func field(_ k: WritableKeyPath<PadProfiles.Binding, [PadProfiles.Output]>) -> Binding<[PadProfiles.Output]> {
-        Binding(get: { binding?[keyPath: k] ?? [] }, set: { v in var b = binding ?? PadProfiles.Binding(); b[keyPath: k] = v; binding = b })
+        Binding(get: { binding?[keyPath: k] ?? [] }, set: { v in
+            var b = binding ?? PadProfiles.Binding()
+            b[keyPath: k] = k == \.press && b.togglePress == true ? v.compactMap(\.toggledOutput) : v
+            binding = b
+        })
     }
 
     func setKind(_ k: Kind) {
@@ -732,13 +918,23 @@ struct BindingEditor: View {
         case .same:
             if let t = binding?.together, let o = binding?.togetherOutputs, !o.isEmpty { binding = PadProfiles.Binding(together: t, togetherOutputs: o) }
             else { binding = nil }
+        case .toggle:
+            var b = binding ?? PadProfiles.Binding()
+            let source = b.press.isEmpty ? b.tap : b.press
+            b.press = source.compactMap(\.toggledOutput)
+            if b.press.isEmpty { b.press = [.nothing] }
+            b.togglePress = true; b.turbo = nil
+            b.tap = []; b.hold = []; b.double = []
+            binding = b
         case .press:
             var b = binding ?? PadProfiles.Binding()
+            b.togglePress = nil; b.press = b.press.map(\.heldOutput)
             if b.press.isEmpty { b.press = b.tap.isEmpty ? [.nothing] : b.tap }
             b.tap = []; b.hold = []; b.double = []
             binding = b
         case .taps:
             var b = binding ?? PadProfiles.Binding()
+            b.togglePress = nil; b.press = b.press.map(\.heldOutput)
             if b.tap.isEmpty { b.tap = b.press.isEmpty ? (input.map { $0.isTrigger || $0.isStickDirection ? [.nothing] : [.pad($0)] } ?? [.nothing]) : b.press }
             if b.hold.isEmpty { b.hold = [.nothing] }
             b.press = []; b.turbo = nil
@@ -771,55 +967,56 @@ struct OutputsEditor: View {
     @Binding var outputs: [PadProfiles.Output]
     let family: Controllers.Family?
     let layers: [String]
+    var toggled = false
     @State private var recording = false
     @State private var monitor: Any?
-    @State private var heldModifiers = Set<Int>()
+    @State private var recorder = PadOutputRecorder()
     @Environment(\.padExtras) var extras
 
-    func add(_ o: PadProfiles.Output) {
+    func add(_ selected: PadProfiles.Output) {
+        guard let o = toggled ? selected.toggledOutput : selected else { return }
         if o == .nothing { outputs = [.nothing] } else { outputs.removeAll { $0 == .nothing }; if !outputs.contains(o) { outputs.append(o) } }
     }
 
     /// The next key, mouse button or scroll becomes an output. Modifiers held with a key are added too (Shift+R).
     func record() {
-        recording = true; heldModifiers = []
+        recording = true; recorder.reset()
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel]) { e in
+            let input: PadOutputRecorder.Input
             switch e.type {
             case .flagsChanged:
                 let k = Int(e.keyCode)
-                let down: Bool = {
-                    switch k {
-                    case 56, 60: return e.modifierFlags.contains(.shift)
-                    case 59, 62: return e.modifierFlags.contains(.control)
-                    case 58, 61: return e.modifierFlags.contains(.option)
-                    case 55, 54: return e.modifierFlags.contains(.command)
-                    case 63: return e.modifierFlags.contains(.function)
-                    case 57: return true
-                    default: return false
-                    }
-                }()
-                if down { heldModifiers.insert(k) }
-                else if heldModifiers.contains(k) {      // a modifier pressed and let go on its own
-                    add(.key(k)); stopRecording()
+                let down: Bool
+                switch k {
+                case 56, 60: down = e.modifierFlags.contains(.shift)
+                case 59, 62: down = e.modifierFlags.contains(.control)
+                case 58, 61: down = e.modifierFlags.contains(.option)
+                case 55, 54: down = e.modifierFlags.contains(.command)
+                case 63: down = e.modifierFlags.contains(.function)
+                case 57: down = true
+                default: return e
                 }
-                return nil
-            case .keyDown:
-                for m in heldModifiers.sorted() { add(.key(m)) }
-                add(.key(Int(e.keyCode))); stopRecording(); return nil
-            case .leftMouseDown: add(.mouse(.left)); stopRecording(); return nil
-            case .rightMouseDown: add(.mouse(.right)); stopRecording(); return nil
-            case .otherMouseDown:
-                add(.mouse(e.buttonNumber == 2 ? .middle : e.buttonNumber == 3 ? .back : .forward)); stopRecording(); return nil
-            case .scrollWheel:
-                guard abs(e.scrollingDeltaY) > 0.5 else { return nil }
-                add(.wheel(up: e.scrollingDeltaY > 0)); stopRecording(); return nil
+                input = .modifier(k, down: down)
+            case .keyDown: input = .key(Int(e.keyCode))
+            case .leftMouseDown: input = .mouseButton(0)
+            case .rightMouseDown: input = .mouseButton(1)
+            case .otherMouseDown: input = .mouseButton(e.buttonNumber)
+            case .scrollWheel: input = .wheel(Double(e.scrollingDeltaY))
             default: return e
             }
+            switch recorder.receive(input) {
+            case .waiting: break
+            case .cancelled: stopRecording()
+            case .outputs(let values):
+                for value in values { add(value) }
+                stopRecording()
+            }
+            return nil
         }
     }
     func stopRecording() {
         if let m = monitor { NSEvent.removeMonitor(m) }
-        monitor = nil; recording = false; heldModifiers = []
+        monitor = nil; recording = false; recorder.reset()
     }
 
     var body: some View {
@@ -834,19 +1031,21 @@ struct OutputsEditor: View {
                     .padding(.horizontal, 7).padding(.vertical, 3)
                     .background(Capsule().fill(Color.accentColor.opacity(0.15)))
                 }
-                Menu(outputs.isEmpty ? "Choose" : "Add") { OutputMenu(family: family, layers: layers) { o in add(o) } }
+                Menu(outputs.isEmpty ? "Choose" : "Add") { OutputMenu(family: family, layers: layers, heldOnly: toggled) { o in add(o) } }
                     .fixedSize()
-                Button(recording ? "Press a key or click…" : "Press…") { recording ? stopRecording() : record() }
-                    .help("Press a key, or click or scroll the mouse inside this window, to add it. Press the button again to stop.")
+                Button(recording ? "Press a key or click… (Esc cancels)" : "Record…") { recording ? stopRecording() : record() }
+                    .help("Press a key, or click or scroll the mouse inside this window, to add it. Escape cancels. Choose Escape from the Key menu when you want to map it.")
                     .foregroundStyle(recording ? Color.accentColor : Color.primary)
             }
         }
+        .onDisappear { stopRecording() }
     }
 }
 
 struct OutputMenu: View {
     let family: Controllers.Family?
     let layers: [String]
+    var heldOnly = false
     let pick: (PadProfiles.Output) -> Void
     @Environment(\.padExtras) var extras
 
@@ -864,10 +1063,20 @@ struct OutputMenu: View {
                 && !(k.title.hasPrefix("F") && k.title.count <= 3 && k.title.dropFirst().allSatisfy(\.isNumber)) && !k.title.hasPrefix("Keypad")
             }) { k in Button(k.title) { pick(.key(k.code)) } }
         }
+        if !heldOnly {
+        Menu("Toggle Held Key") {
+            ForEach(keys) { k in Button(k.title) { pick(.keyToggle(k.code)) } }
+        }
+        Menu("Toggle Held Mouse Button") {
+            ForEach(PadProfiles.MouseButton.allCases, id: \.self) { m in Button(m.title) { pick(.mouseToggle(m)) } }
+        }
+        }
         Menu("Mouse") {
             ForEach(PadProfiles.MouseButton.allCases, id: \.self) { m in Button(m.title) { pick(.mouse(m)) } }
-            Button("Scroll up") { pick(.wheel(up: true)) }
-            Button("Scroll down") { pick(.wheel(up: false)) }
+            if !heldOnly {
+                Button("Scroll up") { pick(.wheel(up: true)) }
+                Button("Scroll down") { pick(.wheel(up: false)) }
+            }
         }
         Menu("Controller") {
             ForEach(PadProfiles.Input.padButtons, id: \.self) { i in Button(i.title(family)) { pick(.pad(i)) } }
@@ -875,6 +1084,7 @@ struct OutputMenu: View {
             Button(PadProfiles.Input.lt.title(family)) { pick(.trigger(right: false)) }
             Button(PadProfiles.Input.rt.title(family)) { pick(.trigger(right: true)) }
         }
+        if !heldOnly {
         Menu("Gyro") {
             Button("Gyro on while held") { pick(.gyroOn) }
             Button("Gyro off while held") { pick(.gyroOff) }
@@ -897,6 +1107,7 @@ struct OutputMenu: View {
                     Button("\(n) on/off") { pick(.layerToggle(n)) }
                 }
             }
+        }
         }
         Divider()
         Button("Nothing") { pick(.nothing) }
@@ -937,7 +1148,7 @@ struct ExtraButtons: View {
 
     var body: some View {
         FlowRow(spacing: 6) {
-            ForEach([PadProfiles.Input.paddle1, .paddle2, .paddle3, .paddle4, .touchpad, .misc], id: \.self) { i in
+            ForEach(family == .valve ? [PadProfiles.Input.paddle1, .paddle2, .touchpad, .rs] : [PadProfiles.Input.paddle1, .paddle2, .paddle3, .paddle4, .touchpad, .misc], id: \.self) { i in
                 Button { selection = .input(i) } label: {
                     Text(i.title(family)).font(.caption)
                         .padding(.horizontal, 6).padding(.vertical, 3)
@@ -995,7 +1206,9 @@ struct CurveGraph: View {
 
 /// The controller and the profile's other devices; pick one to show it, or add one that's connected.
 struct DeviceStrip: View {
+    var mainTitle = "Controller"
     @Binding var devices: [PadProfiles.Device]
+    @Binding var hasHead: Bool
     @Binding var shown: String?
     @Binding var selection: ControllerProfileEditor.Part
     @ObservedObject var hid = HIDDevices.shared
@@ -1015,7 +1228,7 @@ struct DeviceStrip: View {
 
     var body: some View {
         FlowRow(spacing: 6) {
-            chip("Controller", symbol: "gamecontroller", on: shown == nil) { shown = nil; selection = .input(.a) }
+            chip(mainTitle, symbol: "gamecontroller", on: shown == nil && selection != .headMotion) { shown = nil; selection = .input(.a) }
             ForEach(devices) { d in
                 let connected = hid.connected.contains { $0.matches(d) }
                 chip(d.name, symbol: d.isGamepad ? "gamecontroller" : "dial.medium", on: shown == d.id, connected: connected) {
@@ -1023,10 +1236,19 @@ struct DeviceStrip: View {
                 }
                 .help(connected ? d.productName : "\(d.productName) — not connected")
             }
-            if devices.count < 4 {
+            if hasHead {
+                chip("AirPods / Headphones", symbol: "airpodspro", on: selection == .headMotion) {
+                    shown = nil; selection = .headMotion
+                }
+            }
+            if devices.count < 4 || !hasHead {
                 Menu {
+                    if !hasHead {
+                        Button("AirPods / Headphones (experimental)") { hasHead = true }
+                        Divider()
+                    }
                     if addable.isEmpty { Text("Connect a joystick, throttle, pedals, wheel or another controller") }
-                    ForEach(addable) { i in
+                    ForEach(devices.count < 4 ? addable : []) { i in
                         Button(i.name + (i.nth > 0 ? " (\(i.nth + 1))" : "")) {
                             var d = i.device
                             let same = devices.filter { $0.productName == d.productName }.count

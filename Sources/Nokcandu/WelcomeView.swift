@@ -67,7 +67,7 @@ struct WelcomeView: View {
         }
         .padding(24)
         .frame(width: 560)
-        .onDisappear { if ready { UserDefaults.standard.set(true, forKey: "welcomeDone") } }
+        .onDisappear { UserDefaults.standard.set(true, forKey: "welcomeDone") }
     }
 
     func choice(_ symbol: String, _ title: String, _ detail: String, action: @escaping () -> Void) -> some View {

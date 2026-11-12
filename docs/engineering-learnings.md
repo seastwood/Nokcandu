@@ -352,3 +352,250 @@ Each Wine app's engine is an APFS clone, so allocated size overstates what a gam
 ## A move must update every record that names the old path (2026-11-04)
 
 Saved install progress kept the old app path, so moved games looked unfinished and the installer resumed a stale record; background writers that started before the move recreated a ghost folder at the old path. Moves now relocate install records, maintenance skips games being moved, settings writers refuse to create a missing app, and existing ghosts/records are reconciled. Launchers whose path many records share move with a link left behind instead of rewriting every reference. [Details](investigations/space-efficiency-moves-2026-11-04.md).
+
+## Controller mouse-event identity (November 10, 2026)
+
+Desktop controller movement must derive event type and button number from the same held button. Previously left+right chose left-drag with right button; middle/extra held buttons produced ordinary moves. `PadMouseEvent` centralizes desktop event construction and tests all 32 held-button combinations plus release transitions, with delta/location/flags checks. No profile migration or installed game modification. This confirms an event-construction defect, not a fix for Overwatch delayed aim or BF1942 click jumps. See [Phase 0 investigation](investigations/controller-overhaul-2026-11-10.md) for architecture, pending manual validation, opt-in route diagnostics and Undo.
+
+## Controller overhaul continuation (November 10, 2026)
+
+Input receipt, event emission and target consumption are separate acceptance gates. The current incremental changes add opt-in process-directed mapped pointer capture (not physical mouse seizure), event marking, captured click ownership, foreground release, callback-independent editor previews, conservative binding-only live updates, persistent key/mouse toggles, button routing and source-aware hold composition. Profile backups precede first new-feature save; old decoded macro timing stays unchanged. Native macOS suppression and virtual controller identities remain unproven. The unchanged HEAD reproduces all four privacy-test failures under denied process inspection; retain unknown-process safety. See the [implementation checklist](investigations/controller-overhaul-2026-11-10.md#progress-checklist) for tested scope, pending software/hardware gates, research, migration and Undo. Experimental headphone motion uses the documented API and starts disabled; no audio, pairing or permission changes were performed.
+
+Sequence cleanup must track as many outstanding down-events as the accepted step count. The previous six-output chord container was too small for a longer sequence: untracked keys survived normal macro completion. The shared macro ledger now accommodates 48 steps and releases in reverse order; eight-key completion/cancellation tests cover the regression. Explicit mapped-only button routing must also disable unbound passthrough, not merely omit a binding. The Wine reload owner now uses the same conservative binding-update API as DesktopPad.
+
+## Live timer ownership and manual capture recovery
+
+Ordinary hold/double/turbo timers should not force unrelated bindings to restart during an edit. The shared binding-update path now preserves unrelated deadlines, cancels changed-input deadlines, and treats identical compiled text as a no-op even during latched output/sequence execution. Turbo off-phase releases previously decremented shared output counts twice; tracking the off phase prevents another input's hold from being released. Regression tests cover both phases, overlapping holds, cancellation and equivalent saves. Manual capture now forgets activation after missing window/permission or rule changes; disabled rules skip repeated window enumeration. See the [continuation evidence](investigations/controller-overhaul-2026-11-10.md#live-timers-and-authorized-mac-inspection-continuation). Remembered controller assignment rows are not proof of a connected device.
+
+## Compatible controller tuning and exact application targeting
+
+Numeric stick/gyro edits can preserve the running engine when output topology and all other compiled lines match. Keep configuration separate from dynamic state: the stick acceleration accumulator was moved into the runtime portion before copying configuration prefixes. Tests verify acceleration, holds, layers, macro/toggle state and next-sample sensitivity. Structural output changes still rebuild safely. Application capture inheritance now requires an explicitly selected canonical wrapper path and an exact generated helper layout; remembered names are insufficient. Canonical path comparison avoids file-URL directory-metadata mismatches. See [implementation and Undo](investigations/controller-overhaul-2026-11-10.md#compatible-live-tuning-and-exact-wrapper-targeting).
+
+## Controller route composition and debounced editor persistence
+
+Selective stick/trigger/gyro routing now shares the C engine with buttons. Native/Both analog contributions use strongest magnitude on a shared output axis rather than summing the same physical input twice; Disabled/Mapped suppress legacy raw fallback where appropriate. Native sensor/device identity must not be promised merely because mapped output is off. Editor persistence now coalesces committed edits for 250 ms while runtime reads pending values immediately. Scope own profiles by canonical persistence-source path, flush before structural profile actions, and reject stale scheduled callbacks to avoid recreating deleted profiles. Exact tests and rollback are tracked in the [investigation](investigations/controller-overhaul-2026-11-10.md#axis-routing-persistence-and-real-pro-controller-receipt). A GUI probe received continuous Pro Controller motion callbacks while Steam and installed Nokcandu ran, despite the CLI probe seeing no devices; keep evidence scoped to the process and actual connection session.
+
+## Controller cleanup ownership and safe profile persistence
+
+Cleanup must cancel input without creating a radial-menu choice, virtual tap or new pulse. Track activating source across toggle/macro/timer outputs, release removed/replaced slots independently, and refuse a pulse if no release timer can be allocated. Sequence wait allocation failure must unwind held outputs. Tests exercise queue exhaustion and unrelated owners. Validate existing profile JSON before replacing it, back up own as well as shared profiles, and never recursively delete an unexpected controller-map directory/link. Report partial map refresh explicitly while retaining saved settings and good map updates. The four earlier privacy failures reproduce at unchanged HEAD under denied process inspection; per-fixture process observations make those tests hermetic without weakening production unknown-state safety. [Evidence, limits and Undo](investigations/controller-overhaul-2026-11-10.md#ownership-recovery-and-test-delivery-continuation).
+
+A window-local target input monitor is useful separately from adapter receipt counters. The new Help input test returns local events unchanged and throttles display to 10 Hz; its isolated preview verified UI event receipt/reset/normal quit without initializing the real library. Preserve the distinction between computer-control events, physical controller receipt and game consumption. Compatible basic stick output changes can now preserve state; keyed/directional/flick/mixed structural changes still use replacement. [Test procedures](controller-overhaul-testing.md).
+
+The test package passed deep signature/plist checks with the new universal helper; selected regression run executed 131 tests with one environment skip and no failures. A clean temporary SwiftPM scratch/native build avoided a denied existing dSYM update. Build-only environment overrides leave normal build/install defaults intact. The staged copy is ad-hoc signed and may need a separate user permission decision; it was not installed or launched against the real library. Existing iconutil failure is a documented nonfatal packaging limitation.
+
+Binding-edit compatibility should depend on actual active owners rather than the mere presence of a macro, pulse or simultaneous timer. Stable binding-table addresses and by-value output stores allow unrelated live edits to preserve original deadlines. Affected owners/peers still use the nonmutating rejection/replacement path. New live continuity/rejection tests passed. [Evidence](investigations/controller-overhaul-2026-11-10.md#unrelated-running-actions-during-editing).
+
+Persistent layer/gyro latches are separate owners from a button's active press outputs. Replacing their activating binding must clear the owned latch after table replacement, while retaining unrelated holds/latches. Before/after regression tests verify base-layer/gyro restoration and captured held-key cleanup. [Evidence](investigations/controller-overhaul-2026-11-10.md#replacing-latched-mode-bindings).
+
+## Toggle discoverability and compatible key-stick updates
+
+Persistent-output support hidden in an Add submenu is insufficient discoverability. The button inspector now exposes Toggle beside While held and explains first-press latch/second-press release; controller-button/trigger output latches share the same ownership/refcounts as key/mouse. Distinguish logical Wine output from native virtual-device capability. Switching a key-stick's codes must release the old codes before copying configuration; overlapping owners must retain their references. Full release must clear gyro activation flags as well as held outputs. Regression/model/backup tests passed, with isolated real-editor UI verification. Optional local timing aggregates and an offline counting-sink benchmark explicitly exclude end-to-end hardware/game latency. [Evidence, migration and Undo](investigations/controller-overhaul-2026-11-10.md#directional-key-updates-visible-toggle-behavior-and-timing-diagnostics).
+
+Local recording decisions are now independently testable: Escape cancels without creating an output and resets modifier state. Monitor lifetime remains a UI responsibility with disappearance cleanup. Automated UI keyboard targeting introduced a click before Escape in the preview comparison; this did not isolate a human starting-click bug. A deferred-install trial did not help and was removed. Keep deterministic recorder tests separate from confounded UI/hardware evidence. Final selected run: 159 tests, one environmental skip, zero failures; sanitized offline engine-update smoke passed.
+
+A staged app is not the running installed app. After explicit install authorization, use the app-only recovery installer, verify executable identity, reopen the exact usual path and check the real editor. The installed Toggle UI is now verified; renewed Accessibility authorization is a separate security-sensitive step. Do not overwrite profile changes the user makes concurrently during UI inspection.
+
+Controller-picture toggle labels must name the actual held output, not just its action category. Reuse the existing output title and effective press-output conversion so explicit toggle metadata and old toggle tokens agree with the inspector. Compact label scaling plus full hover/accessibility text preserves discoverability. [Evidence](investigations/controller-overhaul-2026-11-10.md#toggle-output-labels-on-the-controller-picture).
+
+For this ad-hoc update, a stale macOS privacy entry stayed visually on while AX trust was false. On/off alone did not restore trust; user-authenticated removal/re-add of only the exact installed Nokcandu restored the app's normal Everywhere status. Permission switches alone are insufficient verification—check effective app status afterward. The installed picture's actual Toggle Space label was verified alongside restored trust; hardware acceptance remains separate.
+
+## Signing continuity and real Wine registry fixtures
+
+A configured keychain hidden by restricted execution must fail a build, not silently downgrade it to ad-hoc and lose the user's grants. Reuse the existing signing identity and verify incoming code against the installed requirement. Two changed test binaries have the same certificate-bound DR; full-app/TCC verification remains distinct. Wine persists CurrentControlSet as a registry link: offline edits must resolve its UTF-16 target, not create literal shadow children. Realistic ControlSet002 fixtures exposed the defect; reliable process observation is required before migration. [Evidence and open gates](investigations/signing-routing-sidebar-drives-2026-11-10.md).
+
+Explicit Gyro-off holds now gate separately opted-in head motion and reset its transform during pause. Construct headphone-motion managers only after user opt-in, never merely to render settings or stop a disabled owner. Shared footer layout must reserve physical list space, rather than relying on sidebar inset underdraw behavior.
+
+An explicit native controller choice must outrank automatic profile-driver adaptation. Shared profiles previously forced Xbox even for a game's explicit native selection; change only Automatic's resolution, and disclose that native routing bypasses the SDL controller remapper. Alias repair alone cannot fix a precedence bug. New tests cover a shared profile driver with explicit native plus actual ControlSet migration.
+
+The installed signed app verifies normally and already recognizes Accessibility without a refresh; a restricted codesign verification failure was a keychain-context limitation, not justification to weaken certificate requirements. Installed sidebar/search tests verified section-first ordering, separate footer, Command-F, filtering and clear/reset.
+
+
+## Scope SDL interception to Wine's caller
+
+The empty native-controller panel was reproducible with real Pro Controller
+hardware even after native policy/registry repair. An empty-prefix comparison
+separated device access from helper interference: native IOHID plus no helper
+registered Pro Controller; the full helper failed without any profile state.
+A forwarding-only hook still recursed; stack sampling showed repeated
+SDL_WaitEventTimeout_REAL, and scoped tracing showed SDL's own dlsym lookup before
+Wine's. Only intercept lookups originating in winebus.so / winebus.sys.so; allow
+SDL's internal dispatch and unrelated callers to keep original addresses.
+The actual-helper fake-library regression fails the old hook and passes the
+caller-scoped fix, including ordinary game processes. The installed real Steam
+prefix and actual panel now enumerate Pro Controller 057e:2009 through DirectInput;
+an isolated SDL/Xbox comparison also enumerates XInput. Original Steam hardware,
+actual buttons/gyro and game acceptance remain separate. Existing running Wine
+processes must exit naturally to load the helper update. [Comparisons, migration
+and Undo](investigations/signing-routing-sidebar-drives-2026-11-10.md#reproduced-native-detection-failure-and-scoped-sdl-fix).
+
+Actual changed-code updates using the same existing certificate retained effective
+Accessibility without another grant. Verify the running executable path: duplicate
+workspace app copies can make an otherwise valid UI observation ambiguous.
+
+
+## Profile-selected experimental input and window receipt
+
+Headphone mapping belongs in a profile's source list. Store optional per-profile
+configuration with inherited removal/disable, resolve it before the runtime's
+compiled-text early return (head settings intentionally do not alter Wine/C
+output), and keep source creation lazy. Old profiles must remain opted out;
+first-feature-save backup now recognizes headMotion. General preferences retain
+status rather than global tuning. Compatible headphone identity is selected by
+macOS, not a fake HID vendor/product. Hardware/audio acceptance remains pending.
+
+A test window can show observed held outputs and ordered receipt transitions to
+help users validate toggles/sequences, but focus loss invalidates that observation.
+Clearing an observed set must never be presented as proof an OS key/button was
+released. Keep bounded local history, no typed-character/global input capture,
+and explicit local Copy rather than background logging. [Scope/tests/Undo](investigations/signing-routing-sidebar-drives-2026-11-10.md#preparation-for-user-testing-held-output-receipt-and-profile-headphone-source).
+
+
+## Original Steam Controller receiver is not an awake controller
+
+USB 28DE:1142 is the original receiver: its keyboard and four vendor interfaces
+exist with the controller off. Label receiver presence separately from controller
+power/pairing/input and do not advertise observed gyro from that inventory. Normal
+Wine Mac IOHID rejects its vendor interface; the Pro Controller native fix does not
+establish Valve passthrough. A strict opt-in, original-ID/vendor-usage-only research
+patch exposed four receiver HID interfaces to Windows in a temporary engine;
+default-off did not. This is a feasibility result, not Steam/profile compatibility.
+WINEDLLPATH did not override the built-in engine path; a copied temporary runtime
+was needed for a valid comparison. The candidate lacks SDL and must not ship.
+No firmware/pairing/mode commands were used. [Evidence and next gates](investigations/steam-controller-2015-2026-11-10.md).
+
+
+## Field tests: admission and coordinate spaces
+
+Headphone activation is an independent source gate: use physical input/actual engine
+layer, retain controller gyro, recenter on admission transitions and inactive samples,
+and default old saved sources to Always. Resolve before compile-text equality; head
+settings intentionally do not affect C/Wine tokens. Installed UI/195 regression
+checks passed; real hold/layer use still needs acceptance.
+
+Validate Wine mouse events in **Windows** coordinates, not the CGEvent's Mac point.
+Presentation origin/scale and Retina broke the old learning comparison. Wine 10/11
+now expose their own conversion to the helper, including tracked cursor bounds and
+restoration. Explicit captured Wine moves should prefer its relative socket: the
+raw-mouse hook can swallow synthetic process-posted movement. Retain default menu
+behavior and native-client routing. Unknown process scans must block managed driver
+refresh. Both drivers and coordinate/header/helper regressions pass; game retests
+remain distinct.
+
+A physical Pro Controller emitted stable full-state button fields while DirectInput
+flipped hundreds of buttons. Its USB descriptor labels packet counter/battery bits
+as buttons; a device-specific Steam reader can still decode the actual raw protocol.
+Do not blame a toggle/profile or silently override As itself. Exact-descriptor USB
+correction now has a full-SDL reproducible build and bounded native Windows idle
+acceptance (375 successful samples/zero transitions in the repeat alongside stable
+host input). Exact descriptor and stock-module fingerprints prevent applying a
+protocol workaround to unrelated hardware or edited engines. Preserve a verified
+original and persistent Undo opt-out; physical mapping/Steam/game acceptance stays
+separate. Expanded related tests pass 200 with no failures/skips.
+[Evidence, checklist and Undo](investigations/controller-field-tests-2026-11-10.md).
+
+## Original wired Steam HID and headset stick mapping
+
+USB 28de:1102 exposes mouse/keyboard plus a vendor FF00:1 interface. Admit only
+that exact vendor interface to Wine; do not broaden keyboard/mouse matching or
+confuse receiver slots with controllers. A full-SDL bus successfully opened/read
+its actual Windows HID interface and preserved Pro idle stability; this is not
+Steam Input/game acceptance. Preserve known-module migration and original recovery.
+A passive profile reader avoids speculative device resets; report-stream freshness
+must be refreshed by duplicate valid state but never status packets. Distinguish
+full packet decoding tests from physically verified controls.
+
+Headset stick control needs attitude displacement from an activation pose, rather
+than mouse deltas: remaining turned must keep a key held, and centering must release.
+Feed the existing source composer/C engine so physical-axis restoration, layered
+key mappings and held radial menus retain their ownership. Keep mouse the legacy
+default and neutralize a previous stick source on admission/output/lifecycle changes.
+[Evidence and limits](investigations/steam-wired-head-mappings-2026-11-11.md).
+
+
+## Controller calibration and foreground transitions — November 11, 2026
+
+A foreground PID change must release old outputs, but need not destroy an unchanged mapping engine. Destruction discards measured sensor bias. Retain the engine only when compiled profile/source are unchanged, clear source snapshots and reattach; profile/source/forced changes retain existing rebuild behavior. Actual-engine tests verify bias, old holds/toggles release and renewed motion. This does not establish hardware-stall recovery. See [field-test evidence](investigations/controller-field-tests-2026-11-11.md).
+
+
+## Verify the actual renderer before applying upstream workarounds — November 11, 2026
+
+BF2's selected Older 3D mode was overridden by an already-installed DirectX 8 compatibility component to a legacy DXVK-Sikarugir 2.3 library. Its actual graphics log lacked the later upstream BF2 focus-loss default even though the ordinary renderer bundle was newer. Inspect effective launch exports, runtime log and option support together. Keep this proven game-specific compatibility setting scoped and opt-in, preserve explicit options, and distinguish a supported candidate from verified gameplay. [BF2 evidence and tests](investigations/bf2-deployment-menu-2026-11-11.md).
+
+
+## Compatibility receipts must survive maintenance and queued edits — November 11, 2026
+
+Live BF2 verification caught an Installed receipt whose owned setting disappeared in a later generated settings write. Read current disk configuration before automatic launcher/helper regeneration; preserve installed component requirements when applying an older queued full-custom edit. Reconcile only known receipt-owned keys and retain manual-launcher hash protection, running-session checks and explicit component Undo. Actual queue/installation/stale-snapshot/repair/Undo regressions pass. Final live flag and launcher append survive restart and Play. [Evidence and limits](investigations/bf2-deployment-menu-2026-11-11.md).
+
+
+Legacy BF2 transport follow-up: supported option names do not prove support for inline DXVK_CONFIG. This installed Sikarugir fork requires DXVK_CONFIG_FILE; actual D3D9 initialization confirmed the file and exact BF2 section are parsed. The component now uses a journal-owned scoped file and Windows path, with explicit-user-file conflict refusal. Foundation can leave parent symlinks unresolved for nonexistent leaves: resolve the valid directory before constructing a new settings filename, while separately refusing leaf links. See the superseding BF2 evidence above.
+
+
+Preserve owned environment/DLL requirements at the central ordinary save boundary as well as stale-snapshot callers; otherwise a new or overlooked writer can drop installed component keys again. Explicit component Undo bypasses that narrow safeguard, and non-environment config fields retain their prior semantics. Full 589-test suite passes with 19 documented optional skips. BF2's selected DXMT mode actually loaded WineD3D/OpenGL for its D3D9 game process; use actual module/log evidence for renderer comparisons.
+
+### Preserve the stock controller runtime dependency
+
+Wine's controller bus dynamically loads SDL by configured SONAME. An engine can contain both an obsolete unversioned SDL2 and a newer versioned SDL2 compatibility runtime. Header detection and “SDL enabled” do not establish the right runtime. Match the stock module dependency, validate the actual install name and generated configuration, and test isolated Windows enumeration with connected devices before packaging. The wrong library produced an Apple Pro alias and omitted converted Pro/Steam XInput slots. [Controlled comparison, scope and Undo](investigations/controller-priorities-2026-11-11.md).
+
+### Mouse buttons must share the movement coordinate contract
+
+Wine's ordinary Mac mouse-button handler adds absolute movement. A controller-relative movement followed by a CGEvent at the frozen Mac pointer therefore jumps even when button-event deltas are zero. Use a capability-gated button-only Wine queue path, preserve physical mouse behavior, and pin release to the down's process/window. Compile/test the actual patched handler, including all buttons and invalid encodings, rather than testing a duplicate formula. [Contract, evidence and pending game checks](investigations/controller-priorities-2026-11-11.md).
+
+### Import profile layers transactionally
+
+Layer actions can reference inherited macros and menus, and names/IDs can collide in another profile. Copy explicit settings into a fresh layer, recursively clone dependencies with new IDs, rewrite self references and reject missing dependencies or capacity overflow before replacing the profile. Never partially edit the destination on an import error. [Scope and tests](investigations/controller-priorities-2026-11-11.md).
+
+### Original Steam Controller needs a reversible mode lease
+
+Passive full-state receipt does not disable firmware desktop mapping or enable sensor reports. Query selected settings first; a measured original USB controller had lizard mode enabled and IMU disabled. A bounded query/write/read-back/restore trial verified a volatile handoff without resetting mappings. Keep the original per connection, verify the applied mode, restore only while it still matches, and fail closed rather than injecting alongside an unverified desktop mode. Keyboard duplication remains an independent acceptance gate until retested. [Evidence and limitations](investigations/controller-priorities-2026-11-11.md).
+
+### Trackball uses contact displacement and a separate momentum clock
+
+Treating pad position as joystick velocity causes continued turning under a stationary finger. Relative pad modes must anchor each contact and integrate finger displacement. Trackball momentum starts on lift, decays by elapsed time, and cancels on renewed contact/focus/source loss. Finger-up reports are status updates, not new lift events: they must neither reset the integration clock nor repeatedly apply the lift timeout. A cadence-equivalence/heartbeat regression caught both conditions before shipping. Both pad preview and runtime share the processor, and mouse mode removes the right-pad joystick-axis contribution to prevent double conversion. [Tests, migration and handoff](investigations/controller-handoff-2026-11-11.md).
+
+### Verify the executable and exclude competing controller owners
+
+Installed/development macOS apps sharing a bundle ID can confuse UI selection, leaving a development process alive when the installed copy quits. Verify the actual running executable, not only LaunchServices/app name. Original-controller mode leases additionally need a kernel lock shared by updated copies; otherwise two sources can overwrite the same recovery receipt or restore while another reader is active. Keep lock FDs close-on-exec and reject symlink paths. [Observed competing-copy incident and handoff](investigations/controller-handoff-2026-11-11.md).
+
+### Estimate trackball launch from motion history, not the last derivative
+
+A real original-controller swipe capture showed the last two contact samples reversing X and jumping Y before touch-up. Ignoring zero touch-up coordinates alone cannot prevent this. Use a robust recent velocity estimate for momentum while keeping direct finger movement immediate; preserve a measured regression fixture and distinguish corrected coast from remaining pre-lift coordinate noise. Touch activation should be an explicit engine gate, with gyro-off holds/native routing still authoritative and immediate neutralization on release. Transient haptic commands need per-pad pacing shared by preview/runtime and bounded bursts rather than persistent controller reconfiguration. [Evidence and acceptance limits](investigations/controller-handoff-2026-11-11.md).
+
+### Separate haptic cadence, texture and notification policy
+
+Strength alone cannot tune trackpad feedback: repeat rate and within-burst spacing affect different sensations. Keep both bounded and shared across preview/runtime, preserve absent-field defaults, and explain that a single test burst cannot demonstrate movement cadence. Gyro touch gating can change state frequently, so provide an independent gyro-note preference without suppressing layer/calibration feedback. User confirmed corrected fling direction, right-pad feedback and touch-only gyro; new pulse feel remains a subjective acceptance check. [Final tests, migration and Undo](investigations/controller-handoff-2026-11-11.md).
+
+### Match feedback to emitted travel, not report frequency
+
+Speed-linked trackpad feedback should integrate cursor-output distance, with a bounded pending pulse and a separate maximum rate. Counting input callbacks makes feel depend on report frequency; accumulating an unbounded backlog produces buzzing after motion ends. Preview must not count the same travel alongside the active desktop source. A per-pad fixed-cadence fallback preserves the earlier option. Tests cover slow/fast travel, bounds, isolation, idle/reset and zero motion; actual new feel remains a hardware acceptance gate. [Installed behavior and Undo](investigations/controller-handoff-2026-11-11.md).
+
+### A wireless receiver slot is not a controller identity
+
+The original 1142 receiver exposes four vendor channels even with the controller off. Select only after a full settings reply and verified capture, keep callbacks per channel, and separate radio disconnect from USB removal. The receiver registry entry survives remote replacements, so do not replay a saved wired-style lease into a later radio session. Bound pending-radio feature retries and move haptic writes off the input thread; serialize restoration after queued output. Actual receiver receipt, mode restore, installed off/on state and user aiming/haptic/typing acceptance are recorded in the [wireless investigation](investigations/steam-wireless-profiles-2026-11-11.md). BLE and native Windows Steam discovery remain separate.
+
+### Keep profile presentation local and control columns consistent
+
+Controller family labels are profile metadata, separate from routing and base-profile mapping inheritance. Falling back to connected hardware for old JSON is safe; copying one legacy hardware-name preference into every profile is not. Shared fixed-width settings slots must align their intrinsic controls to the trailing edge. Installed Display/Performance panels and independent Steam/Overwatch label choices were checked; see [scope, tests and Undo](investigations/settings-profile-labels-2026-11-11.md).
+
+### Verify wireless ownership beyond report receipt
+
+Vendor reports can continue after a receiver-connected controller returns to desktop mode. Stream receipt alone is not proof of capture. Verify the selected settings away from the input loop, recapture only the exact measured baseline with bounded retries, and pause on unknown ownership. Recovery across remote wake requires the remote identity, not the persistent USB receiver slot; store only its digest and verify before restoration. A controlled mode-loss trial failed with timeout-only recovery and passed with the ownership check. Preserve that negative result. [Hardware evidence and remaining typing issue](investigations/steam-wireless-profiles-2026-11-11.md).
+
+### Separate coast errors from direct sensor wobble
+
+A measured vertical swipe rolled laterally at the outer pad boundary before release. Its old coast estimator launched sideways; using the approach window for short boundary dwells corrects that fixture without hard axis locking. Optional per-axis spatial hysteresis addresses tiny direct wobble and preserves zero/raw behavior. User acceptance was with changed X/Y tuning too; do not attribute every improvement to a single filter. [Measured regression and acceptance](investigations/steam-wireless-profiles-2026-11-11.md).
+
+### Separate contact feedback from movement feedback
+
+A pad can confirm finger contact without moving the cursor. Track rising contacts independently for each side, including while feedback is disabled, and emit a finite pulse rather than a held rumble. Share preview/runtime ownership and the existing cancellable radio sender; do not queue a delayed buzz behind motion. Optional strength fields keep old profiles off. User confirmed one pulse on each stationary right-pad touch over the original receiver; full 630-test suite passed. [Evidence, scope and Undo](investigations/steam-wireless-profiles-2026-11-11.md).
+
+### A click that jumps: find out whose click it is first
+
+Three different things moved the game's cursor on a click, and they looked identical. A controller click delivered as a Mac event carried the Mac pointer's position; a physical click during raw capture carried the frozen pointer's position; and the Steam Controller's click was the controller's own built-in trigger action, a real mouse click that no profile had mapped. Before changing delivery code, read the saved profile: if nothing maps that button to a click, the click is the device's. Pads NONE and lizard mode off do not clear the original Steam Controller's built-in *button* actions; those are digital mappings (clear 0x81, defaults 0x85). [Evidence and limits](investigations/controller-click-jump-and-polish-2026-11-11.md).
+
+### Relative input leaves the Mac pointer behind — every reader of it must know
+
+Wine asks the Mac driver for the cursor position after 100 ms without input, and the driver answers with the Mac pointer. Any path that moves Wine's cursor by relative events (controller mouse, raw capture) must tell the driver the pointer is stale, or polling games snap back to it. Keep one flag in the driver, set by whoever posts relative movement and cleared by the first real pointer move, rather than estimating the game's cursor in the helper.
+
+### Smooth by speed, not by dead band
+
+A per-axis dead band steadies a resting finger but must be crossed twice on every change of direction, which users feel as resistance. A low-pass whose cutoff rises with speed removes the same wobble with no distance to push through. Ease movement in for the first 30 ms of a touch: the contact patch is still growing. Match Valve's 15° pad rotation before judging "straightness".

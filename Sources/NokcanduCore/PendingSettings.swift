@@ -37,7 +37,7 @@ public enum PendingSettings {
                     let missed = try await CompatibilityFixes.changeProgram(to: value, from: previous, for: game, log: log)
                     if !missed.isEmpty { throw NokError("Program changed, but some fixes need attention: " + missed.map { $0.0.title + ": " + $0.1 }.joined(separator: "; ")) }
                 }
-                else { try CustomGames.saveAll(value, to: game, force: force) }
+                else { try CustomGames.saveAll(CompatibilityFixes.preservingInstalledSettings(value, for: game), to: game, force: force) }
             case .recipe(var value): value.microphone = GameMicrophone.isOn(game); try RecipeSettings.save(value, for: game)
             case .hosted(var value):
                 if value.borderless != true, CompatibilityFixes.isInstalled(.borderless, for: game) {

@@ -31,6 +31,14 @@ struct InfoButton: View {
 /// Standard width for pickers and menus in a setting row, so controls line up down the page.
 let settingControlWidth: CGFloat = 220
 
+extension View {
+    /// Native menu pickers can hug their text instead of filling the proposed width.
+    /// Anchor that intrinsic control at the row's trailing edge, not the slot's center.
+    func settingControl() -> some View {
+        frame(width: settingControlWidth, alignment: .trailing)
+    }
+}
+
 private struct PendingControlTitlesKey: EnvironmentKey {
     static let defaultValue = Set<String>()
 }

@@ -2,6 +2,18 @@ import XCTest
 @testable import NokcanduCore
 
 final class AppPrivacyTests: XCTestCase {
+    private var fixtureIDs: [InstalledGame.ID] = []
+    func fixture() throws -> InstalledGame {
+        let game = try IPXNetworkingTests().fixture()
+        fixtureIDs.append(game.id)
+        GameLauncher.fixtureProcessSnapshots[game.id] = ProcessSnapshot(rows: [], reliable: true)
+        return game
+    }
+    override func tearDown() {
+        for id in fixtureIDs { GameLauncher.fixtureProcessSnapshots[id] = nil }
+        fixtureIDs = []; super.tearDown()
+    }
+
     func info(_ g: InstalledGame) throws -> [String: Any] {
         try XCTUnwrap(NSDictionary(contentsOf: g.contents.appendingPathComponent("Info.plist")) as? [String: Any])
     }
@@ -11,7 +23,7 @@ final class AppPrivacyTests: XCTestCase {
     func testOffMigrationOnOptInAndNativeEntryUndoStayConsistent() throws {
         let resources = try LauncherEntryTests().entryResourceFixture()
         defer { LauncherEntry.resourceForTesting = nil; try? FileManager.default.removeItem(at: resources) }
-        let g = try IPXNetworkingTests().fixture()
+        let g = try fixture()
         defer { try? FileManager.default.removeItem(at: g.appURL) }
         let bin = g.support.appendingPathComponent("wine/bin")
         try NokPaths.ensure(bin)
@@ -39,7 +51,7 @@ final class AppPrivacyTests: XCTestCase {
     func testManualEntryMetadataIsKeptAndFailureIsVisibleToLaunchPreparation() throws {
         let resources = try LauncherEntryTests().entryResourceFixture()
         defer { LauncherEntry.resourceForTesting = nil; try? FileManager.default.removeItem(at: resources) }
-        let g = try IPXNetworkingTests().fixture()
+        let g = try fixture()
         defer { try? FileManager.default.removeItem(at: g.appURL) }
         var metadata = try info(g); metadata[AppPrivacy.microphoneKey] = AppPrivacy.microphonePurpose; try write(metadata, g)
         try CustomGames.save(g.custom!, to: g)
@@ -49,8 +61,8 @@ final class AppPrivacyTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: g.contents.appendingPathComponent("Info.plist")), before)
     }
     func testSharedParentDeclarationFollowsLaunchingIntentWithoutChangingOtherChoices() throws {
-        let host = try IPXNetworkingTests().fixture()
-        let off = try IPXNetworkingTests().fixture(), on = try IPXNetworkingTests().fixture()
+        let host = try fixture()
+        let off = try fixture(), on = try fixture()
         defer { for g in [host, off, on] { try? FileManager.default.removeItem(at: g.appURL) } }
         let wine = host.support.appendingPathComponent("wine/bin/wine")
         try NokPaths.ensure(wine.deletingLastPathComponent())
@@ -77,4 +89,17 @@ final class AppPrivacyTests: XCTestCase {
         XCTAssertNil(GameApp.plist(name: "Game", icon: false)[AppPrivacy.microphoneKey])
         XCTAssertNotNil(GameApp.plist(name: "Game", icon: false, microphone: true)[AppPrivacy.microphoneKey])
     }
+    func testUnknownActivityStillPreservesMetadataAndBlocksLauncherMutation() throws {
+        let g = try fixture(); defer { try? FileManager.default.removeItem(at: g.appURL) }
+        GameLauncher.fixtureProcessSnapshots[g.id] = ProcessSnapshot(rows: [], reliable: false)
+        var metadata = try info(g)
+        metadata[AppPrivacy.microphoneKey] = AppPrivacy.microphonePurpose
+        try write(metadata, g)
+        let before = try Data(contentsOf: g.contents.appendingPathComponent("Info.plist"))
+        XCTAssertEqual(GameLauncher.runState(of: g), .unknown)
+        XCTAssertFalse(AppPrivacy.ensure(g.appURL))
+        XCTAssertThrowsError(try CustomGames.save(g.custom!, to: g))
+        XCTAssertEqual(try Data(contentsOf: g.contents.appendingPathComponent("Info.plist")), before)
+    }
+
 }
