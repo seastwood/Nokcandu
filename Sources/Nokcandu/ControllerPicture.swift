@@ -462,8 +462,12 @@ final class PadTester: ObservableObject {
 
     private func readSteam(_ state: SteamControllerReport.State?) {
         guard steamSource, let e = engine else { return }
-        controllerName = SteamControllerUSB.shared.controllerName
-        hasMotion = state?.gyro.contains(where: { $0 != 0 }) == true
+        let name = SteamControllerUSB.shared.controllerName
+        if controllerName != name { controllerName = name }       // setting it at all redraws the editor
+        // Once this controller has shown it has a gyro, the Gyro row stays: a resting gyro reads exactly zero
+        // now and then, and a row that came and went with it made the pane's height (and scroll bar) flicker.
+        if state == nil { if hasMotion { hasMotion = false } }
+        else if !hasMotion, state?.gyro.contains(where: { $0 != 0 }) == true { hasMotion = true }
         guard let state else {
             steamPadMotion = [PadSteamTrackpad(), PadSteamTrackpad()]
             steamZones = [PadSteamPadZones(), PadSteamPadZones()]
