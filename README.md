@@ -6,6 +6,8 @@
 Mac app, built on [Wine](https://www.winehq.org) via the open-source [Sikarugir](https://github.com/Sikarugir-App) engines,
 with tested settings, one-click fixes and safe updates.
 
+Discord Server: https://discord.gg/FDZMVgPD2S
+
 [**Download the latest release →**](https://github.com/seastwood/Nokcandu/releases/latest)
 
 ## Install
