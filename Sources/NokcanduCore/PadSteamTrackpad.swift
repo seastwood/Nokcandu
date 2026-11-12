@@ -2,8 +2,11 @@ import Foundation
 
 public struct PadSteamTrackpadSettings: Codable, Hashable, Sendable {
     public enum Mode: String, Codable, CaseIterable, Sendable {
-        case existing, mouse, trackball
+        case existing, mouse, trackball, directions
+        /// The pad moves the pointer itself (rather than acting as mappings or directions).
+        public var movesPointer: Bool { self == .mouse || self == .trackball }
         public var title: String { switch self {
+        case .directions: "Four directions"
         case .existing: "Existing mappings"
         case .mouse: "Trackpad mouse"
         case .trackball: "Trackball mouse"
@@ -26,6 +29,12 @@ public struct PadSteamTrackpadSettings: Codable, Hashable, Sendable {
     public var smoothing: Double?
     /// Degrees the pad's axes are turned to match the thumb's sweep (Valve's own drivers use 15° inward).
     public var rotation: Double?
+    /// How much of the pad's radius, from the rim inward, counts as its edge (0: no edge). The edge is an
+    /// input of its own, held while the finger is there, in every pad behavior.
+    public var edge: Double?
+    /// Four directions: how far from the centre a direction starts (part of the radius).
+    public var deadzone: Double?
+    public static let defaultDeadzone = 0.25
     public static let defaultSmoothing = 0.4
     public static func defaultRotation(side: Int) -> Double { side == 0 ? -15 : 15 }
     public init(mode: Mode = .existing) { self.mode = mode }
@@ -59,7 +68,7 @@ public struct PadSteamTrackpad {
         return movement
     }
     public mutating func touch(down next: Bool, x nextX: Double, y nextY: Double, at now: Double, settings: PadSteamTrackpadSettings) -> Motion {
-        guard settings.mode != .existing, now.isFinite, nextX.isFinite, nextY.isFinite else { reset(); return Motion() }
+        guard settings.mode.movesPointer, now.isFinite, nextX.isFinite, nextY.isFinite else { reset(); return Motion() }
         guard sampleTime == nil || now >= sampleTime! else { reset(); return Motion() }
         let px = min(1,max(0,nextX)), py = min(1,max(0,nextY))
         func speed(_ value: Double) -> Double { value.isFinite ? min(10000,max(100,value)) : 1500 }
@@ -146,8 +155,17 @@ public struct PadSteamTrackpad {
 }
 
 extension PadProfiles {
-    public static func steamTrackpad(_ side: Int, profile: Profile, all: [Profile]) -> PadSteamTrackpadSettings {
-        var settings = (side == 0 ? top(profile, all: all, \.steamLeftTrackpad) : top(profile, all: all, \.steamRightTrackpad)) ?? PadSteamTrackpadSettings()
+    /// A layer's own pad settings (the last profile in the stack that gives that layer some), if any.
+    public static func layerSteamTrackpad(_ side: Int, layer: String, profile: Profile, all: [Profile]) -> PadSteamTrackpadSettings? {
+        stack(profile, all: all).compactMap { q in
+            q.layers.dropFirst().first { $0.name.caseInsensitiveCompare(layer) == .orderedSame }.flatMap { side == 0 ? $0.steamLeftTrackpad : $0.steamRightTrackpad }
+        }.last
+    }
+    /// The pad's settings as they apply: in `layer` (nil or unknown: the base layer) with routing and the
+    /// recommended defaults filled in.
+    public static func steamTrackpad(_ side: Int, profile: Profile, all: [Profile], layer: String? = nil) -> PadSteamTrackpadSettings {
+        var settings = layer.flatMap { layerSteamTrackpad(side, layer: $0, profile: profile, all: all) }
+            ?? (side == 0 ? top(profile, all: all, \.steamLeftTrackpad) : top(profile, all: all, \.steamRightTrackpad)) ?? PadSteamTrackpadSettings()
         let routing = top(profile, all: all, \.routingMode) ?? .legacy
         let key = side == 0 ? "touch" : "rstick"
         let route = stack(profile, all: all).compactMap { $0.controlRoutes?[key] }.last
@@ -156,5 +174,53 @@ extension PadProfiles {
         if settings.smoothing == nil { settings.smoothing = PadSteamTrackpadSettings.defaultSmoothing }
         if settings.rotation == nil { settings.rotation = PadSteamTrackpadSettings.defaultRotation(side: side) }
         return settings
+    }
+}
+
+/// Which of a pad's direction and edge inputs are held for a finger position. No output is made here.
+/// Coordinates are the pad's own −1…1 with y up; the pad angle is applied first, as for pointer movement.
+public struct PadSteamPadZones {
+    public private(set) var held: Set<PadProfiles.Input> = []
+    public init() {}
+    public mutating func reset() { held = [] }
+    public static func edgeSize(_ settings: PadSteamTrackpadSettings) -> Double {
+        guard let e = settings.edge, e.isFinite else { return 0 }
+        return e < 0.02 ? 0 : min(0.6, e)
+    }
+    public static func deadzone(_ settings: PadSteamTrackpadSettings) -> Double {
+        let d = settings.deadzone ?? PadSteamTrackpadSettings.defaultDeadzone
+        return d.isFinite ? min(0.8, max(0.05, d)) : PadSteamTrackpadSettings.defaultDeadzone
+    }
+    /// Returns the inputs now held. A little stickiness at each boundary keeps a finger resting on one from chattering.
+    @discardableResult
+    public mutating func update(side: Int, down: Bool, x: Double, y: Double, settings: PadSteamTrackpadSettings) -> Set<PadProfiles.Input> {
+        guard down, x.isFinite, y.isFinite else { held = []; return held }
+        var px = x, py = y
+        if let degrees = settings.rotation, degrees.isFinite, degrees != 0 {
+            let r = min(45,max(-45,degrees)) * Double.pi / 180
+            (px, py) = (cos(r) * x - sin(r) * y, sin(r) * x + cos(r) * y)
+        }
+        let radius = min(1, (px * px + py * py).squareRoot())
+        var next: Set<PadProfiles.Input> = []
+        let edgeInput = PadProfiles.Input.padEdge(side), edge = Self.edgeSize(settings)
+        if edge > 0, radius >= 1 - edge - (held.contains(edgeInput) ? 0.04 : 0) { next.insert(edgeInput) }
+        if settings.mode == .directions {
+            let d = PadProfiles.Input.padDirections(side), dead = Self.deadzone(settings)
+            let moving = !held.isDisjoint(with: d)
+            if radius >= dead - (moving ? 0.05 : 0) {
+                // Eight ways: a direction covers 135°, so neighbours overlap on the diagonals.
+                let a = atan2(py, px) * 180 / Double.pi
+                func within(_ centre: Double, _ input: PadProfiles.Input) -> Bool {
+                    var off = abs(a - centre); if off > 180 { off = 360 - off }
+                    return off <= 67.5 + (held.contains(input) ? 4 : 0)
+                }
+                if within(90, d[0]) { next.insert(d[0]) }
+                if within(-90, d[1]) { next.insert(d[1]) }
+                if within(180, d[2]) { next.insert(d[2]) }
+                if within(0, d[3]) { next.insert(d[3]) }
+            }
+        }
+        held = next
+        return held
     }
 }

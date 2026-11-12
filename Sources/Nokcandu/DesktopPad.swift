@@ -119,13 +119,14 @@ final class DesktopPad: ObservableObject {
     func start() {
         guard !started else { return }
         started = true
+        Task.detached(priority: .background) { PadSocketLeftovers.remove() }
         GCController.shouldMonitorBackgroundEvents = true
         let nc = NotificationCenter.default
         observers.append(nc.addObserver(forName: .GCControllerDidConnect, object: nil, queue: .main) { _ in MainActor.assumeIsolated { DesktopPad.shared.attach(); DesktopPad.shared.evaluate() } })
         observers.append(nc.addObserver(forName: .GCControllerDidDisconnect, object: nil, queue: .main) { _ in MainActor.assumeIsolated { DesktopPad.shared.attach(); DesktopPad.shared.evaluate() } })
         watchShortcut()
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { _ in
-            MainActor.assumeIsolated { DesktopPad.shared.evaluate() }
+            MainActor.assumeIsolated { DesktopPad.shared.frontCache.at = -1; DesktopPad.shared.evaluate() }
             // A game says it uses its own profile a moment after it comes to the front.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { DesktopPad.shared.evaluate() }
         })
@@ -177,20 +178,51 @@ final class DesktopPad: ObservableObject {
     private var steamSource = false
     var suppliesSteamHaptics: Bool { steamSource && engine != nil }
     private let steamReaderID = UUID()
-    private var steamRightSettings = PadSteamTrackpadSettings()
+    /// Each layer's pad settings, [left, right], by the engine's layer number (0: base).
+    private var steamPads: [[PadSteamTrackpadSettings]] = [[PadSteamTrackpadSettings(), PadSteamTrackpadSettings()]]
+    private var steamPadLayer = 0
+    private var steamLeftSettings: PadSteamTrackpadSettings { steamPads[min(steamPadLayer, steamPads.count - 1)][0] }
+    private var steamRightSettings: PadSteamTrackpadSettings { steamPads[min(steamPadLayer, steamPads.count - 1)][1] }
+    /// A layer with pad settings of its own took over (or gave them back): start the pads afresh.
+    private func steamPadLayerChanged(_ layer: Int) {
+        let old = steamPads[min(steamPadLayer, steamPads.count - 1)]
+        steamPadLayer = layer
+        guard steamPads[min(layer, steamPads.count - 1)] != old else { return }
+        if let e = engine {
+            for side in 0..<2 { for input in steamZones[side].held { pe_pad_zone(e, pe_input_named(input.rawValue), false, Self.now()) } }
+        }
+        steamRightMotion.reset(); steamLeftMotion.reset(); steamZones[0].reset(); steamZones[1].reset()
+    }
     private var steamRightMotion = PadSteamTrackpad()
-    private var steamLeftSettings = PadSteamTrackpadSettings()
     private var steamLeftMotion = PadSteamTrackpad()
+    private var steamZones = [PadSteamPadZones(), PadSteamPadZones()]
+    /// A pad's direction and edge inputs, held or let go as the finger moves.
+    private func steamPadZones(_ side: Int, down: Bool, pad: SteamControllerReport.Point, settings: PadSteamTrackpadSettings, engine e: OpaquePointer, now: Double) {
+        let before = steamZones[side].held
+        let after = steamZones[side].update(side: side, down: down, x: Double(pad.x), y: Double(pad.y), settings: settings)
+        for input in before.symmetricDifference(after) { pe_pad_zone(e, pe_input_named(input.rawValue), after.contains(input), now) }
+    }
     private var headStickActive = false
+
+    /// The app in front. Every controller report and tick checks it (hundreds of times a second) so output
+    /// never goes to the wrong app, and asking macOS each time was the app's biggest cost while playing.
+    /// The answer is kept: replaced when an app is activated, and re-asked at most four times a second.
+    fileprivate(set) var frontCache: (pid: pid_t, at: Double) = (0, -1)
+    var frontPID: pid_t {
+        let now = Self.now()
+        if now - frontCache.at > 0.25 || now < frontCache.at { frontCache = (NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0, now) }
+        return frontCache.pid
+    }
 
     func evaluate(force: Bool = false) {
         let timingStart = diagnosticsEnabled ? Self.now() : nil
         defer { finishTiming("Profile resolution", started: timingStart) }
         trusted = AXIsProcessTrusted()
         let front = NSWorkspace.shared.frontmostApplication
+        frontCache = (front?.processIdentifier ?? 0, Self.now())
         let nextPID = front?.processIdentifier ?? 0
         let focusChanged = runtimePID != nextPID
-        if focusChanged { steamRightMotion.reset(); steamLeftMotion.reset() }
+        if focusChanged { steamRightMotion.reset(); steamLeftMotion.reset(); steamZones[0].reset(); steamZones[1].reset() }
         if focusChanged, let e = engine { pe_release_all(e, Self.now()) }
         runtimePID = nextPID
         let id = front?.bundleIdentifier ?? ""
@@ -220,12 +252,10 @@ final class DesktopPad: ObservableObject {
             settings: chosen.flatMap { trusted ? PadProfiles.headMotion($0, all: all) : nil })
         let nextSteamSource = chosen.map { trusted && PadProfiles.top($0, all: all, \.controllerSource) == .steamUSB } ?? false
         let sourceChanged = nextSteamSource != steamSource
-        let padSettings = chosen.map { PadProfiles.steamTrackpad(1, profile: $0, all: all) } ?? PadSteamTrackpadSettings()
-        if sourceChanged || padSettings != steamRightSettings || force { steamRightMotion.reset() }
-        steamRightSettings = padSettings
-        let leftPadSettings = chosen.map { PadProfiles.steamTrackpad(0, profile: $0, all: all) } ?? PadSteamTrackpadSettings()
-        if sourceChanged || leftPadSettings != steamLeftSettings || force { steamLeftMotion.reset() }
-        steamLeftSettings = leftPadSettings
+        let padLayers: [String?] = chosen.map { p in PadProfiles.merged(p, all: all).layers.enumerated().map { $0.offset == 0 ? nil : $0.element.name } } ?? [nil]
+        let nextPads = padLayers.map { layer in (0..<2).map { side in chosen.map { PadProfiles.steamTrackpad(side, profile: $0, all: all, layer: layer) } ?? PadSteamTrackpadSettings() } }
+        if sourceChanged || nextPads != steamPads || force { steamRightMotion.reset(); steamLeftMotion.reset() }
+        steamPads = nextPads.isEmpty ? [[PadSteamTrackpadSettings(), PadSteamTrackpadSettings()]] : nextPads
         steamSource = nextSteamSource
         if !steamSource { SteamControllerUSB.shared.remove(steamReaderID) }
         let text = (chosen != nil && trusted) ? PadProfiles.compile(chosen!, all: all) : ""
@@ -265,6 +295,7 @@ final class DesktopPad: ObservableObject {
         engine = nil
         timer?.invalidate(); timer = nil
         lastButtons = [:]; lastAxes = [:]; sourceState = PadSourceState(); headStickActive = false
+        steamZones[0].reset(); steamZones[1].reset()
         guard !compiled.isEmpty else { SteamControllerUSB.shared.remove(steamReaderID); return }
         var sink = pe_sink()
         sink.pad_button = { _, _, _ in }          // the real controller is still there for the app
@@ -298,6 +329,7 @@ final class DesktopPad: ObservableObject {
             PadHUD.shared.gyroChanged(gyro == 1)
         }
         shownLayer = layer; shownGyro = gyro
+        steamPadLayerChanged(layer)
         PadHeadTracking.shared.refreshActivation()
     }
 
@@ -310,7 +342,7 @@ final class DesktopPad: ObservableObject {
             }
             lastDiagnosticTick = now
         }
-        guard runtimePID == (NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0) else { evaluate(); return }
+        guard runtimePID == frontPID else { evaluate(); return }
         if let e = engine { pe_tick(e, Self.now()) }
         if OnScreenKeyboard.shared.isOpen {
             steamRightMotion.reset(); steamLeftMotion.reset()
@@ -383,10 +415,18 @@ final class DesktopPad: ObservableObject {
     }
     nonisolated static func now() -> Double { ProcessInfo.processInfo.systemUptime }
 
+    private var napGuard: NSObjectProtocol?
     func attach() {
         // Timers only while a controller is connected and a profile applies.
         let any = steamSource || GCController.controllers().contains { $0.extendedGamepad != nil } || feed.anyConnected
         if !any, let e = engine { pe_release_all(e, Self.now()); sourceState = PadSourceState() }
+        // While a profile is mapping a controller, macOS must not nap Nokcandu behind the game: App Nap
+        // stretches timers and delays callbacks, which is felt as late or uneven input.
+        let mapping = engine != nil && any
+        if mapping, napGuard == nil {
+            napGuard = ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
+                                                             reason: "Mapping a controller for the app in front")
+        } else if !mapping, let guardToken = napGuard { ProcessInfo.processInfo.endActivity(guardToken); napGuard = nil }
         if engine != nil && any && timer == nil {
             let t = Timer(timeInterval: 0.004, repeats: true) { _ in MainActor.assumeIsolated { DesktopPad.shared.tick() } }
             RunLoop.main.add(t, forMode: .common)
@@ -451,10 +491,11 @@ final class DesktopPad: ObservableObject {
     }
     private func readSteam(_ state: SteamControllerReport.State?) {
         guard steamSource, let e = engine else { return }
-        guard runtimePID == (NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0) else { evaluate(); return }
+        guard runtimePID == frontPID else { evaluate(); return }
         guard let state else {
             steamRightMotion.reset()
             steamLeftMotion.reset()
+            steamZones[0].reset(); steamZones[1].reset()
             pe_release_main(e, Self.now()); sourceState = PadSourceState(); lastButtons = [:]; lastAxes = [:]
             PadHeadTracking.shared.refreshActivation(); return
         }
@@ -471,6 +512,8 @@ final class DesktopPad: ObservableObject {
         let gyroTouch = (steamLeftSettings.gyroWhileTouched == true && state.leftTouch) || (steamRightSettings.gyroWhileTouched == true && state.rightTouch)
         pe_gyro_touch(e, touchRequired, gyroTouch)
         pe_touch(e,0,state.leftTouch && steamLeftSettings.mode == .existing,(state.leftPad.x+1)/2,(1-state.leftPad.y)/2,now)
+        steamPadZones(0, down: state.leftTouch, pad: state.leftPad, settings: steamLeftSettings, engine: e, now: now)
+        steamPadZones(1, down: state.rightTouch, pad: state.rightPad, settings: steamRightSettings, engine: e, now: now)
         if steamLeftSettings.mode != .existing {
             let motion = steamLeftMotion.touch(down: state.leftTouch, x: Double(state.leftPad.x+1)/2, y: Double(1-state.leftPad.y)/2, at: now, settings: steamLeftSettings)
             steamPadMouse(motion, side: 0)
@@ -540,7 +583,7 @@ final class DesktopPad: ObservableObject {
             MainActor.assumeIsolated {
                 let runtime = DesktopPad.shared
                 runtime.lastRealMouse = ProcessInfo.processInfo.systemUptime
-                if runtime.runtimePID == (NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0), let engine = runtime.engine {
+                if runtime.runtimePID == runtime.frontPID, let engine = runtime.engine {
                     _ = pe_menu_mouse(engine, e.deltaX, e.deltaY)
                 }
             }
@@ -621,7 +664,7 @@ final class DesktopPad: ObservableObject {
 
     var headMotionAllowed: Bool {
         guard enabled, trusted, activeID != nil, PadHeadTracking.shared.enabled, let engine,
-              runtimePID == (NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0) else { return false }
+              runtimePID == frontPID else { return false }
         return !pe_motion_paused(engine)
     }
     func headMotionAllowed(settings: PadHeadMotionSettings) -> Bool {

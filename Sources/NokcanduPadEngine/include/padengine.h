@@ -21,7 +21,10 @@ enum {
     PE_TZ1, PE_TZ2, PE_TZ3, PE_TZ4, PE_TC1, PE_TC2, PE_TC3, PE_TC4,
     // Tilting the controller (gyro controllers).
     PE_TILT_LEFT, PE_TILT_RIGHT, PE_TILT_FWD, PE_TILT_BACK,
-    PE_INPUTS                               // 45
+    // A trackpad used as four directions, and its outer edge (the host decides when each is held: pe_pad_zone).
+    PE_LPAD_UP, PE_LPAD_DOWN, PE_LPAD_LEFT, PE_LPAD_RIGHT, PE_LPAD_EDGE,
+    PE_RPAD_UP, PE_RPAD_DOWN, PE_RPAD_LEFT, PE_RPAD_RIGHT, PE_RPAD_EDGE,
+    PE_INPUTS                               // 55
 };
 // Axes: SDL2's order. Sticks -32768…32767 (y down), triggers 0…32767.
 enum { PE_AXIS_LX, PE_AXIS_LY, PE_AXIS_RX, PE_AXIS_RY, PE_AXIS_LT, PE_AXIS_RT, PE_AXES };
@@ -85,6 +88,8 @@ bool pe_uses_gyro(const pe_engine *e);
 enum { PE_KEYBOARD_MENU = 255, PE_RUMBLE_MENU = 254 };   // sink.menu ids: the on-screen keyboard, a rumble
 /// The touchpad: finger 0 or 1 touching (or lifted), at x, y 0…1 (y down).
 void pe_touch(pe_engine *e, int finger, bool down, float x, float y, double now);
+// A trackpad direction or edge (PE_LPAD_UP…PE_RPAD_EDGE) held or let go.
+void pe_pad_zone(pe_engine *e, int input, bool down, double now);
 bool pe_uses_touch(const pe_engine *e);
 /// Native touch event visibility in the intercepted Wine SDL path only.
 bool pe_touch_passthrough(const pe_engine *e);

@@ -111,6 +111,9 @@ struct LibraryView: View {
                         }
                     } header: {
                         Text(c.name).contextMenu { CategoryMenu(name: c.name) }
+                            .draggable(AppModel.categoryDragPrefix + c.name)
+                            .dropDestination(for: String.self) { items, _ in model.dropOnSection(items, category: c.name) }
+                            .help("Drop a game here to put it in \(c.name). Drag this title onto another category to move it there.")
                     }
                 }
             }
@@ -119,7 +122,7 @@ struct LibraryView: View {
                     .onMove { model.moveGames(from: $0, to: $1) }
                     .moveDisabled(filtering)
             } header: {
-                Text("Games")
+                Text("Games").dropDestination(for: String.self) { items, _ in model.dropOnSection(items, category: nil) }
             }
             if !model.offlineApps.isEmpty {
                 Section("Drive not connected") {
@@ -141,7 +144,7 @@ struct LibraryView: View {
                 Section(isExpanded: expanded("launchers")) {
                     ForEach(model.launcherApps.filter(model.matchesLibrary)) { g in row(g) }
                 } header: {
-                    Text("Launchers")
+                    Text("Launchers").dropDestination(for: String.self) { items, _ in model.dropOnSection(items, category: nil) }
                 }
             }
         }
@@ -239,6 +242,7 @@ struct LibraryView: View {
                             }
                     }
                     .help(model.updateCount > 0 ? "Settings — \(model.updateCount) update\(model.updateCount == 1 ? "" : "s") available" : "Settings")
+                    .accessibilityLabel(model.updateCount > 0 ? "Settings, \(model.updateCount) update\(model.updateCount == 1 ? "" : "s") available" : "Settings")
                 }
             }
         } detail: {
@@ -254,9 +258,6 @@ struct LibraryView: View {
         }
         .toolbar {
             ToolbarItem(placement: .principal) { RunningStrip() }
-            ToolbarItem {
-                Button { model.refresh() } label: { Label("Refresh", systemImage: "arrow.clockwise") }
-            }
         }
         .alert(model.categoryPrompt?.renaming == nil ? "New Category" : "Rename Category",
                isPresented: Binding(get: { model.categoryPrompt != nil }, set: { if !$0 { model.categoryPrompt = nil } })) {
@@ -310,6 +311,7 @@ extension LibraryView {
         GameRow(game: g, state: model.runStates[g.id] ?? .notRunning)
             .tag(g.id)
             .contentShape(Rectangle())
+            .draggable(g.id)
     }
 }
 

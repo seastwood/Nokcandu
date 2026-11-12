@@ -58,6 +58,18 @@ struct ControllerProfileEditor: View {
         return profile.layers[0][i] ?? m.layers.first?.bindings[i]
     }
 
+    /// What every input does in the layer being edited (its own setting, or what it inherits), from one merge.
+    var resolvedBindings: [PadProfiles.Input: PadProfiles.Binding] {
+        let m = merged
+        let layer = m.layers.first { $0.name.caseInsensitiveCompare(layerName) == .orderedSame }?.bindings ?? [:]
+        let base = m.layers.first?.bindings ?? [:]
+        var out: [PadProfiles.Input: PadProfiles.Binding] = [:]
+        for i in PadProfiles.Input.allCases {
+            out[i] = profile.layers[layerIndex][i] ?? layer[i] ?? (layerIndex > 0 ? (profile.layers[0][i] ?? base[i]) : nil)
+        }
+        return out
+    }
+
     var inputSource: PadProfiles.ControllerSource { PadProfiles.top(profile, all: everything, \.controllerSource) ?? .automatic }
 
     var effectiveRouting: PadProfiles.RoutingMode { PadProfiles.top(profile, all: everything, \.routingMode) ?? .legacy }
@@ -111,15 +123,9 @@ struct ControllerProfileEditor: View {
                     Text("Steam Controller (2015 · USB / receiver)").tag(PadProfiles.ControllerSource.steamUSB)
                 }
             }
-            sourceRow("Routing", info: "Native devices remain visible on macOS. Button suppression applies only through Nokcandu’s Wine mapping path. Select a stick, trigger or gyro to route it individually. Hybrid buttons can cause duplicate actions. Wine profiles use the existing Xbox-style controller path; Native input values does not promise the original device identity.") {
+            sourceRow("Routing", info: "What the game or app receives. Standard: your mappings, and anything you left alone works as usual. “Only what this profile maps” hides the controller’s own input from Windows games; “Mappings and the controller itself” sends both, which can make a button act twice. “The controller itself” switches mappings off. The Buttons choices do the same for buttons only, and “Choose for each control” lets you decide control by control: select a button, stick, trigger or the gyro to set it.\n\nThe controller stays visible to macOS either way; hiding applies to Windows games through Nokcandu. Windows games see an Xbox-style controller.") {
                 Picker("Routing", selection: Binding(get: { effectiveRouting }, set: { profile.routingMode = $0 })) {
-                    Text("Existing behavior").tag(PadProfiles.RoutingMode.legacy)
-                    Text("Native input values").tag(PadProfiles.RoutingMode.native)
-                    Text("Hybrid primary inputs").tag(PadProfiles.RoutingMode.hybridAll)
-                    Text("Mapped primary inputs only").tag(PadProfiles.RoutingMode.remappingAll)
-                    Text("Hybrid buttons").tag(PadProfiles.RoutingMode.hybrid)
-                    Text("Mapped buttons only").tag(PadProfiles.RoutingMode.remapping)
-                    Text("Selective inputs").tag(PadProfiles.RoutingMode.selective)
+                    ForEach(PadProfiles.RoutingMode.shown, id: \.self) { Text($0.title).tag($0) }
                 }
             }
             if effectiveRouting == .selective, case .input(let input) = selection, PadProfiles.Input.padButtons.contains(input) {
@@ -127,7 +133,7 @@ struct ControllerProfileEditor: View {
                     Picker("\(input.title(family)) routing", selection: Binding(get: { profile.buttonRoutes?[input.rawValue] ?? .mapped }, set: { route in
                         if profile.buttonRoutes == nil { profile.buttonRoutes = [:] }; profile.buttonRoutes?[input.rawValue] = route
                     })) {
-                        ForEach(PadProfiles.ButtonRoute.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
+                        ForEach(PadProfiles.ButtonRoute.allCases, id: \.self) { Text($0.title).tag($0) }
                     }
                 }
             }
@@ -138,8 +144,8 @@ struct ControllerProfileEditor: View {
                         Picker(Self.routeTitles[control, default: control.capitalized] + " routing", selection: Binding(get: { profile.controlRoutes?[control] }, set: { route in
                             if profile.controlRoutes == nil { profile.controlRoutes = [:] }; profile.controlRoutes?[control] = route
                         })) {
-                            Text("Existing settings").tag(Optional<PadProfiles.ButtonRoute>.none)
-                            ForEach(PadProfiles.ButtonRoute.allCases, id: \.self) { Text($0.rawValue.capitalized).tag(Optional($0)) }
+                            Text("As the profile’s routing says").tag(Optional<PadProfiles.ButtonRoute>.none)
+                            ForEach(PadProfiles.ButtonRoute.allCases, id: \.self) { Text($0.title).tag(Optional($0)) }
                         }
                     }
                 }
@@ -161,12 +167,16 @@ struct ControllerProfileEditor: View {
                             remove: { removeDevice(id) })
                     .frame(width: width)
             } else {
+                // Worked out once per change to the profile: the picture redraws many times a second while a
+                // controller is in use, and resolving the profile for every button each time kept a core busy.
+                let resolved = resolvedBindings
                 ControllerPicture(family: family, selection: $selection, tester: tester,
-                                  mapped: { i in profile.layers[layerIndex][i] != nil || inherited(i) != nil },
-                                  label: { i in shortLabel(i) }, stickLabel: { s in stickLabel(s) })
+                                  mapped: { i in resolved[i] != nil },
+                                  label: { i in shortLabel(resolved[i]) }, stickLabel: { s in stickLabel(s) },
+                                  steamPad: { side in inputSource == .steamUSB ? PadProfiles.steamTrackpad(side, profile: profile, all: everything, layer: layerIndex > 0 ? layerName : nil) : nil })
                     .frame(width: width, height: width * 400 / 560)
                 ExtraButtons(tester: tester, family: family, selection: $selection,
-                             mapped: { i in profile.layers[layerIndex][i] != nil || inherited(i) != nil })
+                             mapped: { i in resolved[i] != nil })
             }
             PadTestView(tester: tester, family: family)
         }
@@ -286,7 +296,7 @@ struct ControllerProfileEditor: View {
                 } else {
                     // Too narrow for both side by side at a usable size: the picture above its settings.
                     VStack(spacing: 12) {
-                        picturePane(width: geo.size.width).frame(height: max(200, geo.size.height * 0.5))
+                        picturePane(width: geo.size.width).frame(height: max(220, geo.size.height * 0.6))
                         Form { inspector }.formStyle(.grouped)
                     }
                 }
@@ -305,7 +315,17 @@ struct ControllerProfileEditor: View {
         .onAppear {
             family = PadProfiles.controllerLabelFamily(profile, all: everything, connected: PadGC.connectedFamily())
             tester.selectSource(inputSource)
-            tester.configureSteamPads(left: PadProfiles.steamTrackpad(0, profile: profile, all: everything), right: PadProfiles.steamTrackpad(1, profile: profile, all: everything))
+            configureTesterPads(profile)
+            // Opened behind another app (a game in front, say): the live test waits until Nokcandu is in front.
+            if NSApp.isActive { tester.start(profile: PadProfiles.compile(profile, all: everything), devices: PadProfiles.devices(profile, all: everything)) }
+        }
+        .onChange(of: layerIndex) { _, _ in configureTesterPads(profile) }
+        // The live test is for looking at: while Nokcandu is behind another app (a game, say) it stops
+        // reading and redrawing, and picks up again when Nokcandu comes back.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in tester.stop() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            tester.stop()
+            tester.selectSource(inputSource); configureTesterPads(profile)
             tester.start(profile: PadProfiles.compile(profile, all: everything), devices: PadProfiles.devices(profile, all: everything))
         }
         .onDisappear {
@@ -324,7 +344,7 @@ struct ControllerProfileEditor: View {
             undoing = false
             PadProfileEdits.shared.submit(p, contents: own ? editingContents : nil, persist: onChange)
             tester.selectSource(inputSource)
-            tester.configureSteamPads(left: PadProfiles.steamTrackpad(0, profile: p, all: everything), right: PadProfiles.steamTrackpad(1, profile: p, all: everything))
+            configureTesterPads(p)
             family = PadProfiles.controllerLabelFamily(p, all: everything, connected: PadGC.connectedFamily())
             tester.reload(PadProfiles.compile(p, all: everything), devices: PadProfiles.devices(p, all: all.filter { $0.id != p.id } + [p]))
         }
@@ -346,6 +366,13 @@ struct ControllerProfileEditor: View {
             }
             .padding(24).frame(width: 400)
         }
+    }
+
+    /// The test follows the layer being edited, so a layer's own pad settings can be tried as they are set.
+    func configureTesterPads(_ p: PadProfiles.Profile) {
+        let all = everything.filter { $0.id != p.id } + [p]
+        let layer = layerIndex > 0 && p.layers.indices.contains(layerIndex) ? p.layers[layerIndex].name : nil
+        tester.configureSteamPads(left: PadProfiles.steamTrackpad(0, profile: p, all: all, layer: layer), right: PadProfiles.steamTrackpad(1, profile: p, all: all, layer: layer))
     }
 
     // MARK: Header and layers
@@ -502,7 +529,7 @@ struct ControllerProfileEditor: View {
     func stickLabel(_ s: Int) -> String? {
         if inputSource == .steamUSB && s == 1 {
             let mode = steamTrackpadBinding(1).wrappedValue.mode
-            if mode != .existing { return mode == .trackball ? "Trackball" : "Trackpad mouse" }
+            if mode != .existing { return mode == .trackball ? "Trackball" : mode == .directions ? "Directions" : "Trackpad mouse" }
         }
         let st = layerStick(s) ?? baseStick(s)
         switch st.mode {

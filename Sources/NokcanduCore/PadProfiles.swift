@@ -18,9 +18,15 @@ public enum PadProfiles {
         case tz1, tz2, tz3, tz4, tc1, tc2, tc3, tc4
         /// Tilting the controller.
         case tiltleft, tiltright, tiltfwd, tiltback
+        /// A trackpad used as four directions, and its outer edge (original Steam Controller).
+        case lpup, lpdown, lpleft, lpright, lpedge, rpup, rpdown, rpleft, rpright, rpedge
         public var id: String { rawValue }
         /// Not a button on the controller: a stick direction, a touchpad zone or a tilt.
-        public var isVirtual: Bool { isStickDirection || Self.touchZones.contains(self) || Self.tilts.contains(self) }
+        public var isVirtual: Bool { isStickDirection || Self.touchZones.contains(self) || Self.tilts.contains(self) || Self.padZones.contains(self) }
+        /// Up, down, left, right of the left (0) or right (1) trackpad, and that pad's edge.
+        public static func padDirections(_ side: Int) -> [Input] { side == 0 ? [.lpup, .lpdown, .lpleft, .lpright] : [.rpup, .rpdown, .rpleft, .rpright] }
+        public static func padEdge(_ side: Int) -> Input { side == 0 ? .lpedge : .rpedge }
+        public static let padZones: [Input] = padDirections(0) + [.lpedge] + padDirections(1) + [.rpedge]
         public static let touchZones: [Input] = [.tz1, .tz2, .tz3, .tz4, .tc1, .tc2, .tc3, .tc4]
         public static let tilts: [Input] = [.tiltleft, .tiltright, .tiltfwd, .tiltback]
 
@@ -63,6 +69,8 @@ public enum PadProfiles {
             case (.tz1, _): "Touch top left"; case (.tz2, _): "Touch top right"; case (.tz3, _): "Touch bottom left"; case (.tz4, _): "Touch bottom right"
             case (.tc1, _): "Click top left"; case (.tc2, _): "Click top right"; case (.tc3, _): "Click bottom left"; case (.tc4, _): "Click bottom right"
             case (.tiltleft, _): "Tilt left"; case (.tiltright, _): "Tilt right"; case (.tiltfwd, _): "Tilt forward"; case (.tiltback, _): "Tilt back"
+            case (.lpup, _): "Left pad up"; case (.lpdown, _): "Left pad down"; case (.lpleft, _): "Left pad left"; case (.lpright, _): "Left pad right"; case (.lpedge, _): "Left pad edge"
+            case (.rpup, _): "Right pad up"; case (.rpdown, _): "Right pad down"; case (.rpleft, _): "Right pad left"; case (.rpright, _): "Right pad right"; case (.rpedge, _): "Right pad edge"
             }
         }
     }
@@ -225,6 +233,9 @@ public enum PadProfiles {
         public var leftStick: Stick?
         public var rightStick: Stick?
         public var gyro: Gyro?
+        /// A layer's own trackpad settings (original Steam Controller) while it's on (nil: as the base layer).
+        public var steamLeftTrackpad: PadSteamTrackpadSettings?
+        public var steamRightTrackpad: PadSteamTrackpadSettings?
         /// The controller's light while this layer is on (DualSense, DualShock 4), "#RRGGBB".
         public var color: String?
         public init(id: String = UUID().uuidString, name: String, bindings: [String: Binding] = [:]) { self.id = id; self.name = name; self.bindings = bindings }
@@ -520,8 +531,28 @@ public enum PadProfiles {
         return top(profile,all:all,\.controllerSource) == .steamUSB ? .valve : connected
     }
 
-    public enum RoutingMode: String, Codable, CaseIterable, Sendable { case legacy, native, hybrid, remapping, selective, hybridAll, remappingAll }
-    public enum ButtonRoute: String, Codable, CaseIterable, Sendable { case native, mapped, both, disabled }
+    public enum RoutingMode: String, Codable, CaseIterable, Sendable {
+        case legacy, native, hybrid, remapping, selective, hybridAll, remappingAll
+        /// In the order shown, simplest first.
+        public static let shown: [RoutingMode] = [.legacy, .remappingAll, .hybridAll, .native, .remapping, .hybrid, .selective]
+        public var title: String {
+            switch self {
+            case .legacy: "Standard"
+            case .remappingAll: "Only what this profile maps"
+            case .hybridAll: "Mappings and the controller itself"
+            case .native: "The controller itself, no mappings"
+            case .remapping: "Buttons: only what's mapped"
+            case .hybrid: "Buttons: mapped and the button itself"
+            case .selective: "Choose for each control"
+            }
+        }
+    }
+    public enum ButtonRoute: String, Codable, CaseIterable, Sendable {
+        case native, mapped, both, disabled
+        public var title: String {
+            switch self { case .native: "The control itself"; case .mapped: "Its mapping"; case .both: "Both"; case .disabled: "Off" }
+        }
+    }
 
     public struct Profile: Codable, Hashable, Identifiable, Sendable {
         public var id: String
@@ -852,6 +883,22 @@ public enum PadProfiles {
         flick.rightStick = Stick(mode: .flick)
         flick.gyro = { var g = Gyro(output: .mouse); g.sensitivity = 6; g.smoothing = 3; g.tightening = 1.5; return g }()
         return [gyroAim, mk, flick]
+    }
+
+    /// The original Steam Controller, ready to play a keyboard-and-mouse game: the right pad aims as a
+    /// trackball, the left pad walks with W A S D and sprints at its edge, and the triggers click. Without a
+    /// mapped click the controller has none (its built-in one is off while Nokcandu reads it).
+    public static func steamStarter() -> Profile {
+        var p = Profile(id: "starter-steam-controller", name: "Steam Controller")
+        p.controllerSource = .steamUSB
+        p.steamRightTrackpad = { var s = PadSteamTrackpadSettings(mode: .trackball); s.sensitivity = 650; return s }()
+        p.steamLeftTrackpad = { var s = PadSteamTrackpadSettings(mode: .directions); s.edge = 0.2; return s }()
+        let pairs: [(Input, Output)] = [(.rt, .mouse(.left)), (.lt, .mouse(.right)), (.a, .key(49)), (.b, .key(8)), (.x, .key(15)),
+                                        (.y, .key(14)), (.lb, .key(12)), (.rb, .key(3)), (.start, .key(53)), (.back, .key(48)),
+                                        (.lpup, .key(13)), (.lpdown, .key(1)), (.lpleft, .key(0)), (.lpright, .key(2)), (.lpedge, .key(56)),
+                                        (.paddle1, .key(49)), (.paddle2, .key(59))]
+        for (i, o) in pairs { p.base[i] = .as(o) }
+        return p
     }
 
     /// For the Mac itself: right stick moves the pointer, triggers click, left stick scrolls by keys.

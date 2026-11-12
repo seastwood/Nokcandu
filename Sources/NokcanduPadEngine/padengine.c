@@ -176,7 +176,8 @@ static const char *input_names[PE_INPUTS] = {
     "a", "b", "x", "y", "back", "guide", "start", "ls", "rs", "lb", "rb", "up", "down", "left", "right", "misc",
     "paddle1", "paddle2", "paddle3", "paddle4", "touchpad", "lt", "rt", "ltfull", "rtfull",
     "lsup", "lsdown", "lsleft", "lsright", "rsup", "rsdown", "rsleft", "rsright",
-    "tz1", "tz2", "tz3", "tz4", "tc1", "tc2", "tc3", "tc4", "tiltleft", "tiltright", "tiltfwd", "tiltback"
+    "tz1", "tz2", "tz3", "tz4", "tc1", "tc2", "tc3", "tc4", "tiltleft", "tiltright", "tiltfwd", "tiltback",
+    "lpup", "lpdown", "lpleft", "lpright", "lpedge", "rpup", "rpdown", "rpleft", "rpright", "rpedge"
 };
 static int dev_in(int slot, int k) { return PE_INPUTS + (slot - 1) * PE_DEV_INPUTS + k; }
 enum { K_HAT = PE_DEV_BUTTONS, K_AXIS = PE_DEV_BUTTONS + 4 };
@@ -732,6 +733,11 @@ static void set_input(pe_engine *e, int in, bool down, double now) {
     if (down) input_down(e, in, now); else input_up(e, in, now);
 }
 static int touch_zone_of(double x, double y) { return (x >= 0.5) + 2 * (y >= 0.5); }
+
+void pe_pad_zone(pe_engine *e, int input, bool down, double now) {
+    if (!e || input < PE_LPAD_UP || input > PE_RPAD_EDGE) return;
+    set_input(e, input, down, now);
+}
 
 void pe_button(pe_engine *e, int button, bool down, double now) {
     if (!e || button < 0 || button >= PE_PAD_BUTTONS) return;

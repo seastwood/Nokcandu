@@ -66,7 +66,7 @@ struct ProfilesSidebar: View {
                 Menu {
                     Button("Blank Profile") { newPad(PadProfiles.Profile(name: "New Profile")) }
                     Divider()
-                    ForEach(PadProfiles.starters() + [PadProfiles.desktopStarter()]) { s in Button(s.name) { newPad(s) } }
+                    ForEach(PadProfiles.starters() + [PadProfiles.desktopStarter(), PadProfiles.steamStarter()]) { s in Button(s.name) { newPad(s) } }
                     Divider()
                     Button("Import from File…") { ProfileActions.importFile(model: model) }
                     Button("Paste Shared Profile") { ProfileActions.importText(NSPasteboard.general.string(forType: .string) ?? "", model: model) }

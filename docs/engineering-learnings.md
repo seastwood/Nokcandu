@@ -599,3 +599,8 @@ Wine asks the Mac driver for the cursor position after 100 ms without input, and
 ### Smooth by speed, not by dead band
 
 A per-axis dead band steadies a resting finger but must be crossed twice on every change of direction, which users feel as resistance. A low-pass whose cutoff rises with speed removes the same wobble with no distance to push through. Ease movement in for the first 30 ms of a touch: the contact patch is still growing. Match Valve's 15° pad rotation before judging "straightness".
+
+### Don't ask macOS who is in front on every controller report
+
+A CPU sample of the installed app with a Steam Controller profile active (about 15% of a core) showed `NSWorkspace.frontmostApplication` as the largest single cost: the controller runtime asked on every report and every 4 ms tick. The answer is now kept, replaced on app activation and re-asked at most four times a second. Controller mapping still runs on the main thread, so anything slow there delays input; automatic library rescans therefore run only when Nokcandu comes to the front with nothing running, at most once a minute, at background priority, and leave the window alone when nothing changed. Re-measure after installing before claiming a figure.
+

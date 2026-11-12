@@ -19,3 +19,4 @@ profiles-repo/
 .moved/
 commit-msg.txt
 __pycache__/
+.swiftpm/

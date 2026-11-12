@@ -66,3 +66,53 @@ Software-tested only (`SteamPadFeelTests`: resting noise, slow reversal, fast sw
 - Running items: green mark and green "Running" in the list, and a strip of running icons beside the window title on every tab (click to go to it; right-click to quit).
 - **Categories**: user-made sidebar sections for anything in the library (right-click → Category). Stored in `library-order.json` (`categories`, `categoryOf`); favorites still win. Sections collapse and remember it (`collapsed`). No migration: missing keys mean none.
 - Controller profile editor: below 880 pt the picture sits above the settings instead of being squeezed beside them; the pane's content is inset from its edge and scroll bar; long explanations moved to (i) buttons; header and action rows wrap or fold into a menu instead of clipping; the picture's controls scale with it so labels no longer collide.
+
+## Follow-up, November 12: pad edge, four directions and the Steam picture (after 0.12.15)
+
+User request: show the pad angle on the picture; an edge on each trackpad that holds another button (left pad as W A S D, Shift at the rim), with an adjustable size shown on the picture; bigger pads and a higher centre row on the Steam picture.
+
+- **Edge**: optional per-pad `edge` (part of the radius, from the rim inward; unset or under 2% = off). While the finger is in the ring the pad's edge input (`lpedge` / `rpedge`) is held, in every pad behavior, alongside whatever the pad does there. Bound like any button, per layer.
+- **Four directions**: new pad behavior. Eight-way (neighbouring directions overlap on the diagonals), with a centre dead zone and the pad angle applied. Inputs `lpup/lpdown/lpleft/lpright` and `rp…`, each bound like a button. Choosing it for the first time fills in W A S D (left) or the arrow keys (right) if nothing is set.
+- **Where it runs**: the host works out which inputs are held (`PadSteamPadZones`, pure and tested) and tells the engine with `pe_pad_zone`; ten new engine inputs after the tilts. The engine's profile text format is unchanged; older helpers simply never see these inputs (Steam pads are read by the app, not inside Wine).
+- **Picture**: each pad shows its axes turned by the pad angle, the edge ring at its size (lit while touched there), and for four directions the dead zone and what each way does. Steam layout: pads 104 pt (were 76), centre row raised, joystick/face buttons and grips moved to clear them.
+- Existing profiles: nothing changes until an edge size or the new behavior is chosen. Undo: Edge size 0; pick another pad behavior.
+- Tested in software (`SteamPadZoneTests`: eight-way and dead zone, edge in every behavior with its boundary stickiness, angle, no pointer movement in directions, engine holds and releases the bound keys, settings round-trip). **Picture layout and feel on the controller are not yet seen or confirmed.**
+
+### Capability review (not implemented; for choosing what comes next)
+
+Compared with Steam Input and JoyShockMapper. Present already: layers, tap/hold/double, chords, toggles, turbo, macros, sequences, radial menus, on-screen keyboard, flick stick, gyro acceleration/tightening/One Euro filter/yaw-roll mixing/auto-calibration/touch activation, tilt buttons, dual-stage triggers, device combining, sharing, per-app rules.
+
+Gaps worth considering, most useful first:
+
+1. Pad settings per layer (pad behavior, edge and sensitivity currently apply to all layers).
+2. Pad as an analog stick for the left pad (today: directions as keys/buttons, or the old touchpad modes), and tap-to-click / double-tap on a pad.
+3. Gyro: player-space / world-space turning (today: yaw/roll mix in controller space), real-world calibration (degrees per full turn), gyro as scroll.
+4. Triggers as analog outputs (trigger → stick axis or mouse speed), not only soft/full presses.
+5. Steam Controller over Bluetooth, more than one Steam Controller at once, and its inner-ring / click-required variants for directions.
+6. Edge as analog (how far into the ring), for walk/run blends.
+
+## Follow-up, November 12 (later): what was using the CPU, and polish before Streams
+
+Measured on the installed app with the Steam Controller profile active (`top`, `sample`).
+
+| State | CPU of one core |
+| --- | --- |
+| Before: profile editor open, Nokcandu in front | about 15–47% |
+| Before: profile editor open, Nokcandu **behind another app** | about 50% |
+| After: same, behind another app | about 8–20% (one reading set; not yet measured behind a running game) |
+
+What the samples showed, in order of cost:
+
+1. **The editor's live test ran while Nokcandu was in the background** and redrew the controller picture on every report. Each redraw resolved the whole profile once per button. Fixed: the test stops when Nokcandu is not the active app (and does not start when the window opens behind another app); bindings are resolved once per profile change; the test dot publishes at most 30 times a second.
+2. **The on-screen note was rebuilt for every calibration tick** (new hosting view, measure, move, re-order), from both the runtime and the live test. Fixed: one hosting view; only its content changes while the note's shape is the same.
+3. **`NSWorkspace.frontmostApplication` on every report and tick.** Fixed earlier (kept answer).
+4. Pointer-capture polling asked for the front app and its windows four times a second with nothing configured. Fixed: skipped when no app is set up for capture.
+
+Also added: an App Nap guard (`beginActivity` with `.latencyCritical`) held only while a profile is mapping a connected controller. There was none before, so macOS was free to stretch the 4 ms mapping timer behind a game.
+
+**Not done: moving controller mapping off the main thread.** With the redraw and note costs gone the main thread is nearly idle while a game is in front, and the runtime (`DesktopPad`) shares state with profile resolution, the HUD and SwiftUI throughout. Moving it without hardware in the loop risked breaking input in a release. It remains the right long-term change; do it with a controller connected and a latency measurement before and after.
+
+Other changes in this round: per-layer pad settings (`Layer.steamLeftTrackpad/steamRightTrackpad`, resolved by layer name through the profile stack; the runtime switches on the engine's layer change and releases held pad inputs); `PadProfiles.steamStarter()`; routing titles (`RoutingMode.title`, `ButtonRoute.title`); steadiness slider shown only when a profile still has a value; category drag and drop (`moveCategory(_:before:)`, `dropOnSection`); stale `/tmp/nokcandu-pad-*` files removed at start for dead processes only; library rescan on return to the app (nothing running, once a minute, background priority, no UI change when nothing changed).
+
+Visual pass (screenshots of the installed app at 1203×840 and 871×732): Games, Controls, Streams, a game's Overview, and the profile editor in both layouts. Nothing clipped. Adjusted: the stacked editor gives the picture 60% of the height; the Steam face buttons sit slightly lower; the Settings toolbar button has an accessibility name. Not walked: Settings pages, installer, stores, sheets.
+

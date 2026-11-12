@@ -68,6 +68,12 @@ final class PadCapture: ObservableObject {
     }
 
     func refresh() {
+        // Nothing set up to capture: don't ask macOS about the front app and its windows four times a second.
+        if modes.values.allSatisfy({ $0 == "disabled" }) && policy.targetPID == nil {
+            if status != "Disabled" { status = "Disabled" }
+            if !monitors.isEmpty { refreshKeyboardMonitors() }
+            return
+        }
         refreshKeyboardMonitors()
         let app = NSWorkspace.shared.frontmostApplication
         let pid = app?.processIdentifier
@@ -98,7 +104,7 @@ final class PadCapture: ObservableObject {
 
     /// Verify focus and permissions for every output, not merely at polling boundaries.
     func point(for pid: pid_t) -> CGPoint? {
-        guard policy.targetPID == pid, NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+        guard policy.targetPID == pid, DesktopPad.shared.frontPID == pid,
               AXIsProcessTrusted(), !suspended else { return nil }
         return anchor
     }

@@ -15,19 +15,23 @@ struct ControllerPicture: View {
     let label: (PadProfiles.Input) -> String?
     /// What each stick does, when it isn't simply a stick ("Mouse", "WSAD"…).
     var stickLabel: (Int) -> String? = { _ in nil }
+    /// A Steam Controller trackpad's settings as they apply (left 0, right 1), for drawing its angle and edge.
+    var steamPad: (Int) -> PadSteamTrackpadSettings? = { _ in nil }
 
     typealias I = PadProfiles.Input
     /// The drawn body's proportions (width ÷ height). Places are fractions of the body's box.
     static let aspect: CGFloat = 1.55
+    /// The Steam Controller's trackpads, in points at the picture's full size.
+    static let steamPadSize: CGFloat = 104
 
     var steamLayout: Bool { family == .valve }
     var psLayout: Bool { family == .playstation }
     /// Xbox and Nintendo: left stick high, d-pad low. PlayStation: d-pad high, both sticks low.
     var dpadCenter: CGPoint { psLayout ? CGPoint(x: 0.24, y: 0.36) : CGPoint(x: 0.37, y: 0.585) }
-    var stickPlaces: [CGPoint] { steamLayout ? [CGPoint(x:0.34,y:0.68),CGPoint(x:0.76,y:0.38)] : [psLayout ? CGPoint(x: 0.37, y: 0.585) : CGPoint(x: 0.24, y: 0.36), CGPoint(x: 0.63, y: 0.585)] }
+    var stickPlaces: [CGPoint] { steamLayout ? [CGPoint(x:0.37,y:0.66),CGPoint(x:0.75,y:0.33)] : [psLayout ? CGPoint(x: 0.37, y: 0.585) : CGPoint(x: 0.24, y: 0.36), CGPoint(x: 0.63, y: 0.585)] }
 
     func place(_ i: I) -> CGPoint {
-        let d = dpadCenter, face = steamLayout ? CGPoint(x:0.65,y:0.68) : CGPoint(x: 0.76, y: 0.36)
+        let d = dpadCenter, face = steamLayout ? CGPoint(x:0.63,y:0.67) : CGPoint(x: 0.76, y: 0.36)
         let dx: CGFloat = steamLayout ? 0.048 : 0.058, dy: CGFloat = steamLayout ? 0.075 : 0.09
         switch i {
         case .up: return CGPoint(x: d.x, y: d.y - dy)
@@ -39,11 +43,11 @@ struct ControllerPicture: View {
         case .a: return family == .nintendo ? CGPoint(x: face.x + dx, y: face.y) : CGPoint(x: face.x, y: face.y + dy)
         case .x: return family == .nintendo ? CGPoint(x: face.x, y: face.y - dy) : CGPoint(x: face.x - dx, y: face.y)
         case .b: return family == .nintendo ? CGPoint(x: face.x, y: face.y + dy) : CGPoint(x: face.x + dx, y: face.y)
-        case .back: return steamLayout ? CGPoint(x: 0.41, y: 0.43) : CGPoint(x: 0.42, y: 0.33)
-        case .start: return steamLayout ? CGPoint(x: 0.59, y: 0.43) : CGPoint(x: 0.58, y: 0.33)
-        case .guide: return CGPoint(x: 0.5, y: steamLayout ? 0.43 : psLayout ? 0.47 : 0.19)
-        case .paddle1: return CGPoint(x:0.7,y:0.91)
-        case .paddle2: return CGPoint(x:0.3,y:0.91)
+        case .back: return steamLayout ? CGPoint(x: 0.42, y: 0.25) : CGPoint(x: 0.42, y: 0.33)
+        case .start: return steamLayout ? CGPoint(x: 0.58, y: 0.25) : CGPoint(x: 0.58, y: 0.33)
+        case .guide: return CGPoint(x: 0.5, y: steamLayout ? 0.25 : psLayout ? 0.47 : 0.19)
+        case .paddle1: return CGPoint(x:0.79,y:0.86)
+        case .paddle2: return CGPoint(x:0.21,y:0.86)
         case .lb: return CGPoint(x: 0.22, y: -0.07)
         case .rb: return CGPoint(x: 0.78, y: -0.07)
         case .lt: return CGPoint(x: 0.22, y: -0.24)
@@ -75,14 +79,15 @@ struct ControllerPicture: View {
                 if steamLayout {
                     Button { selection = .touchpad } label: {
                         ZStack {
-                            Circle().fill(Color.accentColor.opacity(0.18)).frame(width:76*k,height:76*k)
-                            Circle().stroke(selection == .touchpad ? Color.accentColor : Color.secondary.opacity(0.35),lineWidth:1.5).frame(width:76*k,height:76*k)
+                            Circle().fill(Color.accentColor.opacity(0.18)).frame(width:Self.steamPadSize*k,height:Self.steamPadSize*k)
+                            Circle().stroke(selection == .touchpad ? Color.accentColor : Color.secondary.opacity(0.35),lineWidth:1.5).frame(width:Self.steamPadSize*k,height:Self.steamPadSize*k)
+                            if let pad = steamPad(0) { SteamPadFace(side: 0, diameter: Self.steamPadSize*k, settings: pad, held: pressed, label: label) }
                             Circle().fill(Color.primary.opacity(0.55)).frame(width:10,height:10)
-                                .offset(x:tester.leftSteamPad.x*28*k,y:-tester.leftSteamPad.y*28*k)
-                            Text("Left trackpad").font(.caption2).lineLimit(1).fixedSize().offset(y:38*k+11)
+                                .offset(x:tester.leftSteamPad.x*Self.steamPadSize*0.42*k,y:-tester.leftSteamPad.y*Self.steamPadSize*0.42*k)
+                            Text("Left trackpad").font(.caption2).lineLimit(1).fixedSize().offset(x:-Self.steamPadSize*0.2*k,y:Self.steamPadSize/2*k+9)
                         }
                     }.buttonStyle(.plain).accessibilityLabel("Left trackpad settings")
-                        .position(at(CGPoint(x:0.24,y:0.38)))
+                        .position(at(CGPoint(x:0.25,y:0.33)))
                 } else { DPadWell().fill(Color.primary.opacity(0.08))
                     .frame(width: sw * 0.17, height: sh * 0.265)
                     .position(at(dpadCenter))
@@ -146,22 +151,71 @@ struct ControllerPicture: View {
         let p = sticks.indices.contains(s) ? sticks[s] : .zero
         let click: I = s == 0 ? .ls : .rs
         let selected = selection == .stick(s) || selection == .input(click)
-        let diameter: CGFloat = (steamLayout && s == 1 ? 76 : 54) * k
+        let diameter: CGFloat = (steamLayout && s == 1 ? Self.steamPadSize : steamLayout ? 48 : 54) * k
         return Button { selection = .stick(s) } label: {
             ZStack {
                 Circle().fill(pressed.contains(click) ? Color.accentColor.opacity(0.5) : stickLabel(s) != nil ? Color.accentColor.opacity(0.22) : Color(nsColor: .controlBackgroundColor)).frame(width: diameter, height: diameter)
                     .shadow(color: .black.opacity(0.15), radius: 1.5, y: 0.5)
                 Circle().stroke(selected ? Color.accentColor : Color.secondary.opacity(0.35), lineWidth: selected ? 2 : 0.5).frame(width: diameter, height: diameter)
-                Circle().fill(Color.primary.opacity(0.55)).frame(width: 12, height: 12).offset(x: p.x * 20 * k, y: -p.y * 20 * k)
+                if steamLayout && s == 1, let pad = steamPad(1) { SteamPadFace(side: 1, diameter: diameter, settings: pad, held: pressed, label: label) }
+                Circle().fill(Color.primary.opacity(0.55)).frame(width: 12, height: 12).offset(x: p.x * (steamLayout && s == 1 ? Self.steamPadSize * 0.42 : 20) * k, y: -p.y * (steamLayout && s == 1 ? Self.steamPadSize * 0.42 : 20) * k)
                 VStack(spacing: 0) {
                     if let m = steamLayout ? (s == 1 ? (stickLabel(s) ?? "Right trackpad") : "Joystick") : stickLabel(s) { Text(m).font(.system(size: 10, weight: .semibold)).foregroundStyle(Color.accentColor).lineLimit(1).fixedSize() }
                     if let l = label(click), l != "—" { Text("click: " + l).font(.system(size: 9, weight: .medium)).foregroundStyle(Color.accentColor.opacity(0.85)).lineLimit(1).fixedSize() }
                 }
-                .offset(y: diameter/2+13)
+                .offset(x: steamLayout && s == 1 ? diameter * 0.2 : 0, y: diameter/2+(steamLayout ? 9 : 13))
             }
         }
         .buttonStyle(.plain)
         .accessibilityLabel((s == 0 ? "Left stick" : steamLayout ? "Right trackpad" : "Right stick") + (stickLabel(s).map { ": \($0)" } ?? ""))
+    }
+}
+
+/// What a Steam Controller trackpad's settings look like on the pad itself: its axes turned by the pad angle,
+/// the edge ring at its chosen size (lit while a finger is in it), and for four directions the dead zone and
+/// what each way does.
+struct SteamPadFace: View {
+    let side: Int
+    let diameter: CGFloat
+    let settings: PadSteamTrackpadSettings
+    let held: Set<PadProfiles.Input>
+    let label: (PadProfiles.Input) -> String?
+
+    var body: some View {
+        let edge = PadSteamPadZones.edgeSize(settings), edgeInput = PadProfiles.Input.padEdge(side)
+        let angle = settings.mode == .existing ? 0 : (settings.rotation ?? 0)
+        let directions = PadProfiles.Input.padDirections(side)
+        ZStack {
+            if edge > 0 {
+                Circle().strokeBorder(held.contains(edgeInput) ? Color.accentColor.opacity(0.75) : Color.accentColor.opacity(0.28), lineWidth: diameter / 2 * edge)
+                Circle().stroke(Color.accentColor.opacity(0.6), style: StrokeStyle(lineWidth: 0.75, dash: [2, 2])).frame(width: diameter * (1 - edge), height: diameter * (1 - edge))
+            }
+            if settings.mode != .existing {
+                // The pad's own left–right and up–down, as the pointer or the directions will follow them.
+                ZStack {
+                    Rectangle().fill(Color.primary.opacity(0.32)).frame(width: diameter * 0.86, height: 1)
+                    Rectangle().fill(Color.primary.opacity(0.18)).frame(width: 1, height: diameter * 0.86)
+                    if settings.mode == .directions {
+                        let dead = PadSteamPadZones.deadzone(settings)
+                        Circle().stroke(Color.primary.opacity(0.3), lineWidth: 0.75).frame(width: diameter * dead, height: diameter * dead)
+                        ForEach(Array(directions.enumerated()), id: \.offset) { n, input in
+                            let reach = diameter * (0.5 - max(edge, 0.12) / 2 - 0.13)
+                            Text(label(input).flatMap { $0 == "—" ? nil : $0 } ?? ["▲", "▼", "◀", "▶"][n])
+                                .font(.system(size: max(7, diameter * 0.13), weight: .bold)).lineLimit(1).fixedSize()
+                                .foregroundStyle(held.contains(input) ? Color.white : Color.accentColor)
+                                .padding(.horizontal, 2)
+                                .background(Capsule().fill(held.contains(input) ? Color.accentColor : .clear))
+                                .rotationEffect(.degrees(-angle))          // text stays upright
+                                .offset(x: n == 2 ? -reach : n == 3 ? reach : 0, y: n == 0 ? -reach : n == 1 ? reach : 0)
+                        }
+                    }
+                }
+                .rotationEffect(.degrees(angle))
+            }
+        }
+        .frame(width: diameter, height: diameter)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 
@@ -175,6 +229,7 @@ final class PadTester: ObservableObject {
     @Published var sticks: [CGPoint] = [.zero, .zero]
     @Published var holding: [String] = []          // outputs held now
     @Published var dot = CGPoint(x: 0.5, y: 0.5)   // where the mouse would go (0…1, wraps)
+    private var dotNow = CGPoint(x: 0.5, y: 0.5), dotShown = 0.0
     @Published var gyroSpeed = 0.0                  // degrees per second
     /// The profile's devices: inputs held now ("<device id>.<key>"), axis positions (−1…1, "<id>.<n>"), and the
     /// last thing pressed or moved on one (to pick it by pressing).
@@ -211,6 +266,7 @@ final class PadTester: ObservableObject {
     private var steamSource = false
     private var steamPadSettings = [PadSteamTrackpadSettings(), PadSteamTrackpadSettings()]
     private var steamPadMotion = [PadSteamTrackpad(), PadSteamTrackpad()]
+    private var steamZones = [PadSteamPadZones(), PadSteamPadZones()]
     func configureSteamPads(left: PadSteamTrackpadSettings?, right: PadSteamTrackpadSettings?) {
         let next = [left ?? PadSteamTrackpadSettings(), right ?? PadSteamTrackpadSettings()]
         if next != steamPadSettings { steamPadMotion = [PadSteamTrackpad(), PadSteamTrackpad()] }
@@ -256,7 +312,7 @@ final class PadTester: ObservableObject {
     func reload(_ text: String, devices: [PadProfiles.Device]? = nil) {
         if (devices == nil || devices == self.devices), let e = engine, text.withCString({ pe_update_profile(e, $0) }) { return }
         if let e = engine { pe_release_all(e, Self.now()); pe_destroy(e) }
-        held = [:]; holding = []; padAxes = [:]
+        held = [:]; holding = []; padAxes = [:]; steamZones = [PadSteamPadZones(), PadSteamPadZones()]
         if let devices, devices != self.devices {
             self.devices = devices
             feed.set(devices, always: true)
@@ -295,10 +351,13 @@ final class PadTester: ObservableObject {
     }
     nonisolated func move(_ x: Int, _ y: Int) {
         MainActor.assumeIsolated {
-            var d = dot
+            var d = dotNow
             d.x = (d.x + Double(x) / 1500).truncatingRemainder(dividingBy: 1); if d.x < 0 { d.x += 1 }
             d.y = (d.y + Double(y) / 1000).truncatingRemainder(dividingBy: 1); if d.y < 0 { d.y += 1 }
-            dot = d
+            dotNow = d
+            // Movement arrives hundreds of times a second; the picture only needs it thirty.
+            let now = Self.now()
+            if now - dotShown >= 1.0 / 30 { dot = d; dotShown = now }
         }
     }
 
@@ -407,6 +466,7 @@ final class PadTester: ObservableObject {
         hasMotion = state?.gyro.contains(where: { $0 != 0 }) == true
         guard let state else {
             steamPadMotion = [PadSteamTrackpad(), PadSteamTrackpad()]
+            steamZones = [PadSteamPadZones(), PadSteamPadZones()]
             pe_release_main(e,Self.now()); lastButtons = [:]; lastAxes = [:]
             pressed = []; sticks = [.zero,.zero]; leftSteamPad = .zero; return
         }
@@ -425,6 +485,13 @@ final class PadTester: ObservableObject {
             steamMouse(steamPadMotion[side].touch(down: side == 0 ? state.leftTouch : state.rightTouch,
                 x: Double(pad.x+1)/2, y: Double(1-pad.y)/2, at: now, settings: steamPadSettings[side]), side: side)
         }
+        var zones: Set<PadProfiles.Input> = []
+        for side in 0..<2 {
+            let pad = side == 0 ? state.leftPad : state.rightPad, before = steamZones[side].held
+            let after = steamZones[side].update(side: side, down: side == 0 ? state.leftTouch : state.rightTouch, x: Double(pad.x), y: Double(pad.y), settings: steamPadSettings[side])
+            for input in before.symmetricDifference(after) { pe_pad_zone(e, pe_input_named(input.rawValue), after.contains(input), now) }
+            zones.formUnion(after)
+        }
         for input in PadProfiles.Input.padButtons {
             let n = Int(pe_input_named(input.rawValue)), down = state.buttons.contains(input)
             if lastButtons[n] != down { lastButtons[n] = down; pe_button(e,Int32(n),down,now) }
@@ -433,7 +500,7 @@ final class PadTester: ObservableObject {
         for (a,v) in axes where lastAxes[a] != v { lastAxes[a] = v; pe_axis(e,Int32(a),Int32(v),now) }
         pe_gyro(e,state.gyro[0],state.gyro[1],state.gyro[2],now)
         if pe_uses_tilt(e) { pe_accel(e,state.acceleration[0],state.acceleration[1],state.acceleration[2],now) }
-        var held = state.buttons
+        var held = state.buttons.union(zones)
         if state.leftTrigger > 0.3 { held.insert(.lt) }; if state.leftTrigger > 0.95 { held.insert(.ltfull) }
         if state.rightTrigger > 0.3 { held.insert(.rt) }; if state.rightTrigger > 0.95 { held.insert(.rtfull) }
         if pressed != held { pressed = held }

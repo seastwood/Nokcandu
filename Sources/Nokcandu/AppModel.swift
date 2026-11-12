@@ -158,7 +158,7 @@ final class AppModel: ObservableObject {
             nc.addObserver(forName: name, object: nil, queue: .main) { [weak self] n in
                 Task { @MainActor in
                     self?.scheduleStatusTimer()
-                    if n.name == NSApplication.didBecomeActiveNotification { self?.helperCheckNeeded = true; self?.refreshRunStates(); self?.refreshStoreGames() }
+                    if n.name == NSApplication.didBecomeActiveNotification { self?.helperCheckNeeded = true; self?.refreshRunStates(); self?.refreshStoreGames(); self?.refreshWhenBack() }
                 }
             }
         }
@@ -199,21 +199,35 @@ final class AppModel: ObservableObject {
     var selectedGame: InstalledGame? { games.first { $0.id == selection }.map(PendingSettings.preview) }
 
     private var scanningLibrary = false
+    private var lastLibraryScan = 0.0
+    /// Coming back to Nokcandu picks up games added or removed in Finder, in place of a Refresh button.
+    /// It stays out of a running game's way: nothing while a game or launcher runs, at most once a minute,
+    /// at background priority, and the window is left alone when nothing changed.
+    private func refreshWhenBack() {
+        guard libraryLoaded, !scanningLibrary, runningApps.isEmpty,
+              ProcessInfo.processInfo.systemUptime - lastLibraryScan > 60 else { return }
+        refresh(automatic: true)
+    }
     private var rescanRequested = false
     /// Re-reads the library. The scan runs off the main thread (a game drive that is asleep or slow must
     /// never freeze the window); calls that arrive meanwhile are merged into one more scan.
-    func refresh() {
-        libraryRevision += 1
+    func refresh(automatic: Bool = false) {
+        if !automatic { libraryRevision += 1 }
         if scanningLibrary { rescanRequested = true; return }
         scanningLibrary = true
+        lastLibraryScan = ProcessInfo.processInfo.systemUptime
         Task {
-            let scanned = await Task.detached(priority: .userInitiated) { () -> ([InstalledGame], LibraryExtras) in
+            let scanned = await Task.detached(priority: automatic ? .utility : .userInitiated) { () -> ([InstalledGame], LibraryExtras) in
                 let found = GameLibrary.scan()
                 GameFolders.remember(found)
                 return (found, LibraryExtras.load(found))
             }.value
             scanningLibrary = false
             if rescanRequested { rescanRequested = false; refresh(); return }
+            // An automatic check that found the same library changes nothing on screen.
+            if automatic, scanned.0.map(\.appURL) == games.map(\.appURL), scanned.0.map(\.name) == games.map(\.name),
+               scanned.1.drives == gameDrives, scanned.1.offline.map(\.name) == libraryExtras.offline.map(\.name) { return }
+            if automatic { libraryRevision += 1 }
             libraryExtras = scanned.1
             if gameDrives != scanned.1.drives { gameDrives = scanned.1.drives }
             games = scanned.0
@@ -858,6 +872,22 @@ final class AppModel: ObservableObject {
     }
     func removeCategory(_ name: String) { LibraryOrganizer.removeCategory(name); reorganize() }
     func moveCategory(_ name: String, by offset: Int) { LibraryOrganizer.moveCategory(name, by: offset); reorganize() }
+    /// Something dragged onto a section's title: library items go into that category (nil: out of any), and
+    /// a category's own title dropped on another moves it there.
+    func dropOnSection(_ payloads: [String], category: String?) -> Bool {
+        var changed = false
+        for payload in payloads {
+            if payload.hasPrefix(Self.categoryDragPrefix) {
+                guard let category else { continue }
+                LibraryOrganizer.moveCategory(String(payload.dropFirst(Self.categoryDragPrefix.count)), before: category); changed = true
+            } else if let g = games.first(where: { $0.id == payload }) {
+                LibraryOrganizer.setCategory(g, category); changed = true
+            }
+        }
+        if changed { reorganize() }
+        return changed
+    }
+    static let categoryDragPrefix = "nokcandu-category:"
     func sectionExpanded(_ id: String) -> Binding<Bool> {
         Binding(get: { !self.collapsedSections.contains(id) }, set: { open in
             if open { self.collapsedSections.remove(id) } else { self.collapsedSections.insert(id) }

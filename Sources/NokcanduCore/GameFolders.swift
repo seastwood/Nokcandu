@@ -562,6 +562,14 @@ public enum LibraryOrganizer {
         guard let i = list.firstIndex(of: name), list.indices.contains(i + offset) else { return }
         list.swapAt(i, i + offset); v.categories = list; save(v)
     }
+    /// Puts a category where another one is (dragging its title onto the other's).
+    public static func moveCategory(_ name: String, before other: String) {
+        var v = load(); var list = v.categories ?? []
+        guard name != other, list.contains(name), list.contains(other) else { return }
+        list.removeAll { $0 == name }
+        list.insert(name, at: list.firstIndex(of: other) ?? list.count)
+        v.categories = list; save(v)
+    }
     public static func setCategory(_ g: InstalledGame, _ name: String?) {
         var v = load(); var map = v.categoryOf ?? [:]
         map[key(g)] = name.flatMap { n in (v.categories ?? []).contains(n) ? n : nil }

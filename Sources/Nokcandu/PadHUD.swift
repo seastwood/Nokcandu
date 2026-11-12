@@ -26,6 +26,8 @@ final class PadHUD {
     }
 
     private var panel: NSPanel?
+    private var host: NSHostingView<HUDView>?
+    private var shownShape = ""
     private var hide: DispatchWorkItem?
     private var lastWasGyro = false
     func gyroChanged(_ on: Bool) {
@@ -47,16 +49,27 @@ final class PadHUD {
         lastWasGyro = false
         let p = panel ?? make()
         panel = p
-        let host = NSHostingView(rootView: HUDView(text: text, symbol: symbol, progress: progress))
-        host.frame.size = host.fittingSize
-        p.contentView = host
-        p.setContentSize(host.fittingSize)
-        if let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main {
-            let f = screen.visibleFrame
-            p.setFrameOrigin(NSPoint(x: f.midX - host.fittingSize.width / 2, y: f.minY + 90))
+        // A calibration bar updates twenty times in a second and a half, sometimes behind a game: only the
+        // bar's value changes then, so the note is not rebuilt, measured, moved and re-ordered each time.
+        let shape = text + "\u{1}" + symbol + (progress == nil ? "" : "\u{1}bar")
+        let view = HUDView(text: text, symbol: symbol, progress: progress)
+        if let host, shape == shownShape, p.isVisible, p.alphaValue == 1 {
+            host.rootView = view
+        } else {
+            let h = host ?? NSHostingView(rootView: view)
+            h.rootView = view
+            if host == nil { host = h; p.contentView = h }
+            shownShape = shape
+            let size = h.fittingSize
+            h.frame.size = size
+            p.setContentSize(size)
+            if let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main {
+                let f = screen.visibleFrame
+                p.setFrameOrigin(NSPoint(x: f.midX - size.width / 2, y: f.minY + 90))
+            }
+            p.alphaValue = 1
+            p.orderFrontRegardless()
         }
-        p.alphaValue = 1
-        p.orderFrontRegardless()
         hide?.cancel()
         let work = DispatchWorkItem { [weak p] in
             NSAnimationContext.runAnimationGroup({ ctx in ctx.duration = 0.35; p?.animator().alphaValue = 0 }) { p?.orderOut(nil) }
@@ -79,7 +92,7 @@ final class PadHUD {
     }
 }
 
-private struct HUDView: View {
+struct HUDView: View {
     let text: String
     let symbol: String
     var progress: Double? = nil
