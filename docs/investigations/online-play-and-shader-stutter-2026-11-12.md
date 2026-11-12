@@ -1,0 +1,34 @@
+# Online play (CS2, Overwatch): priorities, sync and shader stutter — November 12, 2026
+
+User report: Overwatch plays very well until a fight, then hitches continuously as shaders load; CS2 has network jitter. Solo games are fine, so something specific to multiplayer. Asked whether esync/msync is in use.
+
+## Verified
+
+- **msync is on and working.** Every launcher exports `WINEMSYNC=1`; the Steam and Battle.net logs show `msync: up and running` on each start, and the engine's server contains the msync code. (esync is the Linux mechanism; msync is its macOS counterpart and the one that applies here.)
+- **Overwatch uses DXMT v0.80-244 with shader IR release on.** Its log reports over 131,000 shaders created with IR released and about 1.4 GB of DXBC kept. That option is what keeps Overwatch inside 16 GB.
+- **DXMT's caches exist and persist**: `$(getconf DARWIN_USER_CACHE_DIR)/dxmt/Overwatch.exe` holds `shaders_320.db` (119 MB, converted shaders) and Metal's own pipeline cache (169 MB), both written during the last session and kept since November 6.
+- DXMT has no option for background/asynchronous pipeline compilation or pre-compilation (config file and binary strings checked; release notes read). Upstream's notes say the cache "builds as you play": each new hero, skin, ability and map compiles once.
+- **Store clients were being run as background work while a game was in front — including the game's own client.** `priorities.m` set `PRIO_DARWIN_BG` on steam.exe, steamwebhelper, Battle.net, Agent and the others whenever any game was in front. On macOS that lowers CPU priority and also throttles the process's network and disk I/O.
+- **wineserver had no priority of its own**, while the game's threads ask for user-interactive.
+- Network path on this Mac: Wi-Fi (5 GHz, strong signal); a USB Ethernet adapter is attached but inactive. An earlier 15-minute sample with AWDL up showed router ping spikes of 20–35 ms every 10–60 s. The AWDL guard (off while a game runs) is installed.
+
+## Changed (shared, for every game in a store client's environment)
+
+1. The game now records its Wine environment beside its process id in `game-in-front`. A store client in that **same** environment keeps normal priority; clients in other environments step back as before. Older helpers read only the first line and behave as before. Pure decision code in `launcher-priority.h`, tested in `test_launcher_priority.py`.
+2. wineserver sets user-interactive QoS at start and again after it forks into the background.
+
+Both are in the helper library, so existing games pick them up through the normal helper update the next time they start. Undo for (1): Settings → "Lower store apps' priority while a game is in front" off restores every client to normal; there is no switch for (2).
+
+## Hypotheses, not yet confirmed in a match
+
+- CS2's jitter and multiplayer-only hitching come at least partly from waiting on a throttled Steam client (game coordinator, matchmaking and voice go through it) and on a de-prioritised wineserver. **Needs a before/after in a real match.** To compare without reinstalling: turning the Settings switch off gives the same result as (1) for the game's own client.
+- Overwatch's fight hitching is first-time pipeline compilation that DXMT cannot move off the critical path; it should lessen as the cache fills and return after a DXMT update (the cache is versioned) or a game patch with new shaders. The priority changes may shorten each hitch but cannot remove them.
+
+## Not done
+
+- **Moving DXMT's cache to a location macOS won't purge.** The binary has `DXMT_SHADER_CACHE_PATH`, but its exact meaning is undocumented and a wrong value would throw away 290 MB of warm cache. The default location is purgeable under disk pressure (the startup disk is 87% full), so this is worth doing once verified with a test program.
+- Wi-Fi itself: Ethernet removes the periodic spikes; that is a setup choice, not code.
+
+## Fresh installs and migration
+
+Fresh installs get the new helper. Existing games update the helper when idle, as usual. No game files, settings or caches are touched.

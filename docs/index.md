@@ -109,3 +109,6 @@ Keep credentials, account identifiers, raw session logs, copyrighted game/runtim
 - [Settings alignment and per-profile controller labels](investigations/settings-profile-labels-2026-11-11.md) — shared control alignment, label persistence, migration and installed verification.
 
 - [Controller click jump, Steam pad feel and library/editor polish](investigations/controller-click-jump-and-polish-2026-11-11.md) — why clicks moved the cursor (three causes), the Steam Controller's built-in button actions, the stale-pointer driver fix, pad smoothing/angle, categories and the responsive editor.
+
+- [Online play, priorities and shader stutter](investigations/online-play-and-shader-stutter-2026-11-12.md) — msync confirmed, a game's own store client no longer backgrounded, wineserver priority, what DXMT's shader cache can and can't do for Overwatch.
+

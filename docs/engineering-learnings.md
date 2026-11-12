@@ -604,3 +604,7 @@ A per-axis dead band steadies a resting finger but must be crossed twice on ever
 
 A CPU sample of the installed app with a Steam Controller profile active (about 15% of a core) showed `NSWorkspace.frontmostApplication` as the largest single cost: the controller runtime asked on every report and every 4 ms tick. The answer is now kept, replaced on app activation and re-asked at most four times a second. Controller mapping still runs on the main thread, so anything slow there delays input; automatic library rescans therefore run only when Nokcandu comes to the front with nothing running, at most once a minute, at background priority, and leave the window alone when nothing changed. Re-measure after installing before claiming a figure.
 
+### "Background" on macOS throttles network and disk too — never apply it to a process the game depends on
+
+`PRIO_DARWIN_BG` is not just a low CPU priority. Putting every store client in the background while a game is in front also throttled the client the game belongs to, which an online game talks to throughout a match. Decide by Wine environment: the game's own client stays normal, others step back. Give wineserver an explicit high QoS; it serves every thread of the game and inherits nothing from them. [Evidence and what is still unconfirmed](investigations/online-play-and-shader-stutter-2026-11-12.md).
+

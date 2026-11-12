@@ -1156,8 +1156,18 @@ static int my_execv(const char *path, char *const argv[]) {
 __attribute__((used)) static const struct { const void *replacement, *original; } wine11_exec_interpose[]
     __attribute__((section("__DATA,__interpose"))) = { { (const void *)my_execv, (const void *)execv } };
 
+static void wineserver_priority(void) { pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0); }
+
 __attribute__((constructor)) static void start(void) {
     int argc = *_NSGetArgc(); char **argv = *_NSGetArgv();
+    // Wine's server answers every game thread's requests one at a time (network waits, files, windows).
+    // Left at the default priority it can be parked on an efficiency core while the game fills the fast
+    // ones, and everything waiting on it — an online match's sockets above all — stalls with it.
+    { const char *program = getprogname();
+      if (program && !strcmp(program, "wineserver")) {
+          wineserver_priority();
+          pthread_atfork(NULL, NULL, wineserver_priority);        // it forks into the background as it starts
+      } }
     if (argc > 1 && nokcandu_configure_browser_renderer(argv[1]))
         fprintf(stderr, "nokcandu: launcher browser uses its own Metal renderer\n");
     else if (argc > 1) {

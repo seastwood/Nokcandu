@@ -62,7 +62,7 @@ struct GeneralSettings: View {
                         if on { try? FileManager.default.removeItem(at: f) } else { try? NokPaths.ensure(NokPaths.support); FileManager.default.createFile(atPath: f.path, contents: Data()) }
                         model.objectWillChange.send()
                     }))
-                Text("Steam, Battle.net, the EA app and Ubisoft Connect keep running (downloads, sign-in, friends) but stop competing with the game for the processor until you switch to them. Games also ask macOS for its fastest cores.")
+                Text("Store apps you aren't playing through keep running (downloads, sign-in, friends) but stop competing with the game until you switch to them. The one your game belongs to keeps its normal priority, since the game relies on it online. Games also ask macOS for its fastest cores.")
                     .font(.caption).foregroundStyle(.secondary)
                 NetworkSteadySetting()
                 Toggle("Take a restore point before big changes", isOn: Binding(get: { RestorePoints.automaticChosen }, set: { RestorePoints.automaticChosen = $0; model.objectWillChange.send() }))

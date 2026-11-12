@@ -7,10 +7,12 @@
 //   Store clients running beside it (Steam, its web helper, Battle.net, the EA app, Ubisoft Connect…) check every
 //   two seconds and run as background work while it is: they keep working (downloads, sign-in, friends) but stop
 //   competing with the game. When you switch to them, or the game quits, they're back to normal.
+//   The client the game itself belongs to (same Wine environment) is left alone: see launcher-priority.h.
 //   Turned off by creating ~/Library/Application Support/Nokcandu/launchers-normal-priority.
 #import <AppKit/AppKit.h>
 #include <sys/resource.h>
 #include <pthread/qos.h>
+#include "launcher-priority.h"
 
 static char prio_flag_path[PATH_MAX], prio_off_path[PATH_MAX];
 
@@ -53,7 +55,8 @@ static void prio_watch_game_front(void) {
     void (^front)(BOOL) = ^(BOOL on) {
         if (on) {
             FILE *f = fopen(prio_flag_path, "w");
-            if (f) { fprintf(f, "%d\n", getpid()); fclose(f); }
+            const char *prefix = getenv("WINEPREFIX");
+            if (f) { fprintf(f, "%d\n%s\n", getpid(), prefix ? prefix : ""); fclose(f); }
         } else {
             FILE *f = fopen(prio_flag_path, "r"); int pid = 0;
             if (f) { if (fscanf(f, "%d", &pid) != 1) pid = 0; fclose(f); }
@@ -80,9 +83,12 @@ static void prio_watch_as_launcher(void) {
     dispatch_source_set_event_handler(t, ^{
         bool want = false;
         if (access(prio_off_path, F_OK) != 0) {
-            FILE *f = fopen(prio_flag_path, "r"); int pid = 0;
-            if (f) { if (fscanf(f, "%d", &pid) != 1) pid = 0; fclose(f); }
-            want = pid > 1 && pid != getpid() && kill(pid, 0) == 0;
+            char text[PATH_MAX + 32] = "", game_prefix[PATH_MAX];
+            FILE *f = fopen(prio_flag_path, "r");
+            if (f) { size_t n = fread(text, 1, sizeof text - 1, f); text[n] = 0; fclose(f); }
+            int pid = nokcandu_front_game(text, game_prefix, sizeof game_prefix);
+            // The game's own client (same Wine environment) stays at normal priority: the game waits on it.
+            want = nokcandu_launcher_steps_back(pid > 1 && pid != getpid() && kill(pid, 0) == 0, game_prefix, getenv("WINEPREFIX"));
         }
         if (want != background && setpriority(PRIO_DARWIN_PROCESS, 0, want ? PRIO_DARWIN_BG : 0) == 0) background = want;
     });
