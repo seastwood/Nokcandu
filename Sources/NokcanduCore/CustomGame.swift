@@ -98,8 +98,10 @@ public enum GraphicsPreset: String, Codable, CaseIterable, Identifiable, Sendabl
         let vk = #"export VK_DRIVER_FILES="$CONTENTS/Resources/vulkan/icd.d/kosmickrisp_mesa_icd.json""#
         let log = #"export DXVK_LOG_PATH="$SUPPORT/Logs""#
         // Smoothness: compile new shaders in the background instead of freezing (the Sikarugir DXVK build
-        // is the -async variant), and keep at most one frame queued so aiming isn't delayed.
-        let smooth = [#"export DXVK_ASYNC=1"#, #"export DXVK_CONFIG="d3d9.maxFrameLatency = 1; dxgi.maxFrameLatency = 1""#]
+        // is the -async variant). Frame latency is left to DXVK (up to three frames queued, so the processor
+        // and graphics chip work at the same time); one frame is Performance → Low latency, by choice.
+        // Forcing one for every game serialised them and cost a lot of frame rate on Apple GPUs.
+        let smooth = [#"export DXVK_ASYNC=1"#]
         switch self {
         case .classic3D:
             return [#"export WINEDLLPATH_D9VK="$SUPPORT/renderer/d9vk/wine""#, vk, log] + smooth + ["export WINEDLLOVERRIDES=\"\(dllOverrides)\""]
@@ -164,6 +166,11 @@ public struct CustomGameConfig: Codable, Hashable {
     /// The game may use the microphone (nil = no: it sees no audio inputs, so macOS never asks for permission).
     public var microphone: Bool?
     public var legacyD3D9: Bool?
+    /// Older 3D games: "moltenvk" runs them on DXVK 1.10 / D9VK 2.3 through MoltenVK instead of DXVK 3 through
+    /// KosmicKrisp (nil). KosmicKrisp is newer and can't prepare pipelines ahead (no graphics pipeline
+    /// libraries), which can stall busy scenes; MoltenVK is the long-standing Vulkan layer on the Mac.
+    public var vulkanLayer: String?
+    public var usesMoltenVK: Bool { graphics == .classic3D && vulkanLayer == "moltenvk" }
     /// Graphics mode the user confirmed actually played well (nil = not play-tested yet).
     public var confirmedGraphics: GraphicsPreset?
     public var createdAt = Date()
@@ -431,6 +438,10 @@ public enum CustomGames {
         s += #"[ -f "$SUPPORT/nokcandu/perf.env" ] && . "$SUPPORT/nokcandu/perf.env""# + "\n"
         if c.legacyD3D9 == true {
             s += #"export WINEDLLPATH_D9VK="$SUPPORT/renderer/dxvk/wine""# + "\n"
+        }
+        if c.usesMoltenVK {
+            s += "# Vulkan layer: MoltenVK (DXVK 1.10 / D9VK 2.3), chosen in Graphics\n"
+            s += #"if [ -f "$SUPPORT/renderer/dxvk/wine/i386-windows/d3d9.dll" ] && [ -f "$CONTENTS/Resources/vulkan/icd.d/MoltenVK_icd.json" ]; then export WINEDLLPATH_D9VK="$SUPPORT/renderer/dxvk/wine" VK_DRIVER_FILES="$CONTENTS/Resources/vulkan/icd.d/MoltenVK_icd.json"; fi"# + "\n"
         }
         let env = (c.environment ?? [:]).filter { CustomGames.isValidEnvName($0.key) }.sorted { $0.key < $1.key }
         if !env.isEmpty {

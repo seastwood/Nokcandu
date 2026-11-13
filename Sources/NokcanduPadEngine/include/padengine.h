@@ -24,7 +24,12 @@ enum {
     // A trackpad used as four directions, and its outer edge (the host decides when each is held: pe_pad_zone).
     PE_LPAD_UP, PE_LPAD_DOWN, PE_LPAD_LEFT, PE_LPAD_RIGHT, PE_LPAD_EDGE,
     PE_RPAD_UP, PE_RPAD_DOWN, PE_RPAD_LEFT, PE_RPAD_RIGHT, PE_RPAD_EDGE,
-    PE_INPUTS                               // 55
+    // A quick touch on a trackpad (touch and lift without moving): works like a button, so double taps too.
+    PE_LPAD_TAP, PE_RPAD_TAP,
+    // A trackpad's zones (up to five, the layout chosen by the host): tapped, and clicked.
+    PE_LPAD_ZT1, PE_LPAD_ZT2, PE_LPAD_ZT3, PE_LPAD_ZT4, PE_LPAD_ZT5, PE_LPAD_ZC1, PE_LPAD_ZC2, PE_LPAD_ZC3, PE_LPAD_ZC4, PE_LPAD_ZC5,
+    PE_RPAD_ZT1, PE_RPAD_ZT2, PE_RPAD_ZT3, PE_RPAD_ZT4, PE_RPAD_ZT5, PE_RPAD_ZC1, PE_RPAD_ZC2, PE_RPAD_ZC3, PE_RPAD_ZC4, PE_RPAD_ZC5,
+    PE_INPUTS                               // 77
 };
 // Axes: SDL2's order. Sticks -32768…32767 (y down), triggers 0…32767.
 enum { PE_AXIS_LX, PE_AXIS_LY, PE_AXIS_RX, PE_AXIS_RY, PE_AXIS_LT, PE_AXIS_RT, PE_AXES };
@@ -88,8 +93,10 @@ bool pe_uses_gyro(const pe_engine *e);
 enum { PE_KEYBOARD_MENU = 255, PE_RUMBLE_MENU = 254 };   // sink.menu ids: the on-screen keyboard, a rumble
 /// The touchpad: finger 0 or 1 touching (or lifted), at x, y 0…1 (y down).
 void pe_touch(pe_engine *e, int finger, bool down, float x, float y, double now);
-// A trackpad direction or edge (PE_LPAD_UP…PE_RPAD_EDGE) held or let go.
+// A trackpad direction, edge, tap or zone input (PE_LPAD_UP…PE_RPAD_ZC5) held or let go.
 void pe_pad_zone(pe_engine *e, int input, bool down, double now);
+// Whether an input does something in the layers on now (so a host can fall back to the plain input).
+bool pe_input_bound(const pe_engine *e, int input);
 bool pe_uses_touch(const pe_engine *e);
 /// Native touch event visibility in the intercepted Wine SDL path only.
 bool pe_touch_passthrough(const pe_engine *e);

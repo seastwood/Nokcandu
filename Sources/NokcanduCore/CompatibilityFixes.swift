@@ -10,6 +10,7 @@ public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable, Senda
     case directx9Extras = "directx9-extras", d3d8to9, borderless, cursorVisibility = "cursor-visibility", openUA = "openua-display", bundledVC = "bundled-vc-runtime", crossProcessWindows = "cross-process-windows"
     case ipxNetworking = "ipx-networking", nativeIPXNetworking = "native-ipx-networking"
     case dxmtLowMemory = "dxmt-low-memory"
+    case dgVoodoo = "dgvoodoo-d3d11"
     public var id: String { rawValue }
     public var title: String {
         switch self {
@@ -27,6 +28,7 @@ public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable, Senda
         case .borderless: "Fullscreen (Borderless)"
         case .cursorVisibility: "Hide stray Mac pointer"
         case .dxmtLowMemory: "Low-memory DXMT (Overwatch build)"
+        case .dgVoodoo: "DirectX 8–9 through Metal (dgVoodoo2)"
         }
     }
     public var detail: String {
@@ -44,6 +46,7 @@ public enum CompatibilityFix: String, CaseIterable, Codable, Identifiable, Senda
         case .d3d8to9: "Downloads d3d8to9 1.16.0 and uses the bundled compatibility renderer. Try this when Older 3D games has visual glitches. For 32-bit DirectX 8 games."
         case .borderless: "Makes the game's window fill its screen without changing the Mac's display mode. Select Windowed inside the game first."
         case .dxmtLowMemory: "Downloads the newest DXMT build tuned for Overwatch 2 (NerRobDog's fork, LGPL 2.1, checked against its published checksum; \(DXMTLowMemory.version) when tested) and uses it for this game only. It frees each shader's parsed form once it's compiled, which cut Overwatch 2's memory from about 13 GB to about 4 GB on a 16 GB Mac and removed killcam and respawn stutter. Other games keep the standard DXMT. Requires DXMT graphics; restart afterward. Undo returns to the standard DXMT."
+        case .dgVoodoo: "Experimental. For older DirectX 8–9 games that run slowly. Downloads dgVoodoo2 \(DgVoodoo.version) (freeware by Dege, checked against its tested checksum) and places it beside the game's program, so the game's DirectX 8–9 is drawn through DirectX 11 — with Metal for DirectX 10–11 (DXMT), straight to Metal instead of through Vulkan. Choose that graphics mode in Settings first. Sets DirectX 11 output, a GeForce 9800 GT as the graphics card the game sees, no watermark and 1 GB of video memory in dgVoodoo's own settings file. Its own settings program is installed too: Open dgVoodoo Settings, under this fix, to change more. Restart the game afterward; Undo removes the files."
         case .cursorVisibility: "Experimental. Try this if the Mac arrow stays visible during gameplay. Follows the game's cursor visibility requests without changing mouse input. Works with Raw Mouse Capture off. Restart the game after installing or undoing."
         }
     }
@@ -188,6 +191,14 @@ public enum CompatibilityFixes {
         }
         if fix == .bundledVC, bundledVCRules(g).isEmpty { return "No matching Visual C++ libraries were found beside this program." }
         if fix == .crossProcessWindows, g.custom?.graphics != .dxmt { return "Choose Metal for DirectX 10–11 (DXMT) first." }
+        if fix == .dgVoodoo {
+            guard let current = graphics ?? g.custom?.graphics, DgVoodoo.outputs.contains(current) else {
+                return "Choose Metal for DirectX 10–11 (DXMT) in Settings first: dgVoodoo2 hands the game's DirectX 8–9 to it."
+            }
+            if isInstalled(.d3d8to9, for: g) { return "Undo DirectX 8 compatibility first: both replace the game's DirectX 8." }
+            if current == .appleMetal, PEFile.inspect(exe)?.is64Bit != true { return "Apple Metal works only with 64-bit games; choose Metal for DirectX 10–11 (DXMT)." }
+        }
+        if fix == .d3d8to9, isInstalled(.dgVoodoo, for: g) { return "Undo DirectX 8–9 through Metal (dgVoodoo2) first." }
         if fix == .dxmtLowMemory, g.custom?.graphics != .dxmt { return "Choose Metal for DirectX 10–11 (DXMT) first." }
         if fix == .openUA, !OpenUASettings.supports(g) { return "Only available for OpenUA (UA_source.exe) with its game data and NUCLEUS.INI." }
         if fix == .cursorVisibility, BF1942DisplayFix.supports(g) {
@@ -419,6 +430,9 @@ public enum CompatibilityFixes {
             let folder = exe.deletingLastPathComponent().appendingPathComponent(DXMTLowMemory.folderName, isDirectory: true)
             files = try await DXMTLowMemory.files(into: folder, work: work, log: log)
             appliedEnv = ["WINEDLLPATH_DXMT": folder.appendingPathComponent("wine").path]
+        case .dgVoodoo:
+            files = try await DgVoodoo.plannedFiles(for: exe, work: work, log: log)
+            applied = DgVoodoo.overrides(is64Bit: PEFile.inspect(exe)?.is64Bit == true)
         case .openUA:
             files = try OpenUASettings.plannedFiles(for: g)
         case .directx9Extras:

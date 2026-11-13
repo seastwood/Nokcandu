@@ -161,6 +161,13 @@ private struct ComponentFixesView: View {
                         }.labelsHidden().disabled(working != nil)
                     }
                 }
+                if fix == .dgVoodoo, on {
+                    Button("Open dgVoodoo Settings…") {
+                        do { try DgVoodoo.openSettings(for: game) } catch { model.fail(error) }
+                    }
+                    .disabled(working != nil)
+                    .help("dgVoodoo2's own settings: graphics card it pretends to be, video memory, resolution, filtering and more. Changes apply the next time the game starts.")
+                }
                 if fix == .ipxNetworking, on {
                     Button("IPX Network Settings…") {
                         do { try IPXNetworking.configure(game) } catch { model.fail(error) }

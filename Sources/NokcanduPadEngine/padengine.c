@@ -2,7 +2,7 @@
 //
 // Profile text: one setting per line, words separated by spaces, "key=value" options.
 //   nokpad 1
-//   gyro out=mouse|lstick|rstick|off on=1 min=6 max=14 lo=0 hi=75 smooth=4 tight=2 invx=0 invy=0 yaw=yaw|roll|both
+//   gyro out=mouse|lstick|rstick|scroll|off (scroll: scrollrate= ticks per degree; world=1: left/right is turning about gravity) on=1 min=6 max=14 lo=0 hi=75 smooth=4 tight=2 invx=0 invy=0 yaw=yaw|roll|both
 //        stickfull=300 stickmin=0.1 cal=auto
 //   stick 0|1 mode=pad|mouse|flick|keys|none to=0|1 dz=0.15 outer=0.95 sens=1500 power=1.5 flick360=4000
 //        flicktime=0.1 keys=<up>,<down>,<left>,<right> (Mac key codes) invy=0
@@ -68,7 +68,7 @@ typedef struct {
     double rest_x, rest_y;
 } stick_t;
 
-enum { G_OFF, G_MOUSE, G_LSTICK, G_RSTICK };
+enum { G_OFF, G_MOUSE, G_LSTICK, G_RSTICK, G_SCROLL };
 enum { Y_YAW, Y_ROLL, Y_BOTH };
 
 enum { A_OFF, A_PAD, A_MOUSE };
@@ -89,6 +89,7 @@ enum { T_RELEASE_OUTS, T_HOLD, T_DOUBLE_WAIT, T_TURBO, T_SIM_WAIT, T_MACRO };
 typedef struct {
     int out, yaw; bool def, invx, invy, autocal, euro;
     double min, max, lo, hi, smooth, tight, stickfull, stickmin, xs, ys, yw, rw, mincut, beta;
+    bool world; double scrollrate;
 } gyro_cfg_t;
 enum { MS_DOWN, MS_UP, MS_WAIT, MS_TEXT };
 typedef struct { unsigned char kind; out_t o; int ms; char *text; } mstep_t;
@@ -139,7 +140,7 @@ struct pe_engine {
     double g_min, g_max, g_lo, g_hi, g_smooth, g_tight, g_stickfull, g_stickmin;
     bool g_invx, g_invy, g_autocal, uses_gyro;
     double g_xs, g_ys, g_yw, g_rw;     // how much turning (yaw) and tilting (roll) move left and right
-    double cal_x, cal_y, cal_z, still_since, last_gyro;
+    double cal_x, cal_y, cal_z, still_since, last_gyro, cal_last; bool cal_have;
     double smooth_buf[16][2]; int smooth_i;
     double g_rest_x, g_rest_y, gyro_stick_x, gyro_stick_y;
     double last_tick;
@@ -157,11 +158,12 @@ struct pe_engine {
     int touch_mode; double touch_sens, touch_scroll; bool f_down[2]; double f_x[2], f_y[2]; int touch_zone, touch_click_in;
     // tilt
     bool tilt_on; double tilt_angle, pitch_neutral; bool tilt_invx, tilt_invy, pitch_init;
+    bool g_world, world_on, up_init; double g_scrollrate, gscroll_rest, up[3];
     // macros, sequences, radial menus
     int macro_owner[MAX_MACROS];
     macro_t macros[MAX_MACROS]; int macro_pos[MAX_MACROS]; bool macro_run[MAX_MACROS]; macro_hold_t macro_held[MAX_MACROS];
     seq_t seqs[MAX_SEQS]; int hist_in[8]; double hist_t[8]; int nhist;
-    menu_t menus[MAX_MENUS]; int menu_open, menu_sel;
+    menu_t menus[MAX_MENUS]; int menu_open, menu_sel; double menu_vx, menu_vy;
     // calibration: 1 automatic (set down), 2 asked for
     bool cal_manual;
     int cal_mode; double cal_start, cal_sum[3], cal_prev[3]; int cal_n; bool cal_done; float cal_shown;
@@ -177,7 +179,9 @@ static const char *input_names[PE_INPUTS] = {
     "paddle1", "paddle2", "paddle3", "paddle4", "touchpad", "lt", "rt", "ltfull", "rtfull",
     "lsup", "lsdown", "lsleft", "lsright", "rsup", "rsdown", "rsleft", "rsright",
     "tz1", "tz2", "tz3", "tz4", "tc1", "tc2", "tc3", "tc4", "tiltleft", "tiltright", "tiltfwd", "tiltback",
-    "lpup", "lpdown", "lpleft", "lpright", "lpedge", "rpup", "rpdown", "rpleft", "rpright", "rpedge"
+    "lpup", "lpdown", "lpleft", "lpright", "lpedge", "rpup", "rpdown", "rpleft", "rpright", "rpedge", "lptap", "rptap",
+    "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpc1", "lpc2", "lpc3", "lpc4", "lpc5",
+    "rpt1", "rpt2", "rpt3", "rpt4", "rpt5", "rpc1", "rpc2", "rpc3", "rpc4", "rpc5"
 };
 static int dev_in(int slot, int k) { return PE_INPUTS + (slot - 1) * PE_DEV_INPUTS + k; }
 enum { K_HAT = PE_DEV_BUTTONS, K_AXIS = PE_DEV_BUTTONS + 4 };
@@ -254,13 +258,14 @@ static double opt_d(const char *v, double d) { return v ? atof(v) : d; }
 static void save_gyro(const pe_engine *e, gyro_cfg_t *c) {
     *c = (gyro_cfg_t){ e->gyro_out, e->gyro_yaw, e->gyro_default, e->g_invx, e->g_invy, e->g_autocal, e->g_euro,
                        e->g_min, e->g_max, e->g_lo, e->g_hi, e->g_smooth, e->g_tight, e->g_stickfull, e->g_stickmin,
-                       e->g_xs, e->g_ys, e->g_yw, e->g_rw, e->g_mincut, e->g_beta };
+                       e->g_xs, e->g_ys, e->g_yw, e->g_rw, e->g_mincut, e->g_beta, e->g_world, e->g_scrollrate };
 }
 static void load_gyro(pe_engine *e, const gyro_cfg_t *c) {
     e->gyro_out = c->out; e->gyro_yaw = c->yaw; e->gyro_default = c->def; e->g_invx = c->invx; e->g_invy = c->invy;
     e->g_autocal = c->autocal; e->g_euro = c->euro; e->g_min = c->min; e->g_max = c->max; e->g_lo = c->lo; e->g_hi = c->hi;
     e->g_smooth = c->smooth; e->g_tight = c->tight; e->g_stickfull = c->stickfull; e->g_stickmin = c->stickmin;
     e->g_xs = c->xs; e->g_ys = c->ys; e->g_yw = c->yw; e->g_rw = c->rw; e->g_mincut = c->mincut; e->g_beta = c->beta;
+    e->g_world = c->world; e->g_scrollrate = c->scrollrate;
 }
 static int hexval(char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1; }
 
@@ -278,7 +283,7 @@ pe_engine *pe_create(const char *text, pe_sink sink) {
         e->trig_soft[s] = 0.3; e->trig_full[s] = 0.95;
     }
     e->gyro_out = G_OFF; e->gyro_default = true; e->g_min = 8; e->g_max = 8; e->g_lo = 0; e->g_hi = 75;
-    e->g_smooth = 0; e->g_tight = 0; e->g_xs = 1; e->g_ys = 1; e->g_yw = 1; e->g_rw = 0; e->g_stickfull = 300; e->g_stickmin = 0.1; e->g_autocal = true;
+    e->g_smooth = 0; e->g_tight = 0; e->g_xs = 1; e->g_ys = 1; e->g_yw = 1; e->g_rw = 0; e->g_stickfull = 300; e->g_stickmin = 0.1; e->g_autocal = true; e->g_scrollrate = 0.1;
     e->g_mincut = 5; e->g_beta = 0.05;
     for (int l = 0; l < MAX_LAYERS; l++) for (int s2 = 0; s2 < 2; s2++) e->stick_cfg[l][s2] = e->stick[s2];
     e->touch_sens = 1500; e->touch_scroll = 12; e->touch_zone = -1; e->touch_click_in = -1;
@@ -325,7 +330,8 @@ pe_engine *pe_create(const char *text, pe_sink sink) {
             int L = (int)opt_d(OPT("layer"), 0); if (L < 0 || L >= MAX_LAYERS) continue;
             gyro_cfg_t base; save_gyro(e, &base);
             const char *o = OPT("out");
-            if (o) e->gyro_out = !strcmp(o, "mouse") ? G_MOUSE : !strcmp(o, "lstick") ? G_LSTICK : !strcmp(o, "rstick") ? G_RSTICK : G_OFF;
+            if (o) e->gyro_out = !strcmp(o, "mouse") ? G_MOUSE : !strcmp(o, "lstick") ? G_LSTICK : !strcmp(o, "rstick") ? G_RSTICK : !strcmp(o, "scroll") ? G_SCROLL : G_OFF;
+            e->g_world = opt_d(OPT("world"), 0) != 0; e->g_scrollrate = opt_d(OPT("scrollrate"), 0.1);
             const char *y = OPT("yaw");
             if (y) e->gyro_yaw = !strcmp(y, "roll") ? Y_ROLL : !strcmp(y, "both") ? Y_BOTH : Y_YAW;
             e->gyro_default = opt_d(OPT("on"), 1) != 0;
@@ -441,7 +447,8 @@ pe_engine *pe_create(const char *text, pe_sink sink) {
         }
     }
     e->uses_gyro = false;
-    for (int l = 0; l < MAX_LAYERS; l++) if (e->gyro_has[l] && e->gyro_cfg[l].out != G_OFF) e->uses_gyro = true;
+    e->world_on = false;
+    for (int l = 0; l < MAX_LAYERS; l++) if (e->gyro_has[l] && e->gyro_cfg[l].out != G_OFF) { e->uses_gyro = true; if (e->gyro_cfg[l].world) e->world_on = true; }
     for (int i = PE_TILT_LEFT; i <= PE_TILT_BACK; i++) for (int l = 0; l < MAX_LAYERS; l++) if (e->bind[l][i].set) e->tilt_on = true;
     e->shown_layer = 0; e->shown_gyro = e->gyro_out == G_OFF ? -1 : e->gyro_default ? 1 : 0;
     for (int i = 0; i < 2; i++) e->stick[i].last_angle = NAN;
@@ -455,7 +462,8 @@ void pe_destroy(pe_engine *e) {
     free(e);
 }
 bool pe_uses_touch(const pe_engine *e) { return e && e->touch_mode != TM_OFF && e->control_route[5] != 1 && e->control_route[5] != 3; }
-bool pe_uses_tilt(const pe_engine *e) { return e && e->tilt_on && e->control_route[6] != 1 && e->control_route[6] != 3; }
+// Also true when the gyro turns about gravity: that needs the accelerometer too.
+bool pe_uses_tilt(const pe_engine *e) { return e && ((e->tilt_on && e->control_route[6] != 1 && e->control_route[6] != 3) || e->world_on); }
 bool pe_uses_gyro(const pe_engine *e) { return e && e->uses_gyro && e->control_route[4] != 1 && e->control_route[4] != 3; }
 
 // MARK: Outputs
@@ -735,8 +743,11 @@ static void set_input(pe_engine *e, int in, bool down, double now) {
 static int touch_zone_of(double x, double y) { return (x >= 0.5) + 2 * (y >= 0.5); }
 
 void pe_pad_zone(pe_engine *e, int input, bool down, double now) {
-    if (!e || input < PE_LPAD_UP || input > PE_RPAD_EDGE) return;
+    if (!e || input < PE_LPAD_UP || input > PE_RPAD_ZC5) return;
     set_input(e, input, down, now);
+}
+bool pe_input_bound(const pe_engine *e, int input) {
+    return e && input >= 0 && input < PE_ALL_INPUTS && lookup(e, input) != NULL;
 }
 
 void pe_button(pe_engine *e, int button, bool down, double now) {
@@ -949,6 +960,9 @@ void pe_axis(pe_engine *e, int axis, int value, double now) {
 static bool gyro_enabled(const pe_engine *e) {
     if (e->control_route[4] == 1 || e->control_route[4] == 3) return false;
     if (e->gyro_off_holds > 0) return false;
+    // A radial menu picked by mouse/gyro direction is asking for the gyro, even when it's normally only on
+    // while a pad is touched or a button held.
+    if (e->menu_open >= 0 && e->menus[e->menu_open].stick == 2) return true;
     if (e->gyro_touch_required) return e->gyro_touched;
     if (e->gyro_on_holds > 0) return true;
     return e->gyro_default != e->gyro_toggled;
@@ -982,10 +996,15 @@ static void calibration_sample(pe_engine *e, double x, double y, double z, doubl
     double d = fabs(x - e->cal_prev[0]) + fabs(y - e->cal_prev[1]) + fabs(z - e->cal_prev[2]);
     double off = sqrt((x - e->cal_x) * (x - e->cal_x) + (y - e->cal_y) * (y - e->cal_y) + (z - e->cal_z) * (z - e->cal_z));
     e->cal_prev[0] = x; e->cal_prev[1] = y; e->cal_prev[2] = z;
+    // Still: hardly changing between readings, and within normal drift. (Requiring readings close to the
+    // last measurement locked in a bad first measurement as permanent drift.)
     bool still = e->cal_mode == 2 ? d < 6 && off < 40 : d < 1.0 && off < 8;
     if (still) { if (!e->still_since) { e->still_since = now; e->cal_done = false; } }
     else { e->still_since = 0; }
-    if (e->cal_mode == 0 && e->g_autocal && still && !e->cal_done && now - e->still_since > 0.5) {
+    // Drift changes slowly: once there's a resting reading, measure again at most every 30 s, and only after
+    // 1.5 s of stillness (it ran almost non-stop in the hand before), so slow aiming is rarely mistaken for it.
+    bool due = !e->cal_have || now - e->cal_last >= 30 || now < e->cal_last;
+    if (e->cal_mode == 0 && e->g_autocal && still && !e->cal_done && due && now - e->still_since > (e->cal_have ? 1.5 : 0.5)) {
         e->cal_manual = false;
         e->cal_mode = 1; e->cal_start = now; e->cal_n = 0; e->cal_sum[0] = e->cal_sum[1] = e->cal_sum[2] = 0; e->cal_shown = -1;
     }
@@ -999,8 +1018,12 @@ static void calibration_sample(pe_engine *e, double x, double y, double z, doubl
     e->cal_sum[0] += x; e->cal_sum[1] += y; e->cal_sum[2] += z; e->cal_n++;
     double span = e->cal_mode == 2 ? 2.0 : 1.5, p = (now - e->cal_start) / span;
     if (p >= 1 && e->cal_n >= 20) {
-        e->cal_x = e->cal_sum[0] / e->cal_n; e->cal_y = e->cal_sum[1] / e->cal_n; e->cal_z = e->cal_sum[2] / e->cal_n;
-        e->cal_mode = 0; e->cal_done = true;
+        double nx = e->cal_sum[0] / e->cal_n, ny = e->cal_sum[1] / e->cal_n, nz = e->cal_sum[2] / e->cal_n;
+        double change = sqrt((nx - e->cal_x) * (nx - e->cal_x) + (ny - e->cal_y) * (ny - e->cal_y) + (nz - e->cal_z) * (nz - e->cal_z));
+        bool automatic = e->cal_mode == 1;
+        e->cal_mode = 0; e->cal_done = true; e->cal_last = now;
+        (void)change; (void)automatic;
+        e->cal_x = nx; e->cal_y = ny; e->cal_z = nz; e->cal_have = true;
         e->cal_shown = -1; cal_report(e, 1);
     } else cal_report(e, (float)fmin(p, 0.99));
 }
@@ -1021,6 +1044,11 @@ void pe_gyro(pe_engine *e, float gx, float gy, float gz, double now) {
     // Right-handed axes (x right, y out of the face, z towards the player), counter-clockwise positive: turning
     // right is −y, tilting right is −z — the same sign, so "both" adds them. Left is +.
     double yaw = y * e->g_yw + z * e->g_rw;
+    if (e->g_world && e->up_init) {
+        // Turning about gravity: the same left/right however the controller is tipped or rolled in the hand.
+        double n = sqrt(e->up[0] * e->up[0] + e->up[1] * e->up[1] + e->up[2] * e->up[2]);
+        if (n > 0.5) yaw = (x * e->up[0] + y * e->up[1] + z * e->up[2]) / n * (e->g_yw > 0 ? e->g_yw : 1);
+    }
     double ox = -yaw, oy = -x;                       // right +, down + (mouse)
     // One Euro filter: strong smoothing when turning slowly (steady aim), little when fast (no lag on flicks).
     if (e->g_euro && dt > 0) {
@@ -1053,6 +1081,11 @@ void pe_gyro(pe_engine *e, float gx, float gy, float gz, double now) {
     // Tightening: very small movements are hand shake, scale them down.
     if (e->g_tight > 0 && mag < e->g_tight && mag > 0) { double f = mag / e->g_tight; ox *= f; oy *= f; mag *= f; }
     bool on = gyro_enabled(e);
+    if (on && dt > 0 && e->menu_open >= 0 && e->menus[e->menu_open].stick == 2) {
+        // Picking a radial menu slice: about ten counts per degree turned, whatever the gyro normally does.
+        pe_menu_mouse(e, ox * dt * 10, oy * dt * 10);
+        return;
+    }
     if (e->gyro_out == G_MOUSE) {
         if (!on || dt == 0) return;
         double sens = e->g_min;
@@ -1061,6 +1094,12 @@ void pe_gyro(pe_engine *e, float gx, float gy, float gz, double now) {
             sens = e->g_min + (e->g_max - e->g_min) * f;
         }
         mouse_out(e, ox * sens * dt * e->g_xs, oy * sens * dt * e->g_ys);
+    } else if (e->gyro_out == G_SCROLL) {
+        if (!on || dt == 0) return;
+        // Tipping the controller back scrolls up, forward scrolls down.
+        e->gscroll_rest += -oy * dt * e->g_scrollrate * e->g_ys;
+        int n = (int)e->gscroll_rest;
+        if (n) { e->gscroll_rest -= n; if (e->sink.wheel) e->sink.wheel(e->sink.ctx, n); }
     } else {
         double sx = 0, sy = 0;
         if (on && mag > 0) {
@@ -1315,11 +1354,19 @@ complete:
 
 // MARK: Radial menus
 
+#define PE_MENU_REACH 80.0   /* the virtual stick's length (mouse counts) */
+#define PE_MENU_PICK 30.0    /* how far it must be pushed before a slice is chosen */
 bool pe_menu_mouse(pe_engine *e, double dx, double dy) {
     if (!e || e->menu_open < 0 || e->menus[e->menu_open].stick != 2) return false;
     const menu_t *mn = &e->menus[e->menu_open];
     if (!mn->n || !isfinite(dx) || !isfinite(dy) || (dx == 0 && dy == 0)) return true;
-    double angle = atan2(dx, -dy) * 180 / M_PI;
+    // Movement steers a small virtual stick: noise and a hand's small wobbles no longer flick between
+    // slices, and moving the other way swings it across. Nothing is chosen until it has gone far enough.
+    e->menu_vx += dx; e->menu_vy += dy;
+    double reach = sqrt(e->menu_vx * e->menu_vx + e->menu_vy * e->menu_vy);
+    if (reach > PE_MENU_REACH) { e->menu_vx *= PE_MENU_REACH / reach; e->menu_vy *= PE_MENU_REACH / reach; reach = PE_MENU_REACH; }
+    if (reach < PE_MENU_PICK) return true;
+    double angle = atan2(e->menu_vx, -e->menu_vy) * 180 / M_PI;
     if (angle < 0) angle += 360;
     double width = 360.0 / mn->n;
     int selected = (int)floor((angle + width / 2) / width) % mn->n;
@@ -1332,7 +1379,7 @@ bool pe_menu_mouse(pe_engine *e, double dx, double dy) {
 
 static void menu_begin(pe_engine *e, int n) {
     if (n < 0 || n >= MAX_MENUS || !e->menus[n].set || e->menu_open >= 0) return;
-    e->menu_open = n; e->menu_sel = -1;
+    e->menu_open = n; e->menu_sel = -1; e->menu_vx = e->menu_vy = 0;
     int s = e->menus[n].stick;
     if (s < 2) { stick_t *k = &e->stick[s]; k->x = k->y = 0; stick_mode_update(e, s); update_pad_sticks(e); }
     else e->m_rest_x = e->m_rest_y = 0;
@@ -1397,6 +1444,13 @@ void pe_accel(pe_engine *e, float ax, float ay, float az, double now) {
     pe_tick(e, now);
     double g = sqrt(ax * ax + ay * ay + az * az);
     if (g <= 0) return;
+    // Which way is up, for turning about gravity: followed slowly, so a shake of the hand doesn't tip it.
+    {
+        double ux = ax / g, uy = ay / g, uz = az / g;
+        if (!e->up_init) { e->up[0] = ux; e->up[1] = uy; e->up[2] = uz; e->up_init = true; }
+        else { e->up[0] += (ux - e->up[0]) * 0.04; e->up[1] += (uy - e->up[1]) * 0.04; e->up[2] += (uz - e->up[2]) * 0.04; }
+    }
+    if (!e->tilt_on || e->control_route[6] == 1 || e->control_route[6] == 3) return;
     double roll = atan2(ax, ay) * 180 / M_PI, pitch = atan2(az, ay) * 180 / M_PI;
     if (e->tilt_invx) roll = -roll;
     // Forward and back count from how you usually hold it: learned while it's held still.
@@ -1555,7 +1609,7 @@ static bool update_tuning(pe_engine *e, const char *text) {
     bool gyro_was_off = e->gyro_out == G_OFF;
     memcpy(e->stick_cfg, next->stick_cfg, sizeof e->stick_cfg);
     memcpy(e->gyro_cfg, next->gyro_cfg, sizeof e->gyro_cfg);
-    e->uses_gyro = next->uses_gyro;
+    e->uses_gyro = next->uses_gyro; e->world_on = next->world_on;
     // The configuration ends before x; the input position, holds and integrators follow it.
     for (int s = 0; s < 2; s++) {
         stick_t *old = &e->stick[s];

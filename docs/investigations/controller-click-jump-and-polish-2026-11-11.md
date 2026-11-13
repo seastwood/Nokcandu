@@ -116,3 +116,20 @@ Other changes in this round: per-layer pad settings (`Layer.steamLeftTrackpad/st
 
 Visual pass (screenshots of the installed app at 1203×840 and 871×732): Games, Controls, Streams, a game's Overview, and the profile editor in both layouts. Nothing clipped. Adjusted: the stacked editor gives the picture 60% of the height; the Steam face buttons sit slightly lower; the Settings toolbar button has an accessibility name. Not walked: Settings pages, installer, stores, sheets.
 
+## Follow-up, November 12 (evening): the capability gaps
+
+Implemented and tested in software (`GyroAndPadStickTests`); **none confirmed on hardware yet**.
+
+- **Gyro turning about gravity** (`world=1`, `Gyro.worldSpace`): the engine keeps a slowly followed gravity direction from the accelerometer and takes left/right as the rotation about it, scaled by the Turning (yaw) amount. `pe_uses_tilt` is now also true for such a profile so hosts send accelerometer data. Flat, it equals ordinary yaw; held upright it reads the axis controller-space yaw ignores. This is the "world space" of other remappers; "player space" (yaw/roll blend relative to the hands) is still the existing yaw/roll mix.
+- **Real-world sensitivity** (`Gyro.realWorld`, `countsPerTurn`): sensitivity = multiplier × counts per full turn ÷ 360, compiled into the existing min/max. No engine change.
+- **Gyro scrolling** (`out=scroll`, `scrollrate`): pitch rate × time × rate into a wheel remainder, one direction per sign.
+- **Trackpad as an analog stick** (`Mode.stick`): host-side, in `SteamControllerReport.State.mappingAxes(left:right:)`. Pad angle and dead zone applied, full push at 90% of the radius. The left pad shares the left stick with the joystick (larger push wins), the right pad drives the right stick. Edge input still works on top.
+- **Pad taps** (`lptap`, `rptap`, two engine inputs): down and up within 0.2 s, moving under 15% of the pad, held 50 ms, released by the next report or tick. Tap, hold and double behave as for any button.
+
+### Looked at and deliberately not changed
+
+- **DXMT's shader cache location.** The cache in `$(getconf DARWIN_USER_CACHE_DIR)/dxmt/` has persisted since November 6 (verified). Whether macOS would purge it under disk pressure is unconfirmed, and `DXMT_SHADER_CACHE_PATH` is undocumented. Moving it risks discarding a warm 290 MB cache for no measured gain. The earlier "may be purged" note is a hypothesis, not a finding.
+- **Controller mapping on its own thread.** Measured after this round's fixes: the main thread is nearly idle while a game is in front. The move remains sensible for the future; it should be done with a controller connected and before/after latency measured, not blind.
+- **Analog triggers and an analog edge.** Windows games already get the triggers as analog values through the controller path; keyboard-and-mouse games cannot use an analog value. For walk/run blends, the new analog-stick pad gives the game a real stick.
+- **Steam Controller over Bluetooth and more than one Steam Controller at once.** Bluetooth uses a different report format and pairing state; several controllers need one reader and engine each. Both need hardware in the loop and are left for a session with the controllers.
+

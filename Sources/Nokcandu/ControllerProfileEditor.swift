@@ -29,6 +29,9 @@ struct ControllerProfileEditor: View {
     @State private var addingLayer = false
     @State private var renamingLayer = false
     @State private var layerImportError: String?
+    /// The zone shown in a trackpad's Zones section.
+    @State var padZoneShown = 0
+    @State var rumbleNote: String?
 
     enum Part: Hashable {
         case input(PadProfiles.Input), stick(Int), gyro, triggers, deviceInput(String, String), deviceAxis(String, Int)
@@ -316,18 +319,10 @@ struct ControllerProfileEditor: View {
             family = PadProfiles.controllerLabelFamily(profile, all: everything, connected: PadGC.connectedFamily())
             tester.selectSource(inputSource)
             configureTesterPads(profile)
-            // Opened behind another app (a game in front, say): the live test waits until Nokcandu is in front.
-            if NSApp.isActive { tester.start(profile: PadProfiles.compile(profile, all: everything), devices: PadProfiles.devices(profile, all: everything)) }
-        }
-        .onChange(of: layerIndex) { _, _ in configureTesterPads(profile) }
-        // The live test is for looking at: while Nokcandu is behind another app (a game, say) it stops
-        // reading and redrawing, and picks up again when Nokcandu comes back.
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in tester.stop() }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            tester.stop()
-            tester.selectSource(inputSource); configureTesterPads(profile)
             tester.start(profile: PadProfiles.compile(profile, all: everything), devices: PadProfiles.devices(profile, all: everything))
         }
+        .onChange(of: layerIndex) { _, _ in configureTesterPads(profile) }
+
         .onDisappear {
             PadProfileEdits.shared.flush(PadProfileEdits.scope(profileID: profile.id, contents: own ? editingContents : nil))
             tester.stop()
@@ -529,7 +524,7 @@ struct ControllerProfileEditor: View {
     func stickLabel(_ s: Int) -> String? {
         if inputSource == .steamUSB && s == 1 {
             let mode = steamTrackpadBinding(1).wrappedValue.mode
-            if mode != .existing { return mode == .trackball ? "Trackball" : mode == .directions ? "Directions" : "Trackpad mouse" }
+            if mode != .existing { return mode == .trackball ? "Trackball" : mode == .directions ? "Directions" : mode == .stick ? "Stick" : mode == .dial ? "Scroll wheel" : "Trackpad mouse" }
         }
         let st = layerStick(s) ?? baseStick(s)
         switch st.mode {
@@ -565,7 +560,7 @@ struct ControllerProfileEditor: View {
         case .trigger(let r): return r ? "RT" : "LT"
         case .wheel(let up): return up ? "Wh↑" : "Wh↓"
         case .gyroOn, .gyroOff, .gyroToggle: return "Gyro"
-        case .layerHold(let n), .layerToggle(let n): return String(n.prefix(4))
+        case .layerHold(let n), .layerToggle(let n): return n.count <= 8 ? n : String(n.prefix(7)) + "…"
         case .macro: return "Macro"
         case .menu: return "Menu"
         case .keyboard: return "Kbd"
@@ -777,10 +772,18 @@ struct ControllerProfileEditor: View {
                        0...2, "%.0f%%", scale: 100, info: "Turning the controller left and right, like turning a steering wheel lying flat.")
                 slider("Tilting (roll)", Binding(get: { g.wrappedValue.roll }, set: { var v = g.wrappedValue; v.rollAmount = ($0 * 20).rounded() / 20; v.yawAmount = v.yaw; g.wrappedValue = v }),
                        0...2, "%.0f%%", scale: 100, info: "Tilting the controller sideways. Some players like a mix of both: it feels natural however you hold the controller.")
+                Toggle("Turn about gravity", isOn: Binding(get: { g.wrappedValue.worldSpace == true }, set: { var v = g.wrappedValue; v.worldSpace = $0 ? true : nil; g.wrappedValue = v }))
+                    .help("Left and right is turning the controller about the vertical, whichever way it is tipped or rolled in your hands. Uses the controller's accelerometer; Turning (yaw) sets its strength and Tilting is not used.")
             }
         }
         if g.wrappedValue.output == .mouse {
             Section("Sensitivity") {
+                Toggle("Real-world sensitivity", isOn: Binding(get: { g.wrappedValue.realWorld != nil }, set: { var v = g.wrappedValue; v.realWorld = $0 ? 1 : nil; g.wrappedValue = v }))
+                    .help("Set how far the view turns for each degree you turn the controller, instead of a mouse speed. Needs the game's mouse movement for one full turn, the same number a flick stick uses.")
+                if g.wrappedValue.realWorld != nil {
+                    slider("View turns", Binding(get: { g.wrappedValue.realWorld ?? 1 }, set: { var v = g.wrappedValue; v.realWorld = $0; g.wrappedValue = v }), 0.25...6, "%.2f ×", info: "1 × turns the view exactly as far as the controller. 2 × turns it twice as far.")
+                    slider("Mouse movement for a full turn", Binding(get: { g.wrappedValue.countsPerTurn ?? 4000 }, set: { var v = g.wrappedValue; v.countsPerTurn = $0; g.wrappedValue = v }), 500...30000, "%.0f", info: "How far the mouse moves to turn all the way round in this game at its current mouse sensitivity. Adjust until a quarter turn of the controller at 1 × turns the view a quarter turn.")
+                } else {
                 slider("Sensitivity", g.sensitivity, 0.5...40, "%.1f", info: "Mouse movement per degree turned.")
                 axisSliders(x: Binding(get: { g.wrappedValue.xScale ?? 1 }, set: { var v = g.wrappedValue; v.xScale = $0 == 1 ? nil : $0; g.wrappedValue = v }),
                             y: Binding(get: { g.wrappedValue.yScale ?? 1 }, set: { var v = g.wrappedValue; v.yScale = $0 == 1 ? nil : $0; g.wrappedValue = v }))
@@ -791,6 +794,11 @@ struct ControllerProfileEditor: View {
                     slider("Slow below", g.slowSpeed, 0...100, "%.0f °/s")
                     slider("Fast above", g.fastSpeed, 10...400, "%.0f °/s")
                 }
+                }
+            }
+        } else if g.wrappedValue.output == .scroll {
+            Section("Scrolling") {
+                slider("Speed", Binding(get: { g.wrappedValue.scrollRate ?? 0.1 }, set: { var v = g.wrappedValue; v.scrollRate = $0; g.wrappedValue = v }), 0.02...1, "%.2f", info: "Wheel steps for each degree the controller is tipped back or forward.")
             }
         } else if g.wrappedValue.output != .off {
             Section("Stick") {

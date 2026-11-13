@@ -763,6 +763,7 @@ struct GraphicsPicker: View {
     @State private var detected: GraphicsPreset?
     @State private var detectionNote: String?
     @State private var detecting = false
+    @State private var moltenVKChoice: Bool?
 
     init(game: InstalledGame, onChange: @escaping () -> Void = {}) {
         self.game = game
@@ -782,6 +783,15 @@ struct GraphicsPicker: View {
                     }
                 }
                 .labelsHidden().settingControl()
+            }
+            if current == .classic3D {
+                SettingRow(title: "Vulkan layer", info: "How Older 3D games reach the Mac's graphics. KosmicKrisp (with DXVK 3) is the default. MoltenVK (with DXVK 1.10 and D9VK 2.3) is the long-standing layer used by most Mac game tools: try it if a game stutters or runs slowly in busy scenes. Takes effect the next time the game starts.") {
+                    Picker("Vulkan layer", selection: Binding(get: { moltenVK }, set: { setMoltenVK($0) })) {
+                        Text("KosmicKrisp (DXVK 3)").tag(false)
+                        Text("MoltenVK (DXVK 1.10)").tag(true)
+                    }
+                    .labelsHidden().settingControl()
+                }
             }
             if !isGameLauncher {
                 HStack {
@@ -829,6 +839,13 @@ struct GraphicsPicker: View {
         }
     }
 
+    var moltenVK: Bool { moltenVKChoice ?? (game.custom?.vulkanLayer == "moltenvk") }
+    func setMoltenVK(_ on: Bool) {
+        guard var c = game.custom, on != moltenVK else { return }
+        c.vulkanLayer = on ? "moltenvk" : nil
+        app.changeSetting(for: game, title: "Vulkan layer", success: on ? "Vulkan layer: MoltenVK. Start the game to try it." : "Vulkan layer: KosmicKrisp.",
+                          change: .custom(c, force: false, changeProgram: false), completion: { saved in if saved { moltenVKChoice = on; onChange() } })
+    }
     func apply(_ p: GraphicsPreset) {
         guard game.custom != nil, p != game.custom?.graphics else { return }
         app.changeSetting(for: game, title: "Graphics", success: "Graphics: \(p.title).", change: .graphics(p), completion: { saved in if saved { current = p; onChange() } })

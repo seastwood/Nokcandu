@@ -608,3 +608,10 @@ A CPU sample of the installed app with a Steam Controller profile active (about 
 
 `PRIO_DARWIN_BG` is not just a low CPU priority. Putting every store client in the background while a game is in front also throttled the client the game belongs to, which an online game talks to throughout a match. Decide by Wine environment: the game's own client stays normal, others step back. Give wineserver an explicit high QoS; it serves every thread of the game and inherits nothing from them. [Evidence and what is still unconfirmed](investigations/online-play-and-shader-stutter-2026-11-12.md).
 
+### Replay the pad's own reports before tuning filters
+
+"The trackpad hooks and stops mid-move" was not the pad angle (the first guess, rejected by the user). A three-minute passive recording of the right pad (Tools/controller-probe/steam-pad-release.swift `--all-samples`, 1,771 reports at ~8 ms), replayed through `PadSteamTrackpad` under each setting, showed no direction reversals but stalls: with the user's steadiness 1.58 px and default Smoothing 0.4, up to 4 consecutive empty reports mid-swipe and 130 px of lag; with steadiness out, 2 and 56. A per-axis dead band combined with a low-pass catches most small reports. Smoothing now supersedes steadiness. Measure with a recording before changing feel; keep raw recordings out of git.
+
+### A 32-bit game on a 64-bit renderer: watch for host pointers
+
+dgVoodoo2 (32-bit D3D9 → D3D11) on DXMT crashed BF2 reading garbage high addresses, with a 64-bit host pointer next to them on the stack. In WoW64 the 32-bit side must only ever receive memory below 4 GB; a translation layer that hands back host memory fails only when something actually reads it. Check the stack for full 64-bit values before blaming a game or a configuration. [Details](compatibility-fixes.md).

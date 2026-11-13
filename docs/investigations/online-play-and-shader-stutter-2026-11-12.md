@@ -32,3 +32,22 @@ Both are in the helper library, so existing games pick them up through the norma
 ## Fresh installs and migration
 
 Fresh installs get the new helper. Existing games update the helper when idle, as usual. No game files, settings or caches are touched.
+
+## Follow-up, November 12 (night)
+
+### Measured while Battlefield 1942 / 2 were running (AWDL guard active, AWDL down)
+
+- Router (Wi-Fi hop): 150 pings, average 3.9 ms, maximum 28.6 ms, standard deviation 3.8 ms.
+- Internet (1.1.1.1): 100 pings, average 33.5 ms, **maximum 172 ms, standard deviation 27 ms**. The jitter is mostly beyond the Mac's Wi-Fi link: router queueing or the provider. Not yet known whether it lines up with CS2's.
+- `netstat`: **1,728 UDP packets dropped because a receive buffer was full** since boot (macOS default UDP buffer 768 KB). None in a 20-second window with no online game. Which program dropped them is not known.
+- A recorder now runs in the background for the next CS2 session (drops, router and internet latency, CS2 and wineserver CPU, queued UDP bytes every ~2 s). **No conclusion about CS2's jitter until that data exists.**
+
+### Battlefield 2 performance — a shared cause found
+
+BF2 runs DXVK 3.1.1 (gplasync) on KosmicKrisp. Every DXVK game's launcher forced `d3d9.maxFrameLatency = 1; dxgi.maxFrameLatency = 1` (since 0.9.0), so the CPU waits for the GPU each frame; the Performance → Low-latency Aiming option, meant to be the opt-in for exactly that, was therefore always on in effect. Changed: the renderer lines no longer set frame latency; the option still does. Existing unmodified launchers are rewritten by the existing idle-only launcher upgrade (Undo through the change history); edited launchers keep the old line. **The frame-rate gain is expected, not measured** — BF2 was running and couldn't be compared. KosmicKrisp itself (an experimental Vulkan-on-Metal driver) may also limit performance; DXVK through MoltenVK is the comparison to try next if BF2 is still slow.
+
+### Paused, November 12 (late)
+
+CS2 network investigation paused at the user's request before any in-match data was recorded; the background recorder was removed unused. Nothing about CS2's jitter is concluded. Starting point when resumed: record a CS2 online match (UDP full-buffer drops, router and internet latency, CS2 and wineserver CPU every ~2 s) and compare with the internet-side jitter measured above.
+
+Battlefield 2 performance is also paused. Measured so far: under 10 FPS, down to about 2, in busy scenes on DXVK 3.1 + KosmicKrisp with frame latency left to DXVK (the shared fix in 0.12.18); MoltenVK (DXVK 1.10 / D9VK 2.3) made the menu slower; dgVoodoo2 + DXMT crashed at start (below). Next step when resumed: measure CPU and GPU in a busy scene to tell a Rosetta/CPU limit from a GPU or translation limit.

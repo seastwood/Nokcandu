@@ -158,28 +158,38 @@ final class SteamControllerUSB: ObservableObject {
             outputGate.cancel(); modeLease = nil; radioFingerprint = nil
             device = nil; active = nil; session = UUID(); lastScan = 0
             status = "Wireless input paused — outputs released; waiting for verified capture"
-        } else { status = "USB full input paused — outputs released" }
+        } else {
+            // A cable pulled and plugged back in can come back as the same or a new connection without a
+            // removal notice. Let go of the silent one so the controller is taken over again; its recovery
+            // record restores its own mode first if it is still the same connection.
+            outputGate.cancel(); modeLease = nil
+            device = nil; active = nil; session = UUID(); lastScan = 0
+            status = "USB input paused — checking the controller again"
+        }
     }
     private func verifyCapture(at now: Double) {
-        guard active?.transport == .receiver, let device, let lease=modeLease,
+        guard let transport = active?.transport, let device, let lease=modeLease,
               !modeCheckPending,now-lastModeCheck>=1 else{return}
         modeCheckPending=true;lastModeCheck=now
         let token=session
         featureQueue.async {
-            let current=Self.readSettings(device,transport:.receiver)
+            let current=Self.readSettings(device,transport:transport)
             Task { @MainActor in
                 self.modeCheckPending=false
                 guard self.session==token,self.modeLease==lease else{return}
+                if transport == .cable, current == nil { return }       // one missed reply over the cable is not a change
                 guard current==lease.applied else {
                     // A reset to our measured baseline can happen on wake even if
                     // vendor reports continue. Do not map alongside desktop mode.
                     self.outputGate.cancel();self.modeLease=nil;self.radioFingerprint=nil
                     self.reset();self.feedback.reset();self.session=UUID()
                     self.captureResets=self.captureResets.filter{now-$0<10}
-                    if current==lease.original,self.captureResets.count<3 {
+                    // Over the cable, a controller that went back to its own mode (plugged back in, woken)
+                    // is taken over again; another app's different mode is still left alone over the radio.
+                    if (current==lease.original || transport == .cable),self.captureResets.count<3 {
                         self.captureResets.append(now)
                         self.device=nil;self.active=nil;self.lastScan=0
-                        self.status="Wireless desktop mode returned — checking capture again"
+                        self.status = transport == .cable ? "Steam Controller back in its own mode — taking it over again" : "Wireless desktop mode returned — checking capture again"
                     } else {
                         // Unknown/competing modes are preserved, not repeatedly fought.
                         self.status="Wireless capture changed — outputs released. Turn profiles off and leave this test, then reopen to retry."
@@ -217,6 +227,12 @@ final class SteamControllerUSB: ObservableObject {
         guard let bytes = feedback.movement(side: side, dx: dx, dy: dy, strength: strength, rate: rate, spacingMS: spacingMS, followsMovement: followsMovement, at: ProcessInfo.processInfo.systemUptime) else { return false }
         return sendFeedback(bytes)
     }
+    /// One haptic tick, as for a scroll step. Skipped (not queued) while a receiver send is still pending.
+    @discardableResult
+    func tick(side: Int, strength: Double) -> Bool {
+        guard let bytes = SteamControllerHaptics.pulse(side: side, strength: strength) else { return false }
+        return sendFeedback(bytes)
+    }
     @discardableResult
     func touchFeedback(side: Int, down: Bool, strength: Double) -> Bool {
         guard let bytes = feedback.touch(side: side, down: down, strength: strength, at: ProcessInfo.processInfo.systemUptime) else { return false }
@@ -247,6 +263,32 @@ final class SteamControllerUSB: ObservableObject {
             return false
         }
         return true
+    }
+    /// Rumbles both pads. Returns false when no Steam Controller is being read, so callers can say so.
+    @discardableResult
+    func rumble(strong: Bool) -> Bool { rumble(strength: strong ? 1 : 0.6, seconds: strong ? 0.4 : 0.15) }
+    @discardableResult
+    func rumble(strength: Double, seconds: Double) -> Bool {
+        guard !feedbackFailed, modeLease != nil, ownership != nil, let device,
+              let left = SteamControllerHaptics.rumble(side: 0, strength: strength, seconds: seconds),
+              let right = SteamControllerHaptics.rumble(side: 1, strength: strength, seconds: seconds) else { return false }
+        if active?.transport == .receiver {
+            guard !hapticPending else { return false }
+            hapticPending = true
+            let token = session, gate = outputGate
+            featureQueue.async {
+                let sent = Self.send(left, to: device, transport: .receiver, gate: gate) && Self.send(right, to: device, transport: .receiver, gate: gate)
+                Task { @MainActor in
+                    self.hapticPending = false
+                    guard self.session == token else { return }
+                    if !sent { self.feedbackStatus = "Rumble didn't reach the controller over the receiver" }
+                }
+            }
+            return true
+        }
+        var a = left, b = right
+        return IOHIDDeviceSetReport(device, kIOHIDReportTypeFeature, 0, &a, a.count) == kIOReturnSuccess
+            && IOHIDDeviceSetReport(device, kIOHIDReportTypeFeature, 0, &b, b.count) == kIOReturnSuccess
     }
     func testFeedback(side: Int, strength: Double, rate: Double = 40, spacingMS: Double = 1) {
         if movementFeedback(side: side, dx: 1, dy: 0, strength: strength, rate: rate, spacingMS: spacingMS) { feedbackStatus = "Short haptic burst sent — move the pad to feel the repeat rate" }

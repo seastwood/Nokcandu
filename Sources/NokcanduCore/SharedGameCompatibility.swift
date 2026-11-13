@@ -101,6 +101,7 @@ enum SharedGameCompatibility {
         case .crossProcessWindows where config.graphics != .dxmt, .dxmtLowMemory where config.graphics != .dxmt:
             return "Choose Metal for DirectX 10–11 (DXMT) for this game first."
         case .cursorVisibility where BF1942DisplayFix.folder(g) != nil: return "Temporarily unavailable for BF1942 because it can flicker."
+        case .dgVoodoo: return "Not yet available for games inside a shared launcher; it's for games with their own Nokcandu Windows environment."
         case .d3d8to9:
             guard CompatibilityFixes.directX8Program(g) != nil else { return "Requires a 32-bit game or one identifiable adjacent 32-bit DirectX 8 program." }
             guard config.graphics == .classic3D else { return "Choose Older 3D games for this game first." }

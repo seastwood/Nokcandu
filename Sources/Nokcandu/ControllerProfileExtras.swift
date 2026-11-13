@@ -184,9 +184,31 @@ extension ControllerProfileEditor {
 
     @ViewBuilder var feedbackInspector: some View {
         Section {
-            LabeledContent("Rumble") { Button("Test Rumble") { PadFeedback.shared.rumble(GCController.controllers(), strong: true) } }
+            LabeledContent("Rumble") {
+                Button("Test Rumble") {
+                    if inputSource == .steamUSB {
+                        rumbleNote = SteamControllerUSB.shared.rumble(strong: true) ? nil : "Connect the Steam Controller and leave this profile open to test its rumble."
+                    } else { rumbleNote = nil; PadFeedback.shared.rumble(GCController.controllers(), strong: true) }
+                }
+            }
+            if let rumbleNote { Text(rumbleNote).font(.caption).foregroundStyle(.secondary) }
             Toggle("Rumble when the layer changes", isOn: Binding(get: { profile.rumbleOnLayer ?? PadProfiles.top(profile, all: everything, \.rumbleOnLayer) ?? false }, set: { profile.rumbleOnLayer = $0 }))
-            ForEach(profile.layers.indices, id: \.self) { l in
+            if profile.rumbleOnLayer ?? PadProfiles.top(profile, all: everything, \.rumbleOnLayer) ?? false {
+                let d = PadProfiles.Profile.defaultLayerRumble
+                slider("Strength", Binding(get: { profile.layerRumbleStrength ?? PadProfiles.top(profile, all: everything, \.layerRumbleStrength) ?? d.strength },
+                                           set: { profile.layerRumbleStrength = $0 }), 0.05...1, "%.0f%%", scale: 100)
+                slider("Length", Binding(get: { profile.layerRumbleLength ?? PadProfiles.top(profile, all: everything, \.layerRumbleLength) ?? d.length },
+                                         set: { profile.layerRumbleLength = $0 }), 0.03...0.5, "%.2f s")
+                Button("Try Layer Rumble") {
+                    let strength = profile.layerRumbleStrength ?? PadProfiles.top(profile, all: everything, \.layerRumbleStrength) ?? d.strength
+                    let length = profile.layerRumbleLength ?? PadProfiles.top(profile, all: everything, \.layerRumbleLength) ?? d.length
+                    if inputSource == .steamUSB {
+                        rumbleNote = SteamControllerUSB.shared.rumble(strength: strength, seconds: length) ? nil : "Connect the Steam Controller and leave this profile open to try its rumble."
+                    } else { rumbleNote = nil; PadFeedback.shared.rumble(GCController.controllers(), strength: strength, seconds: length) }
+                }
+            }
+            // The original Steam Controller has no coloured light.
+            ForEach(inputSource == .steamUSB ? [] : Array(profile.layers.indices), id: \.self) { l in
                 LabeledContent(l == 0 ? "Light: Base" : "Light: \(profile.layers[l].name)") {
                     HStack {
                         if let hex = profile.layers[l].color, let rgb = PadFeedback.rgb(hex) {
@@ -202,7 +224,9 @@ extension ControllerProfileEditor {
         } header: {
             InspectorTitle(title: "Feedback", subtitle: nil, symbol: "waveform")
         } footer: {
-            Text("The light is on DualSense and DualShock 4 controllers; rumble on controllers macOS can rumble (give a button “Rumble” to buzz on purpose). Games' own vibration reaches the controller as usual. The on-screen note (Settings) shows layer changes too.")
+            Text(inputSource == .steamUSB
+                 ? "The Steam Controller rumbles through its trackpads, while this profile is reading it. Give a button “Rumble” to buzz on purpose. The on-screen note (Settings) shows layer changes too."
+                 : "The light is on DualSense and DualShock 4 controllers; rumble on controllers macOS can rumble (give a button “Rumble” to buzz on purpose). Games' own vibration reaches the controller as usual. The on-screen note (Settings) shows layer changes too.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }

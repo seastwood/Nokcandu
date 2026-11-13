@@ -196,6 +196,11 @@ final class DesktopPad: ObservableObject {
     private var steamRightMotion = PadSteamTrackpad()
     private var steamLeftMotion = PadSteamTrackpad()
     private var steamZones = [PadSteamPadZones(), PadSteamPadZones()]
+    private var steamTaps = [PadSteamTap(), PadSteamTap()]
+    private var steamDials = [PadSteamDial(), PadSteamDial()]
+    /// What each pad's current tap pressed (its plain tap or a zone's), so the same one is let go.
+    private var steamTapInputs: [PadProfiles.Input?] = [nil, nil]
+    private var steamZoneClicks = [PadSteamZoneRouter(), PadSteamZoneRouter()]
     /// A pad's direction and edge inputs, held or let go as the finger moves.
     private func steamPadZones(_ side: Int, down: Bool, pad: SteamControllerReport.Point, settings: PadSteamTrackpadSettings, engine e: OpaquePointer, now: Double) {
         let before = steamZones[side].held
@@ -222,7 +227,7 @@ final class DesktopPad: ObservableObject {
         frontCache = (front?.processIdentifier ?? 0, Self.now())
         let nextPID = front?.processIdentifier ?? 0
         let focusChanged = runtimePID != nextPID
-        if focusChanged { steamRightMotion.reset(); steamLeftMotion.reset(); steamZones[0].reset(); steamZones[1].reset() }
+        if focusChanged { steamRightMotion.reset(); steamLeftMotion.reset(); steamZones[0].reset(); steamZones[1].reset(); steamTaps = [PadSteamTap(), PadSteamTap()]; steamTapInputs = [nil, nil]; steamZoneClicks = [PadSteamZoneRouter(), PadSteamZoneRouter()] }
         if focusChanged, let e = engine { pe_release_all(e, Self.now()) }
         runtimePID = nextPID
         let id = front?.bundleIdentifier ?? ""
@@ -277,6 +282,8 @@ final class DesktopPad: ObservableObject {
         let settings = chosen.map { PadProfiles.layerSettings($0, all: all) } ?? [:]
         layerColors = layerNames.enumerated().map { i, n in settings[i == 0 ? "base" : n.lowercased()]?.color }
         rumble = chosen.flatMap { PadProfiles.top($0, all: all, \.rumbleOnLayer) } ?? false
+        layerRumble = (chosen.flatMap { PadProfiles.top($0, all: all, \.layerRumbleStrength) } ?? PadProfiles.Profile.defaultLayerRumble.strength,
+                       chosen.flatMap { PadProfiles.top($0, all: all, \.layerRumbleLength) } ?? PadProfiles.Profile.defaultLayerRumble.length)
         menus = chosen.map { Array(PadProfiles.collected($0, all: all, \.menus).prefix(8)) } ?? []
         PadFeedback.shared.light(layerColors.first ?? nil, feed.mainControllers())
         shownLayer = 0; shownGyro = chosen.map { PadProfiles.merged($0, all: all).gyro.output == .off ? -1 : (PadProfiles.merged($0, all: all).gyro.startsOn ? 1 : 0) } ?? -1
@@ -295,7 +302,7 @@ final class DesktopPad: ObservableObject {
         engine = nil
         timer?.invalidate(); timer = nil
         lastButtons = [:]; lastAxes = [:]; sourceState = PadSourceState(); headStickActive = false
-        steamZones[0].reset(); steamZones[1].reset()
+        steamZones[0].reset(); steamZones[1].reset(); steamTaps = [PadSteamTap(), PadSteamTap()]; steamTapInputs = [nil, nil]; steamZoneClicks = [PadSteamZoneRouter(), PadSteamZoneRouter()]
         guard !compiled.isEmpty else { SteamControllerUSB.shared.remove(steamReaderID); return }
         var sink = pe_sink()
         sink.pad_button = { _, _, _ in }          // the real controller is still there for the app
@@ -321,7 +328,7 @@ final class DesktopPad: ObservableObject {
     private var menus: [PadProfiles.RadialMenu] = []
     func stateChanged(layer: Int, gyro: Int) {
         if layer != shownLayer {
-            if rumble { PadFeedback.shared.rumble(feed.mainControllers()) }
+            if rumble { rumbleMain(strength: layerRumble.strength, seconds: layerRumble.length) }
             PadFeedback.shared.light((layerColors.indices.contains(layer) ? layerColors[layer] : nil) ?? layerColors.first ?? nil, feed.mainControllers())
             let name = layerNames.indices.contains(layer) ? layerNames[layer] : "Layer \(layer)"
             PadHUD.shared.show(layer == 0 ? "Base layer" : name, symbol: layer == 0 ? "square.stack" : "square.stack.3d.up.fill")
@@ -348,7 +355,8 @@ final class DesktopPad: ObservableObject {
             steamRightMotion.reset(); steamLeftMotion.reset()
             return
         }
-        if steamSource, engine != nil {
+        if steamSource, let e = engine {
+            for side in 0..<2 where steamTaps[side].tick(at: Self.now()) { releaseTap(side, engine: e, now: Self.now()) }
             let motion = steamRightMotion.tick(at: Self.now(), settings: steamRightSettings)
             steamPadMouse(motion, side: 1)
             let left = steamLeftMotion.tick(at: Self.now(), settings: steamLeftSettings)
@@ -357,6 +365,15 @@ final class DesktopPad: ObservableObject {
     }
 
     // MARK: Macros' text, radial menus, the on-screen keyboard, calibration
+
+    /// The profile's own controller: the Steam Controller when that is its source (it has no macOS rumble,
+    /// so asking macOS buzzed whatever other controller was connected), otherwise the macOS controllers.
+    private func rumbleMain(strong: Bool) { rumbleMain(strength: strong ? 1 : 0.6, seconds: strong ? 0.4 : 0.15) }
+    private func rumbleMain(strength: Double, seconds: Double) {
+        if steamSource { SteamControllerUSB.shared.rumble(strength: strength, seconds: seconds) }
+        else { PadFeedback.shared.rumble(feed.mainControllers(), strength: strength, seconds: seconds) }
+    }
+    private var layerRumble = PadProfiles.Profile.defaultLayerRumble
 
     func typeText(_ s: String) {
         for ch in s {
@@ -370,7 +387,7 @@ final class DesktopPad: ObservableObject {
     }
     func tapKey(_ k: Int) { key(k, true); key(k, false) }
     func menuChanged(_ m: Int, _ slice: Int) {
-        if m == Int(PE_RUMBLE_MENU) { PadFeedback.shared.rumble(feed.mainControllers(), strong: true); return }
+        if m == Int(PE_RUMBLE_MENU) { rumbleMain(strong: true); return }
         if m == Int(PE_KEYBOARD_MENU) {
             let held = Set(lastButtons.filter(\.value).compactMap { PadProfiles.Input(rawValue: String(cString: pe_input_name(Int32($0.key)))) })
             OnScreenKeyboard.shared.type = { DesktopPad.shared.typeText($0) }
@@ -495,7 +512,7 @@ final class DesktopPad: ObservableObject {
         guard let state else {
             steamRightMotion.reset()
             steamLeftMotion.reset()
-            steamZones[0].reset(); steamZones[1].reset()
+            steamZones[0].reset(); steamZones[1].reset(); steamTaps = [PadSteamTap(), PadSteamTap()]; steamTapInputs = [nil, nil]; steamZoneClicks = [PadSteamZoneRouter(), PadSteamZoneRouter()]
             pe_release_main(e, Self.now()); sourceState = PadSourceState(); lastButtons = [:]; lastAxes = [:]
             PadHeadTracking.shared.refreshActivation(); return
         }
@@ -518,21 +535,57 @@ final class DesktopPad: ObservableObject {
             let motion = steamLeftMotion.touch(down: state.leftTouch, x: Double(state.leftPad.x+1)/2, y: Double(1-state.leftPad.y)/2, at: now, settings: steamLeftSettings)
             steamPadMouse(motion, side: 0)
         }
-        let axes = state.mappingAxes(rightTrackpadAsStick: steamRightSettings.mode == .existing)
+        let axes = state.mappingAxes(left: steamLeftSettings, right: steamRightSettings)
+        var buttons = state.buttons
+        for side in 0..<2 {
+            let settings = side == 0 ? steamLeftSettings : steamRightSettings
+            guard settings.mode == .dial else { steamDials[side].reset(); continue }
+            let pad = side == 0 ? state.leftPad : state.rightPad
+            let steps = steamDials[side].update(down: side == 0 ? state.leftTouch : state.rightTouch, x: Double(pad.x), y: Double(pad.y), settings: settings)
+            guard steps != 0 else { continue }
+            wheel(steps)
+            if let strength = settings.dialHaptic, strength > 0 { SteamControllerUSB.shared.tick(side: side, strength: strength) }
+        }
+        for side in 0..<2 {
+            let pad = side == 0 ? state.leftPad : state.rightPad, touching = side == 0 ? state.leftTouch : state.rightTouch
+            let settings = side == 0 ? steamLeftSettings : steamRightSettings
+            let bound: (PadProfiles.Input) -> Bool = { pe_input_bound(e, pe_input_named($0.rawValue)) }
+            switch steamTaps[side].update(down: touching, x: Double(pad.x), y: Double(pad.y), at: now) {
+            case .press:
+                let input = PadSteamZoneRouter.tap(side: side, x: steamTaps[side].startX, y: steamTaps[side].startY, settings: settings, bound: bound)
+                steamTapInputs[side] = input; pe_pad_zone(e, pe_input_named(input.rawValue), true, now)
+            case .release: releaseTap(side, engine: e, now: now)
+            case .none: break
+            }
+            // A click in a zone that has something set goes to that zone instead of the pad's own click.
+            let clickButton: PadProfiles.Input = side == 0 ? .touchpad : .rs
+            let routed = steamZoneClicks[side].click(side: side, down: state.buttons.contains(clickButton), touching: touching,
+                                                    x: Double(pad.x), y: Double(pad.y), settings: settings, bound: bound)
+            if let c = routed.change { pe_pad_zone(e, pe_input_named(c.input.rawValue), c.down, now) }
+            if routed.suppress { buttons.remove(clickButton) }
+        }
         if steamRightSettings.mode != .existing {
             let motion = steamRightMotion.touch(down: state.rightTouch, x: Double(state.rightPad.x+1)/2, y: Double(1-state.rightPad.y)/2, at: now, settings: steamRightSettings)
             steamPadMouse(motion, side: 1)
         }
-        consume(sourceState.update(source: "steam-usb", buttons: Set(state.buttons.map { Int(pe_input_named($0.rawValue)) }), axes: axes))
+        consume(sourceState.update(source: "steam-usb", buttons: Set(buttons.map { Int(pe_input_named($0.rawValue)) }), axes: axes))
         pe_gyro(e,state.gyro[0],state.gyro[1],state.gyro[2],now)
         if pe_uses_tilt(e) { pe_accel(e,state.acceleration[0],state.acceleration[1],state.acceleration[2],now) }
     }
 
+    private func releaseTap(_ side: Int, engine e: OpaquePointer, now: Double) {
+        let input = steamTapInputs[side] ?? .padTap(side)
+        steamTapInputs[side] = nil
+        pe_pad_zone(e, pe_input_named(input.rawValue), false, now)
+    }
+
     private func steamPadMouse(_ motion: PadSteamTrackpad.Motion, side: Int) {
-        guard motion.x != 0 || motion.y != 0 else { return }
+        guard !motion.isEmpty else { return }
         let settings = side == 0 ? steamLeftSettings : steamRightSettings
-        _ = SteamControllerUSB.shared.movementFeedback(side: side, dx: motion.x, dy: motion.y, strength: settings.movementFeedback ?? 0, rate: settings.hapticRate ?? 40, spacingMS: settings.hapticSpacingMS ?? 1, followsMovement: settings.hapticFollowsMovement ?? true)
-        move(motion.x,motion.y)
+        if motion.x != 0 || motion.y != 0 {
+            _ = SteamControllerUSB.shared.movementFeedback(side: side, dx: motion.x, dy: motion.y, strength: settings.movementFeedback ?? 0, rate: settings.hapticRate ?? 40, spacingMS: settings.hapticSpacingMS ?? 1, followsMovement: settings.hapticFollowsMovement ?? true)
+        }
+        move(motion.x, motion.y, fine: CGVector(dx: motion.fx, dy: motion.fy))
     }
 
     private func consume(_ changes: PadSourceState.Changes) {
@@ -604,14 +657,25 @@ final class DesktopPad: ObservableObject {
         traceCounts.removeAll(keepingCapacity: true); traceLast = now
     }
 
-    private func move(_ dx: Int, _ dy: Int) {
+    /// The pointer as Nokcandu last placed it (between pixels), so consecutive moves add up exactly instead
+    /// of each starting from wherever macOS has got to; dropped when anything else moves the pointer.
+    private var pointerPosition: CGPoint?
+    private var pointerPositionAt = 0.0
+    private var windowCache: (pid: pid_t, rect: CGRect?, at: Double) = (0, nil, -1)
+    private var screenBounds: (rect: CGRect, at: Double) = (.null, -1)
+
+    /// `fine`: the exact movement, when the source has it (trackpads); games still get whole pixels.
+    private func move(_ dx: Int, _ dy: Int, fine: CGVector? = nil) {
+        let fx = fine.map { Double($0.dx) } ?? Double(dx), fy = fine.map { Double($0.dy) } ?? Double(dy)
         // Headphone mouse output uses this same picker; engine-generated gyro,
         // stick and touchpad mouse output is intercepted before its output sink.
-        if let engine, pe_menu_mouse(engine, Double(dx), Double(dy)) { return }
+        if let engine, pe_menu_mouse(engine, fx, fy) { return }
+        let whole = dx != 0 || dy != 0
         if let pid = PadCapture.shared.targetPID {
             // Wine's own helper can deliver explicit relative motion directly.
             // Posting a CGEvent instead can be swallowed by its raw-mouse hook.
             // code=1 requests capture; older helpers ignore it and retain their ordinary path.
+            guard whole else { return }
             if pid == gamePID, sendToGame(kind: 3, code: 1, dx: dx, dy: dy) {
                 traceMovement("captured-wine-socket", dx: dx, dy: dy); return
             }
@@ -622,18 +686,31 @@ final class DesktopPad: ObservableObject {
             return
         }
         if ProcessInfo.processInfo.systemUptime - lastRealMouse < 0.3 { traceMovement("hardware-priority", dx: dx, dy: dy); return }      // the real mouse is aiming
-        if gamePID > 0, sendToGame(kind: 3, code: 0, dx: dx, dy: dy) { traceMovement("wine-socket", dx: dx, dy: dy); return }
+        if gamePID > 0 {
+            if !whole { return }
+            if sendToGame(kind: 3, code: 0, dx: dx, dy: dy) { traceMovement("wine-socket", dx: dx, dy: dy); return }
+        }
         traceMovement("desktop-pointer", dx: dx, dy: dy)
-        var p = cursor
-        p.x += CGFloat(dx); p.y += CGFloat(dy)
-        if gamePID > 0, let w = gameWindow(gamePID) {          // keep the pointer inside the game's window
-            p.x = min(max(p.x, w.minX + 1), w.maxX - 2); p.y = min(max(p.y, w.minY + 28), w.maxY - 2)
+        let now = Self.now(), actual = cursor
+        // Continue from where Nokcandu put the pointer while macOS shows it there (it may not have caught up
+        // with the last move yet); anything else moving it starts afresh from the real position.
+        var p = actual
+        if let last = pointerPosition, now - pointerPositionAt < 0.25,
+           abs(last.x - actual.x) <= 2.5, abs(last.y - actual.y) <= 2.5, now - lastRealMouse > 0.3 { p = last }
+        p.x += CGFloat(fx); p.y += CGFloat(fy)
+        if gamePID > 0 {                                       // keep the pointer inside the game's window
+            if windowCache.pid != gamePID || now - windowCache.at > 0.5 { windowCache = (gamePID, gameWindow(gamePID), now) }
+            if let w = windowCache.rect { p.x = min(max(p.x, w.minX + 1), w.maxX - 2); p.y = min(max(p.y, w.minY + 28), w.maxY - 2) }
         }
-        let bounds = NSScreen.screens.reduce(CGRect.null) { r, s in
-            let f = s.frame, top = NSScreen.screens.first?.frame.maxY ?? f.maxY
-            return r.union(CGRect(x: f.minX, y: top - f.maxY, width: f.width, height: f.height))
+        if now - screenBounds.at > 1 {
+            screenBounds = (NSScreen.screens.reduce(CGRect.null) { r, s in
+                let f = s.frame, top = NSScreen.screens.first?.frame.maxY ?? f.maxY
+                return r.union(CGRect(x: f.minX, y: top - f.maxY, width: f.width, height: f.height))
+            }, now)
         }
+        let bounds = screenBounds.rect
         p.x = min(max(p.x, bounds.minX), bounds.maxX - 1); p.y = min(max(p.y, bounds.minY), bounds.maxY - 1)
+        pointerPosition = p; pointerPositionAt = now
         guard let ev = PadMouseEvent.movement(at: p, dx: dx, dy: dy,
                                              heldButtons: buttonsDown, flags: flags) else { return }
         ev.post(tap: .cghidEventTap)

@@ -624,3 +624,16 @@ Shared, not per game. Applies to every Windows game on Nokcandu's Wine 10.0/11.0
 - Original Steam Controller: its built-in button actions are cleared while Nokcandu reads it. Map the trigger or pad click to Left click in the profile.
 - Stock or manually changed drivers keep the old behavior. Raw capture can still be turned off per game as before.
 - Hardware/game acceptance for the Steam Controller and raw-capture cases is pending. [Investigation](investigations/controller-click-jump-and-polish-2026-11-11.md).
+
+## DirectX 8–9 through Metal (dgVoodoo2) — `dgvoodoo-d3d11`
+
+Shared component for any game with its own Nokcandu Windows environment (not yet for games inside a shared launcher).
+
+- **What it does:** downloads dgVoodoo2 2.87.6 (`dgVoodoo2_87_6.zip`, 9.2 MB, freeware by Dege, from the author's GitHub releases; SHA-256 `9afa4933…6a0a` pinned) and places its `d3d8.dll`/`d3d9.dll` (32-bit) or `d3d9.dll` (64-bit), `dgVoodoo.conf` and `dgVoodooCpl.exe` beside the game's program, with `d3d8=n`/`d3d9=n` overrides. dgVoodoo draws through Direct3D 11, which the game's DXMT renderer draws with Metal, so nothing passes through Vulkan.
+- **Requires** graphics set to Metal, DirectX 10–11 (DXMT) (Newer 3D games and, for 64-bit games, Apple Metal are accepted). Can't be combined with DirectX 8 compatibility (both replace `d3d8.dll`).
+- **Settings changed in dgVoodoo.conf:** `OutputAPI = d3d11_fl11_0`, `dgVoodooWatermark = false`, `[DirectX] VRAM = 1024` (dgVoodoo's own default of 256 MB is too small for later DirectX 9 games). Verified on the real file: exactly those three lines change. **Open dgVoodoo Settings…** under the fix runs `dgVoodooCpl.exe` in the game's environment for anything else.
+- **Undo** removes the files it wrote and its overrides, through the fix's change journal. The BF2 deployment-menu fix applies only with Older 3D games, so it is not active while BF2 uses DXMT for this.
+- **Status:** experimental. Unit-tested (settings edit, overrides by architecture, pinned package contents); **no game has been tried with it yet**, including Battlefield 2, the game it was added for.
+- **Profiles:** shared profiles may reference the ID only after the Nokcandu-Profiles validator lists `dgvoodoo-d3d11` (CI checks the two lists match).
+
+**Battlefield 2 result (November 12):** with graphics set to DXMT, BF2 crashed 8 s after start inside dgVoodoo2's `d3d9.dll` (called from BF2's `renddx9`), reading an unmapped high address; the same crash with the GeForce 9800 GT card, so it isn't the card setting. A 64-bit host address sat beside it on the stack. Hypothesis, not proven: DXMT's 32-bit (WoW64) path returns buffer memory a 32-bit program can't use for the kind of access dgVoodoo makes. Until disproved, treat dgVoodoo2 + DXMT as unsuitable for 32-bit games; 64-bit DirectX 9 games are untested. The fix's default card is now the GeForce 9800 GT (dgVoodoo's recommendation for older games).

@@ -12,7 +12,7 @@ final class SteamPadLayerTests: XCTestCase {
         XCTAssertEqual(PadProfiles.steamTrackpad(1, profile: p, all: [p]).mode, .trackball)
         let aim = PadProfiles.steamTrackpad(1, profile: p, all: [p], layer: "aim")
         XCTAssertEqual(aim.mode, .mouse); XCTAssertEqual(aim.sensitivity, 300); XCTAssertEqual(aim.edge, 0.3)
-        XCTAssertEqual(aim.rotation, 15, "defaults are filled in for a layer too")
+        XCTAssertEqual(aim.rotation, 0, "defaults are filled in for a layer too")
         XCTAssertEqual(PadProfiles.steamTrackpad(1, profile: p, all: [p], layer: "Menu").mode, .trackball)
         XCTAssertEqual(PadProfiles.steamTrackpad(1, profile: p, all: [p], layer: "Missing").mode, .trackball)
         XCTAssertEqual(PadProfiles.steamTrackpad(0, profile: p, all: [p], layer: "Aim").mode, .existing, "the other pad is untouched")

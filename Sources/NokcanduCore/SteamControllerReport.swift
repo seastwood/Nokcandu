@@ -23,6 +23,23 @@ public struct SteamControllerReport {
              2: Self.axis(rightTouch ? rightPad.x : 0), 3: Self.axis(rightTouch ? -rightPad.y : 0),
              4: Self.axis(leftTrigger), 5: Self.axis(rightTrigger)]
         }
+        /// The stick axes for the engine, with either pad as an analog stick when it is set to be one: the pad
+        /// drives its side's stick (left pad: the left stick, which it shares with the joystick — whichever is
+        /// pushed further wins).
+        public func mappingAxes(left: PadSteamTrackpadSettings, right: PadSteamTrackpadSettings) -> [Int: Int] {
+            var result = mappingAxes(rightTrackpadAsStick: right.mode == .existing)
+            if right.mode == .stick {
+                let v = rightTouch ? PadSteamPadStick.vector(x: Double(rightPad.x), y: Double(rightPad.y), settings: right) : (x: 0, y: 0)
+                result[2] = Self.axis(Float(v.x)); result[3] = Self.axis(Float(-v.y))
+            }
+            if left.mode == .stick, leftTouch {
+                let v = PadSteamPadStick.vector(x: Double(leftPad.x), y: Double(leftPad.y), settings: left)
+                if v.x * v.x + v.y * v.y > Double(stick.x * stick.x + stick.y * stick.y) {
+                    result[0] = Self.axis(Float(v.x)); result[1] = Self.axis(Float(-v.y))
+                }
+            }
+            return result
+        }
         public func mappingAxes(rightTrackpadAsStick: Bool) -> [Int: Int] {
             var result = axes
             if !rightTrackpadAsStick { result[2] = 0; result[3] = 0 }

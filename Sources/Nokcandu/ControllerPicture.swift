@@ -190,11 +190,24 @@ struct SteamPadFace: View {
                 Circle().strokeBorder(held.contains(edgeInput) ? Color.accentColor.opacity(0.75) : Color.accentColor.opacity(0.28), lineWidth: diameter / 2 * edge)
                 Circle().stroke(Color.accentColor.opacity(0.6), style: StrokeStyle(lineWidth: 0.75, dash: [2, 2])).frame(width: diameter * (1 - edge), height: diameter * (1 - edge))
             }
+            if settings.mode == .dial {
+                Circle().stroke(Color.accentColor.opacity(0.6), style: StrokeStyle(lineWidth: 1.5, dash: [4, 3])).frame(width: diameter * 0.66, height: diameter * 0.66)
+                Image(systemName: "arrow.clockwise").font(.system(size: max(8, diameter * 0.16), weight: .semibold)).foregroundStyle(Color.accentColor)
+            }
+            if let layout = settings.zoneLayout, layout != .off {
+                SteamPadZoneLines(layout: layout, diameter: diameter, side: side, held: held)
+                    .rotationEffect(.degrees(settings.rotation ?? 0))
+            }
             if settings.mode != .existing {
                 // The pad's own left–right and up–down, as the pointer or the directions will follow them.
                 ZStack {
                     Rectangle().fill(Color.primary.opacity(0.32)).frame(width: diameter * 0.86, height: 1)
                     Rectangle().fill(Color.primary.opacity(0.18)).frame(width: 1, height: diameter * 0.86)
+                    if settings.mode == .stick {
+                        let dead = PadSteamPadStick.deadzone(settings)
+                        Circle().stroke(Color.primary.opacity(0.3), lineWidth: 0.75).frame(width: diameter * dead, height: diameter * dead)
+                        Circle().stroke(Color.primary.opacity(0.18), style: StrokeStyle(lineWidth: 0.75, dash: [2, 2])).frame(width: diameter * 0.9, height: diameter * 0.9)
+                    }
                     if settings.mode == .directions {
                         let dead = PadSteamPadZones.deadzone(settings)
                         Circle().stroke(Color.primary.opacity(0.3), lineWidth: 0.75).frame(width: diameter * dead, height: diameter * dead)
@@ -216,6 +229,54 @@ struct SteamPadFace: View {
         .frame(width: diameter, height: diameter)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+}
+
+/// A pad's zone dividers, and the zone lit while its tap or click is held.
+struct SteamPadZoneLines: View {
+    let layout: PadSteamZoneLayout
+    let diameter: CGFloat
+    let side: Int
+    let held: Set<PadProfiles.Input>
+    var body: some View {
+        let r = diameter / 2
+        ZStack {
+            Path { p in
+                switch layout {
+                case .off: break
+                case .leftRight: p.move(to: CGPoint(x: r, y: 0)); p.addLine(to: CGPoint(x: r, y: diameter))
+                case .topBottom: p.move(to: CGPoint(x: 0, y: r)); p.addLine(to: CGPoint(x: diameter, y: r))
+                case .quadrants:
+                    p.move(to: CGPoint(x: r, y: 0)); p.addLine(to: CGPoint(x: r, y: diameter))
+                    p.move(to: CGPoint(x: 0, y: r)); p.addLine(to: CGPoint(x: diameter, y: r))
+                case .cross:
+                    let c = r * 0.35, k = r / 2.squareRoot()
+                    p.addEllipse(in: CGRect(x: r - c, y: r - c, width: c * 2, height: c * 2))
+                    for (dx, dy) in [(-1.0, -1.0), (1, -1), (-1, 1), (1, 1)] {
+                        p.move(to: CGPoint(x: r + dx * c / 2.squareRoot(), y: r + dy * c / 2.squareRoot()))
+                        p.addLine(to: CGPoint(x: r + dx * k, y: r + dy * k))
+                    }
+                }
+            }
+            .stroke(Color.orange.opacity(0.7), style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+            ForEach(Array(layout.names.indices), id: \.self) { n in
+                let lit = held.contains(.padZoneTap(side, n)) || held.contains(.padZoneClick(side, n))
+                Circle().fill(lit ? Color.orange : Color.orange.opacity(0.35)).frame(width: lit ? 9 : 4, height: lit ? 9 : 4)
+                    .offset(Self.centre(layout, n, r))
+            }
+        }
+        .frame(width: diameter, height: diameter)
+    }
+    /// Where zone n's marker sits (screen offsets from the pad's centre).
+    static func centre(_ layout: PadSteamZoneLayout, _ n: Int, _ r: CGFloat) -> CGSize {
+        let d = r * 0.55
+        switch layout {
+        case .off: return .zero
+        case .leftRight: return CGSize(width: n == 0 ? -d : d, height: 0)
+        case .topBottom: return CGSize(width: 0, height: n == 0 ? -d : d)
+        case .quadrants: return CGSize(width: n % 2 == 0 ? -d * 0.75 : d * 0.75, height: n < 2 ? -d * 0.75 : d * 0.75)
+        case .cross: return [CGSize.zero, CGSize(width: 0, height: -d * 1.1), CGSize(width: 0, height: d * 1.1), CGSize(width: -d * 1.1, height: 0), CGSize(width: d * 1.1, height: 0)][min(4, n)]
+        }
     }
 }
 
@@ -267,6 +328,11 @@ final class PadTester: ObservableObject {
     private var steamPadSettings = [PadSteamTrackpadSettings(), PadSteamTrackpadSettings()]
     private var steamPadMotion = [PadSteamTrackpad(), PadSteamTrackpad()]
     private var steamZones = [PadSteamPadZones(), PadSteamPadZones()]
+    private var steamTaps = [PadSteamTap(), PadSteamTap()]
+    private var steamDials = [PadSteamDial(), PadSteamDial()]
+    private var tapsShown: Set<PadProfiles.Input> = []
+    private var tapInputs: [PadProfiles.Input?] = [nil, nil]
+    private var zoneClicks = [PadSteamZoneRouter(), PadSteamZoneRouter()]
     func configureSteamPads(left: PadSteamTrackpadSettings?, right: PadSteamTrackpadSettings?) {
         let next = [left ?? PadSteamTrackpadSettings(), right ?? PadSteamTrackpadSettings()]
         if next != steamPadSettings { steamPadMotion = [PadSteamTrackpad(), PadSteamTrackpad()] }
@@ -297,11 +363,13 @@ final class PadTester: ObservableObject {
         })
         attach()
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 120, repeats: true) { [weak self] _ in
-            Task { @MainActor in guard let self, let e = self.engine else { return }; self.sample(); pe_tick(e, Self.now()) }
+            Task { @MainActor in guard let self, let e = self.engine, !self.paused else { return }; self.sample(); pe_tick(e, Self.now()) }
         }
     }
     func stop() {
         steamPadMotion = [PadSteamTrackpad(), PadSteamTrackpad()]
+        // The runtime takes the controller back first, so the reader never sees no listener in between.
+        DesktopPad.shared.attach()
         SteamControllerUSB.shared.remove(steamReaderID)
         timer?.invalidate(); timer = nil
         observers.forEach(NotificationCenter.default.removeObserver); observers = []
@@ -312,7 +380,7 @@ final class PadTester: ObservableObject {
     func reload(_ text: String, devices: [PadProfiles.Device]? = nil) {
         if (devices == nil || devices == self.devices), let e = engine, text.withCString({ pe_update_profile(e, $0) }) { return }
         if let e = engine { pe_release_all(e, Self.now()); pe_destroy(e) }
-        held = [:]; holding = []; padAxes = [:]; steamZones = [PadSteamPadZones(), PadSteamPadZones()]
+        held = [:]; holding = []; padAxes = [:]; steamZones = [PadSteamPadZones(), PadSteamPadZones()]; steamTaps = [PadSteamTap(), PadSteamTap()]; tapsShown = []; tapInputs = [nil, nil]; zoneClicks = [PadSteamZoneRouter(), PadSteamZoneRouter()]
         if let devices, devices != self.devices {
             self.devices = devices
             feed.set(devices, always: true)
@@ -396,7 +464,11 @@ final class PadTester: ObservableObject {
     nonisolated func menu(_ m: Int, _ slice: Int) {
         MainActor.assumeIsolated {
             if m == Int(PE_KEYBOARD_MENU) { flash("keyboard"); return }
-            if m == Int(PE_RUMBLE_MENU) { flash("rumble"); PadFeedback.shared.rumble(GCController.controllers(), strong: true); return }
+            if m == Int(PE_RUMBLE_MENU) {
+                flash("rumble")
+                if steamSource { SteamControllerUSB.shared.rumble(strong: true) } else { PadFeedback.shared.rumble(GCController.controllers(), strong: true) }
+                return
+            }
             openMenu = slice == -2 ? nil : (m, slice)
         }
     }
@@ -460,8 +532,18 @@ final class PadTester: ObservableObject {
         }
     }
 
+    /// The live test is for looking at. While Nokcandu is behind another app it skips its work (and
+    /// redrawing) but stays registered, so the shared Steam Controller reader is never let go and
+    /// re-captured because of a focus change — that left the controller unmapped in games.
+    private var paused: Bool {
+        let p = !NSApp.isActive
+        if p && !wasPaused { wasPaused = true; if let e = engine { pe_release_main(e, Self.now()) }; lastButtons = [:]; lastAxes = [:]; if !pressed.isEmpty { pressed = [] } }
+        else if !p { wasPaused = false }
+        return p
+    }
+    private var wasPaused = false
     private func readSteam(_ state: SteamControllerReport.State?) {
-        guard steamSource, let e = engine else { return }
+        guard steamSource, let e = engine, !paused else { return }
         let name = SteamControllerUSB.shared.controllerName
         if controllerName != name { controllerName = name }       // setting it at all redraws the editor
         // Once this controller has shown it has a gyro, the Gyro row stays: a resting gyro reads exactly zero
@@ -470,7 +552,7 @@ final class PadTester: ObservableObject {
         else if !hasMotion, state?.gyro.contains(where: { $0 != 0 }) == true { hasMotion = true }
         guard let state else {
             steamPadMotion = [PadSteamTrackpad(), PadSteamTrackpad()]
-            steamZones = [PadSteamPadZones(), PadSteamPadZones()]
+            steamZones = [PadSteamPadZones(), PadSteamPadZones()]; steamTaps = [PadSteamTap(), PadSteamTap()]; tapsShown = []; tapInputs = [nil, nil]; zoneClicks = [PadSteamZoneRouter(), PadSteamZoneRouter()]
             pe_release_main(e,Self.now()); lastButtons = [:]; lastAxes = [:]
             pressed = []; sticks = [.zero,.zero]; leftSteamPad = .zero; return
         }
@@ -496,15 +578,44 @@ final class PadTester: ObservableObject {
             for input in before.symmetricDifference(after) { pe_pad_zone(e, pe_input_named(input.rawValue), after.contains(input), now) }
             zones.formUnion(after)
         }
+        let axes = state.mappingAxes(left: steamPadSettings[0], right: steamPadSettings[1])
+        // Scroll wheel pads: feel each step here too, unless the running profile is already giving it.
+        for side in 0..<2 where steamPadSettings[side].mode == .dial {
+            let pad = side == 0 ? state.leftPad : state.rightPad
+            let steps = steamDials[side].update(down: side == 0 ? state.leftTouch : state.rightTouch, x: Double(pad.x), y: Double(pad.y), settings: steamPadSettings[side])
+            if steps != 0 { flash(steps > 0 ? "scroll up" : "scroll down")
+                if !DesktopPad.shared.suppliesSteamHaptics, let s = steamPadSettings[side].dialHaptic, s > 0 { SteamControllerUSB.shared.tick(side: side, strength: s) } }
+        }
+        var clickSuppressed: Set<PadProfiles.Input> = []
+        for side in 0..<2 {
+            let pad = side == 0 ? state.leftPad : state.rightPad, touching = side == 0 ? state.leftTouch : state.rightTouch
+            let bound: (PadProfiles.Input) -> Bool = { pe_input_bound(e, pe_input_named($0.rawValue)) }
+            switch steamTaps[side].update(down: touching, x: Double(pad.x), y: Double(pad.y), at: now) {
+            case .press:
+                let tap = PadSteamZoneRouter.tap(side: side, x: steamTaps[side].startX, y: steamTaps[side].startY, settings: steamPadSettings[side], bound: bound)
+                tapInputs[side] = tap; pe_pad_zone(e, pe_input_named(tap.rawValue), true, now); tapsShown.insert(tap)
+            case .release:
+                let tap = tapInputs[side] ?? .padTap(side); tapInputs[side] = nil
+                pe_pad_zone(e, pe_input_named(tap.rawValue), false, now); tapsShown.remove(tap)
+            case .none: break
+            }
+            let clickButton: PadProfiles.Input = side == 0 ? .touchpad : .rs
+            let routed = zoneClicks[side].click(side: side, down: state.buttons.contains(clickButton), touching: touching,
+                                                x: Double(pad.x), y: Double(pad.y), settings: steamPadSettings[side], bound: bound)
+            if let c = routed.change {
+                pe_pad_zone(e, pe_input_named(c.input.rawValue), c.down, now)
+                if c.down { tapsShown.insert(c.input) } else { tapsShown.remove(c.input) }
+            }
+            if routed.suppress { clickSuppressed.insert(clickButton) }
+        }
         for input in PadProfiles.Input.padButtons {
-            let n = Int(pe_input_named(input.rawValue)), down = state.buttons.contains(input)
+            let n = Int(pe_input_named(input.rawValue)), down = state.buttons.contains(input) && !clickSuppressed.contains(input)
             if lastButtons[n] != down { lastButtons[n] = down; pe_button(e,Int32(n),down,now) }
         }
-        let axes = state.mappingAxes(rightTrackpadAsStick: steamPadSettings[1].mode == .existing)
         for (a,v) in axes where lastAxes[a] != v { lastAxes[a] = v; pe_axis(e,Int32(a),Int32(v),now) }
         pe_gyro(e,state.gyro[0],state.gyro[1],state.gyro[2],now)
         if pe_uses_tilt(e) { pe_accel(e,state.acceleration[0],state.acceleration[1],state.acceleration[2],now) }
-        var held = state.buttons.union(zones)
+        var held = state.buttons.union(zones).union(tapsShown)
         if state.leftTrigger > 0.3 { held.insert(.lt) }; if state.leftTrigger > 0.95 { held.insert(.ltfull) }
         if state.rightTrigger > 0.3 { held.insert(.rt) }; if state.rightTrigger > 0.95 { held.insert(.rtfull) }
         if pressed != held { pressed = held }

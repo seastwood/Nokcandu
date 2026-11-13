@@ -20,9 +20,19 @@ public enum PadProfiles {
         case tiltleft, tiltright, tiltfwd, tiltback
         /// A trackpad used as four directions, and its outer edge (original Steam Controller).
         case lpup, lpdown, lpleft, lpright, lpedge, rpup, rpdown, rpleft, rpright, rpedge
+        /// A quick touch on a trackpad, like a button (so it can be double-tapped).
+        case lptap, rptap
+        /// A trackpad's zones: tapped (t) and clicked (c), up to five per pad (PadSteamZoneLayout).
+        case lpt1, lpt2, lpt3, lpt4, lpt5, lpc1, lpc2, lpc3, lpc4, lpc5
+        case rpt1, rpt2, rpt3, rpt4, rpt5, rpc1, rpc2, rpc3, rpc4, rpc5
         public var id: String { rawValue }
         /// Not a button on the controller: a stick direction, a touchpad zone or a tilt.
-        public var isVirtual: Bool { isStickDirection || Self.touchZones.contains(self) || Self.tilts.contains(self) || Self.padZones.contains(self) }
+        public var isVirtual: Bool { isStickDirection || Self.touchZones.contains(self) || Self.tilts.contains(self) || Self.padZones.contains(self) || self == .lptap || self == .rptap || Self.padZoneInputs.contains(self) }
+        /// Zone `n` (0-based) of a pad: its tap, and its click.
+        public static func padZoneTap(_ side: Int, _ n: Int) -> Input { (side == 0 ? [Input.lpt1, .lpt2, .lpt3, .lpt4, .lpt5] : [.rpt1, .rpt2, .rpt3, .rpt4, .rpt5])[min(4, max(0, n))] }
+        public static func padZoneClick(_ side: Int, _ n: Int) -> Input { (side == 0 ? [Input.lpc1, .lpc2, .lpc3, .lpc4, .lpc5] : [.rpc1, .rpc2, .rpc3, .rpc4, .rpc5])[min(4, max(0, n))] }
+        public static let padZoneInputs: Set<Input> = Set((0..<2).flatMap { s in (0..<5).flatMap { [padZoneTap(s, $0), padZoneClick(s, $0)] } })
+        public static func padTap(_ side: Int) -> Input { side == 0 ? .lptap : .rptap }
         /// Up, down, left, right of the left (0) or right (1) trackpad, and that pad's edge.
         public static func padDirections(_ side: Int) -> [Input] { side == 0 ? [.lpup, .lpdown, .lpleft, .lpright] : [.rpup, .rpdown, .rpleft, .rpright] }
         public static func padEdge(_ side: Int) -> Input { side == 0 ? .lpedge : .rpedge }
@@ -71,7 +81,14 @@ public enum PadProfiles {
             case (.tiltleft, _): "Tilt left"; case (.tiltright, _): "Tilt right"; case (.tiltfwd, _): "Tilt forward"; case (.tiltback, _): "Tilt back"
             case (.lpup, _): "Left pad up"; case (.lpdown, _): "Left pad down"; case (.lpleft, _): "Left pad left"; case (.lpright, _): "Left pad right"; case (.lpedge, _): "Left pad edge"
             case (.rpup, _): "Right pad up"; case (.rpdown, _): "Right pad down"; case (.rpleft, _): "Right pad left"; case (.rpright, _): "Right pad right"; case (.rpedge, _): "Right pad edge"
+            case (.lptap, _): "Left pad tap"; case (.rptap, _): "Right pad tap"
+            default: zoneTitle
             }
+        }
+        /// A pad zone's tap or click ("Left pad zone 2 tap").
+        private var zoneTitle: String {
+            let r = rawValue, side = r.hasPrefix("l") ? "Left" : "Right", kind = r.dropFirst(2).first == "t" ? "tap" : "click"
+            return "\(side) pad zone \(r.last.map(String.init) ?? "") \(kind)"
         }
     }
 
@@ -402,8 +419,8 @@ public enum PadProfiles {
     }
 
     public enum GyroOutput: String, CaseIterable, Codable, Hashable, Sendable {
-        case off, mouse, leftStick, rightStick
-        public var title: String { switch self { case .off: "Off"; case .mouse: "Mouse"; case .leftStick: "Left stick"; case .rightStick: "Right stick" } }
+        case off, mouse, leftStick, rightStick, scroll
+        public var title: String { switch self { case .off: "Off"; case .mouse: "Mouse"; case .leftStick: "Left stick"; case .rightStick: "Right stick"; case .scroll: "Scrolling" } }
     }
     public enum GyroTurn: String, CaseIterable, Codable, Hashable, Sendable {
         case yaw, roll, both
@@ -432,6 +449,19 @@ public enum PadProfiles {
         /// How much turning (yaw) and tilting (roll) move left and right (1 = fully). Unset: from `turn`.
         public var yawAmount: Double?
         public var rollAmount: Double?
+        /// Left and right is turning about gravity ("world space"): the same however the controller is held.
+        public var worldSpace: Bool?
+        /// Real-world sensitivity: how many degrees the view turns per degree the controller turns (1: one to
+        /// one), using `countsPerTurn` — the mouse movement for one full turn in the game, as for a flick stick.
+        public var realWorld: Double?
+        public var countsPerTurn: Double?
+        /// Scrolling: wheel steps per degree tipped.
+        public var scrollRate: Double?
+        /// Mouse movement per degree, as the engine gets it.
+        public var effectiveSensitivity: (slow: Double, fast: Double) {
+            if let r = realWorld, r > 0 { let s = r * (countsPerTurn ?? 4000) / 360; return (s, s) }
+            return (sensitivity, fastSensitivity ?? sensitivity)
+        }
         /// A One Euro filter: steady when turning slowly, no lag when turning fast. Its slow-turn cut-off (Hz; lower is
         /// steadier) and how quickly it opens up with speed.
         public var filter: Bool?
@@ -586,6 +616,10 @@ public enum PadProfiles {
         public var buttonRoutes: [String: ButtonRoute]?
         public var controlRoutes: [String: ButtonRoute]?
         public var rumbleOnLayer: Bool?
+        /// The layer-change rumble: strength 0…1 and length in seconds (nil: 0.35 and 0.12 s).
+        public var layerRumbleStrength: Double?
+        public var layerRumbleLength: Double?
+        public static let defaultLayerRumble = (strength: 0.35, length: 0.12)
         public init(id: String = UUID().uuidString, name: String, buildsOn: [String] = [], layers: [Layer] = [Layer(id: "base", name: "Base")],
                     leftStick: Stick? = nil, rightStick: Stick? = nil, gyro: Gyro? = nil, triggers: Triggers? = nil) {
             self.id = id; self.name = name; self.buildsOn = buildsOn; self.layers = layers.isEmpty ? [Layer(id: "base", name: "Base")] : layers
@@ -697,8 +731,8 @@ public enum PadProfiles {
         func n(_ d: Double) -> String { String(format: "%g", d) }
         var lines = ["nokpad 1"]
         func gyroLine(_ g: Gyro, layer: Int) -> String {
-            let gout: String = { switch g.output { case .off: "off"; case .mouse: "mouse"; case .leftStick: "lstick"; case .rightStick: "rstick" } }()
-            return "gyro out=\(gout) on=\(g.startsOn ? 1 : 0) min=\(n(g.sensitivity)) max=\(n(g.fastSensitivity ?? g.sensitivity)) lo=\(n(g.slowSpeed)) hi=\(n(g.fastSpeed)) smooth=\(n(g.smoothing)) tight=\(n(g.tightening)) invx=\(g.invertX ? 1 : 0) invy=\(g.invertY ? 1 : 0) yaw=\(g.turn.rawValue) stickfull=\(n(g.stickFullSpeed)) stickmin=\(n(g.stickMinimum)) cal=\(g.autoCalibrate ? "auto" : "off") xs=\(n(g.xScale ?? 1)) ys=\(n(g.yScale ?? 1)) yw=\(n(g.yaw)) rw=\(n(g.roll)) euro=\(g.filter == true ? 1 : 0) mincut=\(n(g.filterMinCutoff ?? 5)) beta=\(n(g.filterBeta ?? 0.05))" + (layer > 0 ? " layer=\(layer)" : "")
+            let gout: String = { switch g.output { case .off: "off"; case .mouse: "mouse"; case .leftStick: "lstick"; case .rightStick: "rstick"; case .scroll: "scroll" } }()
+            return "gyro out=\(gout) on=\(g.startsOn ? 1 : 0) world=\(g.worldSpace == true ? 1 : 0) scrollrate=\(n(g.scrollRate ?? 0.1)) min=\(n(g.effectiveSensitivity.slow)) max=\(n(g.effectiveSensitivity.fast)) lo=\(n(g.slowSpeed)) hi=\(n(g.fastSpeed)) smooth=\(n(g.smoothing)) tight=\(n(g.tightening)) invx=\(g.invertX ? 1 : 0) invy=\(g.invertY ? 1 : 0) yaw=\(g.turn.rawValue) stickfull=\(n(g.stickFullSpeed)) stickmin=\(n(g.stickMinimum)) cal=\(g.autoCalibrate ? "auto" : "off") xs=\(n(g.xScale ?? 1)) ys=\(n(g.yScale ?? 1)) yw=\(n(g.yaw)) rw=\(n(g.roll)) euro=\(g.filter == true ? 1 : 0) mincut=\(n(g.filterMinCutoff ?? 5)) beta=\(n(g.filterBeta ?? 0.05))" + (layer > 0 ? " layer=\(layer)" : "")
         }
         func stickLine(_ i: Int, _ s: Stick, layer: Int) -> String {
             let mode: String, to: Int

@@ -199,6 +199,12 @@ final class PadFeedback {
     private var originalColor: [ObjectIdentifier: GCColor] = [:]
 
     func rumble(_ controllers: [GCController], strong: Bool = false) {
+        if strong { rumble(controllers, strength: 1, seconds: 0.4) } else { rumble(controllers, strength: 0.7, seconds: 0) }
+    }
+    /// A rumble of a chosen strength (0…1) and length in seconds (0: a single tap).
+    func rumble(_ controllers: [GCController], strength: Double, seconds: Double) {
+        let level = Float(min(1, max(0, strength.isFinite ? strength : 0)))
+        guard level > 0 else { return }
         for c in controllers {
             guard let h = c.haptics else { continue }
             let id = ObjectIdentifier(c)
@@ -207,11 +213,11 @@ final class PadFeedback {
             engines[id] = engine
             do {
                 try engine.start()
-                let ev = strong
-                    ? CHHapticEvent(eventType: .hapticContinuous, parameters: [CHHapticEventParameter(parameterID: .hapticIntensity, value: 1),
-                                    CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.5)], relativeTime: 0, duration: 0.4)
+                let ev = seconds > 0
+                    ? CHHapticEvent(eventType: .hapticContinuous, parameters: [CHHapticEventParameter(parameterID: .hapticIntensity, value: level),
+                                    CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.5)], relativeTime: 0, duration: min(1, seconds))
                     : CHHapticEvent(eventType: .hapticTransient, parameters: [
-                    CHHapticEventParameter(parameterID: .hapticIntensity, value: 0.7),
+                    CHHapticEventParameter(parameterID: .hapticIntensity, value: level),
                     CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.6)], relativeTime: 0)
                 try engine.makePlayer(with: CHHapticPattern(events: [ev], parameters: [])).start(atTime: 0)
             } catch { engines[id] = nil }
