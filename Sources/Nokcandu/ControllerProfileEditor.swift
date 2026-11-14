@@ -1073,6 +1073,8 @@ struct OutputsEditor: View {
     func record() {
         recording = true; recorder.reset()
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel]) { e in
+            // Keys and clicks the controller's live mapping produces are Nokcandu's own, not a choice.
+            if let cg = e.cgEvent, PadEventSource.isOwn(cg, processID: getpid()) { return e }
             let input: PadOutputRecorder.Input
             switch e.type {
             case .flagsChanged:
@@ -1472,6 +1474,8 @@ struct KeyRecordButton: View {
     }
     func start() {
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { e in
+            // Keys the controller's live mapping types are Nokcandu's own events, not the user's choice.
+            if let cg = e.cgEvent, PadEventSource.isOwn(cg, processID: getpid()) { return e }
             let k = Int(e.keyCode)
             if e.type == .keyDown {
                 if k != 53 { set(k) }   // Escape cancels
