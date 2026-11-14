@@ -200,6 +200,9 @@ extension ControllerProfileEditor {
         if monitor != nil { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged, .rightMouseDown, .otherMouseDown]) { [weak self] e in
             guard let self, self.waiting != nil else { return e }
+            // The controller's own mapping is live while the editor is open: pressing X types its key (R).
+            // Those are Nokcandu's own events, not the answer: swallow them and keep waiting.
+            if let cg = e.cgEvent, PadEventSource.isOwn(cg, processID: getpid()) { return nil }
             switch e.type {
             case .keyDown:
                 if e.keyCode == 53 { self.cancel() } else { self.finish(.key(Int(e.keyCode))) }   // Escape cancels
