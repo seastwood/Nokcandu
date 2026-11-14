@@ -409,7 +409,30 @@ import NokcanduCore
     var streamName: String? { running.flatMap { r in profile(r.profileID).map { "\($0.name) — \(host(r.hostID)?.name ?? "")" } } }
     func endStream(quitApp: Bool) { window?.endStream(quitApp: quitApp) }
 
-    /// Nokcandu is quitting: end a running stream properly (the host is told), waiting briefly for it. A stream that
+    /// Nokcandu was asked to quit while a stream runs: end the stream the way End Stream does (keys and
+    /// controllers let go on the host, the connection closed so the host knows), then call `done`, at the latest
+    /// after `timeout` seconds. Returns false, without calling `done`, when no stream is running.
+    /// Before, quitting closed the connection from `applicationWillTerminate` while the main thread waited up
+    /// to 3 s, and left keys held on the host.
+    private var quitPending: (() -> Void)?
+    func endStreamBeforeQuit(timeout: Double = 5, then done: @escaping () -> Void) -> Bool {
+        guard running != nil, let w = window else { return false }
+        quitPending = done
+        let finish: () -> Void = { [weak self] in
+            guard let self, let pending = self.quitPending else { return }
+            self.quitPending = nil
+            pending()
+        }
+        StreamLog.shared.add("Ending the stream because Nokcandu is quitting")
+        w.endStream(quitApp: false, completion: finish)
+        DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { [weak self] in
+            if self?.quitPending != nil { StreamLog.shared.add("The host didn't confirm the stream's end within \(Int(timeout)) s; quitting anyway") }
+            finish()
+        }
+        return true
+    }
+
+    /// Last resort when Nokcandu terminates without having been asked first: end a running stream properly (the host is told), waiting briefly for it. A stream that
     /// just vanishes (Nokcandu killed mid-stream) has twice left Sunshine's secure port stuck until it was restarted.
     func endStreamForQuit() {
         guard running != nil, let c = StreamConnection.current else { return }

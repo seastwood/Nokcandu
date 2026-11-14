@@ -73,6 +73,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Built as a plain SwiftPM executable: make sure it behaves like a normal foreground app.
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        // `kill` (and tools that end apps with it) quits Nokcandu like the Quit command does, so a running
+        // stream is ended properly instead of vanishing from the host. A forced kill can't be caught.
+        for number in [SIGTERM, SIGINT] {
+            // A handler that does nothing, not "ignore": an ignored signal stays ignored in every game and tool
+            // Nokcandu starts, which could then no longer be ended with it.
+            signal(number) { _ in }
+            let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
+            source.setEventHandler { NSApp.terminate(nil) }
+            source.resume()
+            quitSignals.append(source)
+        }
+    }
+    private var quitSignals: [DispatchSourceSignal] = []
+    private var endingStream = false
+    /// Quit (the command, logging out, shutting down, an update): a running stream is ended first, the way End
+    /// Stream does, and Nokcandu quits when the host has been told, or after five seconds.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        MainActor.assumeIsolated {
+            if endingStream { return .terminateLater }
+            guard StreamsModel.shared.endStreamBeforeQuit(then: { NSApp.reply(toApplicationShouldTerminate: true) }) else { return .terminateNow }
+            endingStream = true
+            return .terminateLater
+        }
     }
     /// With the menu bar menu on, Nokcandu keeps running after its window closes (the menu brings it back).
     func applicationWillTerminate(_ notification: Notification) { MainActor.assumeIsolated { StreamsModel.shared.endStreamForQuit(); PadProfileEdits.shared.flushAll(); MacGameKeys.shared.stop(); DesktopPad.shared.stop() } }

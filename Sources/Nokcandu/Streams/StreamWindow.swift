@@ -168,14 +168,20 @@ import SwiftUI
         finish(error: message)
     }
 
-    /// Ends the stream; with `quitApp` the app on the host quits too.
-    func endStream(quitApp: Bool) {
-        guard !ended else { window?.close(); return }
+    /// Ends the stream; with `quitApp` the app on the host quits too. `completion` runs on the main thread once
+    /// the host has been told (the connection is closed), for a caller that must wait for it: Nokcandu quitting.
+    func endStream(quitApp: Bool, completion: (() -> Void)? = nil) {
+        guard !ended else { window?.close(); completion?(); return }
         releaseMouse()
+        // Let go of everything on the host first: keys still held (⌘Q arrives there as the Windows key going
+        // down) and the controllers, or they stay pressed on the host after the stream is gone.
         keyboard.releaseAll()
+        gamepads.stop()
         let c = connection, identity = self.identity
         DispatchQueue.global(qos: .userInitiated).async {
+            usleep(120_000)                       // those releases are on their way before the connection closes
             if quitApp { c.stopAndQuit(identity: identity) } else { c.stop() }
+            if let completion { DispatchQueue.main.async(execute: completion) }
         }
         finish(error: nil)
         window?.close()
