@@ -15,10 +15,10 @@ class ControllerRumbleTests(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory(prefix="nokr-", dir="/tmp")   # short: socket paths are limited
         work = Path(cls.tmp.name)
-        def compile(args):
+        def build_fixture(args):
             subprocess.run(["xcrun", "clang", *args], cwd=ROOT, check=True, capture_output=True, text=True)
         cls.helper = work / "helper.dylib"
-        compile(["-dynamiclib", "-fobjc-arc", "-O2", "-mmacosx-version-min=11.0",
+        build_fixture(["-dynamiclib", "-fobjc-arc", "-O2", "-mmacosx-version-min=11.0",
                  "-framework", "AppKit", "-framework", "GameController", "-framework", "CoreGraphics",
                  "-framework", "IOKit", "-framework", "OpenGL", "-framework", "AudioToolbox",
                  "-framework", "CoreAudio", "-ISources/NokcanduPadEngine/include",
@@ -33,12 +33,12 @@ uint16_t SDL_JoystickGetVendor(void *j) { (void)j; return 0x28de; }
 uint16_t SDL_JoystickGetProduct(void *j) { (void)j; return 0x1102; }
 const char *SDL_JoystickName(void *j) { (void)j; return "Steam Controller"; }
 ''')
-        compile(["-dynamiclib", "-O2", str(sdl), "-o", str(work / "libSDL-fixture.dylib")])
+        build_fixture(["-dynamiclib", "-O2", str(sdl), "-o", str(work / "libSDL-fixture.dylib")])
         driver = work / "driver.c"
         driver.write_text('''#include <dlfcn.h>
 __attribute__((noinline)) void *lookup(void *h,const char *n) { void *p=dlsym(h,n); __asm__ volatile("" : "+r"(p)); return p; }
 ''')
-        compile(["-dynamiclib", "-O2", str(driver), "-o", str(work / "winebus.so")])
+        build_fixture(["-dynamiclib", "-O2", str(driver), "-o", str(work / "winebus.so")])
         main = work / "main.c"
         main.write_text('''#include <dlfcn.h>
 #include <stdint.h>
@@ -54,7 +54,7 @@ int main(void) {
 }
 ''')
         cls.exe = work / "probe"
-        compile(["-O2", str(main), "-o", str(cls.exe)])
+        build_fixture(["-O2", str(main), "-o", str(cls.exe)])
         cls.home = work / "home"
         (cls.home / "Library/Application Support/Nokcandu").mkdir(parents=True)
 

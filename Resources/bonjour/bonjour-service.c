@@ -5,7 +5,8 @@
  * Resources/rawmouse/bonjourbridge.m), so the Windows service has nothing to do; it couldn't work under Wine
  * anyway. This service starts, reports itself running so the game carries on, and waits to be stopped.
  *
- * Build: x86_64-w64-mingw32-clang -O2 -municode -o nokcandu-bonjour-service.exe bonjour-service.c -ladvapi32
+ * Built with the other Windows helpers by Resources/borderless/build.sh (pinned Zig); no built copy is kept in
+ * the repository.
  */
 #include <windows.h>
 

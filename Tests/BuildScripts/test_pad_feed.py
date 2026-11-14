@@ -14,10 +14,10 @@ class PadFeedTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="nokf-", dir="/tmp") as tmp:
             work = Path(tmp)
             state = work / "state"; state.mkdir()
-            def compile(args):
+            def build_fixture(args):
                 subprocess.run(["xcrun", "clang", *args], cwd=ROOT, check=True, capture_output=True, text=True)
             helper = state / "nokcandu-rawmouse.dylib"
-            compile(["-dynamiclib", "-fobjc-arc", "-O2", "-mmacosx-version-min=11.0",
+            build_fixture(["-dynamiclib", "-fobjc-arc", "-O2", "-mmacosx-version-min=11.0",
                      "-framework", "AppKit", "-framework", "GameController", "-framework", "CoreGraphics",
                      "-framework", "IOKit", "-framework", "OpenGL", "-framework", "AudioToolbox",
                      "-framework", "CoreAudio", "-ISources/NokcanduPadEngine/include",
@@ -35,11 +35,11 @@ uint16_t SDL_JoystickGetDeviceVendor(int i) { (void)i; return 0x28de; }
 uint16_t SDL_JoystickGetDeviceProduct(int i) { (void)i; return 0x1102; }
 void *SDL_GameControllerOpen(int i) { (void)i; return 0; }
 ''')
-            compile(["-dynamiclib", "-O2", str(work / "sdl.c"), "-o", str(work / "libSDL-fixture.dylib")])
+            build_fixture(["-dynamiclib", "-O2", str(work / "sdl.c"), "-o", str(work / "libSDL-fixture.dylib")])
             (work / "driver.c").write_text('''#include <dlfcn.h>
 __attribute__((noinline)) void *lookup(void *h,const char *n) { void *p=dlsym(h,n); __asm__ volatile("" : "+r"(p)); return p; }
 ''')
-            compile(["-dynamiclib", "-O2", str(work / "driver.c"), "-o", str(work / "winebus.so")])
+            build_fixture(["-dynamiclib", "-O2", str(work / "driver.c"), "-o", str(work / "winebus.so")])
             (work / "main.c").write_text('''#include <dlfcn.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -69,7 +69,7 @@ int main(int argc, char **argv) {
 }
 ''')
             exe = work / "probe"
-            compile(["-O2", str(work / "main.c"), "-o", str(exe)])
+            build_fixture(["-O2", str(work / "main.c"), "-o", str(exe)])
             env = dict(os.environ, DYLD_INSERT_LIBRARIES=str(helper), NOKCANDU_NO_GAME_APP="1")
             r = subprocess.run([str(exe), "winedevice.exe", str(state)], cwd=work, env=env, capture_output=True, text=True, timeout=20)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)

@@ -25,3 +25,7 @@ for arch in x86 x86_64; do
  done
 
 "$ZIG" cc -target x86_64-windows-gnu -Os -s ea-compat.c -o "$DEST/nokcandu-ea-compat.exe" -ladvapi32 -municode
+
+# The stand-in Windows "Bonjour Service" (see ../bonjour/bonjour-service.c), built here so that no Windows
+# program is kept in the repository.
+"$ZIG" cc -target x86_64-windows-gnu -O2 -s ../bonjour/bonjour-service.c -o "$DEST/nokcandu-bonjour-service.exe" -ladvapi32 -municode

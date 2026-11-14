@@ -11,11 +11,11 @@ class PadInterpositionTests(unittest.TestCase):
     def test_only_wine_driver_lookups_are_intercepted(self):
         with tempfile.TemporaryDirectory(prefix="nok-pad-symbols-") as tmp:
             work = Path(tmp)
-            def compile(args):
+            def build_fixture(args):
                 subprocess.run(["xcrun", "clang", *args], cwd=ROOT, check=True,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             helper = work / "helper.dylib"
-            compile(["-dynamiclib", "-fobjc-arc", "-O2", "-mmacosx-version-min=11.0",
+            build_fixture(["-dynamiclib", "-fobjc-arc", "-O2", "-mmacosx-version-min=11.0",
                      "-framework", "AppKit", "-framework", "GameController", "-framework", "CoreGraphics",
                      "-framework", "IOKit", "-framework", "OpenGL", "-framework", "AudioToolbox",
                      "-framework", "CoreAudio", "-ISources/NokcanduPadEngine/include",
@@ -30,13 +30,13 @@ void *SDL_GameControllerOpen(int index) { (void)index; return 0; }
 void *expected(const char *name) { return !strcmp(name,"SDL_WaitEventTimeout") ? (void *)SDL_WaitEventTimeout : (void *)SDL_GameControllerOpen; }
 __attribute__((noinline)) void *lookup(void *h,const char *n) { void *p=dlsym(h,n); __asm__ volatile("" : "+r"(p)); return p; }
 ''')
-            compile(["-dynamiclib", "-O2", str(sdl), "-o", str(work / "libSDL-fixture.dylib")])
+            build_fixture(["-dynamiclib", "-O2", str(sdl), "-o", str(work / "libSDL-fixture.dylib")])
             driver = work / "driver.c"
             driver.write_text('''#include <dlfcn.h>
 __attribute__((noinline)) void *lookup(void *h,const char *n) { void *p=dlsym(h,n); __asm__ volatile("" : "+r"(p)); return p; }
 ''')
             for name in ["winebus.so", "winebus.sys.so", "other.so"]:
-                compile(["-dynamiclib", "-O2", str(driver), "-o", str(work / name)])
+                build_fixture(["-dynamiclib", "-O2", str(driver), "-o", str(work / name)])
             main = work / "main.c"
             main.write_text('''#include <dlfcn.h>
 #include <stdio.h>
@@ -69,7 +69,7 @@ int main(int argc,char **argv) {
 }
 ''')
             exe = work / "probe"
-            compile(["-O2", str(main), "-o", str(exe)])
+            build_fixture(["-O2", str(main), "-o", str(exe)])
             env = dict(os.environ, DYLD_INSERT_LIBRARIES=str(helper), NOKCANDU_NO_GAME_APP="1")
             for program in ["winedevice.exe", "game.exe"]:
                 with self.subTest(program=program):
