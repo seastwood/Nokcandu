@@ -656,7 +656,8 @@ final class DesktopPad: ObservableObject {
         diagnostic(down ? "key down" : "key up")
         flags = keyboardState.update(k, down: down)
         if !PadKeyboardState.modifier(k).isEmpty { ev.type = .flagsChanged }
-        ev.flags = flags
+        // The held modifiers plus the key's own (Fn and keypad on arrows), or ⌃↑ and ⌃← / ⌃→ don't reach Mission Control.
+        ev.flags = flags.union(PadKeyboardState.keyFlags(k))
         PadEventSource.mark(ev)
         ev.post(tap: .cghidEventTap)
     }

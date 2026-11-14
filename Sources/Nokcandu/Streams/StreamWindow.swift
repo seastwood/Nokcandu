@@ -44,7 +44,8 @@ import SwiftUI
         connection.audio.volume = Float(next.audio.volume)
         connection.audio.outputDevice = next.audio.outputDevice
         keyboard.input = next.input
-        if next.input.keyboardLayout != old.input.keyboardLayout { applyKeyboardLayout() }
+        if next.input.keyboardLayout != old.input.keyboardLayout || next.input.captureSystemShortcuts != old.input.captureSystemShortcuts
+            || next.input.commandAsWindowsKey != old.input.commandAsWindowsKey { applyKeyboardLayout() }
         if next.window.statistics != old.window.statistics {
             state.statistics = next.window.statistics
             if next.window.statistics == .off { state.statsText = "" } else { updateStats() }
@@ -196,6 +197,7 @@ import SwiftUI
         displayLink?.invalidate(); displayLink = nil
         gamepads.stop()
         MacGameKeys.shared.streamFront(nil)
+        StreamSystemShortcuts.capture(false)
         vban?.stop(); vban = nil
         releaseMouse()
         NSEvent.isMouseCoalescingEnabled = true
@@ -283,6 +285,8 @@ import SwiftUI
     private func applyKeyboardLayout() {
         let front = state.connected && !ended && window?.isKeyWindow == true && NSApp.isActive
         MacGameKeys.shared.streamFront(front ? profile.input.keyMappings() : nil)
+        // With ⌘ kept on the Mac its shortcuts must keep working, so the Mac's shortcuts stay on too.
+        StreamSystemShortcuts.capture(front && profile.input.captureSystemShortcuts && profile.input.commandAsWindowsKey)
     }
 
     // MARK: Displays and full screen
@@ -377,6 +381,7 @@ import SwiftUI
     }
     func windowDidResignKey(_ notification: Notification) {
         MacGameKeys.shared.streamFront(nil)
+        StreamSystemShortcuts.capture(false)
         if state.connected, profile.input.clipboard { fetchClipboard(auto: true) }
         releaseMouse()
         keyboard.releaseAll()
