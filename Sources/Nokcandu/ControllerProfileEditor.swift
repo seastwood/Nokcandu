@@ -25,6 +25,8 @@ struct ControllerProfileEditor: View {
     @State var family: Controllers.Family?
     /// Not observed here: the live test updates many times a second, and redrawing the whole editor would close any open menu.
     @State var tester = PadTester()
+    /// "Assign by pressing": a controller button, then the key it should be.
+    @StateObject var assigner = AssignByPressing()
     @State private var newLayerName = ""
     @State private var addingLayer = false
     @State private var renamingLayer = false
@@ -182,11 +184,30 @@ struct ControllerProfileEditor: View {
                 // Worked out once per change to the profile: the picture redraws many times a second while a
                 // controller is in use, and resolving the profile for every button each time kept a core busy.
                 let resolved = resolvedBindings
+                let colors = profile.layers.indices.map { layerColor($0) }
+                AssignBar(assign: assigner, title: { t in
+                    switch t {
+                    case .input(let i): return i.title(family)
+                    case .stick(let s, let d): return (s == 0 ? "Left stick " : "Right stick ") + ["up", "down", "left", "right"][d]
+                    }
+                }, tint: colors[layerIndex])
                 ControllerPicture(family: family, selection: $selection, tester: tester,
                                   mapped: { i in resolved[i] != nil },
                                   label: { i in shortLabel(resolved[i]) }, stickLabel: { s in stickLabel(s) },
-                                  steamPad: { side in inputSource == .steamUSB ? PadProfiles.steamTrackpad(side, profile: profile, all: everything, layer: layerIndex > 0 ? layerName : nil) : nil })
+                                  steamPad: { side in inputSource == .steamUSB ? PadProfiles.steamTrackpad(side, profile: profile, all: everything, layer: layerIndex > 0 ? layerName : nil) : nil },
+                                  tint: colors[layerIndex],
+                                  targetTint: { i in switchTarget(resolved[i]).map { colors[$0] } },
+                                  changed: { i in changedInLayer(i) },
+                                  stickChanged: { s in stickChangedInLayer(s) })
                     .frame(width: width, height: width * 400 / 560)
+                    .onReceive(tester.$pressed) { now in
+                        assigner.pressedChanged(now, select: { selection = .input($0) }, assign: assignPressed)
+                    }
+                    .onReceive(tester.$sticks) { now in
+                        // On the Steam Controller the right "stick" is its trackpad: only the joystick picks directions.
+                        assigner.sticksChanged(now, sticksShown: inputSource == .steamUSB ? [0] : [0, 1],
+                                               select: { selection = .stick($0) }, assign: assignPressed)
+                    }
                 ExtraButtons(tester: tester, family: family, selection: $selection,
                              mapped: { i in resolved[i] != nil })
             }
@@ -433,11 +454,9 @@ struct ControllerProfileEditor: View {
 
     var layerBar: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Picker("Layer", selection: $layerIndex) {
-                ForEach(profile.layers.indices, id: \.self) { i in Text(i == 0 ? "Base" : profile.layers[i].name).tag(i) }
-            }
-            .pickerStyle(.segmented).frame(maxWidth: .infinity)
+            layerTabs
             FlowRow(spacing: 8) {
+            layerColorPicker
             Button { newLayerName = ""; addingLayer = true } label: { Image(systemName: "plus") }
                 .help("Add a layer").disabled(profile.layers.count >= 8)
             Menu("Import Layer") {
@@ -459,13 +478,14 @@ struct ControllerProfileEditor: View {
             .alert("Couldn’t Import Layer", isPresented: Binding(get: { layerImportError != nil }, set: { if !$0 { layerImportError = nil } })) {
                 Button("OK", role: .cancel) { layerImportError = nil }
             } message: { Text(layerImportError ?? "") }
-            if layerIndex > 0 {
-                Menu {
+            Menu {
+                Button("Duplicate \(layerIndex == 0 ? "Base" : layerName) as a New Layer") { duplicateLayer() }.disabled(profile.layers.count >= 8)
+                if layerIndex > 0 {
                     Button("Rename…") { newLayerName = profile.layers[layerIndex].name; renamingLayer = true }
                     Button("Remove Layer", role: .destructive) { removeLayer() }
-                } label: { Image(systemName: "ellipsis.circle") }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-            }
+                }
+            } label: { Image(systemName: "ellipsis.circle") }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
             Menu("Quick Setup") {
                 Button(swapped(.a, .b) ? "Unswap A and B" : "Swap A and B") { swap(.a, .b) }
                 Button(swapped(.x, .y) ? "Unswap X and Y" : "Swap X and Y") { swap(.x, .y) }
@@ -619,7 +639,11 @@ struct ControllerProfileEditor: View {
             BindingEditor(binding: bindingFor(i), input: i, family: family, layers: profile.layers.dropFirst().map(\.name),
                           inLayer: layerIndex > 0, inherited: from.map(describe))
         } header: {
-            InspectorTitle(title: i.title(family), subtitle: layerIndex > 0 ? "\(layerName) layer" : nil, symbol: i.isTrigger ? "l2.button.roundedtop.horizontal" : "circle.circle")
+            HStack {
+                InspectorTitle(title: i.title(family), subtitle: layerIndex > 0 ? "\(layerName) layer" : nil, symbol: i.isTrigger ? "l2.button.roundedtop.horizontal" : "circle.circle")
+                Spacer()
+                if profile.layers.count > 1 { copyInputMenu(i).font(.callout) }
+            }
         }
     }
 
@@ -645,6 +669,11 @@ struct ControllerProfileEditor: View {
         if let own = layerStick(s) {
             return Binding(get: { layerStick(s) ?? own }, set: { if s == 0 { profile.layers[layerIndex].leftStick = $0 } else { profile.layers[layerIndex].rightStick = $0 } })
         }
+        // In a layer without its own settings, a change gives the layer its own copy: editing a layer must
+        // never change the base layer (and with it every other layer) behind the user's back.
+        if layerIndex > 0 {
+            return Binding(get: { baseStick(s) }, set: { if s == 0 { profile.layers[layerIndex].leftStick = $0 } else { profile.layers[layerIndex].rightStick = $0 } })
+        }
         return Binding(get: { baseStick(s) }, set: { if s == 0 { profile.leftStick = $0 } else { profile.rightStick = $0 } })
     }
     @ViewBuilder func layerOwnToggle(_ title: String, has: Bool, set: @escaping (Bool) -> Void) -> some View {
@@ -652,7 +681,7 @@ struct ControllerProfileEditor: View {
             Section {
                 Toggle(title, isOn: Binding(get: { has }, set: set))
             } footer: {
-                Text(has ? "While \(layerName) is on, these settings apply instead of the base layer's." : "Off: the same as the base layer.").font(.caption).foregroundStyle(.secondary)
+                Text(has ? "While \(layerName) is on, these settings apply instead of the base layer's." : "Off: the same as the base layer. Changing a setting here turns this on, so the base layer stays as it is.").font(.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -689,15 +718,23 @@ struct ControllerProfileEditor: View {
                 slider("Speed", Binding(get: { st.wrappedValue.scrollSpeed ?? 20 }, set: { var v = st.wrappedValue; v.scrollSpeed = $0; st.wrappedValue = v }), 2...80, "%.0f lines/s")
             case .keys:
                 ForEach(0..<4, id: \.self) { k in
-                    Picker(["Up", "Down", "Left", "Right"][k], selection: Binding(get: { st.wrappedValue.keys.indices.contains(k) ? st.wrappedValue.keys[k] : 13 },
-                                                  set: { v in var x = st.wrappedValue; if x.keys.count < 4 { x.keys = [13, 1, 0, 2] }; x.keys[k] = v; st.wrappedValue = x })) {
-                        ForEach(PadProfiles.keys) { Text($0.title).tag($0.code) }
+                    let key = Binding(get: { st.wrappedValue.keys.indices.contains(k) ? st.wrappedValue.keys[k] : 13 },
+                                      set: { v in var x = st.wrappedValue; if x.keys.count < 4 { x.keys = [13, 1, 0, 2] }; x.keys[k] = v; st.wrappedValue = x })
+                    HStack {
+                        Picker(["Up", "Down", "Left", "Right"][k], selection: key) {
+                            ForEach(PadProfiles.keys) { Text($0.title).tag($0.code) }
+                        }
+                        KeyRecordButton { key.wrappedValue = $0 }
                     }
                 }
             default: EmptyView()
             }
         } header: {
-            InspectorTitle(title: s == 0 ? "Left Stick" : inputSource == .steamUSB ? "Right Trackpad (as stick)" : "Right Stick", subtitle: nil, symbol: s == 0 ? "l.joystick" : "r.joystick")
+            HStack {
+                InspectorTitle(title: s == 0 ? "Left Stick" : inputSource == .steamUSB ? "Right Trackpad (as stick)" : "Right Stick", subtitle: nil, symbol: s == 0 ? "l.joystick" : "r.joystick")
+                Spacer()
+                if profile.layers.count > 1 { copyStickMenu(s).font(.callout) }
+            }
         } footer: {
             if st.wrappedValue.mode == .flick {
                 Text("Push the stick to the edge to turn to face that way; rotate it around the edge to keep turning. Pairs well with gyro aim.").font(.caption).foregroundStyle(.secondary)
@@ -758,6 +795,8 @@ struct ControllerProfileEditor: View {
     }
     var gyroBinding: Binding<PadProfiles.Gyro> {
         if let own = layerGyro { return Binding(get: { layerGyro ?? own }, set: { profile.layers[layerIndex].gyro = $0 }) }
+        // A change made in a layer becomes that layer's own (see stickBinding).
+        if layerIndex > 0 { return Binding(get: { profile.gyro ?? merged.gyro }, set: { profile.layers[layerIndex].gyro = $0 }) }
         return Binding(get: { profile.gyro ?? merged.gyro }, set: { profile.gyro = $0 })
     }
 
@@ -775,7 +814,11 @@ struct ControllerProfileEditor: View {
                 }
             }
         } header: {
-            InspectorTitle(title: "Gyro", subtitle: nil, symbol: "gyroscope")
+            HStack {
+                InspectorTitle(title: "Gyro", subtitle: nil, symbol: "gyroscope")
+                Spacer()
+                if profile.layers.count > 1 { copyGyroMenu().font(.callout) }
+            }
         } footer: {
             if g.wrappedValue.output != .off {
                 Text(g.wrappedValue.startsOn ? "Give a button “Gyro off while held” to reposition the controller without turning, like lifting a mouse." : "Give a button “Gyro on while held”, for example the aim trigger.")
@@ -861,6 +904,7 @@ struct ControllerProfileEditor: View {
         } header: {
             InspectorTitle(title: "Trigger Pull", subtitle: nil, symbol: "r2.button.roundedtop.horizontal")
         } footer: {
+            if layerIndex > 0 { Text("Trigger pull is set once for the whole profile: changing it here changes it in every layer.").font(.caption).foregroundStyle(.orange) }
             Text("A trigger with nothing set stays a trigger. Set \(PadProfiles.Input.rt.title(family)) and \(PadProfiles.Input.rtfull.title(family)) to different things for a two-stage trigger.").font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -1038,6 +1082,8 @@ struct OutputsEditor: View {
     func record() {
         recording = true; recorder.reset()
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel]) { e in
+            // Keys and clicks the controller's live mapping produces are Nokcandu's own, not a choice.
+            if let cg = e.cgEvent, PadEventSource.isOwn(cg, processID: getpid()) { return e }
             let input: PadOutputRecorder.Input
             switch e.type {
             case .flagsChanged:
@@ -1420,5 +1466,46 @@ struct DevicePanel: View {
         .confirmationDialog("Remove \(device.name) from this profile?", isPresented: $confirmRemove) {
             Button("Remove", role: .destructive, action: remove)
         } message: { Text("What its buttons and axes were set to is removed too.") }
+    }
+}
+
+/// "Record": the next key pressed in this window (a modifier key on its own counts too) becomes the choice.
+/// Escape cancels. The same capture the button outputs use, for places that hold a single key.
+struct KeyRecordButton: View {
+    let set: (Int) -> Void
+    @State private var monitor: Any?
+    var body: some View {
+        Button(monitor == nil ? "Record" : "Press a key…") { monitor == nil ? start() : stop() }
+            .controlSize(.small)
+            .foregroundStyle(monitor == nil ? Color.primary : Color.accentColor)
+            .help("Press the key you want instead of finding it in the list. Escape cancels.")
+            .onDisappear(perform: stop)
+    }
+    func start() {
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { e in
+            // Keys the controller's live mapping types are Nokcandu's own events, not the user's choice.
+            if let cg = e.cgEvent, PadEventSource.isOwn(cg, processID: getpid()) { return e }
+            let k = Int(e.keyCode)
+            if e.type == .keyDown {
+                if k != 53 { set(k) }   // Escape cancels
+                stop(); return nil
+            }
+            // A modifier counts when it goes down on its own.
+            let down: Bool
+            switch k {
+            case 56, 60: down = e.modifierFlags.contains(.shift)
+            case 59, 62: down = e.modifierFlags.contains(.control)
+            case 58, 61: down = e.modifierFlags.contains(.option)
+            case 55, 54: down = e.modifierFlags.contains(.command)
+            case 57: down = true
+            default: return e
+            }
+            if down { set(k); stop(); return nil }
+            return e
+        }
+    }
+    func stop() {
+        if let m = monitor { NSEvent.removeMonitor(m) }
+        monitor = nil
     }
 }
