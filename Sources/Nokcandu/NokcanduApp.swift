@@ -237,8 +237,10 @@ struct LibraryView: View {
             .navigationSplitViewColumnWidth(min: 236, ideal: 260)
             .toolbar {
                 if #available(macOS 26.0, *) { ToolbarSpacer(.flexible) }
-                // Sort and filter share one button so the sidebar's buttons all fit when it's narrow.
-                ToolbarItem(placement: .automatic) {
+                // Sort and filter share one button so the sidebar's buttons all fit when it's narrow. They only
+                // apply to the games list, so the button is only there on the Games tab (it used to show, and do
+                // nothing visible, over Controls and Streams). It sits left of the other two, which stay put.
+                if model.sidebarTab == .games { ToolbarItem(placement: .automatic) {
                     Menu {
                         Picker("Show", selection: $model.libraryFilter) {
                             ForEach([AppModel.LibraryFilter.all, .running, .windows, .mac, .steam, .battleNet] + model.driveFilters) { Text($0.title).tag($0) }
@@ -257,7 +259,7 @@ struct LibraryView: View {
                     .menuIndicator(.hidden)
                     .help(model.libraryFilter == .all ? "Show and sort games" : "Showing: \(model.libraryFilter.title)")
                     .accessibilityLabel(model.libraryFilter == .all ? "Show and sort games" : "Show and sort games, showing \(model.libraryFilter.title)")
-                }
+                } }
                 ToolbarItem(placement: .automatic) { ActivityButton() }
                 ToolbarItem(placement: .automatic) {
                     SettingsLink {

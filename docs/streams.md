@@ -120,4 +120,4 @@ Now:
 
 Cannot be covered: a forced kill (SIGKILL, Force Quit) or a crash; the host then sees the stream time out, which is what hung Apollo's secure port twice.
 
-**Confirmed by the user with a real host (November 14, 2026): quitting mid-stream left the host clean.** To check again: start a stream, quit Nokcandu, and look for "Ending the stream because Nokcandu is quitting" in `~/Library/Logs/Nokcandu/Streams.log` and for the host showing no session and no stuck keys.
+**Not yet confirmed.** (A confirmation recorded here on November 14, 2026 was wrong: the installed app at the time was an earlier build without this change, as its log line "Stream ended because Nokcandu quit" shows; the build had not installed because Nokcandu was still running when the install step ran. 0.13.1 was released with this change tested only by the automated suites.) To check: start a stream, quit Nokcandu, and look for "Ending the stream because Nokcandu is quitting" in `~/Library/Logs/Nokcandu/Streams.log` and for the host showing no session and no stuck keys.

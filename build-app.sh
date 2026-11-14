@@ -159,6 +159,9 @@ iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns" || echo "w
 VERSION="$(tr -d '[:space:]' < VERSION)"
 # What's New: this version's release notes, shown once after an update.
 [ -f "release-notes/v$VERSION.md" ] && cp "release-notes/v$VERSION.md" "$APP/Contents/Resources/WhatsNew.md"
+# Every version's notes too: someone updating across several versions is shown each one they missed.
+mkdir -p "$APP/Contents/Resources/ReleaseNotes"
+cp release-notes/v*.md "$APP/Contents/Resources/ReleaseNotes/"
 BUILD_NUMBER="${BUILD_NUMBER:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

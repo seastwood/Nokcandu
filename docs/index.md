@@ -112,6 +112,8 @@ Keep credentials, account identifiers, raw session logs, copyrighted game/runtim
 
 - [Controller click jump, Steam pad feel and library/editor polish](investigations/controller-click-jump-and-polish-2026-11-11.md) — why clicks moved the cursor (three causes), the Steam Controller's built-in button actions, the stale-pointer driver fix, pad smoothing/angle, categories and the responsive editor.
 
+- [Handoff — November 14](investigations/handoff-2026-11-14.md) — state after 0.13.2: what is released, confirmed, shipped but unconfirmed and open; install and confirmation cautions.
+
 - [Handoff — November 13](investigations/handoff-2026-11-13.md) — the open Steam Controller trackpad jitter while moving (data, recorder, leads, constraints) and everything done since 0.12.18: streams, VBAN, emulated controllers, fed controllers, rumble, profile recovery, memory fix, verification status.
 
 - [Steam pad jitter while moving](investigations/steam-pad-moving-jitter-2026-11-13.md) — haptics ruled out from the recording, filters compared (low-pass, line prediction, One Euro), the noise-proportional filter built, measured jitter and lag (confirmed by the user); then the Mac pointer's choppiness traced to two sources overwriting each other's moves (`PadPointerContinuity`), also confirmed.
