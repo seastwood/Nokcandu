@@ -36,7 +36,8 @@ extension ControllerProfileEditor {
                 // A pad set to directions for the first time starts as the usual keys, ready to change.
                 let directions = PadProfiles.Input.padDirections(side)
                 if mode == .directions, directions.allSatisfy({ profile.layers[0][$0] == nil && profile.layers[layerIndex][$0] == nil && inherited($0) == nil }) {
-                    for (input, key) in zip(directions, side == 0 ? [13, 1, 0, 2] : [126, 125, 123, 124]) { profile.layers[0][input] = .as(.key(key)) }
+                    // Into the layer being edited, so setting this up in a layer doesn't add keys to the base layer.
+                    for (input, key) in zip(directions, side == 0 ? [13, 1, 0, 2] : [126, 125, 123, 124]) { profile.layers[layerIndex][input] = .as(.key(key)) }
                 }
             })) {
                 Text(side == 0 ? "Existing touchpad settings" : "Joystick settings").tag(PadSteamTrackpadSettings.Mode.existing)
