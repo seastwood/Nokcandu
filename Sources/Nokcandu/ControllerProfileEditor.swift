@@ -645,6 +645,11 @@ struct ControllerProfileEditor: View {
         if let own = layerStick(s) {
             return Binding(get: { layerStick(s) ?? own }, set: { if s == 0 { profile.layers[layerIndex].leftStick = $0 } else { profile.layers[layerIndex].rightStick = $0 } })
         }
+        // In a layer without its own settings, a change gives the layer its own copy: editing a layer must
+        // never change the base layer (and with it every other layer) behind the user's back.
+        if layerIndex > 0 {
+            return Binding(get: { baseStick(s) }, set: { if s == 0 { profile.layers[layerIndex].leftStick = $0 } else { profile.layers[layerIndex].rightStick = $0 } })
+        }
         return Binding(get: { baseStick(s) }, set: { if s == 0 { profile.leftStick = $0 } else { profile.rightStick = $0 } })
     }
     @ViewBuilder func layerOwnToggle(_ title: String, has: Bool, set: @escaping (Bool) -> Void) -> some View {
@@ -652,7 +657,7 @@ struct ControllerProfileEditor: View {
             Section {
                 Toggle(title, isOn: Binding(get: { has }, set: set))
             } footer: {
-                Text(has ? "While \(layerName) is on, these settings apply instead of the base layer's." : "Off: the same as the base layer.").font(.caption).foregroundStyle(.secondary)
+                Text(has ? "While \(layerName) is on, these settings apply instead of the base layer's." : "Off: the same as the base layer. Changing a setting here turns this on, so the base layer stays as it is.").font(.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -758,6 +763,8 @@ struct ControllerProfileEditor: View {
     }
     var gyroBinding: Binding<PadProfiles.Gyro> {
         if let own = layerGyro { return Binding(get: { layerGyro ?? own }, set: { profile.layers[layerIndex].gyro = $0 }) }
+        // A change made in a layer becomes that layer's own (see stickBinding).
+        if layerIndex > 0 { return Binding(get: { profile.gyro ?? merged.gyro }, set: { profile.layers[layerIndex].gyro = $0 }) }
         return Binding(get: { profile.gyro ?? merged.gyro }, set: { profile.gyro = $0 })
     }
 

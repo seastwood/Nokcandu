@@ -16,8 +16,12 @@ extension ControllerProfileEditor {
                 if side == 0 { profile.layers[layerIndex].steamLeftTrackpad = value } else { profile.layers[layerIndex].steamRightTrackpad = value }
             })
         }
+        // A change made in a layer becomes that layer's own (see stickBinding).
+        let layer = layerIndex
         return Binding(get: { baseSteamPad(side) }, set: { value in
-            if side == 0 { profile.steamLeftTrackpad = value } else { profile.steamRightTrackpad = value }
+            if layer > 0 {
+                if side == 0 { profile.layers[layer].steamLeftTrackpad = value } else { profile.layers[layer].steamRightTrackpad = value }
+            } else if side == 0 { profile.steamLeftTrackpad = value } else { profile.steamRightTrackpad = value }
         })
     }
     @ViewBuilder func steamTrackpadInspector(_ side: Int) -> some View {
