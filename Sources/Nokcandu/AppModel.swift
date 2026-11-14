@@ -86,7 +86,11 @@ final class AppModel: ObservableObject {
     @Published var showStorage = false
     @Published var showProfiles = false
     @Published var profileFocus: Int?
-    @Published var showWelcome = Setup.needsAttention
+    /// The welcome opens once on a new installation, at the choice of Controls, Streams or Games.
+    @Published var showWelcome = !UserDefaults.standard.bool(forKey: "welcomeDone")
+    enum WelcomePage { case choose, games }
+    /// Which welcome page opens: Setup Checklist… goes straight to what Windows games need.
+    @Published var welcomePage: WelcomePage = .choose
     /// A newer Nokcandu on GitHub Releases, if any.
     @Published var appUpdate: AppUpdate.Release? { didSet { recountUpdates() } }
     /// What's available upstream (Wine engine, wrapper template, LAV Filters); refreshed daily.
@@ -231,9 +235,15 @@ final class AppModel: ObservableObject {
             libraryExtras = scanned.1
             if gameDrives != scanned.1.drives { gameDrives = scanned.1.drives }
             games = scanned.0
-            // First run with an empty library: the welcome shows the ways to add games.
             let firstLoad = !libraryLoaded
-            if !libraryLoaded, games.isEmpty, !UserDefaults.standard.bool(forKey: "welcomeDone") { showWelcome = true }
+            // Windows games that can't run until Rosetta or the engine is back (a reinstalled macOS, a removed
+            // engine): open the setup checklist. Someone using only Controls or Streams never needs them.
+            if firstLoad, !showWelcome, games.contains(where: { $0.native == nil }) {
+                Task {
+                    guard await Task.detached(operation: { Setup.needsAttention }).value, !showWelcome else { return }
+                    welcomePage = .games; showWelcome = true
+                }
+            }
             libraryLoaded = true
             MacGameKeys.shared.start(games: games)
             DesktopPad.shared.games = games

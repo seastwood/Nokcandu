@@ -830,6 +830,10 @@ struct ControllerProfileEditor: View {
                 Toggle("Invert up and down", isOn: g.invertY)
                 Toggle("Keep the gyro calibrated automatically", isOn: g.autoCalibrate)
                     .help("Whenever the controller hasn’t moved for five seconds, in your hands or put down, its drift is measured again. Nothing shows on screen unless a clear drift was corrected.")
+                    .disabled(!PadProfiles.automaticCalibration)
+                if !PadProfiles.automaticCalibration {
+                    Text("Off for every profile in Controls → Controller Settings. Calibrate with your shortcut.").font(.caption).foregroundStyle(.secondary)
+                }
             }
             Section {
                 Toggle("Smart smoothing (One Euro filter)", isOn: Binding(get: { g.wrappedValue.filter == true }, set: { var v = g.wrappedValue; v.filter = $0 ? true : nil; g.wrappedValue = v }))
@@ -840,7 +844,7 @@ struct ControllerProfileEditor: View {
                            info: "How quickly smoothing gets out of the way as you turn faster, so flicks don't lag.")
                 }
             } header: { Text("Filter") } footer: {
-                Text("Smooths slow movement a lot and fast movement hardly at all — steady aim without lag. Calibrate any time with a button set to “Calibrate the gyro”, or a keyboard shortcut in Settings.")
+                Text("Smooths slow movement a lot and fast movement hardly at all — steady aim without lag. Calibrate any time with a button set to “Calibrate the gyro”, or a keyboard shortcut in Controls → Controller Settings.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

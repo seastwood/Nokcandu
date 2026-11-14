@@ -152,7 +152,7 @@ struct PadInputTest: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Controller Input Test").font(.title2)
-            Text("Choose a Mac controller profile in Settings, then click the area below and use your controller. This window observes its own input only; it does not generate input or record typed text.")
+            Text("Choose a Mac controller profile in Controls → Controller on the Mac, then click the area below and use your controller. This window observes its own input only; it does not generate input or record typed text.")
             PadReceiptArea(receipt: receipt).frame(minHeight: 180)
                 .overlay(alignment: .topLeading) { Text("Click here, then move, click or press mapped keys.").foregroundStyle(.secondary).padding().allowsHitTesting(false) }
             TimelineView(.periodic(from: .now, by: 0.1)) { _ in

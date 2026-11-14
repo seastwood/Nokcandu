@@ -30,7 +30,7 @@ The virtual-device candidate matrix remains **not run** for native monitor/game,
 
 ## Repeatable observation
 
-Use Settings → General → Controller diagnostics for receipt age, readers, focus/profile/capture and Steam presence. Keep connection/model and test conditions with each result. The temporary `Tools/controller-probe` sources observe callbacks without injecting events or changing sensor activation; command-line execution observed no devices while the GUI context did, so do not treat CLI absence as incompatible hardware. The later GUI engine probe emitted no mouse output while idle; the user was unable to rotate the controller for an active check. No real-game compatibility conclusion follows from these idle observations.
+Use Controls → Controller Settings → Controller diagnostics for receipt age, readers, focus/profile/capture and Steam presence. Keep connection/model and test conditions with each result. The temporary `Tools/controller-probe` sources observe callbacks without injecting events or changing sensor activation; command-line execution observed no devices while the GUI context did, so do not treat CLI absence as incompatible hardware. The later GUI engine probe emitted no mouse output while idle; the user was unable to rotate the controller for an active check. No real-game compatibility conclusion follows from these idle observations.
 
 
 November 10 native-routing update: the installed shared Steam Wine environment and

@@ -17,8 +17,6 @@ import SwiftUI
     @Published var statsText = ""
     @Published var captured = false
     @Published var hint: String?
-    /// The VBAN microphone: nil off, else whether it's on air (false: muted or push-to-talk not held).
-    @Published var micOnAir: Bool?
 }
 
 @MainActor final class StreamWindowController: NSWindowController, NSWindowDelegate, StreamConnectionDelegate, StreamPadRoute {
@@ -76,15 +74,14 @@ import SwiftUI
         if let w = wanted, let current = vbanSettings, let sender = vban, w.sameTransport(as: current) {
             sender.update(w); vbanSettings = w
             if w.pushToTalk { installPushToTalkMonitor() }
-            refreshMic(); return
+            return
         }
         vban?.stop(); vban = nil
         vbanSettings = wanted
-        guard let wanted else { StreamLog.shared.add("VBAN: off"); refreshMic(); return }
+        guard let wanted else { StreamLog.shared.add("VBAN: off"); return }
         let sender = StreamVBANSender(settings: wanted, hostAddress: connection.address)
         vban = sender
         if wanted.pushToTalk { installPushToTalkMonitor() }
-        defer { refreshMic() }
         sender.start { [weak self] message in
             StreamLog.shared.add(message)
             self?.flash(message)
@@ -190,7 +187,6 @@ import SwiftUI
         statsTimer?.invalidate(); statsTimer = nil
         if let m = eventMonitor { NSEvent.removeMonitor(m); eventMonitor = nil }
         if let m = pttMonitor { NSEvent.removeMonitor(m); pttMonitor = nil }
-        state.micOnAir = nil
         displayLink?.invalidate(); displayLink = nil
         gamepads.stop()
         MacGameKeys.shared.streamFront(nil)
@@ -472,11 +468,8 @@ import SwiftUI
     func toggleMicMute() {
         guard let v = vban else { flash("The VBAN microphone is off for this stream."); return }
         v.muted.toggle()
-        refreshMic()
         flash(v.muted ? "Microphone muted" : "Microphone on")
     }
-
-    private func refreshMic() { state.micOnAir = vban.map { $0.transmitting } }
 
     /// Whether this event is the push-to-talk input, and if so whether it's now held.
     private func pttEvent(_ e: NSEvent) -> Bool? {
@@ -500,7 +493,6 @@ import SwiftUI
     private func setTalking(_ down: Bool) {
         guard let v = vban, v.talking != down else { return }
         v.talking = down
-        refreshMic()
     }
 
     /// Push-to-talk works whichever app is in front (like VBAN Talkie's): a global monitor while the stream runs.
@@ -728,11 +720,6 @@ struct StreamOverlay: View {
                             .padding(8).background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 6))
                     }
                     Spacer()
-                    if let onAir = state.micOnAir {
-                        Image(systemName: onAir ? "mic.fill" : "mic.slash.fill").font(.callout).foregroundStyle(.white)
-                            .padding(6).background((onAir ? Color.green : Color.black).opacity(0.6), in: Circle())
-                            .help(onAir ? "Microphone on air (VBAN)" : "Microphone muted (VBAN)")
-                    }
                     if state.poorConnection {
                         Label("Slow connection", systemImage: "wifi.exclamationmark").font(.caption).foregroundStyle(.white)
                             .padding(6).background(.orange.opacity(0.8), in: Capsule())

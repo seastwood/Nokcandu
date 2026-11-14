@@ -184,6 +184,7 @@ struct StreamHostSummary: View {
                 }
             }
             .padding(28).frame(maxWidth: 720, alignment: .leading)
+            .frame(maxWidth: .infinity)          // the scroll bar sits at the window's edge, the page stays centred
         }
     }
 }
@@ -212,6 +213,7 @@ struct StreamProfileEditor: View {
                 connectionSection
             }
             .padding(28).frame(maxWidth: 720, alignment: .leading)
+            .frame(maxWidth: .infinity)          // the scroll bar sits at the window's edge, the page stays centred
         }
         .onAppear {
             padProfiles = PadProfiles.profiles()
