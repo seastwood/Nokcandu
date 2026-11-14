@@ -1180,3 +1180,29 @@ final class PadSharedMotionPauseTests: XCTestCase {
         pe_release_all(r.engine, 2.01); XCTAssertFalse(pe_motion_paused(r.engine))
     }
 }
+
+final class PadLayerKeptAcrossReleaseTests: XCTestCase {
+    final class States { var seen: [Int32] = [] }
+    func testWindowSwitchReleaseKeepsToggledLayerWithoutReportingBase() {
+        let states = States()
+        var sink = pe_sink()
+        sink.ctx = Unmanaged.passUnretained(states).toOpaque()
+        sink.state = { c, l, _ in Unmanaged<States>.fromOpaque(c!).takeUnretainedValue().seen.append(l) }
+        let e = pe_create("nokpad 1\nbind 0 back press=layer:toggle:1\nbind 1 a press=key:12", sink)
+        defer { pe_destroy(e) }
+        pe_button(e, pe_input_named("back"), true, 1); pe_button(e, pe_input_named("back"), false, 1.05)
+        XCTAssertEqual(states.seen.last, 1)
+        states.seen = []
+        pe_release_outputs(e, 2)            // another window comes to the front
+        XCTAssertEqual(states.seen, [], "no layer change may be reported (each one buzzes the controller)")
+        XCTAssertEqual(pe_active_layer(e), 1)
+    }
+    func testControllerDropoutKeepsToggledLayer() {
+        let r = PadRecorder("bind 0 back press=layer:toggle:1\nbind 1 a press=key:12\nbind 0 a press=key:13")
+        r.press("back", true, 1); r.press("back", false, 1.05)
+        pe_release_main(r.engine, 2)        // e.g. a Steam Controller report gap
+        XCTAssertEqual(pe_active_layer(r.engine), 1)
+        r.press("a", true, 3); r.press("a", false, 3.1)
+        XCTAssertEqual(r.take(), ["key 12 down", "key 12 up"])
+    }
+}

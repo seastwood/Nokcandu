@@ -17,6 +17,13 @@ struct ControllerPicture: View {
     var stickLabel: (Int) -> String? = { _ in nil }
     /// A Steam Controller trackpad's settings as they apply (left 0, right 1), for drawing its angle and edge.
     var steamPad: (Int) -> PadSteamTrackpadSettings? = { _ in nil }
+    /// The colour of the layer being edited: highlights and labels use it, so each layer looks like itself.
+    var tint: Color = .accentColor
+    /// A button that switches layer shows the colour of the layer it switches to.
+    var targetTint: (PadProfiles.Input) -> Color? = { _ in nil }
+    /// The layer being edited changes this button / this stick (a dot marks it).
+    var changed: (PadProfiles.Input) -> Bool = { _ in false }
+    var stickChanged: (Int) -> Bool = { _ in false }
 
     typealias I = PadProfiles.Input
     /// The drawn body's proportions (width ÷ height). Places are fractions of the body's box.
@@ -79,8 +86,8 @@ struct ControllerPicture: View {
                 if steamLayout {
                     Button { selection = .touchpad } label: {
                         ZStack {
-                            Circle().fill(Color.accentColor.opacity(0.18)).frame(width:Self.steamPadSize*k,height:Self.steamPadSize*k)
-                            Circle().stroke(selection == .touchpad ? Color.accentColor : Color.secondary.opacity(0.35),lineWidth:1.5).frame(width:Self.steamPadSize*k,height:Self.steamPadSize*k)
+                            Circle().fill(tint.opacity(0.18)).frame(width:Self.steamPadSize*k,height:Self.steamPadSize*k)
+                            Circle().stroke(selection == .touchpad ? tint : Color.secondary.opacity(0.35),lineWidth:1.5).frame(width:Self.steamPadSize*k,height:Self.steamPadSize*k)
                             if let pad = steamPad(0) { SteamPadFace(side: 0, diameter: Self.steamPadSize*k, settings: pad, held: pressed, label: label) }
                             Circle().fill(Color.primary.opacity(0.55)).frame(width:10,height:10)
                                 .offset(x:tester.leftSteamPad.x*Self.steamPadSize*0.42*k,y:-tester.leftSteamPad.y*Self.steamPadSize*0.42*k)
@@ -97,8 +104,8 @@ struct ControllerPicture: View {
                 Button { selection = .gyro } label: {
                     Label("Gyro", systemImage: "gyroscope").font(.callout)
                         .padding(.horizontal, 10 * k).padding(.vertical, 5 * k)
-                        .background(Capsule().fill(selection == .gyro ? Color.accentColor.opacity(0.35) : Color.primary.opacity(0.08)))
-                        .overlay(Capsule().stroke(selection == .gyro ? Color.accentColor : .clear, lineWidth: 2))
+                        .background(Capsule().fill(selection == .gyro ? tint.opacity(0.35) : Color.primary.opacity(0.08)))
+                        .overlay(Capsule().stroke(selection == .gyro ? tint : .clear, lineWidth: 2))
                 }
                 .buttonStyle(.plain).position(at(CGPoint(x: 0.5, y: 0.93)))
                 .accessibilityLabel("Gyro settings")
@@ -109,6 +116,7 @@ struct ControllerPicture: View {
     func spot(_ i: I, _ k: CGFloat = 1) -> some View {
         let selected = selection == .input(i)
         let on = pressed.contains(i)
+        let tint = targetTint(i) ?? self.tint
         let round = ![.lb, .rb, .lt, .rt, .ltfull, .rtfull].contains(i)
         let outwardLabel = steamLayout && [.y, .a, .x, .b].contains(i)
         let captionOffset: CGSize = i == .y ? CGSize(width: 0, height: -14 * k - 8) : i == .a ? CGSize(width: 0, height: 14 * k + 8) : CGSize(width: i == .x ? -12 * k - 32 : 12 * k + 32, height: 0)
@@ -128,14 +136,15 @@ struct ControllerPicture: View {
             VStack(spacing: 1) {
                 Text(short).font(.system(size: max(9, 11 * k), weight: .semibold)).lineLimit(1)
                     .frame(minWidth: (steamLayout && [.guide, .paddle1, .paddle2].contains(i) ? 44 : round ? (steamLayout ? 24 : 28) : 46) * k, minHeight: 28 * k)
-                    .background(Capsule().fill(on ? Color.accentColor : mapped(i) ? Color.accentColor.opacity(0.35) : Color(nsColor: .controlBackgroundColor)))
-                    .overlay(Capsule().stroke(selected ? Color.accentColor : Color.secondary.opacity(0.35), lineWidth: selected ? 2 : 0.5))
+                    .background(Capsule().fill(on ? tint : mapped(i) ? tint.opacity(0.35) : Color(nsColor: .controlBackgroundColor)))
+                    .overlay(Capsule().stroke(selected ? tint : Color.secondary.opacity(0.35), lineWidth: selected ? 2 : 0.5))
                     .shadow(color: .black.opacity(0.12), radius: 1, y: 0.5)
-                if !outwardLabel, let l = label(i), l != "—" { Text(l).font(.system(size: 10, weight: .medium)).foregroundStyle(Color.accentColor).lineLimit(1).minimumScaleFactor(0.7).frame(maxWidth: 64).help(l) }
+                    .overlay(alignment: .topTrailing) { if changed(i) { ChangeDot(color: self.tint) } }
+                if !outwardLabel, let l = label(i), l != "—" { Text(l).font(.system(size: 10, weight: .medium)).foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.7).frame(maxWidth: 64).help(l) }
             }
             .overlay {
                 if outwardLabel, let l = label(i), l != "—" {
-                    Text(l).font(.system(size: 9, weight: .medium)).foregroundStyle(Color.accentColor)
+                    Text(l).font(.system(size: 9, weight: .medium)).foregroundStyle(tint)
                         .lineLimit(1).minimumScaleFactor(0.7).frame(width: 58, alignment: i == .x ? .trailing : i == .b ? .leading : .center).help(l)
                         .offset(captionOffset)
                         .allowsHitTesting(false)
@@ -154,20 +163,33 @@ struct ControllerPicture: View {
         let diameter: CGFloat = (steamLayout && s == 1 ? Self.steamPadSize : steamLayout ? 48 : 54) * k
         return Button { selection = .stick(s) } label: {
             ZStack {
-                Circle().fill(pressed.contains(click) ? Color.accentColor.opacity(0.5) : stickLabel(s) != nil ? Color.accentColor.opacity(0.22) : Color(nsColor: .controlBackgroundColor)).frame(width: diameter, height: diameter)
+                Circle().fill(pressed.contains(click) ? tint.opacity(0.5) : stickLabel(s) != nil ? tint.opacity(0.22) : Color(nsColor: .controlBackgroundColor)).frame(width: diameter, height: diameter)
                     .shadow(color: .black.opacity(0.15), radius: 1.5, y: 0.5)
-                Circle().stroke(selected ? Color.accentColor : Color.secondary.opacity(0.35), lineWidth: selected ? 2 : 0.5).frame(width: diameter, height: diameter)
+                Circle().stroke(selected ? tint : Color.secondary.opacity(0.35), lineWidth: selected ? 2 : 0.5).frame(width: diameter, height: diameter)
+                    .overlay(alignment: .topTrailing) { if stickChanged(s) || changed(click) { ChangeDot(color: tint) } }
                 if steamLayout && s == 1, let pad = steamPad(1) { SteamPadFace(side: 1, diameter: diameter, settings: pad, held: pressed, label: label) }
                 Circle().fill(Color.primary.opacity(0.55)).frame(width: 12, height: 12).offset(x: p.x * (steamLayout && s == 1 ? Self.steamPadSize * 0.42 : 20) * k, y: -p.y * (steamLayout && s == 1 ? Self.steamPadSize * 0.42 : 20) * k)
                 VStack(spacing: 0) {
-                    if let m = steamLayout ? (s == 1 ? (stickLabel(s) ?? "Right trackpad") : "Joystick") : stickLabel(s) { Text(m).font(.system(size: 10, weight: .semibold)).foregroundStyle(Color.accentColor).lineLimit(1).fixedSize() }
-                    if let l = label(click), l != "—" { Text("click: " + l).font(.system(size: 9, weight: .medium)).foregroundStyle(Color.accentColor.opacity(0.85)).lineLimit(1).fixedSize() }
+                    if let m = steamLayout ? (s == 1 ? (stickLabel(s) ?? "Right trackpad") : "Joystick") : stickLabel(s) { Text(m).font(.system(size: 10, weight: .semibold)).foregroundStyle(tint).lineLimit(1).fixedSize() }
+                    if let l = label(click), l != "—" { Text("click: " + l).font(.system(size: 9, weight: .medium)).foregroundStyle(tint.opacity(0.85)).lineLimit(1).fixedSize() }
                 }
                 .offset(x: steamLayout && s == 1 ? diameter * 0.2 : 0, y: diameter/2+(steamLayout ? 9 : 13))
             }
         }
         .buttonStyle(.plain)
         .accessibilityLabel((s == 0 ? "Left stick" : steamLayout ? "Right trackpad" : "Right stick") + (stickLabel(s).map { ": \($0)" } ?? ""))
+    }
+}
+
+/// The small dot on a control the layer being edited changes.
+struct ChangeDot: View {
+    let color: Color
+    var body: some View {
+        Circle().fill(color).frame(width: 8, height: 8)
+            .overlay(Circle().stroke(Color(nsColor: .windowBackgroundColor), lineWidth: 1.5))
+            .offset(x: 2, y: -2)
+            .help("Changed in this layer")
+            .accessibilityLabel("Changed in this layer")
     }
 }
 
