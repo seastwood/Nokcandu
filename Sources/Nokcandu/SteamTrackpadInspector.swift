@@ -101,7 +101,13 @@ extension ControllerProfileEditor {
             }))
             Text("With touch activation selected on either pad, controller gyro works only while one of those pads is touched. Uses the Gyro settings; a held Gyro off button still overrides it.").font(.caption).foregroundStyle(.secondary)
             GyroNotificationToggle()
-        } header: { Text(side == 0 ? "Left Trackpad" : "Right Trackpad") }
+        } header: {
+            HStack {
+                Text(side == 0 ? "Left Trackpad" : "Right Trackpad")
+                Spacer()
+                if profile.layers.count > 1 { copyPadMenu(side).font(.callout) }
+            }
+        }
           footer: {
             Text("Each pad chooses its behavior independently, and a layer can have pad settings of its own. Trackpad mouse follows finger movement; trackball mouse continues after a flick and lift; four directions holds a key or button for each way you push; analog stick works as a real stick. Profile changes, focus changes and lost input cancel momentum.")
                 .font(.caption).foregroundStyle(.secondary)
