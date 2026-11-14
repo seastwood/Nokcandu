@@ -25,6 +25,7 @@ The project README introduces the app. This folder keeps the implementation know
 | [Chrono Trigger media investigation](investigations/chrono-trigger-media-2026-10-29.md) | Confirmed shared GStreamer library-path correction, startup evidence, migration and selected-game restart behavior. |
 | [Resizable game-window implementation plan](resizable-game-window-plan.md) | Milestones, architecture, input/scaling, renderer coverage, profiles, launchers, rollback and release gates. Planned work. |
 | [Resizable fullscreen-window feasibility](investigations/windowed-fullscreen-feasibility-2026-10-29.md) | Why Wine’s virtual desktop is disabled on the Mac driver, and the requirements for a shared scaling/input backend. Historical research; the driver backend was subsequently implemented. |
+| [Launcher notes](launcher-notes.md) | Optional compatibility fixes, display controls, complete profiles and storage (moved from the README). |
 | [Development](DEVELOPMENT.md) | Build/release instructions and the historical implementation milestones. |
 | [Gaming roadmap](gaming-roadmap.md) | Dated proposals to evaluate; these are not a list of verified fixes or a guarantee of current implementation status. |
 | [Release notes](../release-notes/) | User-facing changes grouped by released version. |

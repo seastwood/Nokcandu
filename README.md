@@ -1,103 +1,83 @@
 # Nokcandu
 
-![Nokcandu: your game library on the left, a game's page with Play, screen, mouse and health tools on the right](docs/Screenshot2.png)
+**A controller and gyro remapper, a game-streaming client and a Windows game launcher for Apple silicon Macs, in one app.**
+One controller profile follows you everywhere: Mac apps, Windows games, and games streamed from your PC.
 
-**Play the Windows games you own on an Apple silicon Mac.** Nokcandu turns each game into its own
-Mac app, built on [Wine](https://www.winehq.org) via the open-source [Sikarugir](https://github.com/Sikarugir-App) engines,
-with tested settings, one-click fixes and safe updates.
+![The Controls tab: a Steam Controller profile with layers, the controller picture showing what every input does, and gyro settings](docs/controls.png)
 
-Discord Server: https://discord.gg/FDZMVgPD2S
+[**Download the latest release →**](https://github.com/seastwood/Nokcandu/releases/latest) · [Discord](https://discord.gg/FDZMVgPD2S) · Apple silicon, macOS 14 or newer · free and open source (GPL v3)
 
-[**Download the latest release →**](https://github.com/seastwood/Nokcandu/releases/latest)
+## Why it's different
+
+- **One profile, three places.** The same remapping, gyro and layers work on the Mac desktop, in Windows games run by Nokcandu, and inside a stream from your gaming PC. You never have to install a game to use the remapper.
+- **The original Steam Controller (2015), properly.** Nokcandu reads it directly, on its cable or through its wireless dongle: both trackpads (trackball with momentum, mouse, analog stick, scroll wheel, zones, taps), the rear grips, the gyro and the haptics. No Steam needed.
+- **Gyro aiming that holds still.** Turning about gravity, real-world sensitivity, a One Euro filter, and drift that corrects itself quietly whenever the controller rests for a few seconds.
+- **AirPods head tracking as an input.** Add head-tracking headphones to a profile and turn your head to steer a stick or pick from a radial menu, with its own activation button and layers. Experimental.
+- **Remappable emulated controllers.** Whatever you hold, a profile can present it to Windows games and streams as an Xbox controller, a DualShock 4 or a Switch Pro Controller, with your mappings applied first.
+- **Stream your PC's games with your Mac's controller setup.** A built-in Sunshine / Apollo / GameStream client, with your profile's mapped controller, keys and mouse sent to the host.
+- **Your Mac's microphone on the host.** A VBAN sender with gain, noise gate, compressor, EQ and push-to-talk, for voice chat in streamed games.
+
+## Controller profiles
+
+Works system-wide. Using a profile outside Nokcandu's own games needs Accessibility access (macOS asks once).
+
+- **Remap everything:** each button, stick direction, trigger, paddle, trackpad and touchpad can be a controller button, a key, a mouse button, the scroll wheel, a macro or a layer switch. Tap, hold, double tap, turbo, combinations and sequences on one button.
+- **Layers** that inherit from the base layer, held or toggled, each with its own stick, trackpad and gyro settings. A note on screen, a rumble or a light colour tells you which one you're in.
+- **Gyro:** as mouse, stick or scroll; on, off or held with any button or while a trackpad is touched; yaw, roll or turning about gravity; calibration that needs no attention.
+- **Steam Controller trackpads:** each pad independently a trackball, mouse, stick, four directions or scroll wheel, with adjustable haptics, sensor-noise filtering that adds no lag to a swipe, a thumb-sweep angle, and up to five zones with their own tap and click.
+- **Combine devices in one profile:** joysticks, throttles, pedals, wheels, a second controller, or AirPods, up to four next to the main controller.
+- **Radial menus, macros, typed text and an on-screen keyboard**, picked with a stick, the gyro, the mouse or your head.
+- **Game rumble everywhere:** a game's vibration plays on the Steam Controller's trackpads, which have no rumble motors.
+- **Where a profile applies:** per game, per Mac app, per stream, per connected controller, or **Use Everywhere** from the menu bar. One switch turns it all off.
+- **Keyboard layouts** remap keys (including fn/Globe) for games and streams the same way.
+- Live test, Quick Setup, undo and redo, profiles that build on each other, and sharing a profile as a file or text.
+
+## Streams
+
+![The Streams tab: a host with a stream profile, its picture settings and controller profile](docs/streams.png)
+
+A client for [Sunshine](https://github.com/LizardByte/Sunshine), Apollo and NVIDIA GameStream hosts, built on [moonlight-common-c](https://github.com/moonlight-stream/moonlight-common-c) by way of VoidLink.
+
+- **Hosts and stream profiles:** find hosts on your network or add one by address, pair with a PIN, and keep several profiles per host (app, resolution, frame rate, bitrate, codec, HDR, 4:4:4, display, sound).
+- **H.264, HEVC and AV1** decoded in hardware, up to 120 fps, with frame pacing you choose and settings you can change mid-stream.
+- **Controllers:** pass your controller through as it is, or use a Nokcandu profile, so the host sees the emulated controller you chose plus your mapped keys and mouse. Gyro aiming on a Steam Controller works in a game running on a Windows PC in another room.
+- **Keyboard and mouse** captured for games, with your keyboard layout applied and ⌘ as the Windows key.
+- **Clipboard sync** with Apollo hosts (optional, new).
+
+<img src="docs/vban-microphone.png" alt="The stream profile's VBAN microphone section: device, destination, format, level meter, gain, noise gate, compressor, EQ and push to talk" width="480">
+
+- **Microphone over VBAN:** send any Mac microphone to the host (for example to VoiceMeeter or VBAN Receptor) with a level meter, gain, noise gate, compressor, three-band EQ, mute and push-to-talk.
+
+## Windows games on your Mac
+
+![The Games tab: the library on the left and a game's Controls page with raw mouse capture and keyboard remapping](docs/games.png)
+
+Each Windows game you own becomes its own Mac app, built on [Wine](https://www.winehq.org) through the open-source [Sikarugir](https://github.com/Sikarugir-App) engines.
+
+- **Install from anywhere:** an installer, a disc image, an existing folder, or Steam, GOG, Epic Games, Amazon and Battle.net in one window. External drives are supported, and games can be moved later.
+- **Raw mouse capture** (optional): the mouse read directly, without macOS acceleration, for aiming in games that capture it.
+- **Play in a resizable window:** the game runs on a virtual screen in a normal Mac window, without changing your Mac's display.
+- **Graphics modes** for DirectX 8 through 12 (DXVK, DXMT, Apple's D3DMetal, MoltenVK), an FPS counter, vsync and a frame limit.
+- **Game Profiles:** apply settings someone else got working, or share yours in one click. Settings only, no files or scripts, ranked by votes ([Nokcandu-Profiles](https://github.com/seastwood/Nokcandu-Profiles)).
+- **Fixes and safety:** one-click fixes (DirectX 8 and 9 extras, borderless windows, cinematics, winetricks), diagnostics and crash recognition. Every file Nokcandu changes is backed up; saves and game files are never touched by repairs or updates.
+
+More detail: [launcher notes](docs/launcher-notes.md).
 
 ## Install
 
 1. Download `Nokcandu-<version>.dmg` from [Releases](https://github.com/seastwood/Nokcandu/releases/latest), open it and drag **Nokcandu** into **Applications**.
-2. Open Nokcandu. It isn't signed with a paid Apple Developer certificate yet, so the first time macOS says it can't verify the app:
-   click **Done**, open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**. You only do this once.
-3. The setup checklist installs **Rosetta 2** (Apple's Intel translator, which Wine needs) and downloads the tested Wine engine (about 260 MB). (Note: ARM support is being fully considered in the design of Nokcandu, and will be worked into it as ARM Wine support matures.)
-4. Click **Install a Game…** or **Set Up Steam**.
+2. Open Nokcandu. It isn't signed with a paid Apple Developer certificate yet, so the first time macOS says it can't verify the app: click **Done**, open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**. You only do this once.
+3. For controller profiles or streams, that's all. For Windows games, the setup checklist installs **Rosetta 2** and downloads the tested Wine engine (about 260 MB).
 
-**Requirements:** Mac with Apple silicon (M1 or later) · macOS 14 Sonoma or newer · space for your games (external SSDs work).
-
-## What it does
-
-- **Any Windows game you own** — run its installer, install from a disc image (.iso, mounted automatically), add an existing game folder, or download with Steam. Nokcandu picks the game's program, suggests a graphics mode from what the game uses, and extracts its icon.
-- **Game stores** — Steam, GOG, Epic Games and Amazon in one window (sign in, install, Mac versions when available), plus Battle.net and optional EA app / Ubisoft Connect. Every game gets its own Mac app with its icon.
-- **Real Mac apps** — games show under their own names in the Dock and macOS turns on **Game Mode** in full screen.
-- **Your games, your drives** — choose where each game installs (external drives included), move games later, and see which ones need a drive plugged in. Mac games you already have can be added too.
-- **Graphics modes** — Classic 3D (DirectX 8/9 → Vulkan), Modern 3D (DirectX 10/11), Apple Metal (DirectX 11/12, 64-bit), DXMT (DirectX 10/11 → Metal), Classic 2D, Compatibility.
-- **Raw mouse capture** — optional and off by default; reads your mouse directly whenever a game captures it (aiming, camera control) (hundreds of updates a second, no macOS acceleration), which can improve aiming in compatible games. Toggle it while playing; compatibility varies by game.
-- **Play in a resizable window** — optional, per game: the game runs on a virtual screen shown in a normal Mac window you can move, resize, minimize or make full screen, without changing your Mac's display. Change its resolution while the game runs. Control-Command-C frees or captures the mouse, Control-Command-F toggles full screen, Shift-Command-Esc always frees the mouse.
-- **Local network games** — Windows games that use Bonjour (like StarCraft's Local Area Network) use the Mac's own Bonjour; nothing to install. Sound follows the Mac's output when you plug in headphones.
-- **Controller profiles** — remap any controller for any game or app on your Mac; see [below](#controller-profiles--for-any-game-anywhere-on-your-mac).
-- **Performance** — FPS counter, vsync, frame limit. **Drives** — map D:, E:… to external SSDs. **Storage** — see and free space.
-- **Fixes & health** — Optional DirectX 8 compatibility (d3d8to9 + bundled DXVK 2.3), DirectX 9 shader extras, borderless windows, cinematic playback (LAV Filters), known community fixes (winetricks), anti-cheat notes, Repair, Diagnostics, crash recognition with suggested fixes, notes per game.
-- **Stays current** — checks this repo for new Nokcandu releases and the Sikarugir/LAV projects for new components. New engines are self-tested before they're offered, each game tries them separately, and you can roll back.
-- **Safe by design** — every file Nokcandu changes is backed up and journaled; your saves and game files are never touched by repairs or updates.
-
-## Controller profiles — for any game, anywhere on your Mac
-
-![The Controls tab: a controller profile with its layers, a picture of the controller showing what each button does, and the selected button's settings](docs/controller-profiles.png)
-
-Nokcandu has a full controller remapper built in, and **it works system-wide**: not just in games you run with Nokcandu,
-but in Mac games, games from launchers you already use, and any other Mac app. If you only want the remapping,
-that's fine — you never have to install a game in Nokcandu to use it.
-
-- **Remap everything** — every button, stick, trigger, paddle and the touchpad click can do itself, another controller button,
-  a key, a mouse button or the scroll wheel. Click **Press…** and press the key or mouse button you want.
-- **Tap, hold, double tap, turbo and button combinations** — one button can do different things depending on how you press it.
-- **Combine devices in one profile** — add joysticks, a throttle, pedals, a wheel, a button box or a second controller
-  (up to four) next to your controller. Each button, hat and axis can be set like a controller button, and axes can drive a
-  stick, a trigger or the mouse — two pedals as one rudder, a throttle as a trigger. A second controller can join the main
-  one, so two halves held in each hand act as one controller. Windows games still see each device as usual for anything
-  you leave alone.
-- **Each stick direction on its own** — set up, down, left and right separately (keys, clicks, buttons, tap and hold, layers).
-  The picture shows what each stick does.
-- **Sticks and gyro as a mouse** — separate X and Y sensitivity, response curves, edge acceleration, and gyro yaw and roll amounts.
-  The gyro can be switched on, off or held with any button.
-- **Layers** — hold or toggle a button to switch to another layer. Layers inherit the base layer, so you only change what's different,
-  and a layer can have its own stick and gyro settings (a slower aim layer, a scrolling layer). A short note on screen shows
-  which layer or gyro mode you switched into, the controller can rumble, and a DualSense or DualShock 4 can change colour per layer.
-- **Gyro made for aiming** — a One Euro filter (steady when slow, no lag on flicks), calibration when you set the controller down
-  or on a button, combination or keyboard shortcut (with a progress bar on screen), and tilting the controller as four more buttons.
-- **Touchpad** (DualSense, DualShock 4) — as a mouse with two-finger scrolling, scrolling, or four zones you can touch and click.
-- **Macros, sequences and radial menus** — keys with pauses and typed text from one press; button sequences like up-up-down;
-  hold a button and point a stick to pick from a ring of up to eight choices. There's an on-screen keyboard for typing with the
-  controller, and a button can rumble the controller.
-- **Quick Setup** — swap A/B and X/Y in one click; Xbox, PlayStation and Nintendo button labels, remembered per controller.
-- **Live test** — see exactly what the game will get as you press buttons, and test the rumble.
-- **Profiles that build on each other**, duplicate, rename, right-click to activate, undo and redo, and share a profile as a file
-  or as text to paste.
-
-**Where a profile applies**
-
-- **Each game** picks a profile, or uses the controller **as it is** — some games work best with their own controller controls.
-- **On the Mac** — a profile for moving the pointer, clicking and typing with your controller everywhere else, with rules for
-  particular apps (handy for games from other launchers).
-- **Use Everywhere** — activate any profile for every app and game until you stop it, from the profile's page, its right-click
-  menu or the menu bar (for streaming, or trying a profile without a game).
-- **A controller can pick the profile** — the Mac can use a different profile while a particular controller is connected.
-- **One switch turns it all off** (Controls tab, Settings or the menu bar), so your controller works untouched.
-
-Using a profile outside Windows games needs Accessibility access (macOS asks the first time), and Nokcandu can open at login
-in the menu bar so profiles are always ready. **Keyboard layouts** work the same way: remap keys (including fn/Globe)
-for Windows games and Mac games.
-
-## Game Profiles
-
-Stuck on a game? Open **Game Profiles** in Nokcandu (or the [website](https://seastwood.github.io/Nokcandu-Profiles/)), search for it,
-and apply the settings someone else got working — or try a profile from a similar game, with one-click Undo.
-Got a game running? **Share This Setup…** on its page submits your settings in one click. Profiles are settings only
-(no files or scripts), are checked automatically, and are ranked by 👍/👎 votes. They live in their own repo,
-[Nokcandu-Profiles](https://github.com/seastwood/Nokcandu-Profiles) — this repo's Issues are for the app itself.
+**Requirements:** Mac with Apple silicon (M1 or later) · macOS 14 Sonoma or newer.
 
 ## Good to know
 
 - Only use games you own. Nokcandu doesn't include or download games.
-- Games with kernel-level anti-cheat (Valorant, many competitive shooters) generally can't run under Wine. Online play in games with anti-cheat is at your own risk.
-- Apple has announced that full Rosetta ends with macOS 28. All Wine engines are Intel code today; Nokcandu watches for an Apple-silicon engine. Check this page before upgrading to macOS 28.
-- Problems? Open the game's **Diagnostics**, save the report, and [open an issue](https://github.com/seastwood/Nokcandu/issues).
+- Games with kernel-level anti-cheat (Valorant, many competitive shooters) generally can't run under Wine. Online play in games with anti-cheat is at your own risk. Streaming them from a PC is not affected.
+- Emulated controllers reach Windows games and streams. Mac apps need an Apple entitlement Nokcandu doesn't have yet.
+- Apple has announced that full Rosetta ends with macOS 28. All Wine engines are Intel code today; Nokcandu watches for an Apple-silicon engine. Controller profiles and streams don't use Rosetta.
+- Problems? [Open an issue](https://github.com/seastwood/Nokcandu/issues); for a game, save its **Diagnostics** report first.
 
 ## Credits & licenses
 
@@ -115,7 +95,7 @@ Nokcandu isn't affiliated with Apple, Microsoft, Valve, Blizzard, GOG, Epic Game
 
 ## Documentation
 
-See the [documentation index](docs/index.md) for engineering learnings, compatibility fixes, troubleshooting records, and development notes.
+See the [documentation index](docs/index.md) for engineering learnings, compatibility fixes, troubleshooting records and development notes.
 
 ## Build from source
 
@@ -126,38 +106,3 @@ See the [documentation index](docs/index.md) for engineering learnings, compatib
 
 Needs Xcode or the Command Line Tools (Swift 5.9+). To release: bump `VERSION`, add `release-notes/v<version>.md`,
 then push a tag `v<version>` — GitHub Actions builds, tests and publishes the DMG. More in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
-
-
-### Optional compatibility fixes
-
-A standalone game's **Fixes** panel offers three opt-in components alongside LAV Filters:
-
-- **DirectX 9 extras** downloads Microsoft's June 2010 redistributable and extracts only `d3dx9_43.dll` and `d3dcompiler_43.dll` beside the selected executable, matching its architecture. Nokcandu does not redistribute Microsoft's DLLs.
-- **DirectX 8 compatibility** downloads crosire's d3d8to9 1.16.0 (BSD-2-Clause) and selects the Sikarugir runtime's older DXVK renderer. It requires a 32-bit game, **Older 3D games**, and the bundled `renderer/dxvk/wine` build. The default renderer remains unchanged for other games.
-- **Fullscreen (Borderless)** uses Nokcandu's source-built Windows helper, available for 32- and 64-bit games. Choose Windowed in the game. The helper sizes visible, unowned game windows to their monitor without changing the Mac's display mode or keeping the game above other apps. It preserves launch arguments and follows restarts of the same executable; unrelated child launchers aren't followed.
-
-These components currently require a game's own managed Windows environment and a program on its private C: drive. Shared Steam/Battle.net/other launcher environments are excluded until per-program routing is available. The generic components don't edit game executables. BF1942 also has a built-in Display recipe: **Apply Recommended BF1942 Display Settings** creates a fingerprint-checked menu copy, sets 1280 × 800 windowed gameplay, keeps the Mac at its desktop resolution, and enables borderless display. Its original executable is preserved. Other BF1942 executable variants need verification before menu-copy support can be enabled.
-
-Each fix records its files and settings. **Undo** restores replaced files and its own DLL rules while preserving other fixes, and refuses to overwrite later manual edits. Quit the game before installing or undoing a fix. Undo installed components before changing the selected executable; undo DirectX 8 compatibility before changing its graphics mode. Profile settings Undo leaves installed components in place: use each component's Undo in Fixes to remove it.
-
-Profiles reference only built-in IDs: `cinematic`, `d3d8to9`, `directx9-extras`, `borderless`. Applying a profile previews downloads and unavailable fixes. Profiles cannot supply binaries, download URLs, scripts, config commands, or patch bytes. Schema 2 can reference Nokcandu’s built-in BF1942 display recipe and a supported gameplay resolution.
-
-Builds compile the Windows helpers with pinned Zig 0.15.2 from [ziglang.org](https://ziglang.org/download/), and the standalone archive tool with [cabextract 1.11](https://www.cabextract.org.uk/) (GPL-3.0-or-later). The app includes cabextract's license, corresponding source archive, and build recipe. Build scripts verify SHA-256 before extraction; `ZIG` may point to an existing official 0.15.2 toolchain.
-
-
-### Display controls
-
-**Mac screen resolution** changes the Mac's display temporarily. **Window style** selects Game default or the same optional Fullscreen (Borderless) component available in Fixes. **Game resolution**, currently available for standalone BF1942, edits the game's own video profiles and offers 800 × 600 through 1920 × 1200 independently of the Mac's supported screen modes.
-
-BF1942's recommended display button handles the menu-resolution correction separately from gameplay resolution. It accepts only two verified full-file fingerprints, writes a separate `BF1942-Nokcandu.exe`, sets windowed mode, and retains an Undo receipt. Launches verify both the source and corrected copy so a game update cannot silently use a stale copy. Undo restores original video files and removes a borderless component only when the recipe installed it. Components installed separately are retained. Later manual edits are preserved and reported. Graphics translation and shader extras remain separate optional fixes.
-
-The recipe is built into Nokcandu. Schema 2 profiles store its name, supported gameplay resolution, and whether the menu correction is required; Nokcandu still verifies the target executable and applies only its own built-in operations. Profiles never contain executable patches, config commands, or arbitrary paths.
-
-
-### Complete profiles and storage (0.9.9)
-
-Private-game profiles use schema 2; shared-launcher profiles use schema 3 so older builds safely skip the new per-game routing behavior. Profiles include experimental once-per-frame mouse delivery and supported BF1942 display settings. Schema 1 profiles still load and preserve the current once-per-frame setting when that field is absent. Older app builds skip schema 2 rather than silently ignoring its new settings. Profile previews identify unsupported game recipes; applying a BF1942 profile to another game never runs its display recipe. Profile Undo restores display files and their prior Undo ledger, while preserving later user edits. Installed component fixes still have their own Undo in Fixes.
-
-The game header shows estimated storage and its drive, with a breakdown for separately stored game files and known settings/saves. A refresh button recalculates it. Native apps added manually are labelled “App” because arbitrary external game data cannot be inferred. Shared Steam/Battle.net runtime space belongs to the shared launcher. APFS allocations are estimates because cloned files may share blocks.
-
-Move tests cover whole apps, renderer-path rebasing, portable per-fix Undo, file-only moves, and return to internal storage. A disposable BF1942 setup was also moved to a connected ExFAT drive and back with byte verification and working Undo. ExFAT is explicitly kept on the files-only path even when macOS reports symlink support; free-space checks fall back to filesystem capacity when the important-usage estimate incorrectly returns zero. Existing games are not relocated automatically.
