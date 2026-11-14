@@ -764,3 +764,15 @@ Reported: with a toggled layer on (a "mac desktop" layer on the Steam Controller
 - **Back to Base.** Losing the controller's input (`pe_release_main`/`pe_release_device` through `release_input_range`: a Steam Controller report gap, a wireless dropout, a reconnect) cleared toggled layers and the gyro toggle owned by its inputs. They are modes, not held outputs, so they now stay; held keys, mouse buttons, key/mouse toggles and pad buttons are still released as before.
 
 Unchanged by design: switching to an app that uses a *different* profile (an app rule, a game, a stream) starts that profile at its base layer. Tests: `PadLayerKeptAcrossReleaseTests`. Not yet checked with the controller.
+
+## Profile editor: layer colours, change dots, assign by pressing, copying between layers (2026-11-14)
+
+Asked for while mapping a Steam Controller profile with several layers. Editor-only (`ControllerLayerTools.swift`, `ControllerPicture`, `ControllerProfileEditor`); no stored format changes and no migration.
+
+- **Layer colours.** Every layer has a colour: its own `Layer.color` (the same field that sets the DualSense/DualShock 4 light) or, unset, a palette colour by position (Base blue, then orange, green, purple…). The layer tabs (now coloured buttons instead of a segmented control) and the picture's highlights use the colour of the layer being edited, and a swatch next to the tabs changes it. Choosing a colour also sets the controller light, as the Feedback section always did; layers left on the palette colour keep the controller's own light.
+- **Layer switch buttons** on the picture show the colour of the layer they hold or toggle.
+- **Change dots.** In a layer, a dot marks each button the layer changes and each stick or trackpad with its own settings or directions there.
+- **Assign by pressing.** A switch above the picture: while on, pressing a controller button selects it and the next key, modifier, or right/middle/side mouse button pressed becomes what it does in the layer being edited (Escape or Cancel stops; "Left Click" assigns a left click, since clicking also operates the editor). Off, pressing buttons only tests them.
+- **Copying.** The layer menu (…) has "Duplicate … as a New Layer" (a copy of Base gets the profile's stick, gyro and pad settings as its own). Button, stick, gyro and trackpad inspectors have "Copy from ▸ layer", which copies what it does in that layer (its own setting or what it inherits).
+
+Builds; not yet checked on screen.
