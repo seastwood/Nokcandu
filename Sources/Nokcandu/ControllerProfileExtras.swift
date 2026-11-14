@@ -36,6 +36,9 @@ extension ControllerProfileEditor {
     }
     @ViewBuilder var legacyTouchpadInspector: some View {
         let t = Binding(get: { profile.touchpad ?? PadProfiles.top(profile, all: everything, \.touchpad) ?? PadProfiles.Touchpad() }, set: { profile.touchpad = $0 })
+        if layerIndex > 0 {
+            Text("Touchpad settings are set once for the whole profile: changing them here changes them in every layer.").font(.caption).foregroundStyle(.orange)
+        }
         Section {
             Picker("Works as", selection: t.mode) { ForEach(PadProfiles.TouchMode.allCases, id: \.self) { Text($0.title).tag($0) } }
             switch t.wrappedValue.mode {

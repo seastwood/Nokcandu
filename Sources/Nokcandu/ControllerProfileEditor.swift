@@ -694,9 +694,13 @@ struct ControllerProfileEditor: View {
                 slider("Speed", Binding(get: { st.wrappedValue.scrollSpeed ?? 20 }, set: { var v = st.wrappedValue; v.scrollSpeed = $0; st.wrappedValue = v }), 2...80, "%.0f lines/s")
             case .keys:
                 ForEach(0..<4, id: \.self) { k in
-                    Picker(["Up", "Down", "Left", "Right"][k], selection: Binding(get: { st.wrappedValue.keys.indices.contains(k) ? st.wrappedValue.keys[k] : 13 },
-                                                  set: { v in var x = st.wrappedValue; if x.keys.count < 4 { x.keys = [13, 1, 0, 2] }; x.keys[k] = v; st.wrappedValue = x })) {
-                        ForEach(PadProfiles.keys) { Text($0.title).tag($0.code) }
+                    let key = Binding(get: { st.wrappedValue.keys.indices.contains(k) ? st.wrappedValue.keys[k] : 13 },
+                                      set: { v in var x = st.wrappedValue; if x.keys.count < 4 { x.keys = [13, 1, 0, 2] }; x.keys[k] = v; st.wrappedValue = x })
+                    HStack {
+                        Picker(["Up", "Down", "Left", "Right"][k], selection: key) {
+                            ForEach(PadProfiles.keys) { Text($0.title).tag($0.code) }
+                        }
+                        KeyRecordButton { key.wrappedValue = $0 }
                     }
                 }
             default: EmptyView()
@@ -868,6 +872,7 @@ struct ControllerProfileEditor: View {
         } header: {
             InspectorTitle(title: "Trigger Pull", subtitle: nil, symbol: "r2.button.roundedtop.horizontal")
         } footer: {
+            if layerIndex > 0 { Text("Trigger pull is set once for the whole profile: changing it here changes it in every layer.").font(.caption).foregroundStyle(.orange) }
             Text("A trigger with nothing set stays a trigger. Set \(PadProfiles.Input.rt.title(family)) and \(PadProfiles.Input.rtfull.title(family)) to different things for a two-stage trigger.").font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -1427,5 +1432,44 @@ struct DevicePanel: View {
         .confirmationDialog("Remove \(device.name) from this profile?", isPresented: $confirmRemove) {
             Button("Remove", role: .destructive, action: remove)
         } message: { Text("What its buttons and axes were set to is removed too.") }
+    }
+}
+
+/// "Record": the next key pressed in this window (a modifier key on its own counts too) becomes the choice.
+/// Escape cancels. The same capture the button outputs use, for places that hold a single key.
+struct KeyRecordButton: View {
+    let set: (Int) -> Void
+    @State private var monitor: Any?
+    var body: some View {
+        Button(monitor == nil ? "Record" : "Press a key…") { monitor == nil ? start() : stop() }
+            .controlSize(.small)
+            .foregroundStyle(monitor == nil ? Color.primary : Color.accentColor)
+            .help("Press the key you want instead of finding it in the list. Escape cancels.")
+            .onDisappear(perform: stop)
+    }
+    func start() {
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { e in
+            let k = Int(e.keyCode)
+            if e.type == .keyDown {
+                if k != 53 { set(k) }   // Escape cancels
+                stop(); return nil
+            }
+            // A modifier counts when it goes down on its own.
+            let down: Bool
+            switch k {
+            case 56, 60: down = e.modifierFlags.contains(.shift)
+            case 59, 62: down = e.modifierFlags.contains(.control)
+            case 58, 61: down = e.modifierFlags.contains(.option)
+            case 55, 54: down = e.modifierFlags.contains(.command)
+            case 57: down = true
+            default: return e
+            }
+            if down { set(k); stop(); return nil }
+            return e
+        }
+    }
+    func stop() {
+        if let m = monitor { NSEvent.removeMonitor(m) }
+        monitor = nil
     }
 }
