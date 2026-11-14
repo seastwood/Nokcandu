@@ -16,7 +16,7 @@ extension ControllerProfileEditor {
         let rgb = PadFeedback.rgb(hex ?? Self.layerPalette[i % Self.layerPalette.count]) ?? (0.2, 0.47, 0.96)
         return Color(red: Double(rgb.0), green: Double(rgb.1), blue: Double(rgb.2))
     }
-    func layerIndex(named name: String) -> Int? {
+    func indexOfLayer(named name: String) -> Int? {
         profile.layers.indices.first { $0 > 0 && profile.layers[$0].name.caseInsensitiveCompare(name) == .orderedSame }
     }
     /// The layer a button switches to (hold or toggle), if it does.
