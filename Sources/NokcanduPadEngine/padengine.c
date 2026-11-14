@@ -1271,7 +1271,12 @@ static void close_menu_without_action(pe_engine *e) {
     int menu = e->menu_open; e->menu_open = e->menu_sel = -1;
     if (e->sink.menu) e->sink.menu(e->sink.ctx, menu, -2);
 }
-void pe_release_all(pe_engine *e, double now) {
+static void release_all(pe_engine *e, double now, bool report);
+void pe_release_all(pe_engine *e, double now) { release_all(e, now, true); }
+
+// `report` false: the caller restores layer and gyro state afterwards and reports once, so the
+// sink never sees the momentary "back to base" (it buzzed the controller on every window switch).
+static void release_all(pe_engine *e, double now, bool report) {
     if (!e || e->releasing) return;
     e->releasing = true;
     e->gyro_touched = false;
@@ -1312,7 +1317,7 @@ void pe_release_all(pe_engine *e, double now) {
     apply_layers(e);
     update_triggers(e);
     update_pad_sticks(e);
-    report_state(e);
+    if (report) report_state(e);
     (void)now;
     memset(e->press, 0, sizeof e->press); memset(e->physical, 0, sizeof e->physical); e->ntimers = 0;
     e->releasing = false;
@@ -1322,7 +1327,7 @@ void pe_release_outputs(pe_engine *e, double now) {
     if (!e) return;
     bool layers[MAX_LAYERS], gyro = e->gyro_toggled; int owners[MAX_LAYERS], gyro_owner = e->gyro_toggle_owner;
     memcpy(layers, e->layer_toggled, sizeof layers); memcpy(owners, e->layer_toggle_owner, sizeof owners);
-    pe_release_all(e, now);
+    release_all(e, now, false);
     memcpy(e->layer_toggled, layers, sizeof layers); memcpy(e->layer_toggle_owner, owners, sizeof owners);
     e->gyro_toggled = gyro; e->gyro_toggle_owner = gyro_owner;
     apply_layers(e); report_state(e);
@@ -1789,11 +1794,9 @@ static void release_input_range(pe_engine *e, int first, int end) {
         }
     }
     clear_controller_toggles(e, affected);
-    for (int l = 1; l < MAX_LAYERS; l++) {
-        int owner = e->layer_toggle_owner[l];
-        if (e->layer_toggled[l] && owner >= 0 && owner < PE_ALL_INPUTS && affected[owner]) e->layer_toggled[l] = false;
-    }
-    if (e->gyro_toggled && e->gyro_toggle_owner >= 0 && e->gyro_toggle_owner < PE_ALL_INPUTS && affected[e->gyro_toggle_owner]) e->gyro_toggled = false;
+    // Toggled layers and the gyro toggle stay as they are: they are modes, not held outputs, so nothing
+    // sticks if they outlive the input. A Steam Controller report gap or a reconnect used to drop the
+    // user back to the base layer.
     if (e->menu_open >= 0 && e->menu_owner >= 0 && e->menu_owner < PE_ALL_INPUTS && affected[e->menu_owner]) {
         int menu = e->menu_open; e->menu_open = e->menu_sel = -1;
         if (e->sink.menu) e->sink.menu(e->sink.ctx, menu, -2);
