@@ -422,9 +422,10 @@ struct StreamProfileEditor: View {
             }
             SettingToggle(title: "Reverse scrolling", isOn: $profile.input.reverseScroll)
             SettingToggle(title: "⌘ is the Windows key", info: "⌘ shortcuts go to the host as Windows-key shortcuts while the stream is in front. Off, ⌘ stays with the Mac (⌘Q quits Nokcandu).", isOn: $profile.input.commandAsWindowsKey)
+            SettingToggle(title: "Send Mac shortcuts to the host", info: "While the stream is in front, macOS's own shortcuts are turned off so they reach the host: ⌘Tab, ⌘Space, ⌃← / ⌃→, Mission Control, screenshots and the rest. With ⌘ as the Windows key that gives the host Windows-key shortcuts; with ⌥ and ⌘ swapped, Alt-Tab. They come back as soon as you switch away or the stream ends. Needs ⌘ is the Windows key on (off, ⌘ shortcuts stay on the Mac and so do the rest). ⌃⌥⇧ shortcuts stay with Nokcandu (⌃⌥⇧D hides the stream, ⌃⌥⇧Q ends it).", isOn: $profile.input.captureSystemShortcuts)
             SettingToggle(title: "Share the clipboard", info: "With an Apollo host: copied text on the Mac goes to the host when the stream comes to the front, and text copied on the host comes back when you switch away. In Apollo, allow this Mac's clipboard permissions under Device Management. The Stream menu can also send or fetch it by hand. While this is on, anything you copy on the Mac, passwords included, is sent to the host when you return to the stream.", isOn: $profile.input.clipboard)
             SettingToggle(title: "Swap ⌥ and ⌘", info: "For a Windows keyboard layout: ⌥ is the Windows key and ⌘ is Alt.", isOn: $profile.input.swapOptionCommand)
-            SettingNote("During a stream: ⌃⌥⇧Q ends it, ⌃⌥⇧Z frees or captures the pointer, ⌃⌥⇧X switches full screen, ⌃⌥⇧S shows statistics.")
+            SettingNote("During a stream: ⌃⌥⇧Q ends it, ⌃⌥⇧Z frees or captures the pointer, ⌃⌥⇧X switches full screen, ⌃⌥⇧D hides it, ⌃⌥⇧S shows statistics.")
         }
     }
 
