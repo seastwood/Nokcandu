@@ -736,7 +736,13 @@ public enum PadProfiles {
         return out
     }
 
-    public static func compile(_ p: Profile, all: [Profile]) -> String {
+    /// Controls → Controller Settings: off, no profile calibrates the gyro by itself; only the calibrate shortcut does.
+    public static var automaticCalibration: Bool {
+        get { UserDefaults.standard.object(forKey: "padAutomaticCalibration") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "padAutomaticCalibration") }
+    }
+
+    public static func compile(_ p: Profile, all: [Profile], automaticCalibration: Bool = PadProfiles.automaticCalibration) -> String {
         let routing = top(p, all: all, \.routingMode) ?? .legacy
         // "source steam": Nokcandu reads the controller itself and feeds Wine's driver the result (padmap.m).
         let source = top(p, all: all, \.controllerSource) == .steamUSB ? "source steam\n" : ""
@@ -764,7 +770,7 @@ public enum PadProfiles {
         var lines = ["nokpad 1"]
         func gyroLine(_ g: Gyro, layer: Int) -> String {
             let gout: String = { switch g.output { case .off: "off"; case .mouse: "mouse"; case .leftStick: "lstick"; case .rightStick: "rstick"; case .scroll: "scroll" } }()
-            return "gyro out=\(gout) on=\(g.startsOn ? 1 : 0) world=\(g.worldSpace == true ? 1 : 0) scrollrate=\(n(g.scrollRate ?? 0.1)) min=\(n(g.effectiveSensitivity.slow)) max=\(n(g.effectiveSensitivity.fast)) lo=\(n(g.slowSpeed)) hi=\(n(g.fastSpeed)) smooth=\(n(g.smoothing)) tight=\(n(g.tightening)) invx=\(g.invertX ? 1 : 0) invy=\(g.invertY ? 1 : 0) yaw=\(g.turn.rawValue) stickfull=\(n(g.stickFullSpeed)) stickmin=\(n(g.stickMinimum)) cal=\(g.autoCalibrate ? "auto" : "off") xs=\(n(g.xScale ?? 1)) ys=\(n(g.yScale ?? 1)) yw=\(n(g.yaw)) rw=\(n(g.roll)) euro=\(g.filter == true ? 1 : 0) mincut=\(n(g.filterMinCutoff ?? 5)) beta=\(n(g.filterBeta ?? 0.05))" + (layer > 0 ? " layer=\(layer)" : "")
+            return "gyro out=\(gout) on=\(g.startsOn ? 1 : 0) world=\(g.worldSpace == true ? 1 : 0) scrollrate=\(n(g.scrollRate ?? 0.1)) min=\(n(g.effectiveSensitivity.slow)) max=\(n(g.effectiveSensitivity.fast)) lo=\(n(g.slowSpeed)) hi=\(n(g.fastSpeed)) smooth=\(n(g.smoothing)) tight=\(n(g.tightening)) invx=\(g.invertX ? 1 : 0) invy=\(g.invertY ? 1 : 0) yaw=\(g.turn.rawValue) stickfull=\(n(g.stickFullSpeed)) stickmin=\(n(g.stickMinimum)) cal=\(g.autoCalibrate && automaticCalibration ? "auto" : "off") xs=\(n(g.xScale ?? 1)) ys=\(n(g.yScale ?? 1)) yw=\(n(g.yaw)) rw=\(n(g.roll)) euro=\(g.filter == true ? 1 : 0) mincut=\(n(g.filterMinCutoff ?? 5)) beta=\(n(g.filterBeta ?? 0.05))" + (layer > 0 ? " layer=\(layer)" : "")
         }
         func stickLine(_ i: Int, _ s: Stick, layer: Int) -> String {
             let mode: String, to: Int

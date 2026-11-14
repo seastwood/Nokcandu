@@ -26,9 +26,11 @@ struct ProfilesSidebar: View {
             .toggleStyle(.switch)
             .selectionDisabled()
             .padding(.vertical, 2)
-            Section("On the Mac") {
+            Section("Settings") {
                 row(title: "Controller on the Mac", subtitle: pad.everywhereID != nil || pad.on ? pad.status : "Off — profiles apply only in games", symbol: "desktopcomputer")
                     .tag("mac")
+                row(title: "Controller Settings", subtitle: "Gyro, notes, capture, headphones", symbol: "slider.horizontal.3")
+                    .tag("settings")
             }
             Section("Controller Profiles") {
                 if pads.isEmpty {
@@ -292,6 +294,15 @@ struct ProfilesTabDetail: View {
                 PadProfilePage(profile: p).id(p.id + p.name)          // a rename from the sidebar reloads the editor
             } else if sel.hasPrefix("keys:"), let l = KeyRemap.layouts().first(where: { $0.id == String(sel.dropFirst(5)) }) {
                 KeyLayoutPage(layout: l).id(l.id + l.name)
+            } else if sel == "settings" {
+                // Everything about controllers that isn't one profile: in games, on the Mac and in streams.
+                Form {
+                    PadGyroAndNotesSettings()
+                    PadCaptureSettings()
+                    PadHeadTrackingSettings()
+                    ControllersSection()
+                    PadDiagnosticsSettings()
+                }.formStyle(.grouped)
             } else {
                 Form { DesktopPadSettings() }.formStyle(.grouped)
             }

@@ -105,6 +105,14 @@ final class GyroQuietCalibrationTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(next.bias)[0], 0.2, accuracy: 0.1)
     }
 
+    func testTheSettingTurnsAutomaticCalibrationOffForEveryProfile() {
+        let p = PadProfiles.Profile(name: "Gyro")
+        XCTAssertTrue(PadProfiles.compile(p, all: [p], automaticCalibration: true).contains("cal=auto"))
+        let off = PadProfiles.compile(p, all: [p], automaticCalibration: false)
+        XCTAssertTrue(off.contains("cal=off"))
+        XCTAssertFalse(off.contains("cal=auto"))
+    }
+
     func testWithAutomaticCalibrationOffNothingChanges() {
         let r = Rig("gyro out=mouse min=10 max=10 cal=off")
         r.hold(from: 10, seconds: 12, drift: (1.5, 0, 0))

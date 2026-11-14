@@ -27,6 +27,7 @@ struct SettingsView: View {
 
 struct GeneralSettings: View {
     @EnvironmentObject var model: AppModel
+    @Environment(\.openWindow) private var openWindow
     @State private var installTo = GameFolders.installFolder
     @State private var discordTick = 0
 
@@ -69,10 +70,16 @@ struct GeneralSettings: View {
                 Text("Before a fix, an engine change or Reset to Recommended, keeps one copy of the game's Windows environment to go back to (the newest replaces the last). Off by default: those changes have their own Undo, and you can take a restore point yourself any time in a game's Storage tab.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            DesktopPadSettings()
-            PadCaptureSettings()
-            PadHeadTrackingSettings()
-            PadDiagnosticsSettings()
+            Section("Controllers") {
+                Text("Controller profiles on the Mac, the gyro, notes, pointer capture, headphone motion and connected controllers are in the Controls tab.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Button("Open Controller Settings") {
+                    model.sidebarTab = .profiles; model.profileSelection = "settings"
+                    NSApp.activate(ignoringOtherApps: true)
+                    if let w = NSApp.windows.first(where: { $0.isVisible && $0.title == "Nokcandu" }) { w.makeKeyAndOrderFront(nil) }
+                    else { openWindow(id: "library") }
+                }
+            }
             Section("Discord") {
                 Toggle("Show what you're playing in Discord", isOn: Binding(get: { DiscordBridge.enabled }, set: { DiscordBridge.enabled = $0; discordTick += 1 }))
                 Text("Windows games that support Discord Rich Presence show up in your Discord status. Nokcandu adds a small bridge (rpc-bridge, the one Sikarugir uses) to each game's Windows environment the next time it starts; turning this off removes it.")
@@ -93,7 +100,7 @@ struct GeneralSettings: View {
                     }
                 }
                 HStack {
-                    Button("Setup Checklist…") { model.showWelcome = true }
+                    Button("Setup Checklist…") { model.welcomePage = .games; model.showWelcome = true }
                     Button("Nokcandu on GitHub") { NSWorkspace.shared.open(URL(string: "https://github.com/seastwood/Nokcandu")!) }
                     Button("Report a Problem") { NSWorkspace.shared.open(URL(string: "https://github.com/seastwood/Nokcandu/issues/new")!) }
                 }
@@ -156,7 +163,6 @@ struct AdvancedSettings: View {
                 Text("For games installed from Epic: a newer cloud save is downloaded before the game starts, and your save is uploaded after it quits. The newer save always wins. (Steam games sync through Steam. GOG cloud saves aren't supported yet.)")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            ControllersSection()
             Section {
                 Toggle("Run games as their own apps", isOn: Binding(get: { gameApps }, set: { on in
                     gameApps = on; GameApp.enabled = on
@@ -296,7 +302,30 @@ struct NetworkSteadySetting: View {
 }
 
 
-/// Settings → General → Controller on the Mac: a controller profile for the Mac itself and per-app choices.
+/// Controls → Controller on the Mac: a controller profile for the Mac itself and per-app choices.
+/// Controls → Controller Settings: the gyro's calibration and the notes shown on screen. They apply to every
+/// profile, in games, on the Mac and in streams, so they don't depend on using a profile on the Mac.
+struct PadGyroAndNotesSettings: View {
+    @ObservedObject var pad = DesktopPad.shared
+
+    var body: some View {
+        Section("Gyro and notes") {
+            ShortcutRecorder(title: "Calibrate the gyro", shortcut: $pad.calibrateShortcut)
+            Toggle("Calibrate the gyro automatically", isOn: Binding(get: { PadProfiles.automaticCalibration }, set: {
+                PadProfiles.automaticCalibration = $0; pad.objectWillChange.send()
+                NotificationCenter.default.post(name: .padProfilesChanged, object: nil)
+            }))
+                .help("On: whenever the controller hasn’t moved for five seconds, its drift is measured again (profiles can still turn this off for themselves). Off: no profile calibrates by itself; the gyro is calibrated only when you use the shortcut above.")
+            Toggle("Show automatic gyro calibration notifications", isOn: Binding(get: { PadHUD.automaticCalibration }, set: { PadHUD.automaticCalibration = $0; pad.objectWillChange.send() }))
+                .help("Automatic calibration runs quietly whenever the controller hasn’t moved for five seconds. With this on, a note appears only for the first measurement and when a clear drift was corrected.")
+                .disabled(!PadProfiles.automaticCalibration)
+            Toggle("Show a note when a layer or the gyro switches", isOn: Binding(get: { PadHUD.enabled }, set: { PadHUD.enabled = $0; pad.objectWillChange.send() }))
+            Toggle("Gyro on/off notifications", isOn: Binding(get: { PadHUD.gyroSwitches }, set: { PadHUD.gyroSwitches = $0; pad.objectWillChange.send() }))
+                .disabled(!PadHUD.enabled)
+        }
+    }
+}
+
 struct DesktopPadSettings: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject var pad = DesktopPad.shared
@@ -343,12 +372,6 @@ struct DesktopPadSettings: View {
                     }
                 }
                 ControllerLinks(pad: pad, profiles: profiles)
-                ShortcutRecorder(title: "Calibrate the gyro", shortcut: $pad.calibrateShortcut)
-                Toggle("Show automatic gyro calibration notifications", isOn: Binding(get: { PadHUD.automaticCalibration }, set: { PadHUD.automaticCalibration = $0; pad.objectWillChange.send() }))
-                    .help("Automatic calibration runs quietly whenever the controller hasn’t moved for five seconds. With this on, a note appears only for the first measurement and when a clear drift was corrected.")
-                Toggle("Show a note when a layer or the gyro switches", isOn: Binding(get: { PadHUD.enabled }, set: { PadHUD.enabled = $0; pad.objectWillChange.send() }))
-                Toggle("Gyro on/off notifications", isOn: Binding(get: { PadHUD.gyroSwitches }, set: { PadHUD.gyroSwitches = $0; pad.objectWillChange.send() }))
-                    .disabled(!PadHUD.enabled)
                 Button("Add an App…") { addApp() }
 
             }

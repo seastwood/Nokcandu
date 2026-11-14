@@ -28,13 +28,14 @@ struct NokcanduApp: App {
                 Button("Refresh Library") { model.refresh() }.keyboardShortcut("r")
                 Button("Check for Game Updates") { Task { await model.checkStoreUpdates(); model.say(model.storeUpdates.isEmpty ? "Your GOG and Epic games are up to date." : "\(model.storeUpdates.count) game update(s) available.") } }
                 Button("Updates…") { model.showUpdates = true }.keyboardShortcut("u", modifiers: [.command, .shift])
-                Button("Setup Checklist…") { model.showWelcome = true }
+                Button("Setup Checklist…") { model.welcomePage = .games; model.showWelcome = true }
             }
             CommandMenu("Game") {
                 GameCommands(model: model)
             }
             CommandMenu("Stream") { StreamCommands() }
             CommandGroup(after: .help) {
+                Button("Getting Started…") { model.welcomePage = .choose; model.showWelcome = true }
                 Button("Controller Input Test…") { openWindow(id: "pad-input-test") }
                 Button("What's New in Nokcandu") { model.showWhatsNew = true }
                 Button("Report a Problem…") { model.showReport = true }
