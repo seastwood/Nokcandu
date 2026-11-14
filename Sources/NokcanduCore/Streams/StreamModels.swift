@@ -230,6 +230,9 @@ public struct StreamProfile: Codable, Hashable, Identifiable, Sendable {
         public var commandAsWindowsKey = true
         /// Swap ⌥ and ⌘ (so ⌥ is Windows and ⌘ is Alt).
         public var swapOptionCommand = false
+        /// Turn off macOS's own keyboard shortcuts (⌘Tab, ⌘Space, ⌃←/⌃→, Mission Control…) while the stream is in
+        /// front, so they reach the host instead.
+        public var captureSystemShortcuts = true
         /// Share the clipboard with an Apollo host: the Mac's goes over when the stream comes to the front, the host's comes back when you leave it.
         /// Off by default until checked against Apollo (its secure port has stopped answering after streams).
         public var clipboard = false
@@ -330,13 +333,14 @@ extension StreamProfile.Controller {
     }
 }
 extension StreamProfile.Input {
-    private enum CodingKeys: String, CodingKey { case mouse, reverseScroll, commandAsWindowsKey, swapOptionCommand, clipboard, keyboardLayout }
+    private enum CodingKeys: String, CodingKey { case mouse, reverseScroll, commandAsWindowsKey, swapOptionCommand, captureSystemShortcuts, clipboard, keyboardLayout }
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         mouse = (try? c.decodeIfPresent(Mouse.self, forKey: .mouse)) ?? .capture
         reverseScroll = try c.decodeIfPresent(Bool.self, forKey: .reverseScroll) ?? false
         commandAsWindowsKey = try c.decodeIfPresent(Bool.self, forKey: .commandAsWindowsKey) ?? true
         swapOptionCommand = try c.decodeIfPresent(Bool.self, forKey: .swapOptionCommand) ?? false
+        captureSystemShortcuts = try c.decodeIfPresent(Bool.self, forKey: .captureSystemShortcuts) ?? true
         clipboard = try c.decodeIfPresent(Bool.self, forKey: .clipboard) ?? false
         keyboardLayout = try c.decodeIfPresent(String.self, forKey: .keyboardLayout)
     }

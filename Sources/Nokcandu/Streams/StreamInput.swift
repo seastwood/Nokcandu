@@ -341,7 +341,43 @@ import NokcanduStreamCore
     func profileKey(_ mac: Int, _ down: Bool) {
         guard let vk = windowsKey(mac) else { return }
         if down { held.insert(vk) } else { held.remove(vk) }
-        streamSendKey(Int16(bitPattern: UInt16(0x8000 | vk)), Int8(down ? KEY_ACTION_DOWN : KEY_ACTION_UP), 0)
+        streamSendKey(Int16(bitPattern: UInt16(0x8000 | vk)), Int8(down ? KEY_ACTION_DOWN : KEY_ACTION_UP), heldModifiers)
+    }
+
+    /// The modifiers among the keys held (a profile's keys have no Mac event flags), so a mapped Ctrl
+    /// with a mapped arrow arrives as Ctrl+arrow.
+    private var heldModifiers: Int8 {
+        var m: Int32 = 0
+        if held.contains(0xA0) || held.contains(0xA1) { m |= MODIFIER_SHIFT }
+        if held.contains(0xA2) || held.contains(0xA3) { m |= MODIFIER_CTRL }
+        if held.contains(0xA4) || held.contains(0xA5) { m |= MODIFIER_ALT }
+        if held.contains(0x5B) || held.contains(0x5C) { m |= MODIFIER_META }
+        return Int8(m)
+    }
+}
+
+/// macOS's own keyboard shortcuts (⌘Tab, ⌘Space, ⌃←/⌃→, Mission Control, screenshots…), turned off while a stream
+/// is in front so their keys reach the stream window and go to the host. The same switch SDL uses to grab the
+/// keyboard (moonlight-qt's "Capture system keyboard shortcuts"); macOS keeps it per connection to the window server,
+/// so the shortcuts come back by themselves if Nokcandu quits or crashes. Needs no permission.
+@MainActor enum StreamSystemShortcuts {
+    private typealias Connection = @convention(c) () -> Int32
+    private typealias SetMode = @convention(c) (Int32, Int32) -> Int32
+    private static let functions: (Connection, SetMode)? = {
+        guard let h = dlopen("/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices", RTLD_LAZY),
+              let c = dlsym(h, "CGSMainConnectionID") ?? dlsym(h, "_CGSDefaultConnection"),
+              let m = dlsym(h, "CGSSetGlobalHotKeyOperatingMode") else { return nil }
+        return (unsafeBitCast(c, to: Connection.self), unsafeBitCast(m, to: SetMode.self))
+    }()
+    private static var off = false
+
+    /// Off (the stream has them) or back on. Accessibility shortcuts (⌥⌘F5 and the like) always stay with the Mac.
+    static func capture(_ on: Bool) {
+        guard on != off, let f = functions else { return }
+        let enable: Int32 = 0, allButUniversalAccess: Int32 = 2
+        let rc = f.1(f.0(), on ? allButUniversalAccess : enable)
+        off = on && rc == 0
+        StreamLog.shared.add("Mac shortcuts \(on ? "go to the host" : "back on the Mac")\(rc == 0 ? "" : " (failed: \(rc))")")
     }
 }
 

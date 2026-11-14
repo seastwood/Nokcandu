@@ -14,4 +14,13 @@ final class PadKeyboardStateTests: XCTestCase {
             XCTAssertEqual(s.update(right, down: false), [])
         }
     }
+
+    func testArrowsCarryTheFlagsMacShortcutsMatch() {
+        for arrow in 123...126 { XCTAssertEqual(PadKeyboardState.keyFlags(arrow), [.maskNumericPad, .maskSecondaryFn]) }
+        XCTAssertEqual(PadKeyboardState.keyFlags(115), .maskSecondaryFn)   // Home
+        XCTAssertEqual(PadKeyboardState.keyFlags(122), .maskSecondaryFn)   // F1
+        XCTAssertEqual(PadKeyboardState.keyFlags(83), .maskNumericPad)     // keypad 1
+        XCTAssertEqual(PadKeyboardState.keyFlags(0), [])                   // A
+        XCTAssertEqual(PadKeyboardState.keyFlags(59), [])                  // Control
+    }
 }
