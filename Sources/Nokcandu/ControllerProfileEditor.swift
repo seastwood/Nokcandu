@@ -185,7 +185,12 @@ struct ControllerProfileEditor: View {
                 // controller is in use, and resolving the profile for every button each time kept a core busy.
                 let resolved = resolvedBindings
                 let colors = profile.layers.indices.map { layerColor($0) }
-                AssignBar(assign: assigner, title: { $0.title(family) }, tint: colors[layerIndex])
+                AssignBar(assign: assigner, title: { t in
+                    switch t {
+                    case .input(let i): return i.title(family)
+                    case .stick(let s, let d): return (s == 0 ? "Left stick " : "Right stick ") + ["up", "down", "left", "right"][d]
+                    }
+                }, tint: colors[layerIndex])
                 ControllerPicture(family: family, selection: $selection, tester: tester,
                                   mapped: { i in resolved[i] != nil },
                                   label: { i in shortLabel(resolved[i]) }, stickLabel: { s in stickLabel(s) },
@@ -196,8 +201,12 @@ struct ControllerProfileEditor: View {
                                   stickChanged: { s in stickChangedInLayer(s) })
                     .frame(width: width, height: width * 400 / 560)
                     .onReceive(tester.$pressed) { now in
-                        assigner.pressedChanged(now, select: { selection = .input($0) },
-                                                assign: { input, output in profile.layers[layerIndex][input] = .as(output) })
+                        assigner.pressedChanged(now, select: { selection = .input($0) }, assign: assignPressed)
+                    }
+                    .onReceive(tester.$sticks) { now in
+                        // On the Steam Controller the right "stick" is its trackpad: only the joystick picks directions.
+                        assigner.sticksChanged(now, sticksShown: inputSource == .steamUSB ? [0] : [0, 1],
+                                               select: { selection = .stick($0) }, assign: assignPressed)
                     }
                 ExtraButtons(tester: tester, family: family, selection: $selection,
                              mapped: { i in resolved[i] != nil })

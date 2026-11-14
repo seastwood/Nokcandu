@@ -73,6 +73,36 @@ extension ControllerProfileEditor {
             .help("This layer's colour here, and the controller's light while it's on (DualSense, DualShock 4).")
     }
 
+    // MARK: Assign by pressing (what an answer changes)
+
+    /// A button gets the output as what it does in this layer. A stick direction: a key goes into the stick's
+    /// Keys (switching a stick that isn't keys or directions to Keys); with four directions, or for a mouse
+    /// button, it becomes that direction's binding. All through the layer-aware stick binding.
+    func assignPressed(_ target: AssignByPressing.Target, _ output: PadProfiles.Output) {
+        switch target {
+        case .input(let i):
+            profile.layers[layerIndex][i] = .as(output)
+        case .stick(let s, let d):
+            let st = stickBinding(s)
+            var v = st.wrappedValue
+            if case .key(let k) = output, v.mode != .directions {
+                if v.mode != .keys { v.mode = .keys }
+                if v.keys.count < 4 { v.keys = s == 0 ? [13, 1, 0, 2] : [126, 125, 123, 124] }
+                v.keys[d] = k
+                st.wrappedValue = v
+            } else {
+                if v.mode == .keys {
+                    // Four directions start from the keys it had, as the Works as menu does.
+                    for (dir, k) in zip(PadProfiles.Input.stickDirections(s), v.keys) where profile.layers[layerIndex][dir] == nil {
+                        profile.layers[layerIndex][dir] = .as(.key(k))
+                    }
+                }
+                if v.mode != .directions { v.mode = .directions; st.wrappedValue = v }
+                profile.layers[layerIndex][PadProfiles.Input.stickDirections(s)[d]] = .as(output)
+            }
+        }
+    }
+
     // MARK: Duplicate and copy
 
     func duplicateLayer() {
@@ -164,21 +194,44 @@ extension ControllerProfileEditor {
 /// While on: a controller button pressed in the editor is selected, and the next key or mouse button pressed
 /// on the Mac becomes what it does in the layer being edited. Off, pressing buttons just tests them.
 @MainActor final class AssignByPressing: ObservableObject {
+    /// What is waiting for its key: a button, or one direction of a stick (0 up, 1 down, 2 left, 3 right).
+    enum Target: Equatable { case input(PadProfiles.Input), stick(Int, direction: Int) }
+
     @Published var on = false { didSet { if !on { cancel() } } }
-    /// The button waiting for its key.
-    @Published private(set) var waiting: PadProfiles.Input?
+    @Published private(set) var waiting: Target?
     private var monitor: Any?
     private var lastPressed: Set<PadProfiles.Input> = []
-    private var assign: ((PadProfiles.Input, PadProfiles.Output) -> Void)?
+    private var stickPushed: [Int?] = [nil, nil]
+    private var assign: ((Target, PadProfiles.Output) -> Void)?
 
     /// The tester's pressed buttons changed.
     func pressedChanged(_ now: Set<PadProfiles.Input>, select: (PadProfiles.Input) -> Void,
-                        assign: @escaping (PadProfiles.Input, PadProfiles.Output) -> Void) {
+                        assign: @escaping (Target, PadProfiles.Output) -> Void) {
         defer { lastPressed = now }
         guard on, let first = now.subtracting(lastPressed).sorted(by: { $0.rawValue < $1.rawValue }).first else { return }
         self.assign = assign
         select(first)
-        waiting = first
+        start(.input(first))
+    }
+
+    /// The tester's stick positions changed (x right, y up, −1…1). A firm push in one direction, from near the
+    /// middle, picks that direction; the stick has to come back towards the middle before it picks again.
+    func sticksChanged(_ sticks: [CGPoint], sticksShown: Set<Int>, select: (Int) -> Void,
+                       assign: @escaping (Target, PadProfiles.Output) -> Void) {
+        for s in 0..<min(2, sticks.count) where sticksShown.contains(s) {
+            let p = sticks[s], m = max(abs(p.x), abs(p.y))
+            if m < 0.4 { stickPushed[s] = nil; continue }
+            guard on, m > 0.7, stickPushed[s] == nil else { continue }
+            let d = abs(p.y) >= abs(p.x) ? (p.y > 0 ? 0 : 1) : (p.x < 0 ? 2 : 3)
+            stickPushed[s] = d
+            self.assign = assign
+            select(s)
+            start(.stick(s, direction: d))
+        }
+    }
+
+    private func start(_ t: Target) {
+        waiting = t
         listen()
     }
 
@@ -233,7 +286,7 @@ extension ControllerProfileEditor {
 /// The switch above the picture, and what it's waiting for.
 struct AssignBar: View {
     @ObservedObject var assign: AssignByPressing
-    let title: (PadProfiles.Input) -> String
+    let title: (AssignByPressing.Target) -> String
     let tint: Color
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
