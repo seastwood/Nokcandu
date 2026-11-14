@@ -25,6 +25,8 @@ struct ControllerProfileEditor: View {
     @State var family: Controllers.Family?
     /// Not observed here: the live test updates many times a second, and redrawing the whole editor would close any open menu.
     @State var tester = PadTester()
+    /// "Assign by pressing": a controller button, then the key it should be.
+    @StateObject var assigner = AssignByPressing()
     @State private var newLayerName = ""
     @State private var addingLayer = false
     @State private var renamingLayer = false
@@ -182,11 +184,21 @@ struct ControllerProfileEditor: View {
                 // Worked out once per change to the profile: the picture redraws many times a second while a
                 // controller is in use, and resolving the profile for every button each time kept a core busy.
                 let resolved = resolvedBindings
+                let colors = profile.layers.indices.map { layerColor($0) }
+                AssignBar(assign: assigner, title: { $0.title(family) }, tint: colors[layerIndex])
                 ControllerPicture(family: family, selection: $selection, tester: tester,
                                   mapped: { i in resolved[i] != nil },
                                   label: { i in shortLabel(resolved[i]) }, stickLabel: { s in stickLabel(s) },
-                                  steamPad: { side in inputSource == .steamUSB ? PadProfiles.steamTrackpad(side, profile: profile, all: everything, layer: layerIndex > 0 ? layerName : nil) : nil })
+                                  steamPad: { side in inputSource == .steamUSB ? PadProfiles.steamTrackpad(side, profile: profile, all: everything, layer: layerIndex > 0 ? layerName : nil) : nil },
+                                  tint: colors[layerIndex],
+                                  targetTint: { i in switchTarget(resolved[i]).map { colors[$0] } },
+                                  changed: { i in changedInLayer(i) },
+                                  stickChanged: { s in stickChangedInLayer(s) })
                     .frame(width: width, height: width * 400 / 560)
+                    .onReceive(tester.$pressed) { now in
+                        assigner.pressedChanged(now, select: { selection = .input($0) },
+                                                assign: { input, output in profile.layers[layerIndex][input] = .as(output) })
+                    }
                 ExtraButtons(tester: tester, family: family, selection: $selection,
                              mapped: { i in resolved[i] != nil })
             }
@@ -433,11 +445,9 @@ struct ControllerProfileEditor: View {
 
     var layerBar: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Picker("Layer", selection: $layerIndex) {
-                ForEach(profile.layers.indices, id: \.self) { i in Text(i == 0 ? "Base" : profile.layers[i].name).tag(i) }
-            }
-            .pickerStyle(.segmented).frame(maxWidth: .infinity)
+            layerTabs
             FlowRow(spacing: 8) {
+            layerColorPicker
             Button { newLayerName = ""; addingLayer = true } label: { Image(systemName: "plus") }
                 .help("Add a layer").disabled(profile.layers.count >= 8)
             Menu("Import Layer") {
@@ -459,13 +469,14 @@ struct ControllerProfileEditor: View {
             .alert("Couldn’t Import Layer", isPresented: Binding(get: { layerImportError != nil }, set: { if !$0 { layerImportError = nil } })) {
                 Button("OK", role: .cancel) { layerImportError = nil }
             } message: { Text(layerImportError ?? "") }
-            if layerIndex > 0 {
-                Menu {
+            Menu {
+                Button("Duplicate \(layerIndex == 0 ? "Base" : layerName) as a New Layer") { duplicateLayer() }.disabled(profile.layers.count >= 8)
+                if layerIndex > 0 {
                     Button("Rename…") { newLayerName = profile.layers[layerIndex].name; renamingLayer = true }
                     Button("Remove Layer", role: .destructive) { removeLayer() }
-                } label: { Image(systemName: "ellipsis.circle") }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-            }
+                }
+            } label: { Image(systemName: "ellipsis.circle") }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
             Menu("Quick Setup") {
                 Button(swapped(.a, .b) ? "Unswap A and B" : "Swap A and B") { swap(.a, .b) }
                 Button(swapped(.x, .y) ? "Unswap X and Y" : "Swap X and Y") { swap(.x, .y) }
@@ -619,7 +630,11 @@ struct ControllerProfileEditor: View {
             BindingEditor(binding: bindingFor(i), input: i, family: family, layers: profile.layers.dropFirst().map(\.name),
                           inLayer: layerIndex > 0, inherited: from.map(describe))
         } header: {
-            InspectorTitle(title: i.title(family), subtitle: layerIndex > 0 ? "\(layerName) layer" : nil, symbol: i.isTrigger ? "l2.button.roundedtop.horizontal" : "circle.circle")
+            HStack {
+                InspectorTitle(title: i.title(family), subtitle: layerIndex > 0 ? "\(layerName) layer" : nil, symbol: i.isTrigger ? "l2.button.roundedtop.horizontal" : "circle.circle")
+                Spacer()
+                if profile.layers.count > 1 { copyInputMenu(i).font(.callout) }
+            }
         }
     }
 
@@ -706,7 +721,11 @@ struct ControllerProfileEditor: View {
             default: EmptyView()
             }
         } header: {
-            InspectorTitle(title: s == 0 ? "Left Stick" : inputSource == .steamUSB ? "Right Trackpad (as stick)" : "Right Stick", subtitle: nil, symbol: s == 0 ? "l.joystick" : "r.joystick")
+            HStack {
+                InspectorTitle(title: s == 0 ? "Left Stick" : inputSource == .steamUSB ? "Right Trackpad (as stick)" : "Right Stick", subtitle: nil, symbol: s == 0 ? "l.joystick" : "r.joystick")
+                Spacer()
+                if profile.layers.count > 1 { copyStickMenu(s).font(.callout) }
+            }
         } footer: {
             if st.wrappedValue.mode == .flick {
                 Text("Push the stick to the edge to turn to face that way; rotate it around the edge to keep turning. Pairs well with gyro aim.").font(.caption).foregroundStyle(.secondary)
@@ -786,7 +805,11 @@ struct ControllerProfileEditor: View {
                 }
             }
         } header: {
-            InspectorTitle(title: "Gyro", subtitle: nil, symbol: "gyroscope")
+            HStack {
+                InspectorTitle(title: "Gyro", subtitle: nil, symbol: "gyroscope")
+                Spacer()
+                if profile.layers.count > 1 { copyGyroMenu().font(.callout) }
+            }
         } footer: {
             if g.wrappedValue.output != .off {
                 Text(g.wrappedValue.startsOn ? "Give a button “Gyro off while held” to reposition the controller without turning, like lifting a mouse." : "Give a button “Gyro on while held”, for example the aim trigger.")
