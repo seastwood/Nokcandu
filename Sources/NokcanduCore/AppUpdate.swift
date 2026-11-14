@@ -1,7 +1,8 @@
 import Foundation
 
 /// Nokcandu keeping itself current: checks the project's GitHub Releases, downloads the new DMG,
-/// verifies it against GitHub's published SHA-256, swaps the app in place and relaunches.
+/// verifies it against GitHub's published SHA-256 and against the running app's signer, swaps the app in place
+/// and relaunches.
 public enum AppUpdate {
     public static let repo = "seastwood/Nokcandu"
     public static var releasesPage: URL { URL(string: "https://github.com/\(repo)/releases")! }
@@ -88,6 +89,8 @@ public enum AppUpdate {
         let source = mount.appendingPathComponent("Nokcandu.app")
         let info = NSDictionary(contentsOf: source.appendingPathComponent("Contents/Info.plist"))
         guard info?["CFBundleShortVersionString"] as? String == r.version else { throw NokError("The app's version doesn't match its release.") }
+        // The same signer as the app that is running: the checksum only says the download is what was uploaded.
+        try AppSigner.check(update: source, current: current)
         log("Saving the current app and preparing Nokcandu \(r.version)…")
         let plan = try await Task.detached { try AppRollback.prepare(source: source, current: current) }.value
         try AppRollback.launch(plan, quit: quit)
