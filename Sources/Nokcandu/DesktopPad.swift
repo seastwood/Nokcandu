@@ -130,7 +130,7 @@ final class DesktopPad: ObservableObject {
     func start() {
         guard !started else { return }
         started = true
-        Task.detached(priority: .background) { PadSocketLeftovers.remove() }
+        Task.detached(priority: .background) { PadSocketLeftovers.removeAll() }
         GCController.shouldMonitorBackgroundEvents = true
         let nc = NotificationCenter.default
         observers.append(nc.addObserver(forName: .GCControllerDidConnect, object: nil, queue: .main) { _ in MainActor.assumeIsolated { DesktopPad.shared.attach(); DesktopPad.shared.evaluate() } })
@@ -665,8 +665,8 @@ final class DesktopPad: ObservableObject {
         if streaming { stream?.mouseButton(b, down); return }
         let target = PadCapture.shared.targetPID ?? 0
         let wineTarget = target == 0 || target == gamePID ? gamePID : 0
-        let capability = "/tmp/nokcandu-pad-\(getuid())-\(wineTarget).sock.buttons"
-        let available = wineTarget > 0 && (try? String(contentsOfFile: capability, encoding: .utf8)) == "1\n"
+        let available = wineTarget > 0 && PadSocketFolder.candidates("nokcandu-pad-\(getuid())-\(wineTarget).sock.buttons")
+            .contains { (try? String(contentsOfFile: $0, encoding: .utf8)) == "1\n" }
         // Keep a CGEvent-delivered hold on its original route too.
         if !mouseState.held.contains(b), socketMouseState.route(button: b, down: down, target: wineTarget, available: available, send: { pid, button, pressed in
             sendToGame(kind: 2, code: Int16(button), dx: 0, dy: 0, down: pressed, target: pid)
@@ -779,16 +779,19 @@ final class DesktopPad: ObservableObject {
     private func sendToGame(kind: UInt8, code: Int16, dx: Int, dy: Int, down: Bool = false, target: pid_t? = nil) -> Bool {
         if sock < 0 { sock = socket(AF_UNIX, SOCK_DGRAM, 0) }
         guard sock >= 0 else { return false }
-        var addr = sockaddr_un(); addr.sun_family = sa_family_t(AF_UNIX)
-        let path = "/tmp/nokcandu-pad-\(getuid())-\(target ?? gamePID).sock"
-        _ = withUnsafeMutableBytes(of: &addr.sun_path) { buf in path.utf8CString.withUnsafeBytes { src in memcpy(buf.baseAddress!, src.baseAddress!, min(buf.count - 1, src.count)) } }
         var msg: (UInt8, UInt8, Int16, Int32, Int32) = (kind, down ? 1 : 0, code, Int32(dx), Int32(dy))
-        let sent = withUnsafePointer(to: &addr) { a in
-            a.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                withUnsafeBytes(of: &msg) { m in sendto(sock, m.baseAddress, 12, MSG_DONTWAIT, sa, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+        // The helper's private folder; /tmp itself only for a game started before the folder existed.
+        for path in PadSocketFolder.candidates("nokcandu-pad-\(getuid())-\(target ?? gamePID).sock") {
+            var addr = sockaddr_un(); addr.sun_family = sa_family_t(AF_UNIX)
+            _ = withUnsafeMutableBytes(of: &addr.sun_path) { buf in path.utf8CString.withUnsafeBytes { src in memcpy(buf.baseAddress!, src.baseAddress!, min(buf.count - 1, src.count)) } }
+            let sent = withUnsafePointer(to: &addr) { a in
+                a.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                    withUnsafeBytes(of: &msg) { m in sendto(sock, m.baseAddress, 12, MSG_DONTWAIT, sa, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+                }
             }
+            if sent == 12 { return true }
         }
-        return sent == 12
+        return false
     }
 
     var headMotionAllowed: Bool {

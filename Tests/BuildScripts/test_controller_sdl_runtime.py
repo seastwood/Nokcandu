@@ -14,7 +14,7 @@ class ControllerSDLRuntimeTests(unittest.TestCase):
         subprocess.run(["xcrun", "clang", "-dynamiclib", str(src), "-Wl,-install_name," + (install_name or name), "-o", str(folder/name)], check=True, capture_output=True)
 
     def select(self, folder):
-        return subprocess.run(["/bin/bash", "-c", 'source "$1"; nokcandu_controller_sdl_runtime "$2" || exit $?; printf "%s" "$NOKCANDU_CONTROLLER_SDL_NAME"', "--", str(SCRIPT), str(folder)], capture_output=True, text=True)
+        return subprocess.run(["/bin/bash", "-s", "--", str(SCRIPT), str(folder)], input='source "$1"; nokcandu_controller_sdl_runtime "$2" || exit $?; printf "%s" "$NOKCANDU_CONTROLLER_SDL_NAME"\n', capture_output=True, text=True)
 
     def test_keeps_stock_dependency_when_old_and_compatibility_libraries_coexist(self):
         with tempfile.TemporaryDirectory() as tmp:

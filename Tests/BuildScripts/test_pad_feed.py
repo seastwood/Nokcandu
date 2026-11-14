@@ -1,6 +1,7 @@
 """A profile that reads the controller itself feeds Wine's driver (Resources/rawmouse/padmap.m, "Fed by Nokcandu"):
 the game gets the profile's controller, and the raw controller's own input is dropped."""
 import os
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -65,7 +66,7 @@ int main(int argc, char **argv) {
  uint8_t msg[4] = { 1, 1, 1, 0 };   /* button 1 (B) down */
  if (sendto(s, msg, 4, 0, (struct sockaddr *)&a, sizeof a) != 4) return 5;
  for (int i = 0; i < 5 && !fed; i++) { memset(ev, 0, 56); if (wait(ev, 1)) { cb e; memcpy(&e, ev, sizeof e); if (e.type == 0x651 && e.which == 7 && e.button == 1) fed = 1; if (e.type == 0x651 && e.button == 0) raw++; } }
- printf("raw %d fed %d\\n", raw, fed); return 0;
+ printf("raw %d fed %d\\n%s\\n", raw, fed, sock); return 0;
 }
 ''')
             exe = work / "probe"
@@ -73,7 +74,16 @@ int main(int argc, char **argv) {
             env = dict(os.environ, DYLD_INSERT_LIBRARIES=str(helper), NOKCANDU_NO_GAME_APP="1")
             r = subprocess.run([str(exe), "winedevice.exe", str(state)], cwd=work, env=env, capture_output=True, text=True, timeout=20)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-            self.assertEqual(r.stdout.strip(), "raw 0 fed 1", r.stderr)
+            result, socket_path = r.stdout.strip().split("\n")
+            self.assertEqual(result, "raw 0 fed 1", r.stderr)
+            # The helper's sockets live in a folder only this user can enter, not in /tmp itself.
+            folder = f"/tmp/nokcandu-{os.getuid()}"
+            self.assertTrue(socket_path.startswith(folder + "/nokcandu-padfeed-"), socket_path)
+            info = os.lstat(folder)
+            self.assertTrue(stat.S_ISDIR(info.st_mode))
+            self.assertEqual(info.st_uid, os.getuid())
+            self.assertEqual(stat.S_IMODE(info.st_mode) & 0o077, 0, oct(info.st_mode))
+            self.assertFalse(os.path.exists(socket_path), "the socket is removed when the game ends")
             self.assertIn("controller fed by Nokcandu", r.stderr)
 
 

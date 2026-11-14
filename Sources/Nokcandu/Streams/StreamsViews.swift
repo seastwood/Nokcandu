@@ -420,7 +420,7 @@ struct StreamProfileEditor: View {
             }
             SettingToggle(title: "Reverse scrolling", isOn: $profile.input.reverseScroll)
             SettingToggle(title: "⌘ is the Windows key", info: "⌘ shortcuts go to the host as Windows-key shortcuts while the stream is in front. Off, ⌘ stays with the Mac (⌘Q quits Nokcandu).", isOn: $profile.input.commandAsWindowsKey)
-            SettingToggle(title: "Share the clipboard", info: "With an Apollo host: copied text on the Mac goes to the host when the stream comes to the front, and text copied on the host comes back when you switch away. In Apollo, allow this Mac's clipboard permissions under Device Management. The Stream menu can also send or fetch it by hand.", isOn: $profile.input.clipboard)
+            SettingToggle(title: "Share the clipboard", info: "With an Apollo host: copied text on the Mac goes to the host when the stream comes to the front, and text copied on the host comes back when you switch away. In Apollo, allow this Mac's clipboard permissions under Device Management. The Stream menu can also send or fetch it by hand. While this is on, anything you copy on the Mac, passwords included, is sent to the host when you return to the stream.", isOn: $profile.input.clipboard)
             SettingToggle(title: "Swap ⌥ and ⌘", info: "For a Windows keyboard layout: ⌥ is the Windows key and ⌘ is Alt.", isOn: $profile.input.swapOptionCommand)
             SettingNote("During a stream: ⌃⌥⇧Q ends it, ⌃⌥⇧Z frees or captures the pointer, ⌃⌥⇧X switches full screen, ⌃⌥⇧S shows statistics.")
         }
@@ -451,7 +451,7 @@ struct StreamProfileEditor: View {
 
     /// The microphone sent over VBAN: separate from the stream's own sound, which comes from the host.
     private var microphoneSection: some View {
-        SettingsSection(title: "Microphone (VBAN)", info: "Sends this Mac's microphone to the PC over VBAN while you stream, like VBAN Talkie. This is separate from the stream's sound above, which comes from the PC. On the PC, receive it with VBAN Receptor or Voicemeeter: an incoming stream with the same stream name, from this Mac's address, on port 6980.") {
+        SettingsSection(title: "Microphone (VBAN)", info: "Sends this Mac's microphone to the PC over VBAN while you stream, like VBAN Talkie. This is separate from the stream's sound above, which comes from the PC. On the PC, receive it with VBAN Receptor or Voicemeeter: an incoming stream with the same stream name, from this Mac's address, on port 6980. VBAN is not encrypted: anyone on the same network could listen, so use it on a network you trust.") {
             SettingToggle(title: "Send the microphone", isOn: $profile.audio.vban.enabled)
             if profile.audio.vban.enabled {
                 SettingRow(title: "Microphone") {

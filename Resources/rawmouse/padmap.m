@@ -11,6 +11,7 @@
 #include "padengine.h"
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/stat.h>
 
 // MARK: Minimal SDL2 types (only what Wine's driver loop uses)
 typedef struct { uint32_t type, timestamp; int32_t which; uint8_t button, state, p1, p2; } nok_sdl_cbutton;
@@ -30,7 +31,21 @@ enum { PADMSG_KEY = 1, PADMSG_MOUSE_BUTTON, PADMSG_MOUSE_MOVE, PADMSG_WHEEL, PAD
 typedef struct { uint8_t kind, down; int16_t code; int32_t dx, dy; } padmsg;
 
 static char pad_state_dir[PATH_MAX];
-static void pad_socket_path(pid_t pid, char *out, size_t n) { snprintf(out, n, "/tmp/nokcandu-pad-%u-%d.sock", getuid(), (int)pid); }
+// The sockets live in a folder only this user can enter: /tmp itself is shared by every account on the Mac, so
+// another account could have taken a socket's name there first. The folder must be a real folder, ours, and
+// closed to everyone else, or no socket is made (Nokcandu applies the same test before sending).
+static bool pad_socket_dir(char *out, size_t n) {
+    snprintf(out, n, "/tmp/nokcandu-%u", getuid());
+    mkdir(out, 0700);
+    struct stat st;
+    return lstat(out, &st) == 0 && S_ISDIR(st.st_mode) && st.st_uid == getuid() && (st.st_mode & 077) == 0;
+}
+static void pad_named_socket(const char *kind, pid_t pid, char *out, size_t n) {
+    char dir[64];
+    if (pad_socket_dir(dir, sizeof dir)) snprintf(out, n, "%s/nokcandu-%s-%u-%d.sock", dir, kind, getuid(), (int)pid);
+    else if (n) out[0] = 0;
+}
+static void pad_socket_path(pid_t pid, char *out, size_t n) { pad_named_socket("pad", pid, out, n); }
 static double pad_now(void) {
     static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
     return (double)mach_absolute_time() * tb.numer / tb.denom / 1e9;
@@ -84,6 +99,7 @@ static void pad_send(padmsg m) {
     if (pad_sock < 0) return;
     struct sockaddr_un a = { .sun_family = AF_UNIX };
     pad_socket_path(pad_game_pid, a.sun_path, sizeof a.sun_path);
+    if (!a.sun_path[0]) return;
     sendto(pad_sock, &m, sizeof m, MSG_DONTWAIT, (struct sockaddr *)&a, sizeof a);
 }
 static int32_t pad_which_of(void *ctx) { int i = (int)(intptr_t)ctx; return i >= 0 && i < PAD_MAX && pads[i].used ? pads[i].which : -1; }
@@ -211,7 +227,8 @@ static void pad_feed_open(bool on) {
     char info[PATH_MAX]; snprintf(info, sizeof info, "%s/pad-feed", pad_state_dir);
     if (on == (pad_feed_fd >= 0)) { pad_feed_on = on; return; }
     pad_feed_on = on;
-    char path[104]; snprintf(path, sizeof path, "/tmp/nokcandu-padfeed-%u-%d.sock", getuid(), (int)getpid());
+    char path[104]; pad_named_socket("padfeed", getpid(), path, sizeof path);
+    if (!path[0]) return;
     if (!on) { close(pad_feed_fd); pad_feed_fd = -1; unlink(path); unlink(info); return; }
     unlink(path);
     int fd = socket(AF_UNIX, SOCK_DGRAM, 0);
@@ -726,8 +743,8 @@ static void pad_activate(void) {
     bool driver = stat(pad_driver_flag, &st) != 0 && stat(pad_active_map, &st) == 0 && stat(pad_off_flag, &st) != 0;
     if (pad_listen < 0) {
         char path[104]; pad_socket_path(getpid(), path, sizeof path);
-        unlink(path);
-        int s = socket(AF_UNIX, SOCK_DGRAM, 0);
+        if (path[0]) unlink(path);
+        int s = path[0] ? socket(AF_UNIX, SOCK_DGRAM, 0) : -1;
         struct sockaddr_un a = { .sun_family = AF_UNIX }; strlcpy(a.sun_path, path, sizeof a.sun_path);
         if (s >= 0 && bind(s, (struct sockaddr *)&a, sizeof a) == 0) {
             fcntl(s, F_SETFL, O_NONBLOCK);

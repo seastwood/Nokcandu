@@ -29,7 +29,7 @@ esac''')
         file = self.bin / name
         file.write_text("#!/bin/bash\nset -eu\n" + body + "\n"); file.chmod(0o755)
     def select(self):
-        result = subprocess.run(["/bin/bash", "-c", 'set -euo pipefail; source scripts/select-signing-identity.sh; nokcandu_select_signing_identity; echo "SELECTED=$SIGN_ID"; printf "%s\\n" "${SIGN_KC[@]+${SIGN_KC[@]}}"'], cwd=ROOT, env=self.env, capture_output=True, text=True)
+        result = subprocess.run(["/bin/bash", "-s"], input='set -euo pipefail; source scripts/select-signing-identity.sh; nokcandu_select_signing_identity; echo "SELECTED=$SIGN_ID"; printf "%s\\n" "${SIGN_KC[@]+${SIGN_KC[@]}}"\n', cwd=ROOT, env=self.env, capture_output=True, text=True)
         self.assertNotIn("test-fixture-password", result.stdout + result.stderr)
         return result
     def test_existing_self_signed_identity_selected_without_trust_mutation(self):
