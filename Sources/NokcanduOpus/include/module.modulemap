@@ -1,0 +1,4 @@
+module NokcanduOpus {
+    header "opus_multistream.h"
+    export *
+}

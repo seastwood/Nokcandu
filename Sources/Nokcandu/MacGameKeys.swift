@@ -24,10 +24,29 @@ final class MacGameKeys {
 
     private func frontChanged(_ app: URL?) {
         let game = app.flatMap { a in games.first { NokPaths.sameApp($0.appPath, a) } }
+        // Nokcandu itself came to the front with a stream window in front: the stream's layout stays on.
+        if game == nil, streamKeys != nil, NokPaths.sameApp(Bundle.main.bundlePath, app ?? URL(fileURLWithPath: "/")) { return }
         let wasActive = active
         queue.async { [weak self] in
             var applied = false
             if let game { applied = KeyRemap.applyForMacGame(game) }
+            if !applied && wasActive { KeyRemap.restoreAfterMacGame() }
+            DispatchQueue.main.async { self?.active = applied }
+        }
+    }
+
+    /// The keyboard layout of the stream window in front (nil when no stream window is in front).
+    private var streamKeys: [KeyRemap.Mapping]?
+
+    /// A stream window came to the front with these remaps, or (nil) went to the back or ended.
+    func streamFront(_ mappings: [KeyRemap.Mapping]?) {
+        let next = mappings.flatMap { $0.isEmpty ? nil : $0 }
+        guard next != streamKeys else { return }
+        streamKeys = next
+        let wasActive = active
+        queue.async { [weak self] in
+            var applied = false
+            if let next { applied = KeyRemap.applyMappings(next) }
             if !applied && wasActive { KeyRemap.restoreAfterMacGame() }
             DispatchQueue.main.async { self?.active = applied }
         }

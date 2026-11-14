@@ -51,7 +51,8 @@ typedef struct {
     /// been carried out). Menu PE_KEYBOARD_MENU with slice 1: the on-screen keyboard was asked for. Optional.
     void (*menu)(void *ctx, int menu, int slice);
     /// Gyro calibration: 0…1 while it's measuring (keep the controller still), 1 when done, −1 when it was moved
-    /// and starts over. Optional.
+    /// and starts over. Automatic measurements report only their end, and only the first one or a correction
+    /// of a degree per second or more. Optional.
     void (*calibration)(void *ctx, float progress);
 } pe_sink;
 
@@ -74,6 +75,10 @@ bool pe_motion_paused(const pe_engine *e);
 void pe_gyro_touch(pe_engine *e, bool required, bool touched);
 /// Releases everything the engine is holding down (keys, mouse buttons, controller buttons) and centres the sticks.
 void pe_release_all(pe_engine *e, double now);
+/// The same for a change of the app in front: everything held or toggled into the old app is let go, but the
+/// controller's own state stays as the player left it: a layer switched on with a toggle, and the gyro
+/// switched on or off. (They used to reset on every window switch.)
+void pe_release_outputs(pe_engine *e, double now);
 /// Releases only actions owned by an additional device slot and neutralizes its axes.
 void pe_release_device(pe_engine *e, int slot, double now);
 /// Releases the primary controller group, preserving configured additional device slots.
@@ -106,6 +111,10 @@ bool pe_uses_tilt(const pe_engine *e);
 /// Measures the gyro's resting drift now (2 seconds; put the controller down or hold it still).
 void pe_calibrate(pe_engine *e, double now);
 bool pe_calibration_is_manual(const pe_engine *e);
+/// The gyro's resting reading (degrees/s per axis), to carry over when an engine is replaced for the same
+/// controller: false while there is none yet. Setting one counts as measured.
+bool pe_calibration_get(const pe_engine *e, double bias[3]);
+void pe_calibration_set(pe_engine *e, const double bias[3]);
 /* Relative pointer motion, y down. Returns true only while a pointer-picked
  * radial menu consumes it; never posts OS events. Zero motion keeps selection. */
 bool pe_menu_mouse(pe_engine *e, double dx, double dy);

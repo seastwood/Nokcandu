@@ -20,7 +20,7 @@ class PadInterpositionTests(unittest.TestCase):
                      "-framework", "IOKit", "-framework", "OpenGL", "-framework", "AudioToolbox",
                      "-framework", "CoreAudio", "-ISources/NokcanduPadEngine/include",
                      *["Resources/rawmouse/" + s for s in ["rawmouse.m", "audiofollow.m", "bonjourbridge.m",
-                       "micguard.m", "socket-events.c", "helper-state.c"]],
+                       "micguard.m", "socket-events.c", "helper-state.c", "commit-memory.c"]],
                      "Sources/NokcanduPadEngine/padengine.c", "-o", str(helper)])
             sdl = work / "sdl.c"
             sdl.write_text('''#include <dlfcn.h>

@@ -4,7 +4,7 @@ Source: user's 11-page PDF `11-11-26 page1 Tests:.pdf.pdf`, reviewed as rendered
 
 | Page | Finding / requirement | Status and next check |
 | --- | --- | --- |
-| 1 | Trackmania warns only 3.4 GB page file/committed memory, recommends 5 GB | Pending: compare Wine memory reporting and real available memory; do not delete games or alter swap settings. |
+| 1 | Trackmania warns only 3.4 GB page file/committed memory, recommends 5 GB | November 13, 2026: cause found — Wine counts only free + inactive memory plus unused swap, and macOS swap grows on demand. Fixed in the Wine helper (see engineering-learnings, "Windows commit checks see macOS's growable swap"); awaiting a Trackmania start to confirm. |
 | 2 | Two Pro Controllers; only lower entry responds | Pending: correlate physical Nintendo and Apple/SDL aliases with real reports before suppressing anything. SDL Pro is not evidence of Valve detection. |
 | 3 | Pro mappings wrong in Trackmania; Xbox detected but no game input | Pending: test native, SDL and XInput identities/mapping separately; preserve Steam Input choices. |
 | 3-5 | Wired Steam reports work; dongle does not. Need trackball mouse, optional stick/WASD, gyro, touch activation, adjustable edge actions, accurate layout, rumble, no firmware desktop duplicates, sustained holds | Partial wired passive implementation; full device ownership/restore, receiver transport, IMU enabling, trackball and haptics pending. Photo confirms actual relative control positions. |

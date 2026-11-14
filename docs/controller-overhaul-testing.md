@@ -55,6 +55,7 @@ For additional device slots, hold actions on two sources, disconnect one, and ve
 - General → Startup: verify Open Nokcandu at Login placement and persistence; changing it is your choice.
 - Dismiss Setup Checklist once, reopen normally, verify it stays dismissed even without Wine setup; reopen from the menu when wanted.
 - Disable automatic gyro-calibration notifications; calibration must continue silently. Manually calibrate and verify visible feedback even when general layer/gyro notes are off.
+- Automatic calibration (November 13, 2026): hold the controller still for 5 s and put it down for 5 s; drift must be corrected each time with nothing on screen unless the correction was 1 degree/s or more. Aim slowly and steadily; the calibration must not change.
 - In a duplicate profile, choose **Add Device → AirPods / Headphones (experimental)**, then select its source chip. Sensitivity, response, dead zone and inversion are saved with that profile. It runs only when this opted-in profile is active; old profiles stay opted out. macOS may request Motion permission. Test recenter, controller composition, **Gyro off while held**, switching to a profile without headphones, and uninterrupted audio. Remove/disable the source to stop it. General settings now show status and directions rather than global tuning. Hardware/audio support remains unverified.
 
 ## Undo
@@ -70,7 +71,7 @@ If a save reports that profile settings were saved but some controller maps coul
 
 1. In a duplicated profile, test ordinary keys/clicks, then one key toggle and one mouse toggle in Help → Controller Input Test. Check observed held outputs after the physical button is released; press again to release the output. Copy the report if the result is wrong.
 2. Test a short sequence with explicit waits. Expand Recent key and button events and check the order/times; these are window receipt times, not device latency.
-3. In a Wine game set Controllers reach games → As itself, close the environment normally, then Test Controllers. Pro Controller is now verified under DirectInput. Native mode may correctly have no XInput slot; games requiring XInput should be tested separately using As an Xbox controller.
+3. In a Wine game set "Controllers in this game" (or "in Steam games") → As itself, close the environment normally, then Test Controllers. Pro Controller is now verified under DirectInput. Native mode may correctly have no XInput slot; games requiring XInput should be tested separately using As an Xbox controller.
 4. Test Overwatch aim before/after firing and BF1942 aim/click jumps, then capture/edges/focus. Keep the profile and scene constant between comparisons. These remain actual game acceptance gates.
 5. Test headset motion only with compatible headphones and when ready for macOS’s Motion permission prompt. Do not judge hardware support from configuration UI alone.
 
@@ -130,7 +131,7 @@ leave physical raw capture off for that comparison.
 
 ## Original Steam Controller USB and headset stick outputs
 
-In Profiles choose your profile → **Input controller → Steam Controller (2015 · USB)**.
+In Profiles choose your profile → **Controller input → Steam Controller, read directly (trackpads, haptics)**.
 Both pads, one stick, grips and triggers have an original-controller layout. Left
 trackpad opens Touchpad settings; right pad opens Right stick settings and centers
 on lift. Use its experimental test status to distinguish USB connection from full

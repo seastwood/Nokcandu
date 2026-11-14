@@ -14,6 +14,11 @@ import NokcanduPadEngine
 final class DesktopPad: ObservableObject {
     static let shared = DesktopPad()
 
+    /// A stream window in front: the profile its stream chose maps the controller, and everything the profile
+    /// outputs (controller, keys, mouse, scrolling, typed text) goes to the host instead of this Mac.
+    weak var stream: StreamPadRoute? { didSet { evaluate(force: true) } }
+    private var streaming: Bool { stream?.isFront == true }
+
     static let onKey = "desktopPadOn", profileKey = "desktopPadProfile", rulesKey = "desktopPadApps", masterKey = "padProfilesOff"
     static let controllerRulesKey = "desktopPadControllers", calibrateKeyKey = "padCalibrateShortcut"
     /// Controller name → the profile the Mac uses while it's connected.
@@ -45,7 +50,9 @@ final class DesktopPad: ObservableObject {
     /// One profile for everything until it's switched off (streaming, say), whatever is in front — games included.
     @Published var everywhereID: String? = (try? String(contentsOf: DesktopPad.everywhereFile, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmptyPad {
         didSet {
-            // A file too: games then leave their own profile out of Wine's controller driver.
+            // A file too, with the profile compiled next to it: games then run it in Wine's controller driver instead of
+            // their own.
+            PadProfiles.writeEverywhereMap(id: everywhereID, all: PadProfiles.profiles())
             if let id = everywhereID {
                 try? NokPaths.ensure(NokPaths.support); try? Data(id.utf8).write(to: Self.everywhereFile, options: .atomic)
                 if let p = PadProfiles.profiles().first(where: { $0.id == id }) { PadHUD.shared.show("\(p.name) everywhere", symbol: "gamecontroller.fill") }
@@ -54,9 +61,13 @@ final class DesktopPad: ObservableObject {
                 if oldValue != nil { PadHUD.shared.show("Profiles back to normal", symbol: "gamecontroller") }
             }
             evaluate(force: true)
+            // The everywhere profile's emulated controller decides Wine's route too (applied while each game is closed).
+            let envs = KeyRemap.environments(games)
+            Task.detached(priority: .utility) { envs.forEach { Controllers.refresh(contents: $0) } }
+            NotificationCenter.default.post(name: .padProfilesChanged, object: nil)
         }
     }
-    static var everywhereFile: URL { NokPaths.support.appendingPathComponent("controller-profiles-everywhere") }
+    static var everywhereFile: URL { PadProfiles.everywhereFile }
     /// The library, to recognise Nokcandu games in front.
     var games: [InstalledGame] = [] { didSet { evaluate() } }
     /// The front app's Wine process when it's a Nokcandu game (its movement goes into the game).
@@ -135,7 +146,7 @@ final class DesktopPad: ObservableObject {
         attach()
         watchRealMouse()
         PadCapture.shared.releaseOutputs = { [weak self] in
-            if let e = self?.engine { pe_release_all(e, Self.now()) }
+            if let e = self?.engine { pe_release_outputs(e, Self.now()) }
         }
         PadCapture.shared.start()
         lifecycleObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { _ in
@@ -176,6 +187,8 @@ final class DesktopPad: ObservableObject {
 
     /// Picks the profile for the app in front (or none) and (re)builds the engine when it changes.
     private var steamSource = false
+    /// The profile in use's Game rumble strength (0…1).
+    private(set) var gameRumble = PadProfiles.Profile.defaultGameRumble
     var suppliesSteamHaptics: Bool { steamSource && engine != nil }
     private let steamReaderID = UUID()
     /// Each layer's pad settings, [left, right], by the engine's layer number (0: base).
@@ -228,14 +241,17 @@ final class DesktopPad: ObservableObject {
         let nextPID = front?.processIdentifier ?? 0
         let focusChanged = runtimePID != nextPID
         if focusChanged { steamRightMotion.reset(); steamLeftMotion.reset(); steamZones[0].reset(); steamZones[1].reset(); steamTaps = [PadSteamTap(), PadSteamTap()]; steamTapInputs = [nil, nil]; steamZoneClicks = [PadSteamZoneRouter(), PadSteamZoneRouter()] }
-        if focusChanged, let e = engine { pe_release_all(e, Self.now()) }
+        if focusChanged, let e = engine { pe_release_outputs(e, Self.now()) }
         runtimePID = nextPID
         let id = front?.bundleIdentifier ?? ""
         var chosen: PadProfiles.Profile?
         let all = PadProfileEdits.shared.profiles(PadProfiles.profiles())
         let g = game(for: front)
         gamePID = g != nil && g?.native == nil ? (front?.processIdentifier ?? 0) : 0
-        if !enabled { status = "All profiles off" }
+        if let s = stream, s.isFront {
+            chosen = s.profileID.flatMap { pid in all.first { $0.id == pid } }
+            status = chosen.map { "Stream: \($0.name)" } ?? "Stream: controller as it is"
+        } else if !enabled { status = "All profiles off" }
         else if let id = everywhereID, let p = all.first(where: { $0.id == id }) {
             chosen = p; status = "Everywhere: \(p.name)"
         } else if let g {
@@ -249,21 +265,30 @@ final class DesktopPad: ObservableObject {
         } else if on, let p = profileID.flatMap({ pid in all.first { $0.id == pid } }) {
             chosen = p; status = "Mac: \(p.name)"
         } else { status = on ? "Mac: no profile chosen" : "Waiting for a game" }
-        if chosen != nil && !trusted { status = "Needs Accessibility permission" }
+        if chosen != nil && !trusted && !streaming { status = "Needs Accessibility permission" }
         let wherePlaying: String = everywhereID != nil && chosen?.id == everywhereID ? "Everywhere" : g?.name ?? (rules[id] != nil ? (front?.localizedName ?? "") : "On the Mac")
         if activeID != chosen?.id { activeID = chosen?.id }
+        // A profile that presents its controller as another one to Mac apps too: a virtual controller, while a Mac app
+        // (not a Nokcandu Windows game, whose Wine driver presents it) is in front and no stream is.
+        let macIdentity = chosen.flatMap { p -> PresentedController? in
+            guard g == nil, !streaming else { return nil }
+            return PadProfiles.top(p, all: all, \.presentAs)
+        }
+        MacVirtualControllers.shared.configure(macIdentity)
         if activeWhere != wherePlaying { activeWhere = wherePlaying }
         PadHeadTracking.shared.configure(profileID: trusted ? chosen?.id : nil,
             settings: chosen.flatMap { trusted ? PadProfiles.headMotion($0, all: all) : nil })
-        let nextSteamSource = chosen.map { trusted && PadProfiles.top($0, all: all, \.controllerSource) == .steamUSB } ?? false
+        let nextSteamSource = chosen.map { (trusted || streaming) && PadProfiles.top($0, all: all, \.controllerSource) == .steamUSB } ?? false
         let sourceChanged = nextSteamSource != steamSource
         let padLayers: [String?] = chosen.map { p in PadProfiles.merged(p, all: all).layers.enumerated().map { $0.offset == 0 ? nil : $0.element.name } } ?? [nil]
         let nextPads = padLayers.map { layer in (0..<2).map { side in chosen.map { PadProfiles.steamTrackpad(side, profile: $0, all: all, layer: layer) } ?? PadSteamTrackpadSettings() } }
         if sourceChanged || nextPads != steamPads || force { steamRightMotion.reset(); steamLeftMotion.reset() }
         steamPads = nextPads.isEmpty ? [[PadSteamTrackpadSettings(), PadSteamTrackpadSettings()]] : nextPads
         steamSource = nextSteamSource
+        // A profile reading the controller itself feeds the Windows game in front (its Wine driver drops the raw one).
+        PadFeed.shared.target(nextSteamSource && !streaming && g != nil && g?.native == nil ? g.flatMap { WineTools.hostContents(for: $0) } : nil)
         if !steamSource { SteamControllerUSB.shared.remove(steamReaderID) }
-        let text = (chosen != nil && trusted) ? PadProfiles.compile(chosen!, all: all) : ""
+        let text = (chosen != nil && (trusted || streaming)) ? PadProfiles.compile(chosen!, all: all) : ""
         if text == compiled && !force && !sourceChanged {
             if focusChanged {
                 // release_all above ends holds/toggles in the old application.
@@ -282,6 +307,7 @@ final class DesktopPad: ObservableObject {
         let settings = chosen.map { PadProfiles.layerSettings($0, all: all) } ?? [:]
         layerColors = layerNames.enumerated().map { i, n in settings[i == 0 ? "base" : n.lowercased()]?.color }
         rumble = chosen.flatMap { PadProfiles.top($0, all: all, \.rumbleOnLayer) } ?? false
+        gameRumble = chosen.flatMap { PadProfiles.top($0, all: all, \.gameRumble) } ?? PadProfiles.Profile.defaultGameRumble
         layerRumble = (chosen.flatMap { PadProfiles.top($0, all: all, \.layerRumbleStrength) } ?? PadProfiles.Profile.defaultLayerRumble.strength,
                        chosen.flatMap { PadProfiles.top($0, all: all, \.layerRumbleLength) } ?? PadProfiles.Profile.defaultLayerRumble.length)
         menus = chosen.map { Array(PadProfiles.collected($0, all: all, \.menus).prefix(8)) } ?? []
@@ -297,7 +323,16 @@ final class DesktopPad: ObservableObject {
         rebuild()
     }
 
+    /// The gyro's resting reading, kept while the engine is replaced (another profile for the app in front,
+    /// an edited profile, a stream starting): it belongs to the controller, not the profile. Losing it here
+    /// meant drift until the next measurement. A different controller corrects it after 5 quiet seconds.
+    private var gyroBias: [Double]?
+    private func keepGyroBias() {
+        var b = [0.0, 0.0, 0.0]
+        if let e = engine, pe_calibration_get(e, &b) { gyroBias = b }
+    }
     private func rebuild() {
+        keepGyroBias()
         if let e = engine { pe_release_all(e, Self.now()); pe_destroy(e) }
         engine = nil
         timer?.invalidate(); timer = nil
@@ -305,8 +340,9 @@ final class DesktopPad: ObservableObject {
         steamZones[0].reset(); steamZones[1].reset(); steamTaps = [PadSteamTap(), PadSteamTap()]; steamTapInputs = [nil, nil]; steamZoneClicks = [PadSteamZoneRouter(), PadSteamZoneRouter()]
         guard !compiled.isEmpty else { SteamControllerUSB.shared.remove(steamReaderID); return }
         var sink = pe_sink()
-        sink.pad_button = { _, _, _ in }          // the real controller is still there for the app
-        sink.pad_axis = { _, _, _ in }
+        // On the Mac the real controller is still there for the app; a stream gets the mapped controller.
+        sink.pad_button = { _, b, d in MainActor.assumeIsolated { DesktopPad.shared.padOut(button: Int(b), d) } }
+        sink.pad_axis = { _, a, v in MainActor.assumeIsolated { DesktopPad.shared.padOut(axis: Int(a), Int(v)) } }
         sink.key = { _, k, d in MainActor.assumeIsolated { DesktopPad.shared.key(Int(k), d) } }
         sink.mouse_button = { _, b, d in MainActor.assumeIsolated { DesktopPad.shared.mouse(Int(b), d) } }
         sink.mouse_move = { _, x, y in MainActor.assumeIsolated { DesktopPad.shared.move(Int(x), Int(y)) } }
@@ -316,6 +352,7 @@ final class DesktopPad: ObservableObject {
         sink.menu = { _, m, sl in MainActor.assumeIsolated { DesktopPad.shared.menuChanged(Int(m), Int(sl)) } }
         sink.calibration = { _, p in MainActor.assumeIsolated { PadHUD.shared.calibration(p, manual: pe_calibration_is_manual(DesktopPad.shared.engine)) } }
         engine = compiled.withCString { pe_create($0, sink) }
+        if let e = engine, let b = gyroBias { pe_calibration_set(e, b) }
         if let e = engine { stateChanged(layer: Int(pe_active_layer(e)), gyro: Int(pe_active_gyro(e))) }
         attach()
     }
@@ -375,7 +412,21 @@ final class DesktopPad: ObservableObject {
     }
     private var layerRumble = PadProfiles.Profile.defaultLayerRumble
 
+    private func padOut(button b: Int, _ down: Bool) {
+        if streaming { stream?.padButton(b, down) }
+        else if PadFeed.shared.button(b, down) { }     // a Windows game in front: its Wine driver presents it
+        else { MacVirtualControllers.shared.button(b, down) }
+    }
+    private func padOut(axis a: Int, _ v: Int) {
+        if streaming { stream?.padAxis(a, v) }
+        else if PadFeed.shared.axis(a, v) { }
+        else { MacVirtualControllers.shared.axis(a, v) }
+    }
+    /// Rumbles the profile's own controller (the Steam Controller or the macOS controllers it maps).
+    func rumbleProfileController(strength: Double, seconds: Double) { rumbleMain(strength: strength, seconds: seconds) }
+
     func typeText(_ s: String) {
+        if streaming { stream?.text(s); return }
         for ch in s {
             let u = Array(String(ch).utf16)
             for down in [true, false] {
@@ -481,8 +532,9 @@ final class DesktopPad: ObservableObject {
                             }
                         }
                         guard !runtime.steamSource, let e = runtime.engine else { return }
+                        MacVirtualControllers.shared.motion(gyro: (r.x, r.y, r.z), accel: (a.x, a.y, a.z))
                         pe_gyro(e, Float(r.x), Float(r.y), Float(r.z), DesktopPad.now())
-                        if pe_uses_tilt(e) { pe_accel(e, Float(a.x), Float(a.y), Float(a.z), DesktopPad.now()) }
+                        pe_accel(e, Float(a.x), Float(a.y), Float(a.z), DesktopPad.now())
                     }
                 }
             }
@@ -570,7 +622,7 @@ final class DesktopPad: ObservableObject {
         }
         consume(sourceState.update(source: "steam-usb", buttons: Set(buttons.map { Int(pe_input_named($0.rawValue)) }), axes: axes))
         pe_gyro(e,state.gyro[0],state.gyro[1],state.gyro[2],now)
-        if pe_uses_tilt(e) { pe_accel(e,state.acceleration[0],state.acceleration[1],state.acceleration[2],now) }
+        pe_accel(e,state.acceleration[0],state.acceleration[1],state.acceleration[2],now)
     }
 
     private func releaseTap(_ side: Int, engine e: OpaquePointer, now: Double) {
@@ -599,6 +651,7 @@ final class DesktopPad: ObservableObject {
     // MARK: Keys and mouse to macOS
 
     private func key(_ k: Int, _ down: Bool) {
+        if streaming { stream?.key(k, down); return }
         guard let ev = CGEvent(keyboardEventSource: PadEventSource.source(), virtualKey: CGKeyCode(k), keyDown: down) else { return }
         diagnostic(down ? "key down" : "key up")
         flags = keyboardState.update(k, down: down)
@@ -609,6 +662,7 @@ final class DesktopPad: ObservableObject {
     }
     private var cursor: CGPoint { CGEvent(source: nil)?.location ?? .zero }
     private func mouse(_ b: Int, _ down: Bool) {
+        if streaming { stream?.mouseButton(b, down); return }
         let target = PadCapture.shared.targetPID ?? 0
         let wineTarget = target == 0 || target == gamePID ? gamePID : 0
         let capability = "/tmp/nokcandu-pad-\(getuid())-\(wineTarget).sock.buttons"
@@ -659,8 +713,7 @@ final class DesktopPad: ObservableObject {
 
     /// The pointer as Nokcandu last placed it (between pixels), so consecutive moves add up exactly instead
     /// of each starting from wherever macOS has got to; dropped when anything else moves the pointer.
-    private var pointerPosition: CGPoint?
-    private var pointerPositionAt = 0.0
+    private var pointerContinuity = PadPointerContinuity()
     private var windowCache: (pid: pid_t, rect: CGRect?, at: Double) = (0, nil, -1)
     private var screenBounds: (rect: CGRect, at: Double) = (.null, -1)
 
@@ -671,6 +724,7 @@ final class DesktopPad: ObservableObject {
         // stick and touchpad mouse output is intercepted before its output sink.
         if let engine, pe_menu_mouse(engine, fx, fy) { return }
         let whole = dx != 0 || dy != 0
+        if streaming { if whole { stream?.mouseMove(dx, dy) }; return }
         if let pid = PadCapture.shared.targetPID {
             // Wine's own helper can deliver explicit relative motion directly.
             // Posting a CGEvent instead can be swallowed by its raw-mouse hook.
@@ -692,11 +746,9 @@ final class DesktopPad: ObservableObject {
         }
         traceMovement("desktop-pointer", dx: dx, dy: dy)
         let now = Self.now(), actual = cursor
-        // Continue from where Nokcandu put the pointer while macOS shows it there (it may not have caught up
-        // with the last move yet); anything else moving it starts afresh from the real position.
-        var p = actual
-        if let last = pointerPosition, now - pointerPositionAt < 0.25,
-           abs(last.x - actual.x) <= 2.5, abs(last.y - actual.y) <= 2.5, now - lastRealMouse > 0.3 { p = last }
+        // Continue from where Nokcandu put the pointer while macOS shows it there or hasn't caught up with
+        // the latest moves yet; anything else moving it starts afresh from the real position.
+        var p = pointerContinuity.base(actual: actual, at: now, realMouseRecently: now - lastRealMouse <= 0.3)
         p.x += CGFloat(fx); p.y += CGFloat(fy)
         if gamePID > 0 {                                       // keep the pointer inside the game's window
             if windowCache.pid != gamePID || now - windowCache.at > 0.5 { windowCache = (gamePID, gameWindow(gamePID), now) }
@@ -710,7 +762,7 @@ final class DesktopPad: ObservableObject {
         }
         let bounds = screenBounds.rect
         p.x = min(max(p.x, bounds.minX), bounds.maxX - 1); p.y = min(max(p.y, bounds.minY), bounds.maxY - 1)
-        pointerPosition = p; pointerPositionAt = now
+        pointerContinuity.posted(p, at: now)
         guard let ev = PadMouseEvent.movement(at: p, dx: dx, dy: dy,
                                              heldButtons: buttonsDown, flags: flags) else { return }
         ev.post(tap: .cghidEventTap)
@@ -770,12 +822,14 @@ final class DesktopPad: ObservableObject {
     func stop() {
         SteamControllerUSB.shared.remove(steamReaderID)
         PadHeadTracking.shared.configure(profileID: nil, settings: nil)
+        keepGyroBias()
         if let e = engine { pe_release_all(e, Self.now()); pe_destroy(e) }; engine = nil
         timer?.invalidate(); timer = nil; feed.stop()
         PadCapture.shared.stop()
     }
 
     private func wheel(_ n: Int) {
+        if streaming { stream?.wheel(n); return }
         CGEvent(scrollWheelEvent2Source: PadEventSource.source(), units: .line, wheelCount: 1, wheel1: Int32(n), wheel2: 0, wheel3: 0)?.post(tap: .cghidEventTap)
     }
 }

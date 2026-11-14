@@ -195,8 +195,24 @@ struct SteamPadFace: View {
                 Image(systemName: "arrow.clockwise").font(.system(size: max(8, diameter * 0.16), weight: .semibold)).foregroundStyle(Color.accentColor)
             }
             if let layout = settings.zoneLayout, layout != .off {
-                SteamPadZoneLines(layout: layout, diameter: diameter, side: side, held: held)
+                SteamPadZoneLines(layout: layout, diameter: diameter, side: side, held: held, label: label, upright: settings.rotation ?? 0)
                     .rotationEffect(.degrees(settings.rotation ?? 0))
+            }
+            if settings.mode == .existing {
+                // Directions set in the pad's existing behaviour (keys, say), around the rim so zone labels fit inside.
+                let named = directions.map { label($0).flatMap { $0 == "—" ? nil : $0 } }
+                if named.contains(where: { $0 != nil }) {
+                    ForEach(Array(directions.enumerated()), id: \.offset) { n, input in
+                        if let text = named[n] {
+                            let reach = diameter * 0.43
+                            Text(text).font(.system(size: max(6, diameter * 0.1), weight: .semibold)).lineLimit(1).fixedSize()
+                                .foregroundStyle(held.contains(input) ? Color.white : Color.primary.opacity(0.75))
+                                .padding(.horizontal, 2)
+                                .background(Capsule().fill(held.contains(input) ? Color.accentColor : Color.black.opacity(0.35)))
+                                .offset(x: n == 2 ? -reach : n == 3 ? reach : 0, y: n == 0 ? -reach : n == 1 ? reach : 0)
+                        }
+                    }
+                }
             }
             if settings.mode != .existing {
                 // The pad's own left–right and up–down, as the pointer or the directions will follow them.
@@ -238,6 +254,10 @@ struct SteamPadZoneLines: View {
     let diameter: CGFloat
     let side: Int
     let held: Set<PadProfiles.Input>
+    /// What each zone's tap (or else click) does, shown in the zone; zones with nothing set show a dot.
+    var label: (PadProfiles.Input) -> String? = { _ in nil }
+    /// The pad's rotation, undone for the labels so they stay upright.
+    var upright: Double = 0
     var body: some View {
         let r = diameter / 2
         ZStack {
@@ -261,8 +281,20 @@ struct SteamPadZoneLines: View {
             .stroke(Color.orange.opacity(0.7), style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
             ForEach(Array(layout.names.indices), id: \.self) { n in
                 let lit = held.contains(.padZoneTap(side, n)) || held.contains(.padZoneClick(side, n))
-                Circle().fill(lit ? Color.orange : Color.orange.opacity(0.35)).frame(width: lit ? 9 : 4, height: lit ? 9 : 4)
-                    .offset(Self.centre(layout, n, r))
+                let named = [PadProfiles.Input.padZoneTap(side, n), .padZoneClick(side, n)].lazy
+                    .compactMap { self.label($0) }.first { $0 != "—" }
+                Group {
+                    if let named {
+                        Text(named).font(.system(size: max(6, diameter * 0.1), weight: .bold)).lineLimit(1).fixedSize()
+                            .foregroundStyle(lit ? Color.white : Color.orange)
+                            .padding(.horizontal, 2)
+                            .background(Capsule().fill(lit ? Color.orange : Color.black.opacity(0.4)))
+                            .rotationEffect(.degrees(-upright))
+                    } else {
+                        Circle().fill(lit ? Color.orange : Color.orange.opacity(0.35)).frame(width: lit ? 9 : 4, height: lit ? 9 : 4)
+                    }
+                }
+                .offset(Self.centre(layout, n, r))
             }
         }
         .frame(width: diameter, height: diameter)
@@ -517,7 +549,7 @@ final class PadTester: ObservableObject {
             let r = m.rotationRate, t = Self.now()
             pe_gyro(e, Float(r.x), Float(r.y), Float(r.z), t)
             let a = m.hasGravityAndUserAcceleration ? m.gravity : m.acceleration
-            if pe_uses_tilt(e) { pe_accel(e, Float(a.x), Float(a.y), Float(a.z), t) }
+            pe_accel(e, Float(a.x), Float(a.y), Float(a.z), t)
             if t - lastGyroShown > 0.1 {
                 let speed = (sqrt(r.x * r.x + r.y * r.y + r.z * r.z) * 180 / .pi).rounded()
                 if speed != gyroSpeed { gyroSpeed = speed }
@@ -614,7 +646,7 @@ final class PadTester: ObservableObject {
         }
         for (a,v) in axes where lastAxes[a] != v { lastAxes[a] = v; pe_axis(e,Int32(a),Int32(v),now) }
         pe_gyro(e,state.gyro[0],state.gyro[1],state.gyro[2],now)
-        if pe_uses_tilt(e) { pe_accel(e,state.acceleration[0],state.acceleration[1],state.acceleration[2],now) }
+        pe_accel(e,state.acceleration[0],state.acceleration[1],state.acceleration[2],now)
         var held = state.buttons.union(zones).union(tapsShown)
         if state.leftTrigger > 0.3 { held.insert(.lt) }; if state.leftTrigger > 0.95 { held.insert(.ltfull) }
         if state.rightTrigger > 0.3 { held.insert(.rt) }; if state.rightTrigger > 0.95 { held.insert(.rtfull) }

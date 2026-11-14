@@ -12,6 +12,7 @@ struct ControllerProfileSection: View {
     @Environment(\.openWindow) private var openWindow
     @State private var naming: Naming?
     @State private var name = ""
+    @ObservedObject private var pad = DesktopPad.shared
 
     enum Naming: Identifiable { case new, rename, duplicate; var id: Int { hashValue } }
 
@@ -56,6 +57,13 @@ struct ControllerProfileSection: View {
                 }
                 .labelsHidden().frame(width: 240)
                 menu
+            }
+            if pad.enabled, let id = pad.everywhereID, let p = profiles.first(where: { $0.id == id }) {
+                HStack {
+                    SettingNote("Right now “\(p.name)” is used everywhere, so this game uses it instead of the profile chosen here.")
+                    Spacer()
+                    Button("Stop Using Everywhere") { pad.everywhereID = nil }
+                }
             }
             if let p = shownProfile {
                 SettingNote(summary(p))
@@ -121,8 +129,8 @@ struct ControllerProfileSection: View {
         if changed > 0 { parts.append("\(changed) button\(changed == 1 ? "" : "s") changed") }
         if m.layers.count > 1 { parts.append("\(m.layers.count - 1) layer\(m.layers.count == 2 ? "" : "s")") }
         if m.gyro.output != .off { parts.append("gyro: \(m.gyro.output.title.lowercased())") }
-        if m.left.mode != .stick { parts.append("left stick: \(m.left.mode.title.lowercased())") }
-        if m.right.mode != .stick { parts.append("right stick: \(m.right.mode.title.lowercased())") }
+        if m.left.mode != .stick { parts.append("left stick: \(m.left.mode.title(forStick: 0).lowercased())") }
+        if m.right.mode != .stick { parts.append("right stick: \(m.right.mode.title(forStick: 1).lowercased())") }
         let under = p.buildsOn.compactMap { id in profiles.first { $0.id == id }?.name }
         if !under.isEmpty { parts.append("builds on " + under.joined(separator: ", ")) }
         return parts.isEmpty ? "Nothing changed yet." : parts.joined(separator: " · ").prefix(1).uppercased() + parts.joined(separator: " · ").dropFirst()

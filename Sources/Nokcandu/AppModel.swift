@@ -238,6 +238,7 @@ final class AppModel: ObservableObject {
             MacGameKeys.shared.start(games: games)
             DesktopPad.shared.games = games
             DesktopPad.shared.start()
+            ControllerRumbleRouter.shared.start()
             if firstLoad { discoverLibraries() }
             didRefresh()
         }

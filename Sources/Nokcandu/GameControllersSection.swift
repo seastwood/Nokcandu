@@ -10,6 +10,8 @@ struct GameControllersSection: View {
     @State private var mode: Controllers.Mode = .automatic
     @State private var working = false
     @State private var inputFix: ControllerHIDFix.State = .unavailable
+    @State private var allProfiles: [PadProfiles.Profile] = []
+    @ObservedObject private var pad = DesktopPad.shared
 
     var contents: URL? { WineTools.hostContents(for: game) }
     var steam: Bool { contents.map(Controllers.isSteamEnvironment) ?? false }
@@ -20,6 +22,14 @@ struct GameControllersSection: View {
         if game.battleNet != nil || BattleNet.isHost(game) { return "Applies to all Battle.net games." }
         if game.hosted != nil || PCLaunchers.kind(of: game) != nil { return "Applies to all games in this launcher." }
         return "Applies to this game."
+    }
+
+    /// The setting's name says where it applies: a Steam, Battle.net or launcher environment is shared by its games.
+    var routeTitle: String {
+        if game.usesSharedSteam || game.isSteamHost { return "Controllers in Steam games" }
+        if game.battleNet != nil || BattleNet.isHost(game) { return "Controllers in Battle.net games" }
+        if game.hosted != nil || PCLaunchers.kind(of: game) != nil { return "Controllers in this launcher's games" }
+        return "Controllers in this game"
     }
 
     var modeInfo: String {
@@ -36,22 +46,47 @@ struct GameControllersSection: View {
         """
     }
 
+    /// The profile this game uses now: one used everywhere wins over the game's own choice.
+    var activeProfile: PadProfiles.Profile? {
+        guard pad.enabled else { return nil }
+        if let id = pad.everywhereID, let p = allProfiles.first(where: { $0.id == id }) { return p }
+        return KeyRemap.gameContents(for: game).flatMap { PadProfiles.effective(contents: $0, shared: KeyRemap.isShared(game), all: allProfiles) }
+    }
+    var usedEverywhere: Bool { pad.enabled && pad.everywhereID != nil && activeProfile?.id == pad.everywhereID }
+    var summaryProfile: ControllerSummary.Profile? { activeProfile.map { ControllerSummary.Profile($0, all: allProfiles) } }
+    var gamepads: [Controllers.Connected] { connected.filter { $0.isGamepad || $0.isSteamControllerReceiver || ($0.vendorID == 0x28de && $0.productID == 0x1102) } }
+
     var body: some View {
         SettingsSection(title: "Controllers") {
-            SettingRow(title: "Controllers reach games", info: modeInfo) {
-                Picker("Controllers reach games", selection: Binding(get: { mode }, set: { choose($0) })) {
-                    ForEach(Controllers.Mode.allCases) { m in
-                        Text(m == .automatic ? "Automatic (\(steam ? "as themselves in Steam" : "Wine's default"))" : m.title).tag(m)
-                    }
-                }
-                .labelsHidden().frame(width: 280)
-                .disabled(working || running)
+            SettingRow(title: "This game gets") {
+                Text(ControllerSummary.line(controllers: gamepads.map(\.displayName),
+                                            steamController: gamepads.contains { $0.vendorID == 0x28de },
+                                            mode: mode, steam: steam, profile: summaryProfile, everywhere: usedEverywhere, profilesOff: !pad.enabled))
+                    .font(.callout.weight(.medium)).multilineTextAlignment(.trailing).fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
             }
-            if let g = KeyRemap.gameContents(for: game), PadProfiles.effective(contents: g, shared: KeyRemap.isShared(game)) != nil, mode != .hidden {
-                if mode == .native {
-                    SettingNote("Your explicit As itself route is preserved. Controller-button remapping and suppression through Nokcandu's SDL profile driver do not apply to that native device route. Mac keyboard/mouse mapping is separate. Choose Automatic or As an Xbox controller if you want Wine's mapped controller outputs.")
-                } else {
-                    SettingNote("This controller profile requests the SDL/Xbox-style route from the next environment start. Steam Input may remap that output too; compare per-game Steam Input settings if actions duplicate.")
+            if let p = activeProfile, let type = summaryProfile?.presentAs, mode != .hidden {
+                // The profile decides what games see; one place to change it.
+                SettingRow(title: routeTitle, info: modeInfo) {
+                    Text("\(type.title), set by profile “\(p.name)”").foregroundStyle(.secondary)
+                    Button("Change…") { model.sidebarTab = .profiles; model.profileSelection = "pad:" + p.id }
+                }
+            } else {
+                SettingRow(title: routeTitle, info: modeInfo) {
+                    Picker(routeTitle, selection: Binding(get: { mode }, set: { choose($0) })) {
+                        ForEach(Controllers.Mode.allCases) { m in
+                            Text(m == .automatic ? "Automatic (\(steam ? "as themselves in Steam" : "Wine's default"))" : m.title).tag(m)
+                        }
+                    }
+                    .labelsHidden().frame(width: 280)
+                    .disabled(working || running)
+                }
+            }
+            if usedEverywhere, let p = activeProfile {
+                HStack {
+                    SettingNote("“\(p.name)” is being used everywhere, so it replaces this game's own controller profile.")
+                    Spacer()
+                    Button("Stop Using Everywhere") { pad.everywhereID = nil }
                 }
             }
             if running { SettingNote("Quit the game\(steam || game.battleNet != nil || game.hosted != nil ? " and its launcher" : "") to change this.") }
@@ -60,14 +95,19 @@ struct GameControllersSection: View {
             } else {
                 ForEach(connected) { c in
                     SettingRow(title: c.displayName + (c.kind == .gamepad ? "" : " · " + c.kind.title)) {
-                        Text(Controllers.describe(c, mode: mode, steam: steam))
-                            .font(.callout).foregroundStyle(c.isGamepad ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
-                            .fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.trailing)
-                            .help("\(c.ids) · \(c.bluetooth ? "Bluetooth" : "USB")")
+                        VStack(alignment: .trailing, spacing: 6) {
+                            Text(Controllers.describe(c, mode: shownMode, steam: steam, presentAs: summaryProfile?.presentAs))
+                                .font(.callout).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.trailing)
+                                .help("\(c.ids) · \(c.bluetooth ? "Bluetooth" : "USB")")
+                            if Controllers.recommendsXbox(c, mode: shownMode, steam: steam, presentAs: summaryProfile?.presentAs) {
+                                Button("Use as an Xbox Controller") { choose(.xbox) }.disabled(working || running)
+                            }
+                        }
                     }
                 }
             }
-            SettingNote("The rows above show macOS hardware and requested routing, not confirmation that Windows detected it. If both lists in Test Controllers are empty, check Wine/device access and restart the environment after changing its route.")
+            SettingNote("This is what Nokcandu asks Wine for; it applies from the game's next start\(steam || game.battleNet != nil || game.hosted != nil ? " (quit the launcher too)" : ""). Test Controllers shows what Windows actually sees.")
             if inputFix != .unavailable {
                 SettingRow(title: "Controller input compatibility") {
                     Text(inputFixText).font(.callout).foregroundStyle(.secondary)
@@ -86,10 +126,15 @@ struct GameControllersSection: View {
             }
         }
         .onAppear { load() }
+        .onReceive(NotificationCenter.default.publisher(for: .padProfilesChanged)) { _ in load() }
         .onReceive(Timer.publish(every: 3, on: .main, in: .common).autoconnect()) { _ in reloadDevices() }
     }
 
+    /// The route as it will apply: a profile's emulated controller needs Wine's conversion.
+    var shownMode: Controllers.Mode { summaryProfile?.presentAs != nil && mode == .native ? .xbox : mode }
+
     func load() {
+        allProfiles = PadProfiles.profiles()
         if let c = contents {
             mode = Controllers.mode(contents: c)
             Task { inputFix = await Task.detached(priority: .utility) { ControllerHIDFix.state(contents: c) }.value }
@@ -133,7 +178,7 @@ struct GameControllersSection: View {
             switch r {
             case .success:
                 ChangeHistory.note(game, "Controllers: \(m.title.lowercased())", undo: .setting(GameDetailView.Tab.controls.rawValue))
-                mode = m; model.say("Controllers reach games \(m == .automatic ? "automatically" : m.title.lowercased()) from the next start.")
+                mode = m; model.say("\(routeTitle): \(m == .automatic ? "automatic" : m.title.lowercased()) from the next start. \(scope)")
             case .failure(let e): model.fail(e)
             }
             working = false

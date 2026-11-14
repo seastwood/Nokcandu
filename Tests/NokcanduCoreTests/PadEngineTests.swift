@@ -602,10 +602,10 @@ final class PadCalibrationKindTests: XCTestCase {
         XCTAssertTrue(pe_calibration_is_manual(r.engine))
         pe_gyro(r.engine, 10, 10, 10, 4)
         for n in 0...100 { pe_gyro(r.engine, 0, 0, 0, 5 + Double(n) * 0.01) }
-        XCTAssertTrue(pe_calibration_is_manual(r.engine), "no automatic measurement within 30 s of the last")
+        XCTAssertTrue(pe_calibration_is_manual(r.engine), "a second of stillness doesn't replace a measurement")
         pe_gyro(r.engine, 10, 10, 10, 129)
-        for n in 0...300 { pe_gyro(r.engine, 0, 0, 0, 130 + Double(n) * 0.01) }
-        XCTAssertFalse(pe_calibration_is_manual(r.engine))
+        for n in 0...600 { pe_gyro(r.engine, 0, 0, 0, 130 + Double(n) * 0.01) }
+        XCTAssertFalse(pe_calibration_is_manual(r.engine), "five quiet seconds do, automatically")
     }
 }
 

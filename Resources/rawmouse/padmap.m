@@ -198,6 +198,55 @@ static void pad_check_calibrate(double now) {
     if (changed && pad_cal_seen && pad_cal_mtime) for (int i = 0; i < PAD_MAX; i++) if (pads[i].used) pe_calibrate(pads[i].e, now);
     pad_cal_seen = true;
 }
+// MARK: Fed by Nokcandu
+// A profile that reads the controller itself (the original Steam Controller read directly, "source steam" in its
+// map) runs in Nokcandu, which sees everything the controller has (trackpads, grips, motion). Its controller output
+// comes here over a socket and becomes the controller the game sees; that controller's raw input from SDL is
+// dropped, so the game never gets the raw controller, mapped its own way, alongside the profile's.
+typedef struct { uint8_t kind, code; int16_t value; } padfeed;   // kind 1 button, 2 axis
+static bool pad_feed_on;
+static int pad_feed_fd = -1;
+static int32_t pad_feed_which = -1;
+static void pad_feed_open(bool on) {
+    char info[PATH_MAX]; snprintf(info, sizeof info, "%s/pad-feed", pad_state_dir);
+    if (on == (pad_feed_fd >= 0)) { pad_feed_on = on; return; }
+    pad_feed_on = on;
+    char path[104]; snprintf(path, sizeof path, "/tmp/nokcandu-padfeed-%u-%d.sock", getuid(), (int)getpid());
+    if (!on) { close(pad_feed_fd); pad_feed_fd = -1; unlink(path); unlink(info); return; }
+    unlink(path);
+    int fd = socket(AF_UNIX, SOCK_DGRAM, 0);
+    struct sockaddr_un a = { .sun_family = AF_UNIX }; strlcpy(a.sun_path, path, sizeof a.sun_path);
+    if (fd < 0 || bind(fd, (struct sockaddr *)&a, sizeof a) != 0) { if (fd >= 0) close(fd); return; }
+    fcntl(fd, F_SETFL, O_NONBLOCK);
+    pad_feed_fd = fd;
+    char tmp[PATH_MAX]; snprintf(tmp, sizeof tmp, "%s.%d", info, (int)getpid());
+    FILE *f = fopen(tmp, "w"); if (f) { fprintf(f, "%s\n", path); fclose(f); rename(tmp, info); }
+    static bool cleanup; if (!cleanup) { cleanup = true; atexit_b(^{ pad_feed_open(false); }); }
+    fprintf(stderr, "nokcandu: controller fed by Nokcandu (%s)\n", path);
+}
+static bool pad_is_fed_device(int32_t which) {
+    if (!pad_feed_on || !real_num_joysticks || !real_device_instance || !real_device_vendor) return false;
+    int n = real_num_joysticks();
+    for (int i = 0; i < n; i++) if (real_device_instance(i) == which) return real_device_vendor(i) == 0x28de;
+    return false;
+}
+static void pad_feed_drain(void) {
+    if (pad_feed_fd < 0) return;
+    padfeed m;
+    while (recv(pad_feed_fd, &m, sizeof m, 0) == (ssize_t)sizeof m) {
+        if (pad_feed_which < 0 && real_num_joysticks && real_device_instance && real_device_vendor) {
+            int n = real_num_joysticks();
+            for (int i = 0; i < n; i++) if (real_device_vendor(i) == 0x28de) { pad_feed_which = real_device_instance(i); break; }
+        }
+        if (pad_feed_which < 0) continue;
+        nok_sdl_event ev = {0};
+        if (m.kind == 1) { ev.cbutton.type = m.value ? NOK_SDL_CBDOWN : NOK_SDL_CBUP; ev.cbutton.which = pad_feed_which; ev.cbutton.button = m.code; ev.cbutton.state = m.value != 0; }
+        else if (m.kind == 2) { ev.caxis.type = NOK_SDL_CAXIS; ev.caxis.which = pad_feed_which; ev.caxis.axis = m.code; ev.caxis.value = m.value; }
+        else continue;
+        pad_push(ev);
+    }
+}
+
 // Which profile applies now: the one the game in front asked for (re-read when it or the profile changes).
 static void pad_check(void) {
     double now = pad_now();
@@ -219,7 +268,7 @@ static void pad_check(void) {
         }
     }
     if (pad_game_pid > 0 && kill(pad_game_pid, 0) != 0) { pad_drop_engines(); pad_game_pid = 0; pad_profile_path[0] = 0; pad_profile_text[0] = 0; }
-    if (!pad_profile_text[0]) pad_has_devices = false;
+    if (!pad_profile_text[0]) { pad_has_devices = false; if (pad_feed_fd >= 0) pad_feed_open(false); }
     if (pad_profile_path[0] && pad_changed(pad_profile_path, &pad_profile_mtime, &pad_profile_ns)) {
         pad_profile_text[0] = 0;
         FILE *f = fopen(pad_profile_path, "r");
@@ -230,6 +279,7 @@ static void pad_check(void) {
             live = pe_update_profile(pads[i].e, pad_profile_text);
         if (!live) pad_drop_engines();
         pad_has_devices = strstr(pad_profile_text, "\ndevice ") != NULL;
+        pad_feed_open(strstr(pad_profile_text, "\nsource steam\n") != NULL);
         fprintf(stderr, "nokcandu: controller profile %s\n", pad_profile_text[0] ? pad_profile_path : "off");
     }
 }
@@ -250,13 +300,28 @@ static int pad_next_wait_ms(double now, int timeout) {
 
 static int nok_wait(nok_sdl_event *ev, int timeout) {
     pad_check();
+    pad_feed_drain();
     { double t = pad_now(); if (st_last_wait > 0 && t - st_last_wait > st_max_gap) st_max_gap = t - st_last_wait; st_last_wait = t; st_ticks++; pad_status(t); }
     if (pad_pop(ev)) return 1;
     double now = pad_now();
     pad_tick_all(now);
     if (pad_pop(ev)) return 1;
-    int r = real_wait(ev, pad_next_wait_ms(now, timeout));
+    int wait_ms = pad_next_wait_ms(now, timeout);
+    if (pad_feed_fd >= 0 && wait_ms > 4) wait_ms = 4;     // pick up Nokcandu's input promptly
+    int r = real_wait(ev, wait_ms);
     now = pad_now();
+    if (r && (ev->type == NOK_SDL_CADDED || ev->type == NOK_SDL_CREMOVED || ev->type == NOK_SDL_JADDED || ev->type == NOK_SDL_JREMOVED)) pad_feed_which = -1;
+    if (r && pad_feed_on) {
+        switch (ev->type) {
+        case NOK_SDL_CAXIS: case NOK_SDL_CBDOWN: case NOK_SDL_CBUP: case NOK_SDL_CSENSOR:
+        case NOK_SDL_CTOUCHDOWN: case NOK_SDL_CTOUCHMOTION: case NOK_SDL_CTOUCHUP:
+        case NOK_SDL_JAXIS: case NOK_SDL_JHAT: case NOK_SDL_JBDOWN: case NOK_SDL_JBUP:
+            if (pad_is_fed_device(ev->cbutton.which)) {   // raw input of the controller Nokcandu feeds: dropped
+                pad_feed_drain();
+                return pad_pop(ev) ? 1 : 0;
+            }
+        }
+    }
     if (r) {
         if (ev->type == NOK_SDL_CREMOVED || ev->type == NOK_SDL_JREMOVED) {
             for (int slot = 1; slot <= PE_MAX_DEVICES; slot++) if (slot_source_valid[slot] && slot_sources[slot] == ev->cbutton.which) {
@@ -345,17 +410,126 @@ static void *nok_open(int index) {
     return c;
 }
 
+// MARK: The controller games see (a profile's "present" line)
+
+// The profile can ask for the controller to be presented as another one. Wine's SDL bus asks SDL for each
+// controller's vendor, product, version and name when it creates the Windows device, so those answers decide what
+// games see. Only Xbox is presented today: Wine's own gamepad reports already have the Xbox layout. Read once,
+// when Wine first asks (the environment's pad-map is written before it starts); a change applies from the next start.
+static struct { bool known, on; int kind; uint16_t vid, pid, version; const char *name; } pad_identity;
+static uint16_t (*real_js_vendor)(void *), (*real_js_product)(void *), (*real_js_version)(void *);
+static const char *(*real_gc_name)(void *), *(*real_js_name)(void *);
+static int (*real_js_type)(void *);
+static void pad_load_identity(void);
+/// Only gamepads take the identity (SDL_JOYSTICK_TYPE_GAMECONTROLLER); wheels, sticks and others stay as they are.
+static bool pad_presents(void *j) {
+    pad_load_identity();
+    return pad_identity.on && j && (!real_js_type || real_js_type(j) == 1);
+}
+
+static void pad_load_identity(void) {
+    if (pad_identity.known) return;
+    pad_identity.known = true;
+    char path[PATH_MAX], line[256];
+    struct stat st;
+    snprintf(path, sizeof path, "%s/pad-driver-off", pad_state_dir);
+    if (stat(path, &st) == 0) return;
+    const char *home = getenv("HOME");
+    if (home) {
+        snprintf(path, sizeof path, "%s/Library/Application Support/Nokcandu/controller-profiles-off", home);
+        if (stat(path, &st) == 0) return;
+    }
+    snprintf(path, sizeof path, "%s/pad-map", pad_state_dir);
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    while (fgets(line, sizeof line, f)) {
+        if (strncmp(line, "present ", 8)) continue;
+        if (!strncmp(line + 8, "xbox", 4)) {
+            pad_identity.on = true; pad_identity.kind = 1; pad_identity.vid = 0x045E; pad_identity.pid = 0x02EA; pad_identity.version = 0x0408;
+            pad_identity.name = "Xbox Wireless Controller";
+        } else if (!strncmp(line + 8, "ds4", 3)) {
+            // Imitated by Nokcandu's controller driver too (ds4-emulation.h).
+            pad_identity.on = true; pad_identity.kind = 2; pad_identity.vid = 0x054C; pad_identity.pid = 0x05C4; pad_identity.version = 0x0100;
+            pad_identity.name = "Wireless Controller";
+        } else if (!strncmp(line + 8, "switchpro", 9)) {
+            // Nokcandu's controller driver imitates the Pro's own reports and commands (switch-pro-emulation.h).
+            pad_identity.on = true; pad_identity.kind = 3; pad_identity.vid = 0x057E; pad_identity.pid = 0x2009; pad_identity.version = 0x0200;
+            pad_identity.name = "Pro Controller";
+        }
+        break;
+    }
+    fclose(f);
+    if (pad_identity.on) fprintf(stderr, "nokcandu: controllers are presented as %s (%04x:%04x)\n", pad_identity.name, pad_identity.vid, pad_identity.pid);
+}
+/// Asked by Nokcandu's controller driver (Engine/controller-hid) for each game controller it creates: 0 as it is,
+/// 1 Xbox, 2 DualShock 4, 3 Switch Pro Controller.
+__attribute__((visibility("default"))) int nokcandu_presented_controller(void *joystick) {
+    return pad_bus && pad_presents(joystick) ? pad_identity.kind : 0;
+}
+// Only the Xbox identity is a rename (Wine's own reports already have its layout). A DualShock 4 or Switch Pro is
+// presented by Nokcandu's controller driver, which imitates it and sets its IDs itself; with a driver that can't
+// (Wine 10, or the stock module), those controllers stay as they are rather than get IDs their reports don't match.
+static bool pad_renames(void *j) { return pad_presents(j) && pad_identity.kind == 1; }
+static uint16_t nok_js_vendor(void *j) { return pad_renames(j) ? pad_identity.vid : real_js_vendor(j); }
+static uint16_t nok_js_product(void *j) { return pad_renames(j) ? pad_identity.pid : real_js_product(j); }
+static uint16_t nok_js_version(void *j) { return pad_renames(j) ? pad_identity.version : real_js_version(j); }
+static const char *nok_gc_name(void *c) { pad_load_identity(); return pad_identity.on && pad_identity.kind == 1 && c ? pad_identity.name : real_gc_name(c); }
+static const char *nok_js_name(void *j) { return pad_renames(j) ? pad_identity.name : real_js_name(j); }
+
+// Rumble for controllers SDL can't rumble. Wine enables rumble for a controller only when a test
+// SDL_JoystickRumble(0, 0, 0) succeeds as it opens it (dlls/winebus.sys/bus_sdl.c), and SDL has no rumble for
+// some controllers (the original Steam Controller, whose haptics are its trackpads). Report rumble as supported and,
+// when SDL can't play it, pass it to Nokcandu, which plays it with the controller's own haptics. The emulated
+// DualShock 4 and Switch Pro send their rumble through the same call, so every route benefits.
+static int (*real_js_rumble)(void *, uint16_t, uint16_t, uint32_t);
+static uint16_t (*rumble_vendor)(void *), (*rumble_product)(void *);
+static const char *(*rumble_name)(void *);
+static int rumble_socket = -1;
+static void rumble_forward(void *joystick, uint16_t low, uint16_t high, uint32_t ms) {
+    const char *home = getenv("HOME");
+    if (!home) return;
+    if (rumble_socket < 0) {
+        rumble_socket = socket(AF_UNIX, SOCK_DGRAM, 0);
+        if (rumble_socket < 0) return;
+        fcntl(rumble_socket, F_SETFL, O_NONBLOCK);
+    }
+    struct sockaddr_un to = { .sun_family = AF_UNIX };
+    snprintf(to.sun_path, sizeof to.sun_path, "%s/Library/Application Support/Nokcandu/controller-rumble.sock", home);
+    char name[96] = "";
+    const char *n = rumble_name && joystick ? rumble_name(joystick) : NULL;
+    if (n) { strlcpy(name, n, sizeof name); for (char *c = name; *c; c++) if (*c == '\n' || *c == '\r') *c = ' '; }
+    char msg[200];
+    int len = snprintf(msg, sizeof msg, "nokcandu-rumble 1 %04x %04x %u %u %u %s",
+                       rumble_vendor && joystick ? rumble_vendor(joystick) : 0, rumble_product && joystick ? rumble_product(joystick) : 0,
+                       low, high, ms, name);
+    if (len > 0) sendto(rumble_socket, msg, (size_t)(len < (int)sizeof msg ? len : (int)sizeof msg - 1), 0, (struct sockaddr *)&to, sizeof to);
+}
+static int nok_js_rumble(void *joystick, uint16_t low, uint16_t high, uint32_t ms) {
+    if (real_js_rumble && real_js_rumble(joystick, low, high, ms) == 0) return 0;
+    rumble_forward(joystick, low, high, ms);
+    return 0;
+}
+
 // Only replace Wine's driver lookups. SDL also resolves its own public symbols
 // internally; intercepting those puts our forwarding hook into SDL's dispatch
 // table and recurses until the Wine driver hangs/crashes (including native HID).
 static void *nok_dlsym(void *handle, const char *name) {
     void *real = dlsym(handle, name);
-    if (!pad_bus || !real || !name) return real;
+    if (!real || !name) return real;
+    bool rumble = !strcmp(name, "SDL_JoystickRumble");
+    if (!pad_bus && !rumble) return real;
     Dl_info caller;
     if (!dladdr(__builtin_return_address(0), &caller) || !caller.dli_fname) return real;
     const char *base = strrchr(caller.dli_fname, '/');
     base = base ? base + 1 : caller.dli_fname;
     if (strcmp(base, "winebus.so") && strcmp(base, "winebus.sys.so")) return real;
+    if (rumble) {
+        real_js_rumble = real;
+        rumble_vendor = (uint16_t (*)(void *))dlsym(handle, "SDL_JoystickGetVendor");
+        rumble_product = (uint16_t (*)(void *))dlsym(handle, "SDL_JoystickGetProduct");
+        rumble_name = (const char *(*)(void *))dlsym(handle, "SDL_JoystickName");
+        return (void *)nok_js_rumble;
+    }
     if (!strcmp(name, "SDL_WaitEventTimeout")) {
         real_wait = real;
         if (!real_open) real_open = (void *(*)(int))dlsym(handle, "SDL_GameControllerOpen");
@@ -367,6 +541,15 @@ static void *nok_dlsym(void *handle, const char *name) {
         fprintf(stderr, "nokcandu: controller remapping ready\n");
         return (void *)nok_wait;
     }
+    if (!strcmp(name, "SDL_JoystickGetVendor")) {
+        real_js_vendor = real;
+        if (!real_js_type) real_js_type = (int (*)(void *))dlsym(handle, "SDL_JoystickGetType");
+        return (void *)nok_js_vendor;
+    }
+    if (!strcmp(name, "SDL_JoystickGetProduct")) { real_js_product = real; return (void *)nok_js_product; }
+    if (!strcmp(name, "SDL_JoystickGetProductVersion")) { real_js_version = real; return (void *)nok_js_version; }
+    if (!strcmp(name, "SDL_GameControllerName")) { real_gc_name = real; return (void *)nok_gc_name; }
+    if (!strcmp(name, "SDL_JoystickName")) { real_js_name = real; return (void *)nok_js_name; }
     if (!strcmp(name, "SDL_GameControllerOpen")) {
         real_open = real;
         if (!real_sensor) real_sensor = (int (*)(void *, int, int))dlsym(handle, "SDL_GameControllerSetSensorEnabled");
@@ -516,12 +699,13 @@ static void pad_release_local(void) {
     for (int b = 0; b < PE_MOUSE_BUTTONS; b++) if (pad_buttons_down[b]) pad_mouse_button(b, false);
 }
 
+static const char *pad_active_map;   // the map named in pad-active: this game's, or the profile used everywhere
 static void pad_write_active(bool active) {
     if (!pad_active_path[0]) return;
     char tmp[PATH_MAX]; snprintf(tmp, sizeof tmp, "%s.%d", pad_active_path, getpid());
     FILE *f = fopen(tmp, "w");
     if (!f) return;
-    if (active) fprintf(f, "%d\n%s\n", getpid(), pad_map_path); else fprintf(f, "0\n\n");
+    if (active) fprintf(f, "%d\n%s\n", getpid(), pad_active_map ? pad_active_map : pad_map_path); else fprintf(f, "0\n\n");
     fclose(f);
     rename(tmp, pad_active_path);
 }
@@ -532,7 +716,14 @@ static char pad_off_flag[PATH_MAX];
 static void pad_activate(void) {
     struct stat st;
     char everywhere[PATH_MAX]; snprintf(everywhere, sizeof everywhere, "%.*s-everywhere", (int)(strlen(pad_off_flag) - 4), pad_off_flag);
-    bool driver = stat(pad_driver_flag, &st) != 0 && stat(pad_map_path, &st) == 0 && stat(pad_off_flag, &st) != 0 && stat(everywhere, &st) != 0;
+    // A profile used everywhere replaces the game's own here too (Nokcandu compiles it next to the flag), so what it
+    // makes of the controller (remapped buttons, gyro as a stick, the emulated controller) reaches Windows games.
+    // Before November 2026 the driver switched off instead, and only the profile's keys and mouse reached the game.
+    static char everywhere_map[PATH_MAX];
+    snprintf(everywhere_map, sizeof everywhere_map, "%s.map", everywhere);
+    bool everywhere_on = stat(everywhere, &st) == 0;
+    pad_active_map = everywhere_on ? everywhere_map : pad_map_path;
+    bool driver = stat(pad_driver_flag, &st) != 0 && stat(pad_active_map, &st) == 0 && stat(pad_off_flag, &st) != 0;
     if (pad_listen < 0) {
         char path[104]; pad_socket_path(getpid(), path, sizeof path);
         unlink(path);

@@ -1,0 +1,4 @@
+module NokcanduStreamCore {
+    umbrella header "NokcanduStreamCore.h"
+    export *
+}

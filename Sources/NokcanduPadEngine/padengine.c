@@ -166,7 +166,10 @@ struct pe_engine {
     menu_t menus[MAX_MENUS]; int menu_open, menu_sel; double menu_vx, menu_vy;
     // calibration: 1 automatic (set down), 2 asked for
     bool cal_manual;
-    int cal_mode; double cal_start, cal_sum[3], cal_prev[3]; int cal_n; bool cal_done; float cal_shown;
+    int cal_mode; double cal_start, cal_sum[3], cal_prev[3], cal_lo[3], cal_hi[3]; int cal_n; bool cal_done; float cal_shown;
+    // quiet tracking: a stretch without movement (in the hand or put down), its sum, and its half-second averages
+    double q_start, q_last, q_sum[3], q_block_start, q_block[3], q_lo[3], q_hi[3]; int q_n, q_block_n;
+    double acc_up[3], acc_at, q_up[3], cal_up[3]; bool acc_init, q_has_up, cal_has_up;
 };
 static void apply_layers(pe_engine *e);
 static void run_macro(pe_engine *e, int n, double now);
@@ -978,8 +981,23 @@ void pe_gyro_touch(pe_engine *e, bool required, bool touched) {
 }
 
 // MARK: Calibration
-// The gyro reads a little even lying still (its drift). Put down, it's measured for 1.5 s (after half a second of
-// stillness, once per time it's put down); asked for, for 2 s from now. Moving it starts the measurement over.
+// The gyro reads a little even lying still (its drift), and the drift changes as the controller warms up.
+// - Put down, it's measured for 1.5 s (after half a second of stillness, once per time it's put down; once
+//   there is a resting reading, after a second and only if the readings stayed within `TABLE_RANGE`).
+// - Asked for, for 2 s from now; moving it starts the measurement over.
+// - Not moved for 5 s, in the hand or put down, the average of those 5 s is the new resting reading, and again
+//   for every further 5 s (quiet tracking). A hand is never as still as a table: a recorded hand-held Steam
+//   Controller's 2 s averages wandered about 1 degree/s from the true drift (November 2026), so a short
+//   measurement in the hand would add drift; 5 s whose half-second averages agree within `QUIET_SPREAD` did not.
+// Automatic measurements are silent unless they corrected a drift of `CAL_NOTICE` degrees/s or more.
+#define QUIET_TIME 5.0
+#define QUIET_BLOCK 0.5
+#define QUIET_SPREAD 1.2      // degrees/s between the half-second averages of one stretch, on any axis
+#define QUIET_BAND 5.0        // a reading this far from the stretch's average ends it
+#define QUIET_OFF 8.0         // drift is never this large: a steady reading beyond it is a turn
+#define QUIET_TIP 0.99939     // cos 2°: gravity moved this much across the controller, so it was turned
+#define CAL_NOTICE 1.0
+#define TABLE_RANGE 1.0       // degrees/s between the lowest and highest reading of a quick measurement
 static void cal_report(pe_engine *e, float p) {
     if (p >= 0 && p < 1 && p - e->cal_shown < 0.05 && p >= e->cal_shown) return;
     e->cal_shown = p;
@@ -991,41 +1009,105 @@ void pe_calibrate(pe_engine *e, double now) {
     e->cal_mode = 2; e->cal_start = now; e->cal_n = 0; e->cal_sum[0] = e->cal_sum[1] = e->cal_sum[2] = 0;
     e->cal_shown = -1; cal_report(e, 0);
 }
+static void quiet_restart(pe_engine *e) { e->q_start = 0; }
+/// Quiet tracking. `d`: the change from the last reading (all axes).
+static void quiet_sample(pe_engine *e, double x, double y, double z, double d, double now) {
+    if (!e->g_autocal || e->cal_mode == 2) { quiet_restart(e); return; }
+    double v[3] = { x, y, z }, cal[3] = { e->cal_x, e->cal_y, e->cal_z };
+    bool up_now = e->acc_init && now - e->acc_at >= 0 && now - e->acc_at < 0.2;
+    bool ok = d < 6;
+    for (int k = 0; k < 3 && ok; k++) ok = fabs(v[k] - cal[k]) < QUIET_OFF;
+    if (ok && e->q_start > 0) {
+        if (now - e->q_last > 0.1 || now < e->q_last) ok = false;
+        if (e->q_n >= 20) for (int k = 0; k < 3 && ok; k++) ok = fabs(v[k] - e->q_sum[k] / e->q_n) < QUIET_BAND;
+        if (ok && e->q_has_up && up_now)
+            ok = e->q_up[0] * e->acc_up[0] + e->q_up[1] * e->acc_up[1] + e->q_up[2] * e->acc_up[2] >= QUIET_TIP;
+    }
+    if (!ok) { quiet_restart(e); return; }
+    if (e->q_start <= 0) {
+        e->q_start = e->q_block_start = now; e->q_n = e->q_block_n = 0;
+        for (int k = 0; k < 3; k++) { e->q_sum[k] = e->q_block[k] = 0; e->q_lo[k] = 1e9; e->q_hi[k] = -1e9; e->q_up[k] = e->acc_up[k]; }
+        e->q_has_up = up_now;
+    }
+    e->q_last = now; e->q_n++; e->q_block_n++;
+    for (int k = 0; k < 3; k++) { e->q_sum[k] += v[k]; e->q_block[k] += v[k]; }
+    if (now - e->q_block_start >= QUIET_BLOCK && e->q_block_n >= 10) {
+        for (int k = 0; k < 3; k++) {
+            double m = e->q_block[k] / e->q_block_n;
+            if (m < e->q_lo[k]) e->q_lo[k] = m;
+            if (m > e->q_hi[k]) e->q_hi[k] = m;
+            e->q_block[k] = 0;
+        }
+        e->q_block_start = now; e->q_block_n = 0;
+    }
+    if (now - e->q_start < QUIET_TIME) return;
+    bool steady = e->q_n >= 100;
+    for (int k = 0; k < 3 && steady; k++) steady = e->q_hi[k] - e->q_lo[k] < QUIET_SPREAD;
+    if (steady && e->cal_mode == 0) {
+        double n[3] = { e->q_sum[0] / e->q_n, e->q_sum[1] / e->q_n, e->q_sum[2] / e->q_n };
+        double change = sqrt((n[0] - cal[0]) * (n[0] - cal[0]) + (n[1] - cal[1]) * (n[1] - cal[1]) + (n[2] - cal[2]) * (n[2] - cal[2]));
+        bool first = !e->cal_have;
+        e->cal_x = n[0]; e->cal_y = n[1]; e->cal_z = n[2]; e->cal_have = true; e->cal_last = now;
+        e->cal_manual = false;
+        if (change >= CAL_NOTICE || first) { e->cal_shown = -1; cal_report(e, 1); }
+    }
+    quiet_restart(e);
+}
 static void calibration_sample(pe_engine *e, double x, double y, double z, double now) {
     // Still: hardly changing from one reading to the next, and not far off what it reads at rest.
     double d = fabs(x - e->cal_prev[0]) + fabs(y - e->cal_prev[1]) + fabs(z - e->cal_prev[2]);
     double off = sqrt((x - e->cal_x) * (x - e->cal_x) + (y - e->cal_y) * (y - e->cal_y) + (z - e->cal_z) * (z - e->cal_z));
     e->cal_prev[0] = x; e->cal_prev[1] = y; e->cal_prev[2] = z;
+    quiet_sample(e, x, y, z, d, now);
     // Still: hardly changing between readings, and within normal drift. (Requiring readings close to the
     // last measurement locked in a bad first measurement as permanent drift.)
     bool still = e->cal_mode == 2 ? d < 6 && off < 40 : d < 1.0 && off < 8;
     if (still) { if (!e->still_since) { e->still_since = now; e->cal_done = false; } }
     else { e->still_since = 0; }
-    // Drift changes slowly: once there's a resting reading, measure again at most every 30 s, and only after
-    // 1.5 s of stillness (it ran almost non-stop in the hand before), so slow aiming is rarely mistaken for it.
-    bool due = !e->cal_have || now - e->cal_last >= 30 || now < e->cal_last;
-    if (e->cal_mode == 0 && e->g_autocal && still && !e->cal_done && due && now - e->still_since > (e->cal_have ? 1.5 : 0.5)) {
+    // The quick measurement (put down). It used to repeat every 30 s on this test alone, and a calm hand
+    // passes for "put down" for a second or two: its 1.5 s average then replaced a good reading with one about
+    // 1 degree/s off ("it loses its calibration randomly", November 13, 2026). Once there is a resting reading
+    // it now replaces it only if the readings stayed within `TABLE_RANGE` throughout, which a hand doesn't
+    // manage (the calmest recorded 2 s in the hand spanned 1.6–2 degrees/s per axis); otherwise quiet tracking
+    // corrects it after its 5 s.
+    bool due = !e->cal_have || now - e->cal_last >= 5 || now < e->cal_last;
+    if (e->cal_mode == 0 && e->g_autocal && still && !e->cal_done && due && now - e->still_since > (e->cal_have ? 1.0 : 0.5)) {
         e->cal_manual = false;
         e->cal_mode = 1; e->cal_start = now; e->cal_n = 0; e->cal_sum[0] = e->cal_sum[1] = e->cal_sum[2] = 0; e->cal_shown = -1;
+        e->cal_has_up = e->acc_init && now - e->acc_at >= 0 && now - e->acc_at < 0.2;
+        for (int k = 0; k < 3; k++) e->cal_up[k] = e->acc_up[k];
     }
     if (!e->cal_mode) return;
     if (!still) {
-        if (e->cal_mode == 1) { e->cal_mode = 0; if (e->cal_n > 10) cal_report(e, -1); return; }
+        if (e->cal_mode == 1) { e->cal_mode = 0; return; }                 // automatic: given up silently
         e->cal_start = now; e->cal_n = 0; e->cal_sum[0] = e->cal_sum[1] = e->cal_sum[2] = 0;     // asked for: start over
         e->cal_shown = -1; cal_report(e, -1); cal_report(e, 0);
         return;
+    }
+    {
+        double v[3] = { x, y, z };
+        for (int k = 0; k < 3; k++) {
+            if (!e->cal_n || v[k] < e->cal_lo[k]) e->cal_lo[k] = v[k];
+            if (!e->cal_n || v[k] > e->cal_hi[k]) e->cal_hi[k] = v[k];
+        }
     }
     e->cal_sum[0] += x; e->cal_sum[1] += y; e->cal_sum[2] += z; e->cal_n++;
     double span = e->cal_mode == 2 ? 2.0 : 1.5, p = (now - e->cal_start) / span;
     if (p >= 1 && e->cal_n >= 20) {
         double nx = e->cal_sum[0] / e->cal_n, ny = e->cal_sum[1] / e->cal_n, nz = e->cal_sum[2] / e->cal_n;
         double change = sqrt((nx - e->cal_x) * (nx - e->cal_x) + (ny - e->cal_y) * (ny - e->cal_y) + (nz - e->cal_z) * (nz - e->cal_z));
-        bool automatic = e->cal_mode == 1;
-        e->cal_mode = 0; e->cal_done = true; e->cal_last = now;
-        (void)change; (void)automatic;
+        bool automatic = e->cal_mode == 1, first = !e->cal_have;
+        e->cal_mode = 0; e->cal_done = true;
+        if (automatic && !first) {
+            for (int k = 0; k < 3; k++) if (e->cal_hi[k] - e->cal_lo[k] >= TABLE_RANGE) return;   // a hand: left to quiet tracking
+            if (e->cal_has_up && e->acc_init && now - e->acc_at < 0.2
+                && e->cal_up[0] * e->acc_up[0] + e->cal_up[1] * e->acc_up[1] + e->cal_up[2] * e->acc_up[2] < QUIET_TIP) return;   // tipped
+        }
+        e->cal_last = now;
         e->cal_x = nx; e->cal_y = ny; e->cal_z = nz; e->cal_have = true;
-        e->cal_shown = -1; cal_report(e, 1);
-    } else cal_report(e, (float)fmin(p, 0.99));
+        quiet_restart(e);
+        if (!automatic || first || change >= CAL_NOTICE) { e->cal_shown = -1; cal_report(e, 1); }
+    } else if (e->cal_mode == 2) cal_report(e, (float)fmin(p, 0.99));
 }
 
 void pe_gyro(pe_engine *e, float gx, float gy, float gz, double now) {
@@ -1236,6 +1318,16 @@ void pe_release_all(pe_engine *e, double now) {
     e->releasing = false;
 }
 
+void pe_release_outputs(pe_engine *e, double now) {
+    if (!e) return;
+    bool layers[MAX_LAYERS], gyro = e->gyro_toggled; int owners[MAX_LAYERS], gyro_owner = e->gyro_toggle_owner;
+    memcpy(layers, e->layer_toggled, sizeof layers); memcpy(owners, e->layer_toggle_owner, sizeof owners);
+    pe_release_all(e, now);
+    memcpy(e->layer_toggled, layers, sizeof layers); memcpy(e->layer_toggle_owner, owners, sizeof owners);
+    e->gyro_toggled = gyro; e->gyro_toggle_owner = gyro_owner;
+    apply_layers(e); report_state(e);
+}
+
 // MARK: Extra devices
 
 static void dev_input(pe_engine *e, int in, bool down, double now) { set_input(e, in, down, now); }
@@ -1440,10 +1532,17 @@ void pe_touch(pe_engine *e, int f, bool down, float fx, float fy, double now) {
 // MARK: Tilt
 
 void pe_accel(pe_engine *e, float ax, float ay, float az, double now) {
-    if (!e || !pe_uses_tilt(e)) return;
-    pe_tick(e, now);
+    if (!e) return;
     double g = sqrt(ax * ax + ay * ay + az * az);
     if (g <= 0) return;
+    // For quiet tracking of the gyro's drift: which way gravity points, lightly smoothed.
+    {
+        double u[3] = { ax / g, ay / g, az / g };
+        for (int k = 0; k < 3; k++) e->acc_up[k] = e->acc_init ? e->acc_up[k] + (u[k] - e->acc_up[k]) * 0.1 : u[k];
+        e->acc_init = true; e->acc_at = now;
+    }
+    if (!pe_uses_tilt(e)) return;
+    pe_tick(e, now);
     // Which way is up, for turning about gravity: followed slowly, so a shake of the hand doesn't tip it.
     {
         double ux = ax / g, uy = ay / g, uz = az / g;
@@ -1555,6 +1654,15 @@ bool pe_update_bindings(pe_engine *e, const char *text) {
 }
 
 bool pe_calibration_is_manual(const pe_engine *e) { return e && e->cal_manual; }
+bool pe_calibration_get(const pe_engine *e, double bias[3]) {
+    if (!e || !e->cal_have) return false;
+    bias[0] = e->cal_x; bias[1] = e->cal_y; bias[2] = e->cal_z;
+    return true;
+}
+void pe_calibration_set(pe_engine *e, const double bias[3]) {
+    if (!e || !isfinite(bias[0]) || !isfinite(bias[1]) || !isfinite(bias[2])) return;
+    e->cal_x = bias[0]; e->cal_y = bias[1]; e->cal_z = bias[2]; e->cal_have = true; e->cal_done = true;
+}
 
 bool pe_motion_paused(const pe_engine *e) { return e && e->gyro_off_holds > 0; }
 
@@ -1717,7 +1825,7 @@ void pe_release_main(pe_engine *e, double now) {
     }
     memset(e->raw_axis, 0, sizeof e->raw_axis);
     e->gyro_stick_x = e->gyro_stick_y = 0; e->last_gyro = 0;
-    e->cal_mode = 0; e->still_since = 0; e->eu_init = false;
+    e->cal_mode = 0; e->still_since = 0; e->eu_init = false; e->q_start = 0; e->acc_init = false;
     memset(e->smooth_buf, 0, sizeof e->smooth_buf); e->smooth_i = 0;
     e->f_down[0] = e->f_down[1] = false; e->touch_zone = e->touch_click_in = -1;
     e->pitch_init = false;

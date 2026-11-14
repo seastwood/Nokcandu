@@ -21,6 +21,7 @@ struct MenuBarMenu: View {
                 }
             }
         }
+        StreamMenuBarSection()
         if !recent.isEmpty {
             Section("Recent") {
                 ForEach(recent) { g in Button("Play \(g.name)") { model.play(g) } }

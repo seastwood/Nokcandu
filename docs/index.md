@@ -4,6 +4,7 @@ The project README introduces the app. This folder keeps the implementation know
 
 | Document | What belongs there |
 | --- | --- |
+| [Streams](streams.md) | The game-streaming client ported from VoidLink/Moonlight: licence change, layout, pairing and stream flow, profile passthrough, what is verified and what is not ported yet. |
 | [Idle CPU, space management and moves](investigations/space-efficiency-moves-2026-11-04.md) | Measured idle-CPU causes, clone-aware space accounting, restore-point/roll-back/log limits, moved-game install records, split app/files moves, launcher moves and APFS games volumes. |
 | [Development handoff — November 4, 2026](handoffs/development-handoff-2026-11-04.md) | Released work, exact verification, confirmed open issues, prioritized polish, code map and safe continuation checklist. |
 | [Release 0.12.4 verification](investigations/release-0.12.4-2026-11-04.md) | Profile/component release scope, migration, known issues and package verification. |
@@ -109,6 +110,12 @@ Keep credentials, account identifiers, raw session logs, copyrighted game/runtim
 - [Settings alignment and per-profile controller labels](investigations/settings-profile-labels-2026-11-11.md) — shared control alignment, label persistence, migration and installed verification.
 
 - [Controller click jump, Steam pad feel and library/editor polish](investigations/controller-click-jump-and-polish-2026-11-11.md) — why clicks moved the cursor (three causes), the Steam Controller's built-in button actions, the stale-pointer driver fix, pad smoothing/angle, categories and the responsive editor.
+
+- [Handoff — November 13](investigations/handoff-2026-11-13.md) — the open Steam Controller trackpad jitter while moving (data, recorder, leads, constraints) and everything done since 0.12.18: streams, VBAN, emulated controllers, fed controllers, rumble, profile recovery, memory fix, verification status.
+
+- [Steam pad jitter while moving](investigations/steam-pad-moving-jitter-2026-11-13.md) — haptics ruled out from the recording, filters compared (low-pass, line prediction, One Euro), the noise-proportional filter built, measured jitter and lag (confirmed by the user); then the Mac pointer's choppiness traced to two sources overwriting each other's moves (`PadPointerContinuity`), also confirmed.
+
+- [Gyro quiet calibration](investigations/gyro-quiet-calibration-2026-11-13.md) — hand-held gyro recording, why the quick automatic measurement replaced good calibrations, the 5-second quiet rule and its trials, silent corrections, carry-over across engine rebuilds; awaiting confirmation.
 
 - [Online play, priorities and shader stutter](investigations/online-play-and-shader-stutter-2026-11-12.md) — msync confirmed, a game's own store client no longer backgrounded, wineserver priority, what DXMT's shader cache can and can't do for Overwatch.
 

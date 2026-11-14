@@ -22,7 +22,9 @@ nokcandu_controller_sdl_runtime "$SDL2_LIBRARY_DIR"
 export SDL2_CFLAGS="${SDL2_CFLAGS:--I/opt/homebrew/include/SDL2}"
 # Keep each complete source/patch set isolated; overlapping patches cannot be
 # reverse-probed one by one after later patches change their context.
-hidInputs="$(cat "$hidRoot"/Engine/controller-hid/000*.patch "$hidRoot"/Engine/controller-hid/*.h | shasum -a 256 | cut -d' ' -f1)"
+# The emulated controllers' protocol is Nokcandu's shared virtual-controller core (also used on the Mac).
+hidShared=("$hidRoot/Sources/NokcanduPadEngine/virtualpad.c" "$hidRoot/Sources/NokcanduPadEngine/include/virtualpad.h")
+hidInputs="$(cat "$hidRoot"/Engine/controller-hid/000*.patch "$hidRoot"/Engine/controller-hid/*.h "${hidShared[@]}" | shasum -a 256 | cut -d' ' -f1)"
 hidSourceRoot="$hidWork/source-$hidInputs"
 hidObjects="$hidWork/obj-$hidInputs"
 mkdir -p "$hidSourceRoot" "$hidObjects" "$hidOut"
@@ -43,7 +45,7 @@ else
     done
     shasum -a 256 "$hidSource/dlls/winebus.sys/bus_iohid.c" | cut -d' ' -f1 > "$hidStamp"
 fi
-for hidHeader in "$hidRoot"/Engine/controller-hid/*.h; do
+for hidHeader in "$hidRoot"/Engine/controller-hid/*.h "${hidShared[@]}"; do
     hidCopy="$hidSource/dlls/winebus.sys/$(basename "$hidHeader")"
     if [ -f "$hidCopy" ]; then cmp -s "$hidHeader" "$hidCopy" || { echo 'Generated controller header was edited; preserved unchanged.' >&2; exit 1; }
     else cp "$hidHeader" "$hidCopy"; fi
@@ -64,5 +66,5 @@ mv -f "$hidStage" "$hidOut/winebus.so"
 printf '{"version":"11.0","sourceSHA256":"%s","stockSHA256":["ebe0cc57211eca3474a39acabe5d2faaacd6bb19b7e758a7701e33cb38f14d19"]}\n' "$(shasum -a 256 "$hidOut/winebus.so" | cut -d' ' -f1)" > "$hidOut/manifest.json"
 cp "$hidSource/COPYING.LIB" "$hidOut/"
 printf '%s\n' "$hidExpected" > "$hidOut/wine-source.sha256"
-cat "$hidRoot"/Engine/controller-hid/000*.patch "$hidRoot"/Engine/controller-hid/*.h | shasum -a 256 | cut -d' ' -f1 > "$hidOut/nokcandu-patch.sha256"
+cat "$hidRoot"/Engine/controller-hid/000*.patch "$hidRoot"/Engine/controller-hid/*.h "${hidShared[@]}" | shasum -a 256 | cut -d' ' -f1 > "$hidOut/nokcandu-patch.sha256"
 echo "Built full-SDL Wine 11.0 controller bus into $hidOut"

@@ -101,7 +101,7 @@ Got a game running? **Share This Setup…** on its page submits your settings in
 
 ## Credits & licenses
 
-Nokcandu's own code is MIT licensed (see [LICENSE](LICENSE)). At runtime it downloads, from their official releases:
+Nokcandu is licensed under the GNU General Public License, version 3 (see [LICENSE](LICENSE)). Releases up to and including 0.12.18 were published under the MIT license, and those copies keep it. The Streams tab's streaming client is derived from [VoidLink](https://github.com/The-Fried-Fish/VoidLink-previously-moonlight-zwm) and [moonlight-common-c](https://github.com/moonlight-stream/moonlight-common-c) (GPL-3.0). At runtime it downloads, from their official releases:
 Wine and the Sikarugir engine/wrapper (LGPL-2.1+, [Sikarugir-App](https://github.com/Sikarugir-App)), which bundle DXVK (zlib),
 Mesa KosmicKrisp (MIT), MoltenVK (Apache-2.0) and Apple's D3DMetal (Apple's license), and LAV Filters (GPL-2.0, on request).
 When you use them: the store clients [gogdl](https://github.com/Heroic-Games-Launcher/heroic-gogdl), [legendary](https://github.com/derrod/legendary)

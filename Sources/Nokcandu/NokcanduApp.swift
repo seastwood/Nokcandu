@@ -33,6 +33,7 @@ struct NokcanduApp: App {
             CommandMenu("Game") {
                 GameCommands(model: model)
             }
+            CommandMenu("Stream") { StreamCommands() }
             CommandGroup(after: .help) {
                 Button("Controller Input Test…") { openWindow(id: "pad-input-test") }
                 Button("What's New in Nokcandu") { model.showWhatsNew = true }
@@ -73,7 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
     /// With the menu bar menu on, Nokcandu keeps running after its window closes (the menu brings it back).
-    func applicationWillTerminate(_ notification: Notification) { MainActor.assumeIsolated { PadProfileEdits.shared.flushAll(); MacGameKeys.shared.stop(); DesktopPad.shared.stop() } }
+    func applicationWillTerminate(_ notification: Notification) { MainActor.assumeIsolated { StreamsModel.shared.endStreamForQuit(); PadProfileEdits.shared.flushAll(); MacGameKeys.shared.stop(); DesktopPad.shared.stop() } }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !MenuBarSetting.on }
 }
 
@@ -249,7 +250,7 @@ struct LibraryView: View {
             if model.sidebarTab == .profiles {
                 ProfilesTabDetail()
             } else if model.sidebarTab == .streams {
-                StreamsComingSoon()
+                StreamsDetail()
             } else if let g = model.selectedGame {
                 GameDetailView(game: g).id(g.id)
             } else {
@@ -589,13 +590,36 @@ struct RunningDot: View {
 /// Beside the window title, on every tab: what is running through Nokcandu right now. Click one to go to it.
 struct RunningStrip: View {
     @EnvironmentObject var model: AppModel
+    @ObservedObject var streams = StreamsModel.shared
     private let limit = 6
 
     var body: some View {
         let running = model.runningApps
-        if !running.isEmpty {
+        if !running.isEmpty || streams.running != nil {
             HStack(spacing: 6) {
                 Text("Running").font(.caption).foregroundStyle(.secondary)
+                if streams.running != nil {
+                    let name = streams.streamName ?? "Stream"
+                    Button { streams.showStream() } label: {
+                        Image(systemName: "dot.radiowaves.left.and.right").font(.system(size: 13, weight: .semibold))
+                            .frame(width: 22, height: 22)
+                            .background(Color.accentColor.opacity(0.18), in: RoundedRectangle(cornerRadius: 5))
+                            .overlay(alignment: .bottomTrailing) { RunningDot(size: 7).offset(x: 2, y: 2) }
+                    }
+                    .buttonStyle(.plain)
+                    .help("Streaming \(name)")
+                    .accessibilityLabel("Streaming \(name)")
+                    .contextMenu {
+                        Button("Show Stream") { streams.showStream() }
+                        Button("Show in Streams") {
+                            model.sidebarTab = .streams
+                            if let r = streams.running { streams.selectedHost = r.hostID; streams.selectedProfile = r.profileID }
+                        }
+                        Divider()
+                        Button("End Stream") { streams.endStream(quitApp: false) }
+                        Button("End Stream and Quit the App on the Host") { streams.endStream(quitApp: true) }
+                    }
+                }
                 ForEach(running.prefix(limit)) { g in
                     Button { show(g) } label: {
                         Image(nsImage: g.icon).resizable().frame(width: 22, height: 22)
@@ -644,20 +668,3 @@ struct CategoryMenu: View {
     }
 }
 
-/// The Streams tab, reserved for what comes after the current features are polished.
-struct StreamsSidebar: View {
-    var body: some View {
-        VStack(spacing: 6) {
-            Spacer()
-            Image(systemName: "dot.radiowaves.left.and.right").font(.title).foregroundStyle(.secondary)
-            Text("Coming soon…").foregroundStyle(.secondary)
-            Spacer()
-        }
-        .frame(maxWidth: .infinity)
-    }
-}
-struct StreamsComingSoon: View {
-    var body: some View {
-        ContentUnavailableView("Streams", systemImage: "dot.radiowaves.left.and.right", description: Text("Coming soon…"))
-    }
-}

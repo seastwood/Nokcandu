@@ -118,13 +118,22 @@ struct ControllerProfileEditor: View {
 
     func left(_ width: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            sourceRow("Input controller", info: inputSource == .steamUSB
-                      ? "Experimental USB cable / wireless receiver source for the 2015 Steam Controller. One active controller is selected automatically; plug the cable in before selecting the source to prefer USB.\n\nWhile this source is being read, Nokcandu turns off the controller’s built-in desktop mouse and keyboard controls and turns on motion reporting. Its original mode is restored on normal release; another app’s changed mode is preserved. Wireless recovery checks the remote controller’s identity before restoring its mode, even after reconnecting.\n\nClick either trackpad to choose its behavior independently: existing mappings, trackpad mouse or trackball mouse. Grips and pad clicks can be mapped separately.\n\nThe controller’s built-in button actions (a trigger as a mouse click, A as Return and so on) are switched off too, so only what this profile maps reaches the Mac or the game; they return when Nokcandu releases the controller. No pairing or firmware change is performed."
-                      : "Automatic uses the controllers macOS recognizes. Choose Steam Controller for the original 2015 controller on its cable or wireless receiver.") {
-                Picker("Input controller", selection: Binding(get: { inputSource }, set: { profile.controllerSource = $0 })) {
-                    Text("Automatic (macOS controllers)").tag(PadProfiles.ControllerSource.automatic)
-                    Text("Steam Controller (2015 · USB / receiver)").tag(PadProfiles.ControllerSource.steamUSB)
+            sourceRow("Controller input", info: inputSource == .steamUSB
+                      ? "Nokcandu reads the original 2015 Steam Controller itself, by cable or wireless receiver, so its trackpads (as a mouse, trackball, dial or stick), grips, pad clicks and trackpad haptics can be mapped. Games still get the controller as their Emulated controller (below) sets.\n\nWhile it's read, the controller's built-in desktop mouse and keyboard are switched off and motion is turned on, so only this profile acts. Its own mode comes back when Nokcandu lets go. No pairing or firmware change is made. Plug in the cable before choosing this to prefer USB."
+                      : "The controllers macOS recognizes. For the original 2015 Steam Controller, choose “Steam Controller, read directly” to map its trackpads and use their haptics.") {
+                Picker("Controller input", selection: Binding(get: { inputSource }, set: { profile.controllerSource = $0 })) {
+                    Text("Automatic (controllers macOS recognizes)").tag(PadProfiles.ControllerSource.automatic)
+                    Text("Steam Controller, read directly (trackpads, haptics)").tag(PadProfiles.ControllerSource.steamUSB)
                 }
+            }
+            sourceRow("Emulated controller", info: "The controller games see instead of the one you hold, with this profile's mappings. Games get that controller's name, maker and reports, so they treat it as that controller and show its button prompts. Works with any controller macOS and SDL recognize as a gamepad (8BitDo, Xbox, PlayStation, Switch, Steam Controller and others); wheels and flight sticks keep their own identity.\n\nXbox controller: an XInput controller, for most games.\nDualShock 4 and Switch Pro Controller: imitated in full (reports, start-up handshake, calibration, motion, the DualShock 4's touchpad, rumble), for games and emulators that support them. Like the real ones they aren't XInput controllers.\n\nWhere it applies: Windows games in Nokcandu (from the game's next start; the DualShock 4 and Switch Pro need Wine 11 and Nokcandu's controller driver, otherwise the controller stays as it is), streams with Emulated controller type set to Automatic, and Mac apps and games as a virtual controller once macOS allows it (Apple's virtual-device entitlement). On the Mac the real controller stays visible too, so a game that reads every controller may see both.") {
+                Picker("Emulated controller", selection: Binding(get: { PadProfiles.top(profile, all: everything, \.presentAs) }, set: { profile.presentAs = $0 })) {
+                    Text("None").tag(PresentedController?.none)
+                    ForEach(PresentedController.allCases, id: \.self) { c in Text(c.title).tag(Optional(c)) }
+                }
+            }
+            if PadProfiles.top(profile, all: everything, \.presentAs) != nil, let why = MacVirtualControllers.unavailableReason {
+                Text("Windows games and streams see it now. Mac apps: \(why)").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             sourceRow("Routing", info: "What the game or app receives. Standard: your mappings, and anything you left alone works as usual. “Only what this profile maps” hides the controller’s own input from Windows games; “Mappings and the controller itself” sends both, which can make a button act twice. “The controller itself” switches mappings off. The Buttons choices do the same for buttons only, and “Choose for each control” lets you decide control by control: select a button, stick, trigger or the gyro to set it.\n\nThe controller stays visible to macOS either way; hiding applies to Windows games through Nokcandu. Windows games see an Xbox-style controller.") {
                 Picker("Routing", selection: Binding(get: { effectiveRouting }, set: { profile.routingMode = $0 })) {
@@ -548,10 +557,17 @@ struct ControllerProfileEditor: View {
         return short.allSatisfy { $0.count == 1 } ? [0, 2, 1, 3].map { short[$0] }.joined() : short.map { String($0.prefix(4)) }.joined(separator: " ")
     }
     func shortLabel(_ i: PadProfiles.Input) -> String? { shortLabel(profile.layers[layerIndex][i] ?? inherited(i)) }
+    /// Everything a button does at once, short: "Gyro + LT" (two at most, then "+2").
     func shortLabel(_ binding: PadProfiles.Binding?) -> String? {
         guard let b = binding else { return nil }
-        let first = b.pressOutputs.first ?? b.tap.first ?? b.hold.first ?? b.togetherOutputs.first
-        guard let o = first else { return nil }
+        let group = [b.pressOutputs, b.tap, b.hold, b.togetherOutputs].first { !$0.isEmpty } ?? []
+        let names = group.compactMap(shortLabel(output:))
+        let shown = names.filter { $0 != "—" }
+        guard !names.isEmpty else { return nil }
+        if shown.isEmpty { return "—" }
+        return shown.prefix(2).joined(separator: " + ") + (shown.count > 2 ? " +\(shown.count - 2)" : "")
+    }
+    func shortLabel(output o: PadProfiles.Output) -> String? {
         switch o {
         case .keyToggle, .mouseToggle, .padToggle, .triggerToggle: return o.title(family)
         case .key(let k): return PadProfiles.keyTitle(k).replacingOccurrences(of: "Left ", with: "L").replacingOccurrences(of: "Right ", with: "R")
@@ -660,7 +676,7 @@ struct ControllerProfileEditor: View {
                     }
                 }
                 var v = st.wrappedValue; v.mode = m; st.wrappedValue = v
-            })) { ForEach(PadProfiles.StickMode.allCases, id: \.self) { Text($0.title).tag($0) } }
+            })) { ForEach(PadProfiles.StickMode.allCases, id: \.self) { Text($0.title(forStick: s)).tag($0) } }
             switch st.wrappedValue.mode {
             case .mouse:
                 slider("Speed", st.speed, 200...6000, "%.0f /s")
@@ -812,7 +828,8 @@ struct ControllerProfileEditor: View {
                 slider("Steady below", g.tightening, 0...10, "%.1f °/s", info: "Very small movements (hand shake) are scaled down. 0 is off.")
                 Toggle("Invert left and right", isOn: g.invertX)
                 Toggle("Invert up and down", isOn: g.invertY)
-                Toggle("Calibrate when the controller is put down", isOn: g.autoCalibrate)
+                Toggle("Keep the gyro calibrated automatically", isOn: g.autoCalibrate)
+                    .help("Whenever the controller hasn’t moved for five seconds, in your hands or put down, its drift is measured again. Nothing shows on screen unless a clear drift was corrected.")
             }
             Section {
                 Toggle("Smart smoothing (One Euro filter)", isOn: Binding(get: { g.wrappedValue.filter == true }, set: { var v = g.wrappedValue; v.filter = $0 ? true : nil; g.wrappedValue = v }))
@@ -970,7 +987,7 @@ struct BindingEditor: View {
         case .taps:
             var b = binding ?? PadProfiles.Binding()
             b.togglePress = nil; b.press = b.press.map(\.heldOutput)
-            if b.tap.isEmpty { b.tap = b.press.isEmpty ? (input.map { $0.isTrigger || $0.isStickDirection ? [.nothing] : [.pad($0)] } ?? [.nothing]) : b.press }
+            if b.tap.isEmpty { b.tap = b.press.isEmpty ? (input.map { $0.isTrigger || $0.isVirtual ? [.nothing] : [.pad($0)] } ?? [.nothing]) : b.press }
             if b.hold.isEmpty { b.hold = [.nothing] }
             b.press = []; b.turbo = nil
             binding = b

@@ -75,15 +75,66 @@ public struct PadSteamTrackpad {
     private var filterX = 0.0, filterY = 0.0, rateX = 0.0, rateY = 0.0, landed = 0.0
     /// Where the finger landed, and whether it has since clearly started to move.
     private var landX = 0.0, landY = 0.0, released = false
-    private var restVX = 0.0, restVY = 0.0, slowSince: Double?
+    private var slowSince: Double?
+    /// The latest positions, for the finger's average drift: sensor noise averages out, movement doesn't.
+    private var recent: [(t: Double, x: Double, y: Double)] = []
+    /// The pad's own noise: the scatter of its readings around the finger's path, averaged over about a fifth of
+    /// a second; while the finger moves it rises five times slower, because a curving swipe also scatters
+    /// around a straight line for a moment. Kept from touch to touch.
+    public private(set) var noiseLevel = 0.0
+    /// Noise filtering while the finger moves. A recorded Steam Controller pad (November 2026) scattered
+    /// 0.002–0.003 of the pad per axis, moving or still, haptics or not, nearly white: 6–8 px of cursor jitter
+    /// on every report. Below `quietNoise` nothing is filtered (the movement stays exactly raw); from
+    /// `noisyNoise` up the filter is fully on: a low-pass at `noiseCutoff` Hz that opens by `noiseOpening` Hz
+    /// for each pad-width per second of finger speed, so a slow finger trails by a pixel or two and a swipe by
+    /// about a millisecond. The speed that opens it is counted beyond what the noise alone reads as
+    /// (`noiseSpeed` × the noise level), or the noise would open the filter by itself.
+    public static let quietNoise = 0.0008, noisyNoise = 0.002
+    public static let noiseCutoff = 4.0, noiseOpening = 80.0, noiseSpeed = 60.0
     /// A finger settling onto the pad (or the pad's touch pulse) reads as a little movement: nothing moves
     /// until the finger has gone this far from where it landed, or this long has passed.
     public static let landingDistance = 0.008
-    /// Below this speed (part of the pad per second, averaged) for `restTime`, the finger is resting: the
-    /// pointer holds still until it clearly moves again. A slow, deliberate aim is several times faster.
+    /// Below this speed (part of the pad per second, of the finger's average position) for `restTime`, the
+    /// finger is resting: the pointer holds still until it clearly moves again. A slow, deliberate aim is several
+    /// times faster.
     public static let restSpeed = 0.05, restTime = 0.08
+    /// The averaging window. A recorded Steam Controller pad wandered ±0.7 % of its width on every report under
+    /// a still thumb (November 2026), so an instant speed never fell below `restSpeed`; averages over 80 ms do.
+    public static let restWindow = 0.08
+    /// A reading this far from where the finger rests, in multiples of the pad's current noise (its spread
+    /// under the resting finger), is movement on that same report. On a quiet pad that is under
+    /// `landingDistance`, so nothing waits; a noisy one (a recorded thumb spread 0.003–0.0045 with single
+    /// readings up to 0.014 out) needs a clearer move. Capped so a very noisy pad still responds.
+    public static let noiseMultiple = 5.0, clearMoveCap = 0.03
+    /// RMS distance of the samples from their least-squares straight line in time (0 with fewer than five).
+    static func scatter(_ w: [(t: Double, x: Double, y: Double)]) -> Double {
+        guard w.count >= 5 else { return 0 }
+        let n = Double(w.count), mt = w.map(\.t).reduce(0, +) / n
+        let mx = w.map(\.x).reduce(0, +) / n, my = w.map(\.y).reduce(0, +) / n
+        let tt = w.map { ($0.t - mt) * ($0.t - mt) }.reduce(0, +)
+        let sx = tt > 0 ? w.map { ($0.t - mt) * ($0.x - mx) }.reduce(0, +) / tt : 0
+        let sy = tt > 0 ? w.map { ($0.t - mt) * ($0.y - my) }.reduce(0, +) / tt : 0
+        let r = w.map { p -> Double in
+            let ex = p.x - (mx + sx * (p.t - mt)), ey = p.y - (my + sy * (p.t - mt)); return ex * ex + ey * ey
+        }.reduce(0, +) / n
+        return r.squareRoot()
+    }
+    static func clearMove(noise: Double) -> Double { min(clearMoveCap, max(landingDistance, noiseMultiple * noise)) }
+    /// The average position over the last window, and its speed against the window before (nil: too little yet).
+    private func drift(now: Double) -> (x: Double, y: Double, speed: Double?)? {
+        let a = recent.filter { $0.t > now - Self.restWindow }, b = recent.filter { $0.t <= now - Self.restWindow && $0.t > now - 2 * Self.restWindow }
+        guard !a.isEmpty else { return nil }
+        func mean(_ s: [(t: Double, x: Double, y: Double)]) -> (t: Double, x: Double, y: Double) {
+            let n = Double(s.count); return (s.map(\.t).reduce(0, +) / n, s.map(\.x).reduce(0, +) / n, s.map(\.y).reduce(0, +) / n)
+        }
+        let ma = mean(a)
+        guard b.count >= 3, a.count >= 3 else { return (ma.x, ma.y, nil) }
+        let mb = mean(b), dt = max(0.01, ma.t - mb.t)
+        return (ma.x, ma.y, ((ma.x - mb.x) * (ma.x - mb.x) + (ma.y - mb.y) * (ma.y - mb.y)).squareRoot() / dt)
+    }
     public init() {}
-    public mutating func reset() { self = Self() }
+    /// Forgets the touch; the pad's noise level is the pad's, and stays.
+    public mutating func reset() { let noise = noiseLevel; self = Self(); noiseLevel = noise }
     private mutating func motion(_ x: Double, _ y: Double) -> Motion {
         restX += x; restY += y
         let result = Motion(x: Int(restX), y: Int(restY), fx: x.isFinite ? x : 0, fy: y.isFinite ? y : 0)
@@ -108,7 +159,7 @@ public struct PadSteamTrackpad {
         if next && !down {
             vx = 0; vy = 0; restX = 0; restY = 0; movedTime = nil; steadyX = 0; steadyY = 0; edgeEntryTime = nil; velocityHistory = []
             filterX = px; filterY = py; rateX = 0; rateY = 0; landed = now
-            landX = px; landY = py; released = false; restVX = 0; restVY = 0; slowSince = nil
+            landX = px; landY = py; released = false; slowSince = nil; recent = [(now, px, py)]
             return Motion()
         }
         if !next {
@@ -141,21 +192,40 @@ public struct PadSteamTrackpad {
         // while the finger rests — when it lands and whenever it comes to rest again — until it has clearly
         // moved; it then starts from where the finger is, so the wobble is never replayed. (A time limit on
         // this let a resting thumb's wobble move the pointer and buzz the movement haptics.)
-        do {
-            let dt = max(0.0005, now - previous), a = dt / (dt + 1 / (2 * Double.pi * 6))
-            restVX += a * ((px - x) / dt - restVX); restVY += a * ((py - y) / dt - restVY)
+        // Judged on the finger's average position, so the pad's own noise doesn't count as movement. (The
+        // trackball also waited for its momentum to settle, which noise kept from ever happening: the cursor
+        // jiggled and the movement haptics buzzed, shaking the pad further.)
+        recent.append((now, px, py))
+        if recent.count > 64 || (recent.first.map { $0.t < now - 2 * Self.restWindow - 0.02 } ?? false) {
+            recent.removeAll { $0.t < now - 2 * Self.restWindow - 0.02 }
+            if recent.count > 64 { recent.removeFirst(recent.count - 64) }
         }
+        let average = drift(now: now)
+        let window = recent.filter { $0.t > now - Self.restWindow }
+        let noise = Self.scatter(window)
+        if window.count >= 5 { noiseLevel += (noise < noiseLevel || !released ? 0.05 : 0.01) * (noise - noiseLevel) }
         if released {
-            if (restVX * restVX + restVY * restVY).squareRoot() < Self.restSpeed {
+            if let speed = average?.speed, speed < Self.restSpeed {
                 if slowSince == nil { slowSince = now }
-                if now - slowSince! >= Self.restTime, settings.mode != .trackball || abs(vx) + abs(vy) < 0.5 {
-                    released = false; landX = px; landY = py
+                if now - slowSince! >= Self.restTime, let average {
+                    released = false; landX = average.x; landY = average.y; vx = 0; vy = 0
                 }
             } else { slowSince = nil }
         }
         if !released {
-            let away = ((px - landX) * (px - landX) + (py - landY) * (py - landY)).squareRoot()
-            if away < Self.landingDistance {
+            // The last few reports' average: enough to keep the noise inside the landing distance, short enough
+            // that a thumb starting to move gets going within a report or two.
+            // The pad's noise now: the scatter of the last window's readings around the finger's straight-line
+            // path, so a finger starting to move doesn't count as noise (only jitter does).
+            // One reading clearly beyond the noise starts the cursor on that same report (on a quiet pad, the
+            // same distance as before: no added latency). A slow start the size of the noise is told apart by
+            // the last few reports' average.
+            let rawAway = ((px - landX) * (px - landX) + (py - landY) * (py - landY)).squareRoot()
+            let last = recent.suffix(4), n = Double(last.count)
+            let ax = last.map(\.x).reduce(0, +) / n, ay = last.map(\.y).reduce(0, +) / n
+            let away = ((ax - landX) * (ax - landX) + (ay - landY) * (ay - landY)).squareRoot()
+            let clear = Self.clearMove(noise: noise)
+            if rawAway < clear && (clear <= Self.landingDistance || away < max(Self.landingDistance, clear * 0.75)) {
                 filterX = px; filterY = py; rateX = 0; rateY = 0
                 return Motion()
             }
@@ -168,21 +238,27 @@ public struct PadSteamTrackpad {
         let steadiness = requested.isFinite ? min(5,max(0,requested)) : 0
         var moveX = px - x, moveY = py - y
         let strength = settings.smoothing.map { $0.isFinite ? min(1,max(0,$0)) : 0 } ?? 0
-        if strength > 0 {
+        let amount = min(1, max(0, (noiseLevel - Self.quietNoise) / (Self.noisyNoise - Self.quietNoise)))
+        if strength > 0 || amount > 0 {
             // A filter whose cutoff rises with finger speed: sensor noise under a resting or slow finger is
             // held back, while a deliberate movement passes with a millisecond or two of lag. Unlike a dead
-            // band it never has to be "pushed through" when the finger changes direction.
+            // band it never has to be "pushed through" when the finger changes direction, and unlike a
+            // straight-line prediction it never runs past a finger that stops.
             let dt = max(0.0005, now - previous)
             func blend(_ cutoff: Double) -> Double { let tau = 1 / (2 * Double.pi * cutoff); return dt / (dt + tau) }
             let rateBlend = blend(15)
             rateX += rateBlend * ((px - x) / dt - rateX); rateY += rateBlend * ((py - y) / dt - rateY)
-            let a = blend(25 * pow(0.1, strength) + 80 * (rateX * rateX + rateY * rateY).squareRoot())
-            let nextX = filterX + a * (px - filterX), nextY = filterY + a * (py - filterY)
+            // The finger's speed beyond what the pad's noise alone reads as (nothing on a quiet pad).
+            let fingerSpeed = max(0, (rateX * rateX + rateY * rateY).squareRoot() - Self.noiseSpeed * noiseLevel)
+            // The Smoothing setting, and the pad's own noise whatever the setting: the stronger of the two.
+            var a = strength > 0 ? blend(25 * pow(0.1, strength) + 80 * fingerSpeed) : 1
+            if amount > 0 { a = min(a, 1 - amount * (1 - blend(Self.noiseCutoff + Self.noiseOpening * fingerSpeed))) }
+            let nextX = a >= 1 ? px : filterX + a * (px - filterX), nextY = a >= 1 ? py : filterY + a * (py - filterY)
             // The contact patch grows for a moment as a finger lands, which shifts its centre: ease in.
-            let settle = min(1, max(0, (now - landed) / 0.03))
+            let settle = strength > 0 ? min(1, max(0, (now - landed) / 0.03)) : 1
             moveX = (nextX - filterX) * settle; moveY = (nextY - filterY) * settle
             filterX = nextX; filterY = nextY
-        }
+        } else { filterX = px; filterY = py; rateX = 0; rateY = 0 }
         if let degrees = settings.rotation, degrees.isFinite, degrees != 0 {
             // Screen coordinates (y down): a positive angle turns the pad's axes the way Valve does for the right pad.
             let r = min(45,max(-45,degrees)) * Double.pi / 180, c = cos(r), sn = sin(r)

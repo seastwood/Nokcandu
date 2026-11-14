@@ -1,0 +1,42 @@
+--- a/dlls/winebus.sys/bus_sdl.c
++++ b/dlls/winebus.sys/bus_sdl.c
+@@ -150,6 +150,9 @@
+     LONG effect_flags;
+     int axis_offset;
+ };
++
++/* Nokcandu: a Switch Pro Controller or DualShock 4 emulated from any controller, when the environment's profile asks. */
++#include "controller-emulation.h"
+ 
+ static inline struct sdl_device *impl_from_unix_device(struct unix_device *iface)
+ {
+@@ -977,6 +980,8 @@
+     if (pSDL_JoystickGetSerial && (sdl_serial = pSDL_JoystickGetSerial(joystick)))
+         ntdll_umbstowcs(sdl_serial, strlen(sdl_serial) + 1, desc.serialnumber, ARRAY_SIZE(desc.serialnumber));
+ 
++    if (nk_pad_add(joystick, controller, id, &desc)) return;
++
+     if (controller)
+     {
+         desc.is_gamepad = TRUE;
+@@ -1030,6 +1035,12 @@
+     TRACE("Received action %x\n", event->type);
+ 
+     pthread_mutex_lock(&sdl_cs);
++
++    if (nk_pad_event(event))
++    {
++        pthread_mutex_unlock(&sdl_cs);
++        return;
++    }
+ 
+     if (event->type == SDL_JOYDEVICEADDED)
+         sdl_add_device(((SDL_JoyDeviceEvent *)event)->which);
+@@ -1201,6 +1212,7 @@
+         if (bus_event_queue_pop(&event_queue, result)) return STATUS_PENDING;
+         if (pSDL_WaitEventTimeout(&event, 10) != 0) process_device_event(&event);
+         else check_all_devices_effects_state();
++        nk_pad_tick();
+     } while (event.type != quit_event);
+ 
+     TRACE("SDL main loop exiting\n");

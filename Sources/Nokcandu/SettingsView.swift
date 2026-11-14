@@ -345,6 +345,7 @@ struct DesktopPadSettings: View {
                 ControllerLinks(pad: pad, profiles: profiles)
                 ShortcutRecorder(title: "Calibrate the gyro", shortcut: $pad.calibrateShortcut)
                 Toggle("Show automatic gyro calibration notifications", isOn: Binding(get: { PadHUD.automaticCalibration }, set: { PadHUD.automaticCalibration = $0; pad.objectWillChange.send() }))
+                    .help("Automatic calibration runs quietly whenever the controller hasn’t moved for five seconds. With this on, a note appears only for the first measurement and when a clear drift was corrected.")
                 Toggle("Show a note when a layer or the gyro switches", isOn: Binding(get: { PadHUD.enabled }, set: { PadHUD.enabled = $0; pad.objectWillChange.send() }))
                 Toggle("Gyro on/off notifications", isOn: Binding(get: { PadHUD.gyroSwitches }, set: { PadHUD.gyroSwitches = $0; pad.objectWillChange.send() }))
                     .disabled(!PadHUD.enabled)

@@ -74,7 +74,7 @@ xcrun clang -arch x86_64 -arch arm64 -mmacosx-version-min=11.0 -dynamiclib -fobj
   -framework AudioToolbox -framework CoreAudio \
   -ISources/NokcanduPadEngine/include \
   -install_name @rpath/nokcandu-rawmouse.dylib "-DNOKCANDU_HELPER_BUILD=\"$HELPER_BUILD\"" \
-  -o "$APP/Contents/Resources/nokcandu-rawmouse.dylib" Resources/rawmouse/rawmouse.m Resources/rawmouse/audiofollow.m Resources/rawmouse/bonjourbridge.m Resources/rawmouse/micguard.m Resources/rawmouse/socket-events.c Resources/rawmouse/helper-state.c Sources/NokcanduPadEngine/padengine.c
+  -o "$APP/Contents/Resources/nokcandu-rawmouse.dylib" Resources/rawmouse/rawmouse.m Resources/rawmouse/audiofollow.m Resources/rawmouse/bonjourbridge.m Resources/rawmouse/micguard.m Resources/rawmouse/socket-events.c Resources/rawmouse/helper-state.c Resources/rawmouse/commit-memory.c Sources/NokcanduPadEngine/padengine.c
 # Nokcandu's Wine Mac drivers (resizable game windows), one per Wine version in Engine/winemac/SUPPORTED_WINE,
 # built by Engine/winemac/build.sh into build/winemac-<version> (Wine 10.0's may also be in build/winemac).
 # Bundled as Resources/winemac/<version>/; Nokcandu puts each into engines of that Wine version.
@@ -103,6 +103,8 @@ PYHID
 mkdir -p "$APP/Contents/Resources/controller-hid/11.0"
 cp "$HID_BUILD/winebus.so" "$HID_BUILD/manifest.json" "$HID_BUILD/wine-source.sha256" "$HID_BUILD/nokcandu-patch.sha256" "$APP/Contents/Resources/controller-hid/11.0/"
 cp Engine/controller-hid/README.md Engine/controller-hid/build.sh Engine/controller-hid/sdl-runtime.sh Engine/controller-hid/000*.patch Engine/controller-hid/*.h "$APP/Contents/Resources/controller-hid/"
+# The shared core the emulated controllers are built from (corresponding source for the module).
+cp Sources/NokcanduPadEngine/virtualpad.c Sources/NokcanduPadEngine/include/virtualpad.h "$APP/Contents/Resources/controller-hid/"
 cp "$HID_BUILD/COPYING.LIB" "$APP/Contents/Resources/controller-hid/"
 # Native IPX is opt-in. Bundle only the engine version verified at runtime.
 mkdir -p "$APP/Contents/Resources/native-ipx"
@@ -172,7 +174,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
-  <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
+  <key>LSSupportsGameMode</key><true/>
   <key>NSHighResolutionCapable</key><true/>
   <key>CFBundleURLTypes</key>
   <array><dict>
@@ -183,7 +186,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleURLSchemes</key><array><string>nokcandu</string></array>
   </dict></array>
   <key>NSMotionUsageDescription</key><string>Use compatible headphone head motion as an optional controller input.</string>
-  <key>NSMicrophoneUsageDescription</key><string>Games started from Nokcandu can use your microphone for voice chat.</string>
+  <key>NSMicrophoneUsageDescription</key><string>Games started from Nokcandu, and streams you choose to send it to, can use your microphone for voice chat.</string>
+  <key>NSLocalNetworkUsageDescription</key><string>Streams finds and connects to computers on your network that stream games to this Mac.</string>
+  <key>NSBonjourServices</key><array><string>_nvstream._tcp</string></array>
   <key>NSDocumentsFolderUsageDescription</key><string>Nokcandu reads and adjusts some games' settings in your Documents folder.</string>
   <key>NSDownloadsFolderUsageDescription</key><string>Nokcandu installs games from installers and disc images you choose in Downloads.</string>
   <key>NSRemovableVolumesUsageDescription</key><string>Nokcandu keeps games and game files on drives you choose, like an external SSD.</string>
@@ -195,7 +200,26 @@ PLIST
 # Signed with the identity chosen above (not notarized).
 codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/screen-size"
 codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/nokcandu-settings"
-codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP"
+# Virtual controllers on the Mac (CoreHID) need Apple's com.apple.developer.hid.virtual.device entitlement, which only
+# works with an Apple-issued provisioning profile that grants it. Without one macOS kills an app that claims it, so
+# it's added only when NOKCANDU_PROVISIONING_PROFILE points at such a profile (Developer ID signing). See
+# docs/controller-capabilities.md.
+APP_ENTITLEMENTS=()
+if [ -n "${NOKCANDU_PROVISIONING_PROFILE:-}" ]; then
+  [ -f "$NOKCANDU_PROVISIONING_PROFILE" ] || { echo "NOKCANDU_PROVISIONING_PROFILE doesn't exist."; exit 1; }
+  security cms -D -i "$NOKCANDU_PROVISIONING_PROFILE" 2>/dev/null | grep -q 'com.apple.developer.hid.virtual.device' \
+    || { echo "The provisioning profile doesn't grant com.apple.developer.hid.virtual.device."; exit 1; }
+  cp "$NOKCANDU_PROVISIONING_PROFILE" "$APP/Contents/embedded.provisionprofile"
+  ENT="$(mktemp -t nokcandu-entitlements).plist"
+  cat > "$ENT" <<ENTITLEMENTS
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>com.apple.developer.hid.virtual.device</key><true/></dict></plist>
+ENTITLEMENTS
+  APP_ENTITLEMENTS=(--entitlements "$ENT")
+  echo "Virtual controllers on the Mac: entitlement granted by the provisioning profile"
+fi
+codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} ${APP_ENTITLEMENTS[@]+"${APP_ENTITLEMENTS[@]}"} --sign "$SIGN_ID" "$APP"
 echo "Built $(pwd)/$APP"
 
 if [ "${1:-}" = --install ]; then

@@ -44,3 +44,14 @@ firmware or settings-reset commands were sent by Nokcandu's probe/profile reader
 The known stock/owned driver migration and persistent Undo restore both patches
 as one module, preserving the first original. Original controller full physical
 input and Steam ownership/coexistence still need user testing.
+
+## Imitated Switch Pro Controller and DualShock 4
+
+The fourth patch (`0004-controller-emulation.patch`) adds `controller-emulation.h` to Wine's SDL bus. The protocol itself (descriptors, input reports, the Pro's handshake and subcommands, the DualShock 4's feature reports 0x02/0x12/0xa3 and output 0x05) is Nokcandu's shared virtual-controller core, `Sources/NokcanduPadEngine/virtualpad.c` (LGPL-2.1-or-later), which `build.sh` copies in and which also drives the Mac virtual controllers. Only when Nokcandu's helper (loaded in the
+environment) says a game controller should be presented as a Switch Pro Controller (`nokcandu_presented_controller`,
+from the profile's `present switchpro` line) does the bus create a raw 057e:2009 HID device with the full-state Pro
+descriptor, Pro reports built from the controller's events, and replies to the Pro's USB commands and subcommands
+(device info, virtual SPI flash calibration, report mode, IMU, vibration). Without the helper or the line, behaviour
+is unchanged. Verified inside Wine with `Tools/controller-probe/switch-pro-windows-hid.c`; see
+docs/controller-capabilities.md.
+

@@ -121,7 +121,10 @@ public enum Controllers {
     /// Automatic may choose the SDL/Xbox driver for profiles. An explicit native
     /// policy must not be silently overridden by another game's shared profile.
     public static func effective(_ mode: Mode, contents: URL) -> Mode {
-        mode == .automatic && PadProfiles.driverInUse(contents: contents) ? .xbox : mode
+        // A profile that presents the controller as another one is the more specific choice: the imitation needs
+        // Wine's SDL route, even when the game's controllers are otherwise "as themselves". "Not at all" still wins.
+        if mode == .native && PadProfiles.presentsController(contents: contents) { return .xbox }
+        return mode == .automatic && PadProfiles.driverInUse(contents: contents) ? .xbox : mode
     }
 
     /// Re-applies a saved choice (and a controller profile's needs) when the registry is out of step — after Repair,
@@ -247,26 +250,35 @@ public enum Controllers {
     }
 
     /// Requested policy from macOS inventory, not proof of Wine device enumeration.
-    public static func describe(_ c: Connected, mode: Mode, steam: Bool) -> String {
+    /// What happens to a controller in Windows games, in plain words.
+    public static func describe(_ c: Connected, mode: Mode, steam: Bool, presentAs: PresentedController? = nil) -> String {
         if c.isSteamControllerReceiver {
-            return "Wireless receiver detected; this inventory does not confirm controller power or input. For Nokcandu mappings, select Steam Controller (2015 · USB / receiver) in a profile and check its live Test status. Native wireless passthrough to Windows Steam remains unverified; receiver presence alone is not Windows controller detection. No re-pairing is needed for an already paired controller."
+            return "Steam Controller wireless receiver. Turn the controller on; games then see it like the cable version."
         }
-        if c.vendorID == 0x28de && c.productID == 0x1102 && !c.bluetooth {
-            if passesThrough(.valve,mode:mode,steam:steam) {
-                return "Original wired Steam Controller: native vendor HID access is available with Nokcandu’s Wine 11 controller compatibility module. Verify recognition in Windows Steam’s Controller settings; a proprietary HID device need not appear as a joystick in Test Controllers. Physical controls and Steam Input output still require testing."
+        let valve = c.vendorID == 0x28de && c.productID == 0x1102 && !c.bluetooth
+        if mode == .hidden { return "Games don't see it. A controller profile can still turn its buttons into keys and mouse." }
+        if let presentAs, c.isGamepad || valve { return "Games see it as a \(presentAs.title), with your profile's mappings." }
+        if valve {
+            if passesThrough(.valve, mode: mode, steam: steam) {
+                return "Passed to Steam as itself, for Steam Input (check Steam → Settings → Controller). Games without Steam Input may not see it."
             }
-            return "Original wired Steam Controller: Xbox conversion is not verified. Use As itself with compatible Windows Steam support, or select the experimental USB source in a Nokcandu profile for keyboard/mouse mappings."
+            return "Games see it as an Xbox controller (sticks, buttons, triggers). Trackpads and gyro follow your controller profile; rumble plays on the trackpads."
         }
-        guard c.isGamepad else {
-            return "Not seen by Windows programs yet: Wine on the Mac only takes devices that present themselves as gamepads or joysticks."
-        }
+        guard c.isGamepad else { return "Windows games can't use this device yet: Wine on the Mac only takes gamepads and joysticks." }
         if c.family == nil, c.kind != .gamepad {
-            // Wheels, pedals and flight gear keep their own axes and buttons (Wine passes many through as the real device).
-            return "Requested: its own axes and buttons, for games with \(c.kind == .wheel ? "wheel" : "joystick") support. Verify detection in Test Controllers."
+            return "Games see its own axes and buttons, for games with \(c.kind == .wheel ? "wheel" : "joystick") support."
         }
         if passesThrough(c.family, mode: mode, steam: steam) {
-            return "Requested: as itself. " + (steam ? "Steam Input can use it if Wine detects it. " : "Requires compatible Windows device support. ") + "Verify detection in Test Controllers; motion channels are not verified here."
+            return steam ? "Passed to Steam as itself, so Steam Input can use it." : "Games see it as itself, if they support this controller."
         }
-        return "Requested: as an Xbox controller" + (c.hasMotion ? " (gyro isn't passed on this way)" : "") + "."
+        return "Games see it as an Xbox controller" + (c.hasMotion ? ". Its gyro works through a controller profile (as a stick or the mouse), since Xbox controllers have none." : ".")
     }
+
+    /// The original Steam Controller passed through as itself outside Steam Input rarely works in games; one button
+    /// sets the route that does.
+    public static func recommendsXbox(_ c: Connected, mode: Mode, steam: Bool, presentAs: PresentedController?) -> Bool {
+        presentAs == nil && mode != .hidden && c.vendorID == 0x28de && (c.productID == 0x1102 || c.productID == 0x1142)
+            && !c.bluetooth && passesThrough(.valve, mode: mode, steam: steam)
+    }
+
 }

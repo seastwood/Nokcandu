@@ -1,0 +1,4 @@
+module NokcanduMbedTLS {
+    header "nk_mbedtls.h"
+    export *
+}

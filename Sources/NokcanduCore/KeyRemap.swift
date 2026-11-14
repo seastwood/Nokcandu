@@ -348,6 +348,20 @@ public enum KeyRemap {
         return true
     }
 
+    /// Applies a set of remaps to the keyboard now (a stream window came to the front), recording the mapping that
+    /// was there so restoreAfterMacGame (or recovery after a crash) puts it back. Returns false when there are none.
+    @discardableResult
+    public static func applyMappings(_ m: [Mapping]) -> Bool {
+        let clean = m.filter { $0.to != $0.from }
+        guard !clean.isEmpty, let json = hidutilJSON(text(clean)) else { return false }
+        if !FileManager.default.fileExists(atPath: activeMarker.path) {
+            let before = (try? Shell.run("/usr/bin/hidutil", ["property", "--get", "UserKeyMapping"], timeout: 10))?.combined ?? ""
+            try? Data("\(getpid())\n\(previousMapping(before))\n".utf8).write(to: activeMarker, options: .atomic)
+        }
+        _ = try? Shell.run("/usr/bin/hidutil", ["property", "--set", json], timeout: 10)
+        return true
+    }
+
     /// Puts the keyboard back after a Mac game (only a mapping Nokcandu itself applied).
     public static func restoreAfterMacGame() {
         guard let text = try? String(contentsOf: activeMarker, encoding: .utf8) else { return }

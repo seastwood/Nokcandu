@@ -181,10 +181,23 @@ public enum PadProfiles {
         }
         public init(from decoder: Decoder) throws {
             let s = try decoder.singleValueContainer().decode(String.self)
-            guard let o = Output(token: s) else { throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Unknown output \(s)")) }
+            guard let o = Output(token: s) else {
+                // Reading the library leniently: one output this version can't use becomes Nothing, rather than
+                // the whole file failing to load (which showed as every profile gone).
+                if let notes = decoder.userInfo[PadProfiles.lenientOutputs] as? LenientNotes {
+                    notes.add("\(s) at \(decoder.codingPath.map(\.stringValue).joined(separator: "."))")
+                    self = .nothing; return
+                }
+                throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Unknown output \(s)"))
+            }
             self = o
         }
-        public func encode(to encoder: Encoder) throws { var c = encoder.singleValueContainer(); try c.encode(token) }
+        /// Only what reads back is written: an output this version can't read (a trackpad tap sent as itself, say)
+        /// is saved as Nothing, so a save never makes the library unreadable.
+        public func encode(to encoder: Encoder) throws {
+            var c = encoder.singleValueContainer()
+            try c.encode(Output(token: token) == nil ? "none" : token)
+        }
 
         public func title(_ family: Controllers.Family? = nil) -> String {
             switch self {
@@ -391,6 +404,15 @@ public enum PadProfiles {
             case .stick: "Stick"; case .otherStick: "The other stick"; case .mouse: "Mouse"
             case .flick: "Flick stick"; case .keys: "Keys"; case .directions: "Four directions, each set on its own"
             case .scroll: "Scrolling"; case .off: "Nothing"
+            }
+        }
+        /// The title on a given stick's page (0 left, 1 right): "Stick" and "The other stick" name the sticks, so
+        /// the choice says which stick games see.
+        public func title(forStick s: Int) -> String {
+            switch self {
+            case .stick: s == 0 ? "Left stick" : "Right stick"
+            case .otherStick: s == 0 ? "Right stick (swapped)" : "Left stick (swapped)"
+            default: title
             }
         }
     }
@@ -603,6 +625,9 @@ public enum PadProfiles {
         public var controllerSource: ControllerSource?
         /// UI names/diagram style for this profile only; nil follows its source/connected device.
         public var controllerLabels: String?
+        /// The emulated controller: the controller is presented as this one everywhere Nokcandu can: Windows games, streams, and Mac apps (as a
+        /// virtual controller, once the app has Apple's virtual-device entitlement). nil: the controller as it is.
+        public var presentAs: PresentedController?
         /// Original Steam Controller right pad: nil preserves the existing stick mapping.
         public var steamRightTrackpad: PadSteamTrackpadSettings?
         public var steamLeftTrackpad: PadSteamTrackpadSettings?
@@ -620,6 +645,10 @@ public enum PadProfiles {
         public var layerRumbleStrength: Double?
         public var layerRumbleLength: Double?
         public static let defaultLayerRumble = (strength: 0.35, length: 0.12)
+        /// How strongly games' own rumble plays when Nokcandu plays it (controllers SDL can't rumble, like the original
+        /// Steam Controller's trackpads): 0 off … 1 as the game asks. nil: `defaultGameRumble`.
+        public var gameRumble: Double?
+        public static let defaultGameRumble = 0.6
         public init(id: String = UUID().uuidString, name: String, buildsOn: [String] = [], layers: [Layer] = [Layer(id: "base", name: "Base")],
                     leftStick: Stick? = nil, rightStick: Stick? = nil, gyro: Gyro? = nil, triggers: Triggers? = nil) {
             self.id = id; self.name = name; self.buildsOn = buildsOn; self.layers = layers.isEmpty ? [Layer(id: "base", name: "Base")] : layers
@@ -709,7 +738,10 @@ public enum PadProfiles {
 
     public static func compile(_ p: Profile, all: [Profile]) -> String {
         let routing = top(p, all: all, \.routingMode) ?? .legacy
-        if routing == .native { return "nokpad 1\n" }
+        // "source steam": Nokcandu reads the controller itself and feeds Wine's driver the result (padmap.m).
+        let source = top(p, all: all, \.controllerSource) == .steamUSB ? "source steam\n" : ""
+        let present = (top(p, all: all, \.presentAs).map { "present \($0.rawValue)\n" } ?? "") + source
+        if routing == .native { return "nokpad 1\n" + present }
         let m = merged(p, all: all)
         let layerIndex = Dictionary(m.layers.enumerated().map { ($0.element.name.lowercased(), $0.offset) }, uniquingKeysWith: { a, _ in a })
         let macros = Array(collected(p, all: all, \.macros).prefix(16)), menus = Array(collected(p, all: all, \.menus).prefix(8))
@@ -857,7 +889,7 @@ public enum PadProfiles {
             let route = routing == .hybridAll ? "both" : "mapped"
             for key in ["lstick", "rstick", "lt", "rt", "gyro", "touch", "tilt"] { lines.append("route \(key) \(route)") }
         }
-        return lines.joined(separator: "\n") + "\n"
+        return lines.joined(separator: "\n") + "\n" + present
     }
 
     // MARK: Sharing
@@ -958,7 +990,38 @@ public enum PadProfiles {
     static func ownFile(_ contents: URL) -> URL { folder(contents).appendingPathComponent("pad-own.json") }
 
     public static func profiles(file: URL = profilesFile) -> [Profile] {
-        (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode([Profile].self, from: $0) } ?? []
+        guard let data = try? Data(contentsOf: file) else { return [] }
+        if let list = try? JSONDecoder().decode([Profile].self, from: data) { return list }
+        guard let (list, _) = try? decodeLeniently([Profile].self, from: data, file: file) else { return [] }
+        return list
+    }
+
+    static let lenientOutputs = CodingUserInfoKey(rawValue: "nokcandu.lenientOutputs")!
+    final class LenientNotes: @unchecked Sendable {
+        private(set) var dropped: [String] = []
+        func add(_ s: String) { dropped.append(s) }
+    }
+
+    /// Decodes profiles with outputs this version doesn't understand read as Nothing. The file as it was is kept
+    /// next to it (`.unreadable-backup`, written once) before anything is saved over it, so nothing is lost for good.
+    static func decodeLeniently<T: Decodable>(_ type: T.Type, from data: Data, file: URL) throws -> (T, [String]) {
+        let notes = LenientNotes()
+        let d = JSONDecoder(); d.userInfo[lenientOutputs] = notes
+        let value = try d.decode(type, from: data)
+        if !notes.dropped.isEmpty {
+            let backup = file.appendingPathExtension("unreadable-backup")
+            if !FileManager.default.fileExists(atPath: backup.path) { try? data.write(to: backup, options: .withoutOverwriting) }
+        }
+        return (value, notes.dropped)
+    }
+
+    /// Before saving over a file: it must be readable, at least leniently (then its original is kept), so damaged
+    /// or newer data isn't replaced by what failed to load.
+    private static func checkReadable<T: Decodable>(_ type: T.Type, file: URL) throws {
+        guard FileManager.default.fileExists(atPath: file.path) else { return }
+        let data = try Data(contentsOf: file)
+        if (try? JSONDecoder().decode(type, from: data)) != nil { return }
+        _ = try decodeLeniently(type, from: data, file: file)
     }
     private static func preserveBeforeV2(_ encoded: Data, file: URL) throws {
         guard let text = String(data: encoded, encoding: .utf8),
@@ -971,9 +1034,7 @@ public enum PadProfiles {
     static func saveProfiles(_ p: [Profile], file: URL = profilesFile) throws {
         try NokPaths.ensure(file.deletingLastPathComponent())
         // A read failure is not an empty library. Preserve damaged/newer data for recovery.
-        if FileManager.default.fileExists(atPath: file.path) {
-            _ = try JSONDecoder().decode([Profile].self, from: Data(contentsOf: file))
-        }
+        try checkReadable([Profile].self, file: file)
         let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         let encoded = try enc.encode(p.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending })
         try preserveBeforeV2(encoded, file: file)
@@ -981,9 +1042,7 @@ public enum PadProfiles {
     }
     private static func saveOwn(_ p: Profile, contents: URL) throws {
         let file = ownFile(contents)
-        if FileManager.default.fileExists(atPath: file.path) {
-            _ = try JSONDecoder().decode(Profile.self, from: Data(contentsOf: file))
-        }
+        try checkReadable(Profile.self, file: file)
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(p)
         try preserveBeforeV2(data, file: file)
@@ -1012,7 +1071,8 @@ public enum PadProfiles {
 
     /// The game's own profile (one that isn't shared), when it has one.
     public static func own(contents: URL) -> Profile? {
-        (try? Data(contentsOf: ownFile(contents))).flatMap { try? JSONDecoder().decode(Profile.self, from: $0) }
+        guard let data = try? Data(contentsOf: ownFile(contents)) else { return nil }
+        return (try? JSONDecoder().decode(Profile.self, from: data)) ?? (try? decodeLeniently(Profile.self, from: data, file: ownFile(contents)))?.0
     }
 
     /// The profile an environment uses now, with everything resolved (nil: controllers as they are).
@@ -1078,10 +1138,33 @@ public enum PadProfiles {
         return true
     }
 
+    /// "Use a Profile Everywhere": the chosen profile's ID (written by the app), and that profile compiled for Wine's
+    /// controller driver, which games read instead of their own map while the flag is there.
+    public static var everywhereFile: URL { NokPaths.support.appendingPathComponent("controller-profiles-everywhere") }
+    public static var everywhereMapFile: URL { NokPaths.support.appendingPathComponent("controller-profiles-everywhere.map") }
+
+    /// Writes (or removes) the everywhere profile's compiled map. Call before writing the flag, so a game that sees
+    /// the flag finds the map.
+    @discardableResult
+    public static func writeEverywhereMap(id: String?, all: [Profile], to file: URL = everywhereMapFile) -> Bool {
+        guard let id, let p = all.first(where: { $0.id == id }) else {
+            try? FileManager.default.removeItem(at: file); return false
+        }
+        let text = compile(p, all: all)
+        if (try? String(contentsOf: file, encoding: .utf8)) == text { return true }
+        try? NokPaths.ensure(file.deletingLastPathComponent())
+        return (try? Data(text.utf8).write(to: file, options: .atomic)) != nil
+    }
+    static func everywhereID(file: URL = everywhereFile) -> String? {
+        guard let s = (try? String(contentsOf: file, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty else { return nil }
+        return s
+    }
+
     /// Writes every environment's pad-map again (after a profile or the default changed). Returns how many changed.
     @discardableResult
     public static func refresh(environments: [URL], shared: [URL] = [], file lf: URL = profilesFile, defaultFile df: URL = defaultFile) -> Int {
         let list = profiles(file: lf), sharedSet = Set(shared)
+        if lf == profilesFile { writeEverywhereMap(id: everywhereID(), all: list) }
         var n = 0
         for c in Set(environments).union(sharedSet) where write(contents: c, shared: sharedSet.contains(c), all: list, file: lf, defaultFile: df) { n += 1 }
         return n
@@ -1090,6 +1173,7 @@ public enum PadProfiles {
     @discardableResult
     static func refreshChecked(environments: [URL], shared: [URL], file: URL, defaultFile: URL) throws -> Int {
         let list = profiles(file: file), sharedSet = Set(shared)
+        if file == profilesFile { writeEverywhereMap(id: everywhereID(), all: list) }
         var changed = 0, failed = 0
         for c in Set(environments).union(sharedSet) {
             do { if try writeChecked(contents: c, shared: sharedSet.contains(c), all: list, file: file, defaultFile: defaultFile) { changed += 1 } }
@@ -1130,7 +1214,22 @@ public enum PadProfiles {
     /// Profiles also applied inside Wine's controller driver (what the game sees as the controller), unless
     /// "pad-driver-off" is present in the environment.
     public static func driverInUse(contents: URL) -> Bool {
-        !FileManager.default.fileExists(atPath: folder(contents).appendingPathComponent("pad-driver-off").path) && inUse(contents: contents)
+        !FileManager.default.fileExists(atPath: folder(contents).appendingPathComponent("pad-driver-off").path)
+            && (inUse(contents: contents) || everywhereActive)
+    }
+
+    /// A profile is being used everywhere (its compiled map is there for games to use instead of their own).
+    static var everywhereActive: Bool {
+        FileManager.default.fileExists(atPath: everywhereFile.path) && FileManager.default.fileExists(atPath: everywhereMapFile.path)
+            && !FileManager.default.fileExists(atPath: NokPaths.support.appendingPathComponent("controller-profiles-off").path)
+    }
+
+    /// Whether the environment's profile presents its controllers as another controller (a "present" line in its
+    /// compiled profile), which needs Wine's SDL route rather than the physical device.
+    public static func presentsController(contents: URL) -> Bool {
+        guard driverInUse(contents: contents),
+              let text = try? String(contentsOf: everywhereActive ? everywhereMapFile : mapFile(contents), encoding: .utf8) else { return false }
+        return text.split(separator: "\n").contains { $0.hasPrefix("present ") }
     }
 
     /// Whether an environment has a profile in use.
@@ -1196,3 +1295,22 @@ extension PadProfiles.Output {
         switch self { case .macro, .menu, .keyboard: false; default: true }
     }
 }
+
+/// A controller identity Nokcandu's Wine controller driver can present to Windows games, whatever the real controller is.
+public enum PresentedController: String, Codable, CaseIterable, Sendable {
+    case xbox, dualShock4 = "ds4", switchPro = "switchpro"
+
+    public var title: String {
+        switch self { case .xbox: "Xbox controller"; case .dualShock4: "DualShock 4"; case .switchPro: "Switch Pro Controller" }
+    }
+    public var vendorID: Int { switch self { case .xbox: 0x045E; case .dualShock4: 0x054C; case .switchPro: 0x057E } }
+    public var productID: Int { switch self { case .xbox: 0x02EA; case .dualShock4: 0x05C4; case .switchPro: 0x2009 } }
+    /// The name Windows and games see.
+    public var productName: String {
+        switch self { case .xbox: "Xbox Wireless Controller"; case .dualShock4: "Wireless Controller"; case .switchPro: "Pro Controller" }
+    }
+    /// Xbox matches Wine's own gamepad reports. The Switch Pro and DualShock 4 are imitated by Nokcandu's controller
+    /// driver (Engine/controller-hid/controller-emulation.h, with the shared core NokcanduPadEngine/virtualpad.c).
+    public var available: Bool { true }
+}
+

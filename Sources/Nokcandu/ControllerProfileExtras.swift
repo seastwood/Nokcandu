@@ -192,6 +192,15 @@ extension ControllerProfileEditor {
                 }
             }
             if let rumbleNote { Text(rumbleNote).font(.caption).foregroundStyle(.secondary) }
+            let gameRumble = Binding(get: { profile.gameRumble ?? PadProfiles.top(profile, all: everything, \.gameRumble) ?? PadProfiles.Profile.defaultGameRumble },
+                                     set: { profile.gameRumble = $0 })
+            slider("Game rumble", gameRumble, 0...1, "%.0f%%", scale: 100)
+                .help("How strongly a game's own vibration plays when Nokcandu plays it — on the Steam Controller's trackpads, for example. 0% turns it off.")
+            Button("Try Game Rumble") {
+                if inputSource == .steamUSB {
+                    rumbleNote = SteamControllerUSB.shared.rumble(strength: gameRumble.wrappedValue, seconds: 0.4) ? nil : "Connect the Steam Controller and leave this profile open to try its rumble."
+                } else { rumbleNote = nil; PadFeedback.shared.rumble(GCController.controllers(), strength: gameRumble.wrappedValue, seconds: 0.4) }
+            }.disabled(gameRumble.wrappedValue <= 0)
             Toggle("Rumble when the layer changes", isOn: Binding(get: { profile.rumbleOnLayer ?? PadProfiles.top(profile, all: everything, \.rumbleOnLayer) ?? false }, set: { profile.rumbleOnLayer = $0 }))
             if profile.rumbleOnLayer ?? PadProfiles.top(profile, all: everything, \.rumbleOnLayer) ?? false {
                 let d = PadProfiles.Profile.defaultLayerRumble
