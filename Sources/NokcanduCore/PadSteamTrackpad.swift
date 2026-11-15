@@ -31,6 +31,13 @@ public struct PadSteamTrackpadSettings: Codable, Hashable, Sendable {
     public var smoothing: Double?
     /// Degrees the pad's axes are turned to match the thumb's sweep (Valve's own drivers use 15° inward).
     public var rotation: Double?
+    /// Straight flicks: a quick swipe within this many degrees of straight up, down or across goes exactly
+    /// straight (0 or nil: off). See `PadSteamTrackpad.straighten`.
+    public var straighten: Double?
+    /// Match sideways sensitivity: with X and Y sensitivities set differently, the higher one comes down to the
+    /// lower one's as movement turns towards the lower one's axis (nil or false: off). See
+    /// `PadSteamTrackpad.matchedSensitivity`.
+    public var matchSideways: Bool?
     /// How much of the pad's radius, from the rim inward, counts as its edge (0: no edge). The edge is an
     /// input of its own, held while the finger is there, in every pad behavior.
     public var edge: Double?
@@ -73,8 +80,63 @@ public struct PadSteamTrackpad {
     private var edgeEntryTime: Double?
     private var velocityHistory: [(time: Double, x: Double, y: Double)] = []
     private var filterX = 0.0, filterY = 0.0, rateX = 0.0, rateY = 0.0, landed = 0.0
+    /// The finger's velocity (pad-widths a second, after the pad angle), averaged over a few reports: the
+    /// direction a flick is judged by.
+    private var flickX = 0.0, flickY = 0.0
+    /// The finger's direction for Match sideways sensitivity (pad-widths a second, after the pad angle),
+    /// averaged over about 25 ms so a single wobble doesn't change it.
+    private var headingX = 0.0, headingY = 0.0
+    /// The sensitivities (pixels per pad-width) for a finger heading (`vx`, `vy`). The lower of the two stays as
+    /// set; the higher is used in full only for movement straight along its own axis and comes down to the
+    /// lower one's for movement straight along the other, in proportion to the share of the movement along its
+    /// axis (the square of the cosine of the angle). With X at 2,214 and Y at 1,158 (a traced profile,
+    /// November 14, 2026), the thumb's sideways wander in an up/down movement was drawn nearly twice as large as
+    /// its progress, so up and down zig-zagged while left and right didn't. Only the size of each report's
+    /// movement changes, never its timing.
+    public static func matchedSensitivity(x sx: Double, y sy: Double, vx: Double, vy: Double) -> (x: Double, y: Double) {
+        let speed2 = vx * vx + vy * vy
+        guard sx != sy, speed2 > 0, speed2.isFinite else { return (sx, sy) }
+        let alongX = vx * vx / speed2
+        return sx > sy ? (sy + (sx - sy) * alongX, sy) : (sx, sx + (sy - sx) * (1 - alongX))
+    }
+    /// Straight flicks act on quick swipes only: nothing below `straightenFrom` pad-widths a second, fully
+    /// from `straightenFull`. A thumb's quick up or down flick lands several degrees either side of straight
+    /// (recorded, November 14, 2026: 63 flicks at about 2 pad-widths a second, 6° off at the median and 13° at
+    /// the 90th percentile, though slow movement on the same pad was as straight up and down as across), and a
+    /// trackball's momentum then carries the pointer further off than the flick itself did.
+    public static let straightenFrom = 0.5, straightenFull = 1.5
+    /// How much of the sideways part of this report's movement to keep (1: all of it) for a finger moving at
+    /// (`vx`, `vy`) pad-widths a second with Straight flicks set to `cone` degrees. Within half the cone of an
+    /// axis the sideways part goes entirely; it returns over the outer half, so a diagonal is never caught.
+    /// The movement along the axis is never changed or delayed.
+    public static func straighten(vx: Double, vy: Double, cone: Double) -> (keep: Double, vertical: Bool) {
+        let vertical = abs(vy) >= abs(vx)
+        guard cone.isFinite, cone > 0, vx.isFinite, vy.isFinite else { return (1, vertical) }
+        let c = min(40, cone), speed = (vx * vx + vy * vy).squareRoot()
+        let engaged = min(1, max(0, (speed - straightenFrom) / (straightenFull - straightenFrom)))
+        guard engaged > 0 else { return (1, vertical) }
+        let off = atan2(min(abs(vx), abs(vy)), max(abs(vx), abs(vy))) * 180 / Double.pi
+        let pull = off <= c / 2 ? 1 : off >= c ? 0 : (c - off) / (c / 2)
+        return (1 - engaged * pull, vertical)
+    }
     /// Where the finger landed, and whether it has since clearly started to move.
     private var landX = 0.0, landY = 0.0, released = false
+    /// The hold in force is the one from the finger landing (true), or a rest in the middle of a touch.
+    private var landing = true
+    /// The reading the pointer had followed up to when a rest began.
+    private var heldX = 0.0, heldY = 0.0
+    /// The pad's noise under a resting finger only (the scatter while it is held still), kept from touch to
+    /// touch. `noiseLevel` also rises while the finger moves, because a curve or a change of speed scatters
+    /// around a straight line too; what counts as resting must not depend on how the finger just moved.
+    public private(set) var restNoise = 0.0
+    /// A rest in the middle of a touch, on a quiet pad: the finger is resting below `restSpeedFloor`
+    /// pad-widths a second and moving again once `restDistance` from where it rested; a noisy pad needs
+    /// `restSpeedPerNoise` and `noiseMultiple` times its resting noise, up to the old fixed values
+    /// (`restSpeed`, `clearMoveCap`). The fixed values were set on a pad whose readings wandered ±0.7 % under a
+    /// still thumb. On a quiet one (resting scatter 0.0003–0.0006, traced November 14, 2026) they held the
+    /// pointer at every slow-down and change of direction: ten times in 31 seconds of ordinary movement, for
+    /// 30–136 ms each, and what the finger moved meanwhile (0.009–0.04 of the pad, 10–90 px) was dropped.
+    public static let restSpeedFloor = 0.008, restSpeedPerNoise = 12.0, restDistance = 0.002
     private var slowSince: Double?
     /// The latest positions, for the finger's average drift: sensor noise averages out, movement doesn't.
     private var recent: [(t: Double, x: Double, y: Double)] = []
@@ -119,6 +181,18 @@ public struct PadSteamTrackpad {
         }.reduce(0, +) / n
         return r.squareRoot()
     }
+    /// The pad's noise by itself: from how much each reading departs from the midpoint of its neighbours, which
+    /// steady movement in any direction leaves at zero (the scatter around a straight line counts a finger that
+    /// is turning or changing speed as noise). On the same scale as `scatter` for plain noise; 0 with fewer than five.
+    static func jitter(_ w: [(t: Double, x: Double, y: Double)]) -> Double {
+        guard w.count >= 5 else { return 0 }
+        var sum = 0.0
+        for i in 1..<(w.count - 1) {
+            let ex = w[i + 1].x - 2 * w[i].x + w[i - 1].x, ey = w[i + 1].y - 2 * w[i].y + w[i - 1].y
+            sum += ex * ex + ey * ey
+        }
+        return (sum / Double(w.count - 2) / 6).squareRoot()
+    }
     static func clearMove(noise: Double) -> Double { min(clearMoveCap, max(landingDistance, noiseMultiple * noise)) }
     /// The average position over the last window, and its speed against the window before (nil: too little yet).
     private func drift(now: Double) -> (x: Double, y: Double, speed: Double?)? {
@@ -134,7 +208,7 @@ public struct PadSteamTrackpad {
     }
     public init() {}
     /// Forgets the touch; the pad's noise level is the pad's, and stays.
-    public mutating func reset() { let noise = noiseLevel; self = Self(); noiseLevel = noise }
+    public mutating func reset() { let noise = noiseLevel, rest = restNoise; self = Self(); noiseLevel = noise; restNoise = rest }
     private mutating func motion(_ x: Double, _ y: Double) -> Motion {
         restX += x; restY += y
         let result = Motion(x: Int(restX), y: Int(restY), fx: x.isFinite ? x : 0, fy: y.isFinite ? y : 0)
@@ -158,8 +232,8 @@ public struct PadSteamTrackpad {
         defer { down = next; x = px; y = py; sampleTime = now; if next || wasDown { tickTime = now } }
         if next && !down {
             vx = 0; vy = 0; restX = 0; restY = 0; movedTime = nil; steadyX = 0; steadyY = 0; edgeEntryTime = nil; velocityHistory = []
-            filterX = px; filterY = py; rateX = 0; rateY = 0; landed = now
-            landX = px; landY = py; released = false; slowSince = nil; recent = [(now, px, py)]
+            filterX = px; filterY = py; rateX = 0; rateY = 0; landed = now; flickX = 0; flickY = 0; headingX = 0; headingY = 0
+            landX = px; landY = py; released = false; landing = true; slowSince = nil; recent = [(now, px, py)]
             return Motion()
         }
         if !next {
@@ -200,15 +274,25 @@ public struct PadSteamTrackpad {
             recent.removeAll { $0.t < now - 2 * Self.restWindow - 0.02 }
             if recent.count > 64 { recent.removeFirst(recent.count - 64) }
         }
+        var fromX = x, fromY = y
         let average = drift(now: now)
         let window = recent.filter { $0.t > now - Self.restWindow }
         let noise = Self.scatter(window)
         if window.count >= 5 { noiseLevel += (noise < noiseLevel || !released ? 0.05 : 0.01) * (noise - noiseLevel) }
+        // Learned whenever the finger is still or slow, held or not (a slow finger's path is straight enough over
+        // 80 ms that the scatter around it is the pad's own): a noisy pad never comes to rest by the quiet
+        // pad's measure, so it could not be learned from rests alone.
+        if window.count >= 5, let speed = average?.speed, speed < Self.restSpeed {
+            let own = Self.jitter(window)
+            restNoise += (own > restNoise ? 0.1 : 0.03) * (own - restNoise)
+        }
+        let restBelow = min(Self.restSpeed, max(Self.restSpeedFloor, Self.restSpeedPerNoise * restNoise))
         if released {
-            if let speed = average?.speed, speed < Self.restSpeed {
+            if let speed = average?.speed, speed < restBelow {
                 if slowSince == nil { slowSince = now }
                 if now - slowSince! >= Self.restTime, let average {
-                    released = false; landX = average.x; landY = average.y; vx = 0; vy = 0
+                    released = false; landing = false; landX = average.x; landY = average.y; vx = 0; vy = 0
+                    heldX = filterX; heldY = filterY
                 }
             } else { slowSince = nil }
         }
@@ -224,19 +308,29 @@ public struct PadSteamTrackpad {
             let last = recent.suffix(4), n = Double(last.count)
             let ax = last.map(\.x).reduce(0, +) / n, ay = last.map(\.y).reduce(0, +) / n
             let away = ((ax - landX) * (ax - landX) + (ay - landY) * (ay - landY)).squareRoot()
-            let clear = Self.clearMove(noise: noise)
-            if rawAway < clear && (clear <= Self.landingDistance || away < max(Self.landingDistance, clear * 0.75)) {
+            // Landing: a settling finger and the touch pulse read as movement, so the fixed landing distance
+            // stands. A rest mid-touch has only the pad's resting noise to stay clear of.
+            let floor = landing ? Self.landingDistance : Self.restDistance
+            let clear = landing ? Self.clearMove(noise: noise) : min(Self.clearMoveCap, max(floor, Self.noiseMultiple * restNoise))
+            if rawAway < clear && (clear <= floor || away < max(floor, clear * 0.75)) {
                 filterX = px; filterY = py; rateX = 0; rateY = 0
                 return Motion()
             }
-            released = true; slowSince = nil; filterX = x; filterY = y
+            released = true; slowSince = nil
+            if landing { landing = false; filterX = x; filterY = y }
+            else {
+                // Out of a rest the pointer goes on from the reading it last followed: what the finger has
+                // moved since is movement, not wobble (it is beyond the pad's noise), and dropping it left
+                // the pointer short at every slow-down.
+                fromX = heldX; fromY = heldY; filterX = heldX; filterY = heldY
+            }
         }
         // Steadiness is a per-axis dead band. With Smoothing on as well it caught most small reports, so the
         // pointer stalled mid-swipe and one axis froze then jumped (a recorded session: 32 ms stalls, a
         // sideways hook on vertical swipes). Smoothing replaces it; steadiness applies only without it.
         let requested = (settings.smoothing ?? 0) > 0 ? 0 : (settings.steadiness ?? 0)
         let steadiness = requested.isFinite ? min(5,max(0,requested)) : 0
-        var moveX = px - x, moveY = py - y
+        var moveX = px - fromX, moveY = py - fromY
         let strength = settings.smoothing.map { $0.isFinite ? min(1,max(0,$0)) : 0 } ?? 0
         let amount = min(1, max(0, (noiseLevel - Self.quietNoise) / (Self.noisyNoise - Self.quietNoise)))
         if strength > 0 || amount > 0 {
@@ -264,8 +358,26 @@ public struct PadSteamTrackpad {
             let r = min(45,max(-45,degrees)) * Double.pi / 180, c = cos(r), sn = sin(r)
             (moveX, moveY) = (c * moveX + sn * moveY, -sn * moveX + c * moveY)
         }
-        let dx = Self.steady(moveX * speed(settings.sensitivityX ?? settings.sensitivity), amount:steadiness, remainder:&steadyX)
-        let dy = Self.steady(moveY * speed(settings.sensitivityY ?? settings.sensitivity) * (settings.invertY ? -1 : 1), amount:steadiness, remainder:&steadyY)
+        if let cone = settings.straighten, cone.isFinite, cone > 0 {
+            // Judged on the direction over the last few reports (about 10 ms of averaging), so one noisy report
+            // doesn't flip it; only the sideways part of the movement is scaled, with nothing held back.
+            let dt = max(0.0005, now - previous), blend = dt / (dt + 1 / (2 * Double.pi * 15))
+            flickX += blend * (moveX / dt - flickX); flickY += blend * (moveY / dt - flickY)
+            // The averaged direction trails a sharp turn by a report or two, and what was "sideways" a moment
+            // ago is then the movement itself (which stopped the pointer on a quick change of direction): this
+            // report's own direction has to agree, or it passes whole.
+            let s = Self.straighten(vx: flickX, vy: flickY, cone: cone), own = Self.straighten(vx: moveX / dt, vy: moveY / dt, cone: cone)
+            let keep = own.vertical == s.vertical ? max(s.keep, own.keep) : 1
+            if s.vertical { moveX *= keep } else { moveY *= keep }
+        }
+        var sensitivityX = speed(settings.sensitivityX ?? settings.sensitivity), sensitivityY = speed(settings.sensitivityY ?? settings.sensitivity)
+        if settings.matchSideways == true, sensitivityX != sensitivityY {
+            let dt = max(0.0005, now - previous), blend = dt / (dt + 1 / (2 * Double.pi * 6))
+            headingX += blend * (moveX / dt - headingX); headingY += blend * (moveY / dt - headingY)
+            (sensitivityX, sensitivityY) = Self.matchedSensitivity(x: sensitivityX, y: sensitivityY, vx: headingX, vy: headingY)
+        }
+        let dx = Self.steady(moveX * sensitivityX, amount:steadiness, remainder:&steadyX)
+        let dy = Self.steady(moveY * sensitivityY * (settings.invertY ? -1 : 1), amount:steadiness, remainder:&steadyY)
         if abs(dx) + abs(dy) > 0.01 {
             let dt = max(0.001,now - previous)
             vx = min(20000,max(-20000,dx / dt)); vy = min(20000,max(-20000,dy / dt)); movedTime = now

@@ -74,6 +74,101 @@ final class SteamPadFeelTests: XCTestCase {
         XCTAssertEqual(sweep.x, 388, accuracy: 8); XCTAssertEqual(sweep.y, 0, accuracy: 2)
     }
 
+    /// Straight flicks: a quick swipe a few degrees off an axis comes out straight, with the same distance
+    /// along the axis on every report; slow movement and diagonals are left exactly as they were.
+    func testStraightFlicksStraightenQuickNearAxisSwipesOnly() {
+        func settings(_ cone: Double?) -> PadSteamTrackpadSettings {
+            var s = PadSteamTrackpadSettings(mode: .trackball); s.sensitivity = 1000; s.smoothing = 0; s.rotation = 0; s.straighten = cone; return s
+        }
+        func swipe(_ s: PadSteamTrackpadSettings, speed: Double, degrees: Double, seconds: Double) -> (x: Double, y: Double, steps: [Double]) {
+            var pad = PadSteamTrackpad(), x = 0.0, y = 0.0, steps: [Double] = [], t = 0.0
+            let r = degrees * Double.pi / 180
+            while t <= seconds {
+                let m = pad.touch(down: true, x: 0.5 + sin(r) * speed * t, y: 0.8 - cos(r) * speed * t, at: 10 + t, settings: s)
+                x += m.fx; y += m.fy; steps.append(m.fy); t += 0.008
+            }
+            return (x, y, steps)
+        }
+        // A flick up, 8° off, at 2 pad-widths a second.
+        let off = swipe(settings(nil), speed: 2, degrees: 8, seconds: 0.12), straight = swipe(settings(30), speed: 2, degrees: 8, seconds: 0.12)
+        XCTAssertGreaterThan(off.x, 25, "as it was: the flick drifts sideways")
+        XCTAssertLessThan(abs(straight.x), 4, "straightened")
+        XCTAssertEqual(straight.y, off.y, accuracy: 0.001, "the movement along the flick is untouched")
+        XCTAssertEqual(straight.steps, off.steps, "on every report: nothing is delayed")
+        // The same 8° off, slowly: untouched.
+        let slow = swipe(settings(nil), speed: 0.3, degrees: 8, seconds: 0.5), slowOn = swipe(settings(30), speed: 0.3, degrees: 8, seconds: 0.5)
+        XCTAssertEqual(slowOn.x, slow.x, accuracy: 0.001); XCTAssertEqual(slowOn.y, slow.y, accuracy: 0.001)
+        // A quick diagonal: untouched.
+        let diagonal = swipe(settings(nil), speed: 2, degrees: 40, seconds: 0.12), diagonalOn = swipe(settings(30), speed: 2, degrees: 40, seconds: 0.12)
+        XCTAssertEqual(diagonalOn.x, diagonal.x, accuracy: 0.001); XCTAssertEqual(diagonalOn.y, diagonal.y, accuracy: 0.001)
+        // Across works the same way.
+        let across = swipe(settings(30), speed: 2, degrees: 97, seconds: 0.12)
+        XCTAssertLessThan(abs(across.y), 4); XCTAssertGreaterThan(across.x, 150)
+        // A quick turn from up to across: the movement across is not mistaken for the flick's sideways part.
+        var pad = PadSteamTrackpad(), t = 0.0, x = 0.5, y = 0.8, turned = 0.0, turnedSteps = 0
+        while t <= 0.2 {
+            if t < 0.1 { y -= 0.016 } else { x += 0.016 }
+            let m = pad.touch(down: true, x: x, y: y, at: 10 + t, settings: settings(30))
+            if t >= 0.1 { turned += m.fx; turnedSteps += 1 }
+            t += 0.008
+        }
+        XCTAssertEqual(turned, Double(turnedSteps) * 16, accuracy: 0.5, "all of the movement after the turn arrives")
+        XCTAssertEqual(PadSteamTrackpad.straighten(vx: 0.2, vy: -2, cone: 0).keep, 1)
+        XCTAssertEqual(PadSteamTrackpad.straighten(vx: 0.2, vy: -2, cone: 30).keep, 0)
+    }
+
+    /// A finger that slows right down and goes on (a careful aim, a change of direction) keeps the pointer
+    /// going with it on a quiet pad: the pointer used to stop below 0.05 pad-widths a second and drop the next
+    /// 0.008 of the pad.
+    func testASlowFingerOnAQuietPadKeepsThePointerMoving() {
+        var s = PadSteamTrackpadSettings(mode: .trackball); s.sensitivity = 1000; s.smoothing = 0; s.rotation = 0
+        var pad = PadSteamTrackpad(), t = 0.0, x = 0.3, moved = 0.0, slowSteps = 0, slowStalls = 0
+        _ = pad.touch(down: true, x: x, y: 0.5, at: 10, settings: s)
+        while t < 0.8 {
+            t += 0.008
+            let slow = t > 0.2 && t <= 0.6
+            x += (slow ? 0.02 : 0.3) * 0.008
+            let m = pad.touch(down: true, x: x, y: 0.5, at: 10 + t, settings: s)
+            moved += m.fx
+            if slow, t > 0.3 { slowSteps += 1; if m.fx == 0 { slowStalls += 1 } }
+        }
+        XCTAssertEqual(slowStalls, 0, "of \(slowSteps) slow reports")
+        XCTAssertGreaterThan(moved, (x - 0.3) * 1000 - 10, "all but the landing distance arrives")
+        XCTAssertLessThan(moved, (x - 0.3) * 1000 + 0.5)
+    }
+
+    /// Match sideways sensitivity: an up/down movement's sideways wander is drawn at the lower (Y) sensitivity;
+    /// a movement across keeps the full X; the movement along the lower axis is identical on every report.
+    func testMatchSidewaysSensitivityFollowsTheDirection() {
+        func settings(_ on: Bool) -> PadSteamTrackpadSettings {
+            var s = PadSteamTrackpadSettings(mode: .mouse); s.sensitivityX = 2200; s.sensitivityY = 1100; s.smoothing = 0; s.rotation = 0
+            s.matchSideways = on ? true : nil; return s
+        }
+        func run(_ s: PadSteamTrackpadSettings, path: (Double) -> (Double, Double)) -> (x: Double, y: Double, ySteps: [Double]) {
+            var pad = PadSteamTrackpad(), x = 0.0, y = 0.0, steps: [Double] = [], t = 0.0
+            while t <= 0.5 {
+                let p = path(t)
+                let m = pad.touch(down: true, x: p.0, y: p.1, at: 10 + t, settings: s)
+                x += m.fx; y += m.fy; steps.append(m.fy); t += 0.008
+            }
+            return (x, y, steps)
+        }
+        // Up, at 0.6 pad-widths a second, drifting 0.03 of the pad sideways.
+        let up: (Double) -> (Double, Double) = { t in (0.5 + 0.06 * t, 0.8 - 0.6 * t) }
+        let off = run(settings(false), path: up), on = run(settings(true), path: up)
+        XCTAssertEqual(on.ySteps, off.ySteps, "up and down is untouched, report by report")
+        XCTAssertLessThan(on.x, off.x * 0.6, "the sideways drift is drawn at about Y's sensitivity, not X's")
+        XCTAssertGreaterThan(on.x, off.x * 0.45)
+        // Across: full X.
+        let across: (Double) -> (Double, Double) = { t in (0.2 + 0.6 * t, 0.5) }
+        let acrossOff = run(settings(false), path: across), acrossOn = run(settings(true), path: across)
+        XCTAssertEqual(acrossOn.x, acrossOff.x, accuracy: acrossOff.x * 0.03)
+        // Equal sensitivities: nothing changes.
+        XCTAssertEqual(PadSteamTrackpad.matchedSensitivity(x: 1000, y: 1000, vx: 0, vy: 1).x, 1000)
+        XCTAssertEqual(PadSteamTrackpad.matchedSensitivity(x: 2000, y: 1000, vx: 1, vy: 1).x, 1500, accuracy: 0.001)
+        XCTAssertEqual(PadSteamTrackpad.matchedSensitivity(x: 1000, y: 2000, vx: 1, vy: 0).y, 1000, accuracy: 0.001)
+    }
+
     func testAStraightVerticalSwipeStaysStraightByDefault() {
         var s = PadSteamTrackpadSettings(mode: .trackball); s.sensitivity = 1000
         var p = PadProfiles.Profile(name: "P"); p.steamRightTrackpad = s

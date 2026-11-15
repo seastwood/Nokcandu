@@ -395,6 +395,7 @@ final class DesktopPad: ObservableObject {
         if steamSource, let e = engine {
             for side in 0..<2 where steamTaps[side].tick(at: Self.now()) { releaseTap(side, engine: e, now: Self.now()) }
             let motion = steamRightMotion.tick(at: Self.now(), settings: steamRightSettings)
+            if !motion.isEmpty { PadTrace.shared.add(String(format: "coast -> %.3f,%.3f (%d,%d)", motion.fx, motion.fy, motion.x, motion.y)) }
             steamPadMouse(motion, side: 1)
             let left = steamLeftMotion.tick(at: Self.now(), settings: steamLeftSettings)
             steamPadMouse(left, side: 0)
@@ -618,6 +619,9 @@ final class DesktopPad: ObservableObject {
         }
         if steamRightSettings.mode != .existing {
             let motion = steamRightMotion.touch(down: state.rightTouch, x: Double(state.rightPad.x+1)/2, y: Double(1-state.rightPad.y)/2, at: now, settings: steamRightSettings)
+            if state.rightTouch || !motion.isEmpty {
+                PadTrace.shared.add(String(format: "pad t=%.6f touch=%d x=%.5f y=%.5f -> %.3f,%.3f (%d,%d) layer=%d noise=%.5f", now, state.rightTouch ? 1 : 0, Double(state.rightPad.x), Double(state.rightPad.y), motion.fx, motion.fy, motion.x, motion.y, steamPadLayer, steamRightMotion.noiseLevel))
+            }
             steamPadMouse(motion, side: 1)
         }
         consume(sourceState.update(source: "steam-usb", buttons: Set(buttons.map { Int(pe_input_named($0.rawValue)) }), axes: axes))
@@ -691,6 +695,7 @@ final class DesktopPad: ObservableObject {
             MainActor.assumeIsolated {
                 let runtime = DesktopPad.shared
                 runtime.lastRealMouse = ProcessInfo.processInfo.systemUptime
+                PadTrace.shared.add(String(format: "realmouse %.1f,%.1f", e.deltaX, e.deltaY))
                 if runtime.runtimePID == runtime.frontPID, let engine = runtime.engine {
                     _ = pe_menu_mouse(engine, e.deltaX, e.deltaY)
                 }
@@ -704,6 +709,7 @@ final class DesktopPad: ObservableObject {
     private var traceLast = 0.0
     private func traceMovement(_ route: String, dx: Int, dy: Int) {
         diagnostic("mouse: " + route)
+        if route != "desktop-pointer" { PadTrace.shared.add("move \(route) \(dx),\(dy)") }
         guard traceMouse else { return }
         traceCounts[route, default: 0] += 1
         let now = Self.now()
@@ -723,9 +729,9 @@ final class DesktopPad: ObservableObject {
         let fx = fine.map { Double($0.dx) } ?? Double(dx), fy = fine.map { Double($0.dy) } ?? Double(dy)
         // Headphone mouse output uses this same picker; engine-generated gyro,
         // stick and touchpad mouse output is intercepted before its output sink.
-        if let engine, pe_menu_mouse(engine, fx, fy) { return }
+        if let engine, pe_menu_mouse(engine, fx, fy) { PadTrace.shared.add("move menu"); return }
         let whole = dx != 0 || dy != 0
-        if streaming { if whole { stream?.mouseMove(dx, dy) }; return }
+        if streaming { PadTrace.shared.add("move stream \(dx),\(dy)"); if whole { stream?.mouseMove(dx, dy) }; return }
         if let pid = PadCapture.shared.targetPID {
             // Wine's own helper can deliver explicit relative motion directly.
             // Posting a CGEvent instead can be swallowed by its raw-mouse hook.
@@ -764,6 +770,7 @@ final class DesktopPad: ObservableObject {
         let bounds = screenBounds.rect
         p.x = min(max(p.x, bounds.minX), bounds.maxX - 1); p.y = min(max(p.y, bounds.minY), bounds.maxY - 1)
         pointerContinuity.posted(p, at: now)
+        PadTrace.shared.add(String(format: "move desktop %.3f,%.3f seen=%.2f,%.2f to=%.2f,%.2f", fx, fy, actual.x, actual.y, p.x, p.y))
         guard let ev = PadMouseEvent.movement(at: p, dx: dx, dy: dy,
                                              heldButtons: buttonsDown, flags: flags) else { return }
         ev.post(tap: .cghidEventTap)
