@@ -11,7 +11,13 @@ final class StreamVBANSender: @unchecked Sendable {
     private let destination: String
     private var engine: AVAudioEngine?
     private var connection: NWConnection?
-    private var converter: AVAudioConverter?
+    /// Capture state, owned by `queue`: the engine is rebuilt whenever macOS stops it (see restartCapture).
+    private var configObserver: NSObjectProtocol?
+    private var captureFormat: AVAudioFormat?
+    private var lastBuffer = Date(), lastRestart = Date.distantPast
+    private var watchdog: DispatchSourceTimer?
+    private var stopped = false, outageReported = false
+    private var notify: (@MainActor (String) -> Void)?
     private var packetizer: VBANPacketizer
     private let queue = DispatchQueue(label: "nokcandu.vban", qos: .userInteractive)
     private(set) var sentPackets = 0
@@ -66,7 +72,22 @@ final class StreamVBANSender: @unchecked Sendable {
         let c = NWConnection(host: NWEndpoint.Host(destination), port: NWEndpoint.Port(rawValue: settings.port) ?? 6980, using: .udp)
         c.start(queue: queue)
         connection = c
+        notify = failed
+        processor = VBANProcessor(settings: settings, sampleRate: Double(packetizer.sampleRate), channels: packetizer.channels)
+        let problem = queue.sync { startCapture() }
+        if let problem {
+            Task { @MainActor in failed(problem) }
+            return
+        }
+        if let f = captureFormat {
+            StreamLog.shared.add("VBAN: sending \(packetizer.channels == 1 ? "mono" : "stereo") \(packetizer.sampleRate) Hz as \"\(packetizer.streamName)\" to \(destination):\(settings.port) from \(f.channelCount)-channel \(Int(f.sampleRate)) Hz input")
+        }
+        startPacing()
+        startWatchdog()
+    }
 
+    /// Builds a fresh engine on the microphone as it is now and starts it. On `queue`. Returns what went wrong, or nil.
+    private func startCapture() -> String? {
         let e = AVAudioEngine()
         if let uid = settings.inputDevice, let id = Self.deviceID(uid: uid), let unit = e.inputNode.audioUnit {
             var dev = id
@@ -76,23 +97,74 @@ final class StreamVBANSender: @unchecked Sendable {
         guard input.sampleRate > 0, input.channelCount > 0,
               let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(packetizer.sampleRate), channels: AVAudioChannelCount(packetizer.channels), interleaved: true),
               let conv = AVAudioConverter(from: input, to: target) else {
-            Task { @MainActor in failed("VBAN: the microphone isn't available.") }
-            return
+            return "VBAN: the microphone isn't available."
         }
-        converter = conv
-        processor = VBANProcessor(settings: settings, sampleRate: Double(packetizer.sampleRate), channels: packetizer.channels)
-        e.inputNode.installTap(onBus: 0, bufferSize: 512, format: input) { [weak self] buffer, _ in self?.send(buffer, to: target) }
+        // Each engine's tap has its own converter: the input's sample rate can differ after a restart.
+        e.inputNode.installTap(onBus: 0, bufferSize: 512, format: input) { [weak self] buffer, _ in self?.send(buffer, with: conv, to: target) }
         do { try e.start() } catch {
-            Task { @MainActor in failed("VBAN: couldn't start the microphone (\(error.localizedDescription)).") }
-            return
+            e.inputNode.removeTap(onBus: 0)
+            return "VBAN: couldn't start the microphone (\(error.localizedDescription))."
         }
         engine = e
-        StreamLog.shared.add("VBAN: sending \(packetizer.channels == 1 ? "mono" : "stereo") \(packetizer.sampleRate) Hz as \"\(packetizer.streamName)\" to \(destination):\(settings.port) from \(input.channelCount)-channel \(Int(input.sampleRate)) Hz input")
-        startPacing()
+        captureFormat = input
+        lastBuffer = Date()
+        // macOS stops an engine when the audio setup changes (headphones or AirPods connecting, the default device
+        // switched, a sample rate change). Without this the microphone went silent until VBAN was switched off and on.
+        let id = ObjectIdentifier(e)
+        configObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: e, queue: nil) { [weak self] _ in
+            // Not from inside the notification: the engine can't be torn down there. A moment later, so a burst of
+            // changes (a device connecting posts several) settles into one restart.
+            self?.queue.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let self, let e = self.engine, ObjectIdentifier(e) == id else { return }
+                let now = e.inputNode.outputFormat(forBus: 0)
+                // Still running on the same input: nothing was lost (the stream's sound restarting posts this too).
+                if e.isRunning, let was = self.captureFormat, now.sampleRate == was.sampleRate, now.channelCount == was.channelCount { return }
+                self.restartCapture(reason: "the Mac's audio setup changed")
+            }
+        }
+        return nil
     }
 
-    private func send(_ buffer: AVAudioPCMBuffer, to format: AVAudioFormat) {
-        guard let converter else { return }
+    private func stopCapture() {
+        if let o = configObserver { NotificationCenter.default.removeObserver(o); configObserver = nil }
+        engine?.inputNode.removeTap(onBus: 0)
+        engine?.stop(); engine = nil
+    }
+
+    /// Starts the microphone again after macOS stopped it. On `queue`.
+    private func restartCapture(reason: String) {
+        guard !stopped, Date().timeIntervalSince(lastRestart) >= 1 else { return }
+        lastRestart = Date()
+        stopCapture()
+        if let problem = startCapture() {
+            // The watchdog tries again every few seconds; say so once, not on every attempt.
+            if !outageReported {
+                outageReported = true
+                StreamLog.shared.add("VBAN: microphone stopped (\(reason)) and couldn't restart: \(problem) Trying again every few seconds.")
+                if let notify { Task { @MainActor in notify("The VBAN microphone stopped. Trying to start it again…") } }
+            }
+            return
+        }
+        let f = captureFormat
+        StreamLog.shared.add("VBAN: microphone restarted (\(reason)); \(f?.channelCount ?? 0)-channel \(Int(f?.sampleRate ?? 0)) Hz input")
+        if outageReported, let notify { Task { @MainActor in notify("The VBAN microphone is sending again.") } }
+        outageReported = false
+    }
+
+    /// Whatever stopped the microphone, notice it: no audio from it for 3 seconds means it needs starting again
+    /// (a running microphone always delivers, even silence).
+    private func startWatchdog() {
+        let t = DispatchSource.makeTimerSource(queue: queue)
+        t.schedule(deadline: .now() + 3, repeating: 3)
+        t.setEventHandler { [weak self] in
+            guard let self, !self.stopped, Date().timeIntervalSince(self.lastBuffer) >= 3 else { return }
+            self.restartCapture(reason: "no audio from the microphone for 3 seconds")
+        }
+        t.resume()
+        watchdog = t
+    }
+
+    private func send(_ buffer: AVAudioPCMBuffer, with converter: AVAudioConverter, to format: AVAudioFormat) {
         let ratio = format.sampleRate / buffer.format.sampleRate
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio + 32)
         guard let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return }
@@ -106,6 +178,7 @@ final class StreamVBANSender: @unchecked Sendable {
         var floats = Array(UnsafeBufferPointer(start: p, count: Int(out.frameLength) * packetizer.channels))
         queue.async { [weak self] in
             guard let self, var proc = self.processor else { return }
+            self.lastBuffer = Date()
             proc.process(&floats)
             let level = proc.takePeak()
             self.processor = proc
@@ -148,8 +221,11 @@ final class StreamVBANSender: @unchecked Sendable {
 
     func stop() {
         timer?.cancel(); timer = nil
-        engine?.inputNode.removeTap(onBus: 0)
-        engine?.stop(); engine = nil
+        queue.sync {
+            stopped = true
+            watchdog?.cancel(); watchdog = nil
+            stopCapture()
+        }
         connection?.cancel(); connection = nil
         if sentPackets > 0 { StreamLog.shared.add("VBAN: sent \(sentPackets) packets") }
     }

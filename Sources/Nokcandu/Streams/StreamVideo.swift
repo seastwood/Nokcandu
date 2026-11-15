@@ -34,6 +34,12 @@ final class StreamVideoDecoder: @unchecked Sendable {
     let stats = StreamVideoStats()
     /// Asked for a key frame since the last decode error.
     private var needsIDR = false
+    /// Decoding failing without a single good frame since `failingSince`: past `giveUpAfter` seconds the stream
+    /// ends with a message (`onUndecodable`) instead of asking the host for key frames forever. Every rejected
+    /// frame asked the host for a new one, many times a second, which left a host (Apollo) needing a restart.
+    private var failingSince: Double?, lastKeyFrameAsk = 0.0, gaveUp = false
+    static let giveUpAfter = 5.0, keyFrameAskInterval = 0.25
+    var onUndecodable: (() -> Void)?
 
     init() {
         layer.videoGravity = .resizeAspect
@@ -48,6 +54,7 @@ final class StreamVideoDecoder: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         self.videoFormat = videoFormat
         self.width = Int(width); self.height = Int(height); self.fps = Int(fps)
+        os_unfair_lock_lock(&frameLock); failingSince = nil; gaveUp = false; lastKeyFrameAsk = 0; decodeFailures = [:]; os_unfair_lock_unlock(&frameLock)
         invalidate()
         return 0
     }
@@ -72,24 +79,40 @@ final class StreamVideoDecoder: @unchecked Sendable {
     func submit(_ du: UnsafeMutablePointer<DECODE_UNIT>) -> Int32 {
         let unit = du.pointee
         stats.received(unit)
+        // Given up: drop frames quietly until the stream ends, rather than asking the host for key frames.
+        if hasGivenUp { return DR_OK }
         lock.lock(); defer { lock.unlock() }
-        var frame = Data(capacity: Int(unit.fullLength) + 64)
+        // The picture data goes straight into the block buffer the decoder reads: one copy. (It was copied
+        // three times: into a joined buffer, a converted one, and the decoder's.) H.264/HEVC start codes are
+        // then turned into lengths in place; only 3-byte start codes, which need room, take a second buffer.
         var sets: [Data] = []
+        var total = 0
         var entry = unit.bufferList
         while let e = entry {
-            let data = Data(bytesNoCopy: e.pointee.data, count: Int(e.pointee.length), deallocator: .none)
-            if isAV1 {
-                frame.append(data)
-            } else if e.pointee.bufferType != BUFFER_TYPE_PICDATA {
-                sets.append(Self.stripStartCode(data))
-            } else {
-                Self.appendLengthPrefixed(data, to: &frame)
-            }
+            let n = Int(e.pointee.length)
+            if isAV1 || e.pointee.bufferType == BUFFER_TYPE_PICDATA { total += n }
+            else { sets.append(Self.stripStartCode(Data(bytes: e.pointee.data, count: n))) }
             entry = e.pointee.next
+        }
+        guard total > 0, var block = Self.makeBlock(length: total), let base = Self.pointer(block) else { return DR_OK }
+        var offset = 0
+        entry = unit.bufferList
+        while let e = entry {
+            let n = Int(e.pointee.length)
+            if isAV1 || e.pointee.bufferType == BUFFER_TYPE_PICDATA { memcpy(base + offset, e.pointee.data, n); offset += n }
+            entry = e.pointee.next
+        }
+        var length = total
+        if !isAV1, !Self.lengthPrefixInPlace(base, count: total) {
+            var converted = Data(capacity: total + 64)
+            Self.appendLengthPrefixed(Data(bytesNoCopy: base, count: total, deallocator: .none), to: &converted)
+            guard let b = Self.makeBlock(length: converted.count), let p = Self.pointer(b) else { return DR_OK }
+            converted.copyBytes(to: p.assumingMemoryBound(to: UInt8.self), count: converted.count)
+            block = b; length = converted.count
         }
         if unit.frameType == FRAME_TYPE_IDR {
             if isAV1 {
-                if !makeAV1Format(frame) { return DR_NEED_IDR }
+                if !makeAV1Format(Data(bytes: base, count: total)) { return DR_NEED_IDR }
             } else if !sets.isEmpty, sets != parameterSets {
                 if !makeFormat(sets) { return DR_NEED_IDR }
             }
@@ -98,20 +121,22 @@ final class StreamVideoDecoder: @unchecked Sendable {
         if needsKeyFrame { return DR_NEED_IDR }
         guard let format else { return DR_OK }
         if session == nil, !makeSession(format) { return DR_NEED_IDR }
-        guard let sample = Self.sampleBuffer(frame, format: format) else { return DR_OK }
+        guard let sample = Self.sampleBuffer(block, length: length, format: format) else { return DR_OK }
         let flags: VTDecodeFrameFlags = [._EnableAsynchronousDecompression]
         let received = unit.receiveTimeUs
         let status = VTDecompressionSessionDecodeFrame(session!, sampleBuffer: sample, flags: flags, infoFlagsOut: nil) { [weak self] status, _, image, _, _ in
             guard let self else { return }
             guard status == noErr, let image else {
                 self.stats.dropped()
-                if status != noErr { self.setNeedsIDR(true); LiRequestIdrFrame() }
+                if status != noErr { self.noteDecodeFailure(status); self.setNeedsIDR(true); if self.mayAskForKeyFrame() { LiRequestIdrFrame() } }
                 return
             }
+            self.decodedOne()
             self.stats.decoded(receivedUs: received)
             self.show(image)
         }
         if status != noErr {
+            noteDecodeFailure(status)
             // The session can be lost (sleep, display change): start again from the next key frame.
             if status == kVTInvalidSessionErr { invalidate() }
             setNeedsIDR(true)
@@ -120,6 +145,32 @@ final class StreamVideoDecoder: @unchecked Sendable {
         return DR_OK
     }
 
+    /// Decode failures in the stream log: the first few of each kind, so a codec this Mac rejects says why
+    /// instead of only showing a black picture.
+    private var decodeFailures: [OSStatus: Int] = [:]
+    private func noteDecodeFailure(_ status: OSStatus) {
+        let now = ProcessInfo.processInfo.systemUptime
+        os_unfair_lock_lock(&frameLock)
+        let n = (decodeFailures[status] ?? 0) + 1; decodeFailures[status] = n
+        if failingSince == nil { failingSince = now }
+        let giveUp = !gaveUp && now - failingSince! >= Self.giveUpAfter
+        if giveUp { gaveUp = true }
+        os_unfair_lock_unlock(&frameLock)
+        if n <= 3 || n % 500 == 0 { StreamLog.shared.add("Video: the decoder rejected a frame (\(status)), \(n) so far") }
+        if giveUp {
+            StreamLog.shared.add("Video: no frame decoded for \(Int(Self.giveUpAfter)) s (\(status)); ending the stream")
+            DispatchQueue.main.async { [weak self] in self?.onUndecodable?() }
+        }
+    }
+    private func decodedOne() { os_unfair_lock_lock(&frameLock); failingSince = nil; os_unfair_lock_unlock(&frameLock) }
+    /// At most one key-frame request of ours every `keyFrameAskInterval`, and none once given up.
+    private func mayAskForKeyFrame() -> Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        os_unfair_lock_lock(&frameLock); defer { os_unfair_lock_unlock(&frameLock) }
+        guard !gaveUp, now - lastKeyFrameAsk >= Self.keyFrameAskInterval else { return false }
+        lastKeyFrameAsk = now; return true
+    }
+    private var hasGivenUp: Bool { os_unfair_lock_lock(&frameLock); defer { os_unfair_lock_unlock(&frameLock) }; return gaveUp }
     private func setNeedsIDR(_ v: Bool) { os_unfair_lock_lock(&frameLock); needsIDR = v; os_unfair_lock_unlock(&frameLock) }
     private var needsKeyFrame: Bool { os_unfair_lock_lock(&frameLock); defer { os_unfair_lock_unlock(&frameLock) }; return needsIDR }
 
@@ -167,9 +218,16 @@ final class StreamVideoDecoder: @unchecked Sendable {
             a[kCMSampleAttachmentKey_DisplayImmediately] = true
         }
         let layer = self.layer
-        DispatchQueue.main.async {
+        // On a display refresh (the main thread) the frame goes up at once; it went round the main queue
+        // again first, a turn later. Straight from the decoder ("Lowest latency"), it goes over to the main thread.
+        if Thread.isMainThread {
             if layer.status == .failed { layer.flush() }
             layer.enqueue(sample)
+        } else {
+            DispatchQueue.main.async {
+                if layer.status == .failed { layer.flush() }
+                layer.enqueue(sample)
+            }
         }
         stats.shown()
     }
@@ -194,6 +252,8 @@ final class StreamVideoDecoder: @unchecked Sendable {
         guard status == noErr, let desc else { StreamLog.shared.add("Video: couldn't read the stream's parameter sets (\(status))"); return false }
         replaceFormat(desc)
         parameterSets = sets
+        let d = CMVideoFormatDescriptionGetDimensions(desc)
+        StreamLog.shared.add("Video: \(isHEVC ? "HEVC" : "H.264") parameter sets read (\(sets.count): \(sets.map { String($0.count) }.joined(separator: ", ")) bytes; first bytes \(sets.map { $0.prefix(2).map { String(format: "%02x", $0) }.joined() }.joined(separator: " "))), \(d.width)×\(d.height)")
         return true
     }
 
@@ -314,16 +374,42 @@ final class StreamVideoDecoder: @unchecked Sendable {
         }
     }
 
-    static func sampleBuffer(_ frame: Data, format: CMVideoFormatDescription) -> CMSampleBuffer? {
+    static func makeBlock(length: Int) -> CMBlockBuffer? {
         var block: CMBlockBuffer?
-        let len = frame.count
-        guard CMBlockBufferCreateWithMemoryBlock(allocator: nil, memoryBlock: nil, blockLength: len, blockAllocator: nil, customBlockSource: nil,
-                                                 offsetToData: 0, dataLength: len, flags: kCMBlockBufferAssureMemoryNowFlag, blockBufferOut: &block) == noErr,
-              let block else { return nil }
-        let copied = frame.withUnsafeBytes { CMBlockBufferReplaceDataBytes(with: $0.baseAddress!, blockBuffer: block, offsetIntoDestination: 0, dataLength: len) }
-        guard copied == noErr else { return nil }
+        guard CMBlockBufferCreateWithMemoryBlock(allocator: nil, memoryBlock: nil, blockLength: length, blockAllocator: nil, customBlockSource: nil,
+                                                 offsetToData: 0, dataLength: length, flags: kCMBlockBufferAssureMemoryNowFlag, blockBufferOut: &block) == noErr
+        else { return nil }
+        return block
+    }
+    static func pointer(_ block: CMBlockBuffer) -> UnsafeMutableRawPointer? {
+        var p: UnsafeMutablePointer<CChar>?
+        guard CMBlockBufferGetDataPointer(block, atOffset: 0, lengthAtOffsetOut: nil, totalLengthOut: nil, dataPointerOut: &p) == noErr else { return nil }
+        return p.map { UnsafeMutableRawPointer($0) }
+    }
+    /// Annex B with 4-byte start codes (what hosts send) to 4-byte lengths, in place. False, untouched, if the
+    /// data doesn't begin with a start code or has a 3-byte one (which needs a byte more room).
+    static func lengthPrefixInPlace(_ raw: UnsafeMutableRawPointer, count n: Int) -> Bool {
+        let p = raw.assumingMemoryBound(to: UInt8.self)
+        var starts: [Int] = []
+        var i = 0
+        while i + 3 < n {
+            if p[i] == 0, p[i + 1] == 0 {
+                if p[i + 2] == 1 { return false }
+                if p[i + 2] == 0, p[i + 3] == 1 { starts.append(i); i += 4; continue }
+            }
+            i += 1
+        }
+        guard starts.first == 0 else { return false }
+        for (k, s) in starts.enumerated() {
+            let end = k + 1 < starts.count ? starts[k + 1] : n
+            let len = UInt32(end - s - 4).bigEndian
+            withUnsafeBytes(of: len) { memcpy(p + s, $0.baseAddress!, 4) }
+        }
+        return true
+    }
+    static func sampleBuffer(_ block: CMBlockBuffer, length: Int, format: CMVideoFormatDescription) -> CMSampleBuffer? {
         var sample: CMSampleBuffer?
-        var size = len
+        var size = length
         guard CMSampleBufferCreateReady(allocator: nil, dataBuffer: block, formatDescription: format, sampleCount: 1, sampleTimingEntryCount: 0,
                                         sampleTimingArray: nil, sampleSizeEntryCount: 1, sampleSizeArray: &size, sampleBufferOut: &sample) == noErr else { return nil }
         return sample
@@ -383,20 +469,39 @@ final class StreamLog: @unchecked Sendable {
     /// ~/Library/Logs/Nokcandu/Streams.log, for Diagnostics and troubleshooting.
     static let file = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Nokcandu/Streams.log")
     private let fileQueue = DispatchQueue(label: "nokcandu.streamlog")
+    /// The same line again and again (the stream core asks for a key frame on every frame it can't use) is
+    /// written once and then counted, so it can't push everything else out of the log.
+    private var lastLine = "", repeats = 0
     func add(_ s: String) {
-        lock.lock(); lines.append(s); if lines.count > 400 { lines.removeFirst(lines.count - 400) }; lock.unlock()
+        lock.lock()
+        if s == lastLine { repeats += 1; if repeats < 3 || repeats % 1000 == 0 { lock.unlock(); writeRepeat(s, count: repeats) } else { lock.unlock() }; return }
+        let skipped = repeats; lastLine = s; repeats = 0
+        lines.append(s); if lines.count > 400 { lines.removeFirst(lines.count - 400) }; lock.unlock()
+        if skipped >= 3 { write("(the line before repeated \(skipped) times in all)") }
+        write(s)
+        #if DEBUG
+        print("[stream]", s)
+        #endif
+    }
+    private func writeRepeat(_ s: String, count: Int) { write(count < 3 ? s : "\(s) (×\(count))") }
+    private func write(_ s: String) {
         let line = "\(ISO8601DateFormatter().string(from: Date())) \(s)\n"
         fileQueue.async {
             let url = StreamLog.file
             try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             if let h = try? FileHandle(forWritingTo: url) {
-                if (try? h.seekToEnd()) ?? 0 > 2_000_000 { try? h.truncate(atOffset: 0) }
+                if (try? h.seekToEnd()) ?? 0 > 2_000_000 {
+                    // Full: the log so far becomes Streams.previous.log (replacing the one before), not lost.
+                    try? h.close()
+                    let previous = url.deletingLastPathComponent().appendingPathComponent("Streams.previous.log")
+                    try? FileManager.default.removeItem(at: previous)
+                    try? FileManager.default.moveItem(at: url, to: previous)
+                    try? Data(line.utf8).write(to: url)
+                    return
+                }
                 h.write(Data(line.utf8)); try? h.close()
             } else { try? Data(line.utf8).write(to: url) }
         }
-        #if DEBUG
-        print("[stream]", s)
-        #endif
     }
     var text: String { lock.lock(); defer { lock.unlock() }; return lines.joined(separator: "\n") }
     func clear() { lock.lock(); lines.removeAll(); lock.unlock(); add("— new stream —") }

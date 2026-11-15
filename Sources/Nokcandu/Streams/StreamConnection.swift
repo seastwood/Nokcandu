@@ -36,6 +36,7 @@ final class StreamConnection: @unchecked Sendable {
     init(host: StreamHost, profile: StreamProfile, address: String) {
         self.host = host; self.profile = profile; self.address = address
         video.pacing = profile.video.pacing
+        video.onUndecodable = { [weak self] in self?.terminated(-104) }
         video.frameBuffer = profile.video.frameBuffer
         video.fullRange = profile.video.fullRange
         audio.volume = Float(profile.audio.volume)

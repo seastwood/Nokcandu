@@ -31,6 +31,9 @@ import SwiftUI
     private var statsTimer: Timer?
     private var displayLink: CADisplayLink?
     private var ended = false
+    /// Keeps this controller alive while its window still shows an error: StreamsModel lets go of it as soon as the
+    /// stream ends, and the overlay's Close button (and the window's delegate) need it until the window closes.
+    private var heldForError: StreamWindowController?
     private var vban: StreamVBANSender?
     private var vbanSettings: VBANSettings?
 
@@ -203,6 +206,7 @@ import SwiftUI
         NSEvent.isMouseCoalescingEnabled = true
         if DesktopPad.shared.stream === self { DesktopPad.shared.stream = nil }
         if StreamConnection.current === connection { StreamConnection.current = nil }
+        if error != nil, window?.isVisible == true { heldForError = self }
         onEnd?(error)
     }
 
@@ -249,8 +253,16 @@ import SwiftUI
 
     @objc private func refresh() { connection.video.displayRefresh() }
 
+    private var statsTicks = 0
     private func updateStats() {
         let v = connection.video.stats.roll()
+        statsTicks += 1
+        if statsTicks % 5 == 0 {
+            var rtt: UInt32 = 0, variance: UInt32 = 0
+            _ = LiGetEstimatedRttInfo(&rtt, &variance)
+            StreamLog.shared.add(String(format: "Video stats: received %.0f fps, shown %.0f fps, decode %.1f ms, host %.1f ms, network %d ms (±%d); dropped %d decode, %d pacing; display %d Hz",
+                                        v.receivedFPS, v.shownFPS, v.decodeMs, v.hostMs, rtt, variance, v.dropped, v.pacedDrops, window?.screen?.maximumFramesPerSecond ?? 0))
+        }
         guard state.statistics != .off else { return }
         var rtt: UInt32 = 0, variance: UInt32 = 0
         _ = LiGetEstimatedRttInfo(&rtt, &variance)
@@ -389,6 +401,8 @@ import SwiftUI
     }
     func windowWillClose(_ notification: Notification) {
         if !ended { endStream(quitApp: false) }
+        // Let go after this call returns, not from inside it.
+        if let held = heldForError { heldForError = nil; DispatchQueue.main.async { _ = held } }
     }
 
     // MARK: Clipboard (Apollo hosts)
