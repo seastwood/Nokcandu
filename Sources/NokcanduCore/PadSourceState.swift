@@ -9,6 +9,8 @@ public struct PadSourceState {
     }
     private struct State { var buttons: Set<Int>; var axes: [Int: Int] }
     private var sources: [String: State] = [:]
+    /// The sources with a state now.
+    public var sourceNames: Set<String> { Set(sources.keys) }
     private var buttons = Set<Int>()
     private var axes: [Int: Int] = [:]
     public init() {}

@@ -487,7 +487,11 @@ final class DesktopPad: ObservableObject {
     private var napGuard: NSObjectProtocol?
     func attach() {
         // Timers only while a controller is connected and a profile applies.
-        let any = steamSource || GCController.controllers().contains { $0.extendedGamepad != nil } || feed.anyConnected
+        MappedGamepads.shared.excluded = feed.devices
+        if mappedToken == nil {
+            mappedToken = MappedGamepads.shared.listen { source, held, axes in MainActor.assumeIsolated { DesktopPad.shared.readMapped(source, held, axes) } }
+        }
+        let any = steamSource || GCController.controllers().contains { $0.extendedGamepad != nil } || feed.anyConnected || !MappedGamepads.shared.pads.isEmpty
         if !any, let e = engine { pe_release_all(e, Self.now()); sourceState = PadSourceState() }
         // While a profile is mapping a controller, macOS must not nap Nokcandu behind the game: App Nap
         // stretches timers and delays callbacks, which is felt as late or uneven input.
@@ -507,11 +511,12 @@ final class DesktopPad: ObservableObject {
             return
         }
         SteamControllerUSB.shared.remove(steamReaderID)
-        if hadMainController && feed.mainControllers().isEmpty, let e = engine {
+        let hasMain = !feed.mainControllers().isEmpty || !MappedGamepads.shared.pads.isEmpty
+        if hadMainController && !hasMain, let e = engine {
             pe_release_main(e, Self.now()); sourceState = PadSourceState(); lastButtons = [:]; lastAxes = [:]
         }
-        hadMainController = !feed.mainControllers().isEmpty
-        consume(sourceState.retain(Set(feed.mainControllers().map { String(describing: ObjectIdentifier($0)) }).union(headStickActive ? ["head-motion"] : [])))
+        hadMainController = hasMain
+        consume(sourceState.retain(Set(feed.mainControllers().map { String(describing: ObjectIdentifier($0)) }).union(headStickActive ? ["head-motion"] : []).union(MappedGamepads.shared.sources)))
         for c in feed.mainControllers() {
             guard let gp = c.extendedGamepad else { continue }
             let sourceID = String(describing: ObjectIdentifier(c))
@@ -545,6 +550,17 @@ final class DesktopPad: ObservableObject {
         }
     }
 
+    private var mappedToken: UUID?
+    /// A controller macOS doesn't know, read with its community mapping (MappedGamepads): like any other.
+    private func readMapped(_ source: String, _ held: Set<PadProfiles.Input>?, _ axes: [Int: Int]) {
+        guard engine != nil, !steamSource else { return }
+        guard let held else { consume(sourceState.retain(sourceState.sourceNames.subtracting([source]))); return }
+        if OnScreenKeyboard.shared.isOpen {
+            OnScreenKeyboard.shared.handle(held, stick: CGPoint(x: Double(axes[0] ?? 0) / 32767, y: -Double(axes[1] ?? 0) / 32767))
+            return
+        }
+        consume(sourceState.update(source: source, buttons: Set(held.map { Int(pe_input_named($0.rawValue)) }), axes: axes))
+    }
     private func read(_ g: GCExtendedGamepad, source: String) {
         let timingStart = diagnosticsEnabled ? Self.now() : nil
         defer { finishTiming("Controller handling", started: timingStart) }

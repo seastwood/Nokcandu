@@ -634,7 +634,9 @@ final class PadTester: ObservableObject {
             lastButtons = [:]; lastAxes = [:]; pressed = []; sticks = [.zero, .zero]
             primaryID = next
         }
-        controllerName = c?.vendorName
+        MappedGamepads.shared.start()
+        MappedGamepads.shared.excluded = feed.devices
+        controllerName = c?.vendorName ?? MappedGamepads.shared.names.first
         hasMotion = c?.motion?.hasRotationRate ?? false
         if let m = c?.motion, m.sensorsRequireManualActivation { m.sensorsActive = true }
     }
@@ -647,7 +649,7 @@ final class PadTester: ObservableObject {
             for side in 0..<2 { steamMouse(steamPadMotion[side].tick(at: Self.now(), settings: steamPadSettings[side]), side: side) }
         }
         guard !steamSource else { return }
-        guard let c = feed.mainControllers().first, let g = c.extendedGamepad else { return }
+        guard let c = feed.mainControllers().first, let g = c.extendedGamepad else { sampleMapped(); return }
         guard primaryID == ObjectIdentifier(c) else { attach(); return }
         read(g)
         if let m = c.motion, let e = engine {
@@ -775,9 +777,21 @@ final class PadTester: ObservableObject {
         if !pe_menu_mouse(engine, Double(motion.x), Double(motion.y)) { move(motion.x,motion.y) }
     }
 
+    /// No controller macOS knows: a controller read with its community mapping (MappedGamepads), if one is connected.
+    private func sampleMapped() {
+        guard let p = MappedGamepads.shared.pads.values.sorted(by: { $0.info.id < $1.info.id }).first else { return }
+        if controllerName != p.info.name { controllerName = p.info.name }
+        let s = p.mapping.state(buttons: p.buttons, axes: p.axes, hat: p.hat)
+        let buttons = PadProfiles.Input.padButtons.map { ($0, s.buttons.contains($0)) }
+        let axes = (0..<6).map { (Int32($0), Float(s.axes[$0] ?? 0) / 32767) }
+        readState(buttons, axes)
+    }
     private func read(_ g: GCExtendedGamepad) {
-        typealias I = PadProfiles.Input
         let (buttons, axes) = PadGC.state(g)
+        readState(buttons, axes)
+    }
+    private func readState(_ buttons: [(PadProfiles.Input, Bool)], _ axes: [(Int32, Float)]) {
+        typealias I = PadProfiles.Input
         let now = Self.now()
         var p = Set<I>()
         for (i, down) in buttons {
@@ -789,13 +803,16 @@ final class PadTester: ObservableObject {
             let iv = Int(max(-32768, min(32767, v * 32767)))
             if lastAxes[Int(a)] != iv { lastAxes[Int(a)] = iv; if let e = engine { pe_axis(e, a, Int32(iv), now) } }
         }
-        if g.leftTrigger.value > 0.3 { p.insert(.lt) }
-        if g.rightTrigger.value > 0.3 { p.insert(.rt) }
-        if g.leftTrigger.value > 0.95 { p.insert(.ltfull) }
-        if g.rightTrigger.value > 0.95 { p.insert(.rtfull) }
+        let v = Dictionary(uniqueKeysWithValues: axes.map { (Int($0.0), Double($0.1)) })
+        func a(_ n: Int) -> Double { v[n] ?? 0 }
+        if a(4) > 0.3 { p.insert(.lt) }
+        if a(5) > 0.3 { p.insert(.rt) }
+        if a(4) > 0.95 { p.insert(.ltfull) }
+        if a(5) > 0.95 { p.insert(.rtfull) }
         if p != pressed { pressed = p }
-        let s = [CGPoint(x: (Double(g.leftThumbstick.xAxis.value) * 20).rounded() / 20, y: (Double(g.leftThumbstick.yAxis.value) * 20).rounded() / 20),
-                 CGPoint(x: (Double(g.rightThumbstick.xAxis.value) * 20).rounded() / 20, y: (Double(g.rightThumbstick.yAxis.value) * 20).rounded() / 20)]
+        // Axes are y down; the picture's sticks are y up.
+        let s = [CGPoint(x: (a(0) * 20).rounded() / 20, y: (-a(1) * 20).rounded() / 20),
+                 CGPoint(x: (a(2) * 20).rounded() / 20, y: (-a(3) * 20).rounded() / 20)]
         if s != sticks { sticks = s }
     }
 }
