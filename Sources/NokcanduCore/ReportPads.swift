@@ -15,7 +15,7 @@ public struct ReportPadState: Equatable {
 /// Controllers whose own reports carry more than their generic HID description lets macOS see (extra buttons,
 /// motion, rumble): each driver's decoder, start-up and rumble, from SDL's HIDAPI drivers.
 public enum ReportPadDriver: Equatable {
-    case eightBitDo(product: Int), stadia, lunaUSB, lunaBluetooth, sinput, zuiki(product: Int), horiSteam
+    case eightBitDo(product: Int), stadia, lunaUSB, lunaBluetooth, sinput, zuiki(product: Int), horiSteam, gameSir
 
     public static func find(vendor: Int, product: Int) -> ReportPadDriver? {
         switch (vendor, product) {
@@ -27,6 +27,7 @@ public enum ReportPadDriver: Equatable {
         case (0x38D2, 0x1014): return .sinput
         case (0x33DD, let p) where Zuiki.names[p] != nil: return .zuiki(product: p)
         case (0x0F0D, 0x01AB), (0x0F0D, 0x0196): return .horiSteam
+        case (0x3537, 0x10B8), (0x3537, 0x103C): return .gameSir
         default: return nil
         }
     }
@@ -34,7 +35,7 @@ public enum ReportPadDriver: Equatable {
     public static var matching: [(vendor: Int, product: Int)] {
         EightBitDoController.products.map { (EightBitDoController.vendor, $0) } + [(0x18D1, 0x9400), (0x1949, 0x0419), (0x0171, 0x0419)]
             + SInput.raspberryPiProducts.map { (0x2E8A, $0) } + [(0x38D2, 0x1014)] + Zuiki.names.keys.map { (0x33DD, $0) }
-            + [(0x0F0D, 0x01AB), (0x0F0D, 0x0196)]
+            + [(0x0F0D, 0x01AB), (0x0F0D, 0x0196), (0x3537, 0x10B8), (0x3537, 0x103C)]
     }
 
     public var name: String {
@@ -45,6 +46,7 @@ public enum ReportPadDriver: Equatable {
         case .sinput: return "SInput Controller"
         case .zuiki(let p): return Zuiki.names[p] ?? "ZUIKI Controller"
         case .horiSteam: return "Wireless HORIPAD for Steam"
+        case .gameSir: return "GameSir 8K Controller"
         }
     }
     /// A feature report to read (get) once at start, which some controllers need before they send everything.
@@ -55,6 +57,7 @@ public enum ReportPadDriver: Equatable {
     /// An output report to send once at start (SInput: ask for its features, which answer with its motion ranges).
     public var startOutput: [UInt8]? {
         if case .sinput = self { return SInput.command(0x02, []) }
+        if case .gameSir = self { return Self.gameSirCommand([0x01, 0x00]) }      // its full ("SDL") mode
         return nil
     }
     /// The output report for rumble at these strengths (0…1), or nil when it has none. A first byte of 0 is "no
@@ -72,8 +75,10 @@ public enum ReportPadDriver: Equatable {
         case .sinput: return SInput.command(0x01, [2, byte(low), 0, byte(high), 0])
         case .zuiki(let p): return p == 0x0020 ? nil : [0, 0, 0, 0, byte(low), byte(high), 0, 0]
         case .horiSteam: return nil
+        case .gameSir: return Self.gameSirCommand([0x03, byte(low), byte(high)])
         }
     }
+    static func gameSirCommand(_ body: [UInt8]) -> [UInt8] { [0xA2] + body + [UInt8](repeating: 0, count: 63 - body.count) }
 }
 
 /// One controller's decoder (some keep a little state between reports).
@@ -98,6 +103,7 @@ public struct ReportPadDecoder {
             return SInput.decode(d, sinput)
         case .zuiki(let p): return p == 0x0017 ? Zuiki.bluetooth(d) : Zuiki.usb(d)
         case .horiSteam: return Self.horiSteam(d)
+        case .gameSir: return Self.gameSir(d)
         }
     }
 
@@ -130,6 +136,35 @@ public struct ReportPadDecoder {
                                      2: stick(d[3], centre: 0x80), 3: stick(d[4], centre: 0x80),
                                      4: trigger(d[9]), 5: trigger(d[8])],
                               gyro: [-s16(16) * g, -s16(14) * g, -s16(12) * g], acceleration: [s16(22) * a, s16(18) * a, -s16(20) * a])
+    }
+    /// GameSir G7 Pro 8K and Tarantula 8K in their full mode (SDL_hidapi_gamesir.c): back buttons L4/R4 and L5/R5,
+    /// Share, gyro. The other reports (its plain modes) are left to the generic mapping.
+    static func gameSir(_ r: [UInt8]) -> ReportPadState? {
+        let d: ArraySlice<UInt8>
+        if r.count >= 3, r[0] == 0x43, r[1] == 0xA1, r[2] == 0xC8 { d = r[3...] }
+        else if r.count >= 2, r[0] == 0xA1, r[1] == 0xC8 { d = r[2...] }
+        else { return nil }
+        let p = Array(d)
+        guard p.count >= 14 else { return nil }
+        let h = p[2] & 0x0F
+        var held = (1...8).contains(h) ? EightBitDoController.hat(h - 1) : []
+        held.formUnion(bits(p[0], [(0x01, .a), (0x02, .b), (0x08, .x), (0x10, .y), (0x40, .lb), (0x80, .rb)]))
+        held.formUnion(bits(p[1], [(0x04, .back), (0x08, .start), (0x10, .guide), (0x20, .ls), (0x40, .rs), (0x80, .misc)]))
+        held.formUnion(bits(p[2], [(0x40, .paddle2), (0x80, .paddle1)]))
+        held.formUnion(bits(p[3], [(0x01, .paddle4), (0x02, .paddle3)]))
+        func be(_ i: Int) -> Int { Int(Int16(bitPattern: UInt16(p[i]) << 8 | UInt16(p[i + 1]))) }
+        func flip(_ v: Int) -> Int { v == -32768 ? 32767 : -v }
+        var gyro: [Float]?, accel: [Float]?
+        if p.count >= 26 {
+            // SDL's axes are the report's own; Nokcandu's (SDL's x, z, y). 1/16 °/s per unit; ±4 g.
+            let g = Float(Double.pi / 180 / 16), a = Float(4.0 / 32768)
+            gyro = [Float(be(20)) * g, Float(be(24)) * g, Float(be(22)) * g]
+            accel = [Float(be(14)) * a, Float(be(18)) * a, Float(be(16)) * a]
+            if gyro == [0, 0, 0], accel == [0, 0, 0] { gyro = nil; accel = nil }
+        }
+        return ReportPadState(buttons: held, axes: [0: max(-32767, be(4)), 1: flip(be(6)), 2: max(-32767, be(8)), 3: flip(be(10)),
+                                                    4: trigger(p[12]), 5: trigger(p[13])],
+                              gyro: gyro, acceleration: accel)
     }
     /// Google Stadia Controller (SDL_hidapi_stadia.c): report 3; Capture and Assistant as Share and a paddle.
     static func stadia(_ d: [UInt8]) -> ReportPadState? {

@@ -217,3 +217,18 @@ final class HoriSteamTests: XCTestCase {
         XCTAssertEqual(ReportPadDriver.find(vendor: 0x0F0D, product: 0x0196), .horiSteam)
     }
 }
+
+final class GameSirTests: XCTestCase {
+    func testFullReport() {
+        var d = [UInt8](repeating: 0, count: 2 + 26); d[0] = 0xA1; d[1] = 0xC8
+        d[2] = 0x01; d[3] = 0x80; d[4] = 0x03 | 0x40; d[5] = 0x01
+        d[2 + 6] = 0x7F; d[2 + 7] = 0xFF        // left y up
+        d[2 + 13] = 255
+        var dec = ReportPadDecoder(.gameSir)
+        let s = try! XCTUnwrap(dec.decode(d))
+        XCTAssertEqual(s.buttons, [.a, .misc, .right, .paddle2, .paddle4])
+        XCTAssertEqual(s.axes[1], -32767); XCTAssertEqual(s.axes[5], 32767)
+        XCTAssertNil(dec.decode([0x02] + [UInt8](repeating: 0, count: 12)))
+        XCTAssertEqual(ReportPadDriver.gameSir.startOutput?.count, 64)
+    }
+}
