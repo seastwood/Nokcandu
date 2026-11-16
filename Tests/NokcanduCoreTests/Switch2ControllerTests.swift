@@ -232,3 +232,19 @@ final class GameSirTests: XCTestCase {
         XCTAssertEqual(ReportPadDriver.gameSir.startOutput?.count, 64)
     }
 }
+
+final class ShieldTests: XCTestCase {
+    func testBothReports() {
+        var dec = ReportPadDecoder(.shield(product: 0x7210))
+        XCTAssertNil(dec.decode([0x02, 0x01, 0, 0, 0]))
+        var d = [UInt8](repeating: 0, count: 16); d[0] = 0x01; d[3] = 8; d[1] = 0x01; d[2] = 0x08
+        for i in stride(from: 4, to: 12, by: 2) { d[i] = 0; d[i + 1] = 0x80 }
+        d[14] = 0xFF; d[15] = 0xFF
+        let s = try! XCTUnwrap(dec.decode(d))
+        XCTAssertEqual(s.buttons, [.a, .paddle1, .touchpad]); XCTAssertEqual(s.axes[0], 0); XCTAssertEqual(s.axes[5], 32767)
+        var dec2 = ReportPadDecoder(.shield(product: 0x7214))
+        var e = [UInt8](repeating: 0, count: 33); e[0] = 0x01; e[2] = 0; e[17] = 0x01
+        let t = try! XCTUnwrap(dec2.decode(e))
+        XCTAssertEqual(t.buttons, [.up, .guide])
+    }
+}

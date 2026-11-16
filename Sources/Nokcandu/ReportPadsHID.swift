@@ -41,6 +41,10 @@ final class ReportPadsHID {
             let id = UInt64(UInt(bitPattern: ctx))
             MainActor.assumeIsolated { ReportPadsHID.shared.report(report, id: id) }
         }, UnsafeMutableRawPointer(bitPattern: UInt(id)))
+        // Nothing is sent to a controller macOS's own support or a profile's own device reads: a mode switch
+        // would take it from them.
+        if let info = HIDDevices.shared.connected.first(where: { $0.id == id }),
+           info.gamepad || MappedGamepads.shared.excluded.contains(where: { !$0.isGamepad && info.matches($0) }) { return }
         if var out = driver.startOutput {
             _ = IOHIDDeviceSetReport(d, kIOHIDReportTypeOutput, CFIndex(out[0]), &out, out.count)
         }

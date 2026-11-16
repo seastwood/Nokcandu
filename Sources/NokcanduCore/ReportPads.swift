@@ -15,7 +15,7 @@ public struct ReportPadState: Equatable {
 /// Controllers whose own reports carry more than their generic HID description lets macOS see (extra buttons,
 /// motion, rumble): each driver's decoder, start-up and rumble, from SDL's HIDAPI drivers.
 public enum ReportPadDriver: Equatable {
-    case eightBitDo(product: Int), stadia, lunaUSB, lunaBluetooth, sinput, zuiki(product: Int), horiSteam, gameSir
+    case eightBitDo(product: Int), stadia, lunaUSB, lunaBluetooth, sinput, zuiki(product: Int), horiSteam, gameSir, shield(product: Int)
 
     public static func find(vendor: Int, product: Int) -> ReportPadDriver? {
         switch (vendor, product) {
@@ -28,6 +28,7 @@ public enum ReportPadDriver: Equatable {
         case (0x33DD, let p) where Zuiki.names[p] != nil: return .zuiki(product: p)
         case (0x0F0D, 0x01AB), (0x0F0D, 0x0196): return .horiSteam
         case (0x3537, 0x10B8), (0x3537, 0x103C): return .gameSir
+        case (0x0955, let p) where p == 0x7210 || p == 0x7214: return .shield(product: p)
         default: return nil
         }
     }
@@ -35,7 +36,7 @@ public enum ReportPadDriver: Equatable {
     public static var matching: [(vendor: Int, product: Int)] {
         EightBitDoController.products.map { (EightBitDoController.vendor, $0) } + [(0x18D1, 0x9400), (0x1949, 0x0419), (0x0171, 0x0419)]
             + SInput.raspberryPiProducts.map { (0x2E8A, $0) } + [(0x38D2, 0x1014)] + Zuiki.names.keys.map { (0x33DD, $0) }
-            + [(0x0F0D, 0x01AB), (0x0F0D, 0x0196), (0x3537, 0x10B8), (0x3537, 0x103C)]
+            + [(0x0F0D, 0x01AB), (0x0F0D, 0x0196), (0x3537, 0x10B8), (0x3537, 0x103C), (0x0955, 0x7210), (0x0955, 0x7214)]
     }
 
     public var name: String {
@@ -47,6 +48,7 @@ public enum ReportPadDriver: Equatable {
         case .zuiki(let p): return Zuiki.names[p] ?? "ZUIKI Controller"
         case .horiSteam: return "Wireless HORIPAD for Steam"
         case .gameSir: return "GameSir 8K Controller"
+        case .shield: return "NVIDIA SHIELD Controller"
         }
     }
     /// A feature report to read (get) once at start, which some controllers need before they send everything.
@@ -76,6 +78,7 @@ public enum ReportPadDriver: Equatable {
         case .zuiki(let p): return p == 0x0020 ? nil : [0, 0, 0, 0, byte(low), byte(high), 0, 0]
         case .horiSteam: return nil
         case .gameSir: return Self.gameSirCommand([0x03, byte(low), byte(high)])
+        case .shield(let p): return p == 0x7210 ? [0x01, 0x00, byte(low), 0x00, byte(high), 0x00, 0x00] : nil
         }
     }
     static func gameSirCommand(_ body: [UInt8]) -> [UInt8] { [0xA2] + body + [UInt8](repeating: 0, count: 63 - body.count) }
@@ -86,6 +89,7 @@ public struct ReportPadDecoder {
     public let driver: ReportPadDriver
     private var guide = false
     private var sinput = SInput.Features()
+    private var touchClick = false
     public init(_ driver: ReportPadDriver) { self.driver = driver }
 
     public mutating func decode(_ d: [UInt8]) -> ReportPadState? {
@@ -104,6 +108,11 @@ public struct ReportPadDecoder {
         case .zuiki(let p): return p == 0x0017 ? Zuiki.bluetooth(d) : Zuiki.usb(d)
         case .horiSteam: return Self.horiSteam(d)
         case .gameSir: return Self.gameSir(d)
+        case .shield:
+            if d.count >= 2, d[0] == 0x02 { touchClick = d[1] & 0x01 != 0; return nil }   // the touchpad's report
+            guard var s = Self.shield(d) else { return nil }
+            if touchClick { s.buttons.insert(.touchpad) }
+            return s
         }
     }
 
@@ -165,6 +174,26 @@ public struct ReportPadDecoder {
         return ReportPadState(buttons: held, axes: [0: max(-32767, be(4)), 1: flip(be(6)), 2: max(-32767, be(8)), 3: flip(be(10)),
                                                     4: trigger(p[12]), 5: trigger(p[13])],
                               gyro: gyro, acceleration: accel)
+    }
+    /// NVIDIA SHIELD controllers (SDL_hidapi_shield.c): the 2015 one (v1.03, 16-byte report; + and − as paddles,
+    /// touchpad click) and the 2017 one (v1.04).
+    static func shield(_ d: [UInt8]) -> ReportPadState? {
+        guard d.count >= 16, d[0] == 0x01 else { return nil }
+        func u16(_ i: Int) -> Int { Int(d[i]) | Int(d[i + 1]) << 8 }
+        func stick(_ i: Int) -> Int { max(-32767, u16(i) - 0x8000) }
+        let face: [(UInt8, PadProfiles.Input)] = [(0x01, .a), (0x02, .b), (0x04, .x), (0x08, .y), (0x10, .lb), (0x20, .rb), (0x40, .ls), (0x80, .rs)]
+        if d.count == 16 {
+            var held = EightBitDoController.hat(d[3])
+            held.formUnion(bits(d[1], face))
+            held.formUnion(bits(d[2], [(0x02, .start), (0x08, .paddle1), (0x10, .paddle2), (0x40, .back), (0x80, .guide)]))
+            return ReportPadState(buttons: held, axes: [0: stick(4), 1: stick(6), 2: stick(8), 3: stick(10), 4: u16(12) / 2, 5: u16(14) / 2])
+        }
+        guard d.count >= 23 else { return nil }
+        var held = EightBitDoController.hat(d[2])
+        held.formUnion(bits(d[3], face))
+        held.formUnion(bits(d[4], [(0x01, .start)]))
+        held.formUnion(bits(d[17], [(0x01, .guide), (0x02, .back)]))
+        return ReportPadState(buttons: held, axes: [0: stick(9), 1: stick(11), 2: stick(13), 3: stick(15), 4: u16(19) / 2, 5: u16(21) / 2])
     }
     /// Google Stadia Controller (SDL_hidapi_stadia.c): report 3; Capture and Assistant as Share and a paddle.
     static func stadia(_ d: [UInt8]) -> ReportPadState? {
