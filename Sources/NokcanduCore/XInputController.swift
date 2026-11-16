@@ -27,6 +27,25 @@ public enum XInputController {
     public static func rumble(low: UInt8, high: UInt8) -> [UInt8] { [0x00, 0x08, 0x00, low, high, 0x00, 0x00, 0x00] }
     /// The ring of lights: player 1 (6 is "flash, then player 1 on").
     public static let playerLight: [UInt8] = [0x01, 0x03, 0x06]
+
+    /// The Xbox 360 Wireless Receiver: one interface (protocol 0x81) per controller slot, each speaking this
+    /// (SDL's xbox360w driver).
+    public enum Wireless {
+        public static let interfaceProtocol = 0x81
+        /// Asks the receiver whether a controller is connected to this slot.
+        public static let presence: [UInt8] = [0x08, 0x00, 0x0F, 0xC0, 0, 0, 0, 0, 0, 0, 0, 0]
+        public enum Packet: Equatable { case connected(Bool), state(buttons: Set<PadProfiles.Input>, axes: [Int: Int]) }
+        public static func decode(_ d: [UInt8]) -> Packet? {
+            if d.count == 2, d[0] == 0x08 { return .connected(d[1] & 0x80 != 0) }
+            // A controller's state: the wired report's layout from byte 4 (its own header differs).
+            guard d.count == 29, d[0] == 0x00, d[1] & 0x01 != 0, !(d[1] == 0x0F && d[3] == 0xF0), !(d[1] == 0x05 && d[5] == 0x12) else { return nil }
+            guard let s = XInputController.decode([0x00, 0x14] + d[6...]) else { return nil }
+            return .state(buttons: s.buttons, axes: s.axes)
+        }
+        public static func rumble(low: UInt8, high: UInt8) -> [UInt8] { [0x00, 0x01, 0x0F, 0xC0, 0x00, low, high, 0, 0, 0, 0, 0] }
+        /// The slot's light on, as the player for that slot (0…3).
+        public static func light(slot: Int) -> [UInt8] { [0x00, 0x00, 0x08, UInt8(0x40 + (0x06 + slot) % 0x0E), 0, 0, 0, 0, 0, 0, 0, 0] }
+    }
 }
 
 /// Wired Xbox One and Series controllers and compatible ones (GIP: interface class 0xFF, subclass 0x47, protocol

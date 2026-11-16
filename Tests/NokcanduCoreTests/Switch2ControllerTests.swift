@@ -191,3 +191,16 @@ final class ZuikiTests: XCTestCase {
         XCTAssertEqual(ReportPadDriver.zuiki(product: 0x0020).rumble(low: 1, high: 1), nil)
     }
 }
+
+final class Xbox360WirelessTests: XCTestCase {
+    func testPackets() {
+        XCTAssertEqual(XInputController.Wireless.decode([0x08, 0x80]), .connected(true))
+        XCTAssertEqual(XInputController.Wireless.decode([0x08, 0x00]), .connected(false))
+        var d = [UInt8](repeating: 0, count: 29); d[1] = 0x01; d[3] = 0xF0; d[5] = 0x13
+        d[6] = 0x10; d[7] = 0x10            // Start, A
+        d[9] = 255                          // right trigger
+        guard case .state(let b, let a)? = XInputController.Wireless.decode(d) else { return XCTFail() }
+        XCTAssertEqual(b, [.start, .a]); XCTAssertEqual(a[5], 32767)
+        XCTAssertEqual(XInputController.Wireless.light(slot: 1)[3], 0x47)
+    }
+}

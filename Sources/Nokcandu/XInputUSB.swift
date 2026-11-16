@@ -10,12 +10,13 @@ import NokcanduCore
 final class XInputUSB: @unchecked Sendable {
     static let shared = XInputUSB()
     private var port: IONotificationPortRef?
-    private var iterator: io_iterator_t = 0, gipIterator: io_iterator_t = 0
+    private var iterator: io_iterator_t = 0, gipIterator: io_iterator_t = 0, wirelessIterator: io_iterator_t = 0
     private let lock = NSLock()
     private var running: Set<UInt64> = []
     private var started = false
     /// Each connected controller's way to send to it, and whether it speaks GIP.
-    private var senders: [UInt64: (gip: Bool, send: ([UInt8]) -> Void)] = [:]
+    private enum Kind { case wired, gip, wireless }
+    private var senders: [UInt64: (kind: Kind, send: ([UInt8]) -> Void)] = [:]
     private var gipSequence: UInt8 = 2
 
     /// Buzzes every controller read here for `seconds` (at most one), at `strength` (0…1).
@@ -23,15 +24,16 @@ final class XInputUSB: @unchecked Sendable {
         lock.lock(); let list = Array(senders.values); lock.unlock()
         guard !list.isEmpty, strength.isFinite, strength > 0 else { return }
         let level = UInt8(max(0, min(1, strength)) * 255)
-        for s in list {
-            if s.gip { lock.lock(); gipSequence &+= 1; let q = gipSequence; lock.unlock(); s.send(GIPController.rumble(strong: level, weak: level, sequence: q)) }
-            else { s.send(XInputController.rumble(low: level, high: level)) }
-        }
+        for s in list { s.send(rumbleReport(s.kind, level)) }
         DispatchQueue.global().asyncAfter(deadline: .now() + max(0.05, min(1, seconds))) { [self] in
-            for s in list {
-                if s.gip { lock.lock(); gipSequence &+= 1; let q = gipSequence; lock.unlock(); s.send(GIPController.rumble(strong: 0, weak: 0, sequence: q)) }
-                else { s.send(XInputController.rumble(low: 0, high: 0)) }
-            }
+            for s in list { s.send(rumbleReport(s.kind, 0)) }
+        }
+    }
+    private func rumbleReport(_ kind: Kind, _ level: UInt8) -> [UInt8] {
+        switch kind {
+        case .gip: lock.lock(); gipSequence &+= 1; let q = gipSequence; lock.unlock(); return GIPController.rumble(strong: level, weak: level, sequence: q)
+        case .wired: return XInputController.rumble(low: level, high: level)
+        case .wireless: return XInputController.Wireless.rumble(low: level, high: level)
         }
     }
 
@@ -54,6 +56,11 @@ final class XInputUSB: @unchecked Sendable {
         if let m = matching(GIPController.interfaceClass, GIPController.interfaceSubclass, GIPController.interfaceProtocol) {
             IOServiceAddMatchingNotification(p, kIOFirstMatchNotification, m, { _, it in XInputUSB.shared.matched(it) }, nil, &gipIterator)
             matched(gipIterator)
+        }
+        // The Xbox 360 Wireless Receiver: one interface per controller slot.
+        if let m = matching(XInputController.interfaceClass, XInputController.interfaceSubclass, XInputController.Wireless.interfaceProtocol) {
+            IOServiceAddMatchingNotification(p, kIOFirstMatchNotification, m, { _, it in XInputUSB.shared.matched(it) }, nil, &wirelessIterator)
+            matched(wirelessIterator)
         }
     }
 
@@ -88,7 +95,9 @@ final class XInputUSB: @unchecked Sendable {
             }
             current = UnsafeRawPointer(ep).assumingMemoryBound(to: IOUSBDescriptorHeader.self)
         }
-        let gip = (IORegistryEntryCreateCFProperty(service, "bInterfaceProtocol" as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() as? NSNumber)?.intValue == GIPController.interfaceProtocol
+        let proto = (IORegistryEntryCreateCFProperty(service, "bInterfaceProtocol" as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() as? NSNumber)?.intValue
+        let kind: Kind = proto == GIPController.interfaceProtocol ? .gip : proto == XInputController.Wireless.interfaceProtocol ? .wireless : .wired
+        let gip = kind == .gip
         guard inAddress != 0, let inPipe = try? iface.copyPipe(withAddress: inAddress) else { return }
         let outPipe = outAddress != 0 ? try? iface.copyPipe(withAddress: outAddress) : nil
         func send(_ bytes: [UInt8]) {
@@ -97,11 +106,15 @@ final class XInputUSB: @unchecked Sendable {
             var n = 0
             _ = try? outPipe.__sendIORequest(with: data, bytesTransferred: &n, completionTimeout: 1)
         }
-        send(gip ? GIPController.powerOn : XInputController.playerLight)
         let sendQueue = DispatchQueue(label: "Nokcandu.XInputUSB.send.\(id)")
-        lock.lock(); senders[id] = (gip, { bytes in sendQueue.async { send(bytes) } }); lock.unlock()
-        defer { lock.lock(); senders[id] = nil; lock.unlock() }
         let source = "xinput:\(id)"
+        if kind == .wireless {
+            readWireless(iface, inPipe: inPipe, send: send, sendQueue: sendQueue, id: id, source: source)
+            return
+        }
+        send(gip ? GIPController.powerOn : XInputController.playerLight)
+        lock.lock(); senders[id] = (kind, { bytes in sendQueue.async { send(bytes) } }); lock.unlock()
+        defer { lock.lock(); senders[id] = nil; lock.unlock() }
         ControllerLog.add("Controller: \(product) read as an \(gip ? "Xbox One/Series (GIP)" : "Xbox 360 (XInput)") controller")
         var gipDecoder = GIPController.Decoder()
         var last: (Set<PadProfiles.Input>, [Int: Int])?
@@ -119,5 +132,47 @@ final class XInputUSB: @unchecked Sendable {
         }
         DispatchQueue.main.async { MainActor.assumeIsolated { MappedGamepads.shared.publish(source, name: product, buttons: nil, axes: [:]) } }
         ControllerLog.add("Controller: \(product) (XInput) disconnected")
+    }
+
+    /// One slot of the Xbox 360 Wireless Receiver: a controller comes and goes while the receiver stays.
+    private func readWireless(_ iface: IOUSBHostInterface, inPipe: IOUSBHostPipe, send: @escaping ([UInt8]) -> Void,
+                              sendQueue: DispatchQueue, id: UInt64, source: String) {
+        let slot = Int(iface.interfaceDescriptor.pointee.bInterfaceNumber) / 2
+        let name = "Xbox 360 Wireless Controller"
+        var connected = false
+        func drop() {
+            guard connected else { return }
+            connected = false
+            lock.lock(); senders[id] = nil; lock.unlock()
+            DispatchQueue.main.async { MainActor.assumeIsolated { MappedGamepads.shared.publish(source, name: name, buttons: nil, axes: [:]) } }
+            ControllerLog.add("Controller: \(name) (receiver slot \(slot + 1)) disconnected")
+        }
+        defer { drop() }
+        send(XInputController.Wireless.presence)
+        var last: (Set<PadProfiles.Input>, [Int: Int])?
+        while true {
+            let data = NSMutableData(length: 32)!
+            var n = 0
+            do { try inPipe.__sendIORequest(with: data, bytesTransferred: &n, completionTimeout: 0) }
+            catch { break }                              // receiver unplugged
+            switch XInputController.Wireless.decode(Array(UnsafeRawBufferPointer(start: data.bytes, count: n))) {
+            case .connected(true)?:
+                guard !connected else { continue }
+                connected = true; last = nil
+                send(XInputController.Wireless.light(slot: slot))
+                lock.lock(); senders[id] = (.wireless, { bytes in sendQueue.async { send(bytes) } }); lock.unlock()
+                ControllerLog.add("Controller: \(name) connected to the receiver (slot \(slot + 1))")
+            case .connected(false)?: drop()
+            case .state(let buttons, let axes)?:
+                if !connected {           // a state without the connect message: it's there all the same
+                    connected = true
+                    lock.lock(); senders[id] = (.wireless, { bytes in sendQueue.async { send(bytes) } }); lock.unlock()
+                }
+                if let last, last.0 == buttons, last.1 == axes { continue }
+                last = (buttons, axes)
+                DispatchQueue.main.async { MainActor.assumeIsolated { MappedGamepads.shared.publish(source, name: name, buttons: buttons, axes: axes) } }
+            case nil: continue
+            }
+        }
     }
 }

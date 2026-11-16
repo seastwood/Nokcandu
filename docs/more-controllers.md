@@ -12,6 +12,7 @@ its own device ("Add Device"), is left alone.
 | PlayStation 3 controller | 054C:0268 | mapping + start feature report F4 | starts sending |
 | Switch 2 Pro, GameCube (Switch 2) | 057E:2069, 2073 | `Switch2USB` (see switch-2-controllers.md) | full support by USB |
 | Xbox 360 / Xbox One wired (and clones) | XInput / GIP class | `XInputUSB` (IOUSBHost) | works at all, rumble |
+| Xbox 360 Wireless Receiver (and clones) | XInput class, protocol 0x81 | `XInputUSB` | up to four wireless 360 controllers, slot lights, rumble |
 | GameCube adapter (Wii U / Switch) | 057E:0337 | `GameCubeAdapterHID` | four ports, four players |
 | 8BitDo SF30/SN30 Pro, Pro 2/3, Ultimate 2/2C/3 (D-input) | 2DC8:… | `ReportPadsHID` | back buttons, Share, gyro, rumble |
 | Google Stadia | 18D1:9400 | `ReportPadsHID` | Capture (Share), Assistant (paddle 1), rumble |
