@@ -96,6 +96,14 @@ final class HIDDevices: ObservableObject {
         connected.append(info)
         renumber()
     }
+    /// Sends a feature report to a connected device (a start-up command some controllers need). The report's
+    /// number goes first in `bytes`, as hidapi takes it.
+    @discardableResult
+    func setFeature(_ id: UInt64, _ bytes: [UInt8]) -> Bool {
+        guard let d = refs[id], let reportID = bytes.first else { return false }
+        var b = bytes
+        return IOHIDDeviceSetReport(d, kIOHIDReportTypeFeature, CFIndex(reportID), &b, b.count) == kIOReturnSuccess
+    }
     private func removed(_ d: IOHIDDevice) {
         let id = Self.registryID(d)
         elements[id] = nil; refs[id] = nil; hats[id] = nil

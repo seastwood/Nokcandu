@@ -72,6 +72,11 @@ final class MappedGamepads {
             guard let m = GamepadMapping.find(vendor: info.vendorID, product: info.productID) else { continue }
             pads[info.id] = Pad(info: info, mapping: m, buttons: Array(repeating: false, count: max(32, info.buttonCount)), axes: Array(repeating: 0, count: max(8, info.axisNames.count)))
             ControllerLog.add("Controller: \(info.name) (\(String(format: "%04X:%04X", info.vendorID, info.productID))) read as a controller with the community mapping “\(m.name)”")
+            // A PlayStation 3 controller by USB sends nothing until told to (SDL's PS3 driver, as every PS3 does).
+            if info.vendorID == 0x054C, info.productID == 0x0268 {
+                let ok = HIDDevices.shared.setFeature(info.id, [0xF4, 0x42, 0x0C, 0x00, 0x00])
+                ControllerLog.add("Controller: PlayStation 3 controller \(ok ? "started" : "start-up command not accepted")")
+            }
         }
     }
 
