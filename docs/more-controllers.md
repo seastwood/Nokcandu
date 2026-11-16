@@ -18,6 +18,7 @@ its own device ("Add Device"), is left alone.
 | Google Stadia | 18D1:9400 | `ReportPadsHID` | Capture (Share), Assistant (paddle 1), rumble |
 | Amazon Luna | 1949:0419, 0171:0419 (BT) | `ReportPadsHID` | microphone button (Share), Home over BT, rumble over BT |
 | ZUIKI EVOTOP (PC, 2.4 GHz, Bluetooth), EVOTOP AXIS, MASCON PRO | 33DD:… | `ReportPadsHID` | gyro on the EVOTOP, rumble |
+| HORI Wireless HORIPAD for Steam | 0F0D:01AB, 0196 (BT) | `ReportPadsHID` | M1/M2 and FL/FR back buttons, Quick Access (Share), stick touch, gyro |
 | SInput (GP2040-CE, Handheld Legend ProGCC/GC Ultimate, Firebird…) | 2E8A:10C6/10DF/10DD/10E0/10E5, 38D2:1014 | `ReportPadsHID` | paddles, Capture, touchpad click, gyro, rumble |
 
 `ReportPadsHID` takes a controller from the generic mapping only once a report it understands arrives, so a

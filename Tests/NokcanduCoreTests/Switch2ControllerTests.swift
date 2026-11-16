@@ -204,3 +204,16 @@ final class Xbox360WirelessTests: XCTestCase {
         XCTAssertEqual(XInputController.Wireless.light(slot: 1)[3], 0x47)
     }
 }
+
+final class HoriSteamTests: XCTestCase {
+    func testReport() {
+        var d = [UInt8](repeating: 0x80, count: 40); d[0] = 0x07; d[5] = 0x08 | 0x40; d[6] = 0x02; d[7] = 0x10 | 0x80
+        d[8] = 255; d[9] = 0
+        for i in 10..<24 { d[i] = 0 }
+        var dec = ReportPadDecoder(.horiSteam)
+        let s = try! XCTUnwrap(dec.decode(d))
+        XCTAssertEqual(s.buttons, [.misc, .paddle2, .lstouch, .paddle4])
+        XCTAssertEqual(s.axes[5], 32767); XCTAssertEqual(s.axes[4], 0); XCTAssertEqual(s.axes[0], 0)
+        XCTAssertEqual(ReportPadDriver.find(vendor: 0x0F0D, product: 0x0196), .horiSteam)
+    }
+}

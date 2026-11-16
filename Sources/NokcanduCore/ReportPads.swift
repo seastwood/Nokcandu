@@ -15,7 +15,7 @@ public struct ReportPadState: Equatable {
 /// Controllers whose own reports carry more than their generic HID description lets macOS see (extra buttons,
 /// motion, rumble): each driver's decoder, start-up and rumble, from SDL's HIDAPI drivers.
 public enum ReportPadDriver: Equatable {
-    case eightBitDo(product: Int), stadia, lunaUSB, lunaBluetooth, sinput, zuiki(product: Int)
+    case eightBitDo(product: Int), stadia, lunaUSB, lunaBluetooth, sinput, zuiki(product: Int), horiSteam
 
     public static func find(vendor: Int, product: Int) -> ReportPadDriver? {
         switch (vendor, product) {
@@ -26,6 +26,7 @@ public enum ReportPadDriver: Equatable {
         case (0x2E8A, let p) where SInput.raspberryPiProducts.contains(p): return .sinput
         case (0x38D2, 0x1014): return .sinput
         case (0x33DD, let p) where Zuiki.names[p] != nil: return .zuiki(product: p)
+        case (0x0F0D, 0x01AB), (0x0F0D, 0x0196): return .horiSteam
         default: return nil
         }
     }
@@ -33,6 +34,7 @@ public enum ReportPadDriver: Equatable {
     public static var matching: [(vendor: Int, product: Int)] {
         EightBitDoController.products.map { (EightBitDoController.vendor, $0) } + [(0x18D1, 0x9400), (0x1949, 0x0419), (0x0171, 0x0419)]
             + SInput.raspberryPiProducts.map { (0x2E8A, $0) } + [(0x38D2, 0x1014)] + Zuiki.names.keys.map { (0x33DD, $0) }
+            + [(0x0F0D, 0x01AB), (0x0F0D, 0x0196)]
     }
 
     public var name: String {
@@ -42,6 +44,7 @@ public enum ReportPadDriver: Equatable {
         case .lunaUSB, .lunaBluetooth: return "Amazon Luna Controller"
         case .sinput: return "SInput Controller"
         case .zuiki(let p): return Zuiki.names[p] ?? "ZUIKI Controller"
+        case .horiSteam: return "Wireless HORIPAD for Steam"
         }
     }
     /// A feature report to read (get) once at start, which some controllers need before they send everything.
@@ -68,6 +71,7 @@ public enum ReportPadDriver: Equatable {
         case .lunaUSB: return nil
         case .sinput: return SInput.command(0x01, [2, byte(low), 0, byte(high), 0])
         case .zuiki(let p): return p == 0x0020 ? nil : [0, 0, 0, 0, byte(low), byte(high), 0, 0]
+        case .horiSteam: return nil
         }
     }
 }
@@ -93,6 +97,7 @@ public struct ReportPadDecoder {
             if let f = SInput.features(d) { sinput = f; return nil }
             return SInput.decode(d, sinput)
         case .zuiki(let p): return p == 0x0017 ? Zuiki.bluetooth(d) : Zuiki.usb(d)
+        case .horiSteam: return Self.horiSteam(d)
         }
     }
 
@@ -107,6 +112,25 @@ public struct ReportPadDecoder {
     }
     static func trigger(_ v: UInt8) -> Int { Int(v) * 32767 / 255 }
 
+    /// HORI's Wireless HORIPAD for Steam (SDL_hidapi_steam_hori.c): back buttons M1/M2 and FL/FR, Quick Access,
+    /// touch-sensing sticks and a gyro.
+    static func horiSteam(_ d: [UInt8]) -> ReportPadState? {
+        guard d.count >= 24, d[0] == 0x07 || d[0] == 0x00 else { return nil }
+        var held = EightBitDoController.hat(d[5] & 0x0F)
+        held.formUnion(bits(d[5], [(0x10, .a), (0x20, .b), (0x40, .misc), (0x80, .x)]))
+        held.formUnion(bits(d[6], [(0x01, .y), (0x02, .paddle2), (0x04, .lb), (0x08, .rb), (0x40, .back), (0x80, .start)]))
+        held.formUnion(bits(d[7], [(0x01, .guide), (0x02, .ls), (0x04, .rs), (0x08, .paddle1), (0x10, .lstouch), (0x20, .rstouch),
+                                   (0x40, .paddle3), (0x80, .paddle4)]))
+        func s16(_ i: Int) -> Float { Float(Int16(bitPattern: UInt16(d[i]) | UInt16(d[i + 1]) << 8)) }
+        // SDL's gyro is (−16, −12, −14) of the report's, its acceleration (22, −20, 18); Nokcandu's axes (SDL's x,
+        // z, y) then (−16, −14, −12) and (22, 18, −20). ±2048 °/s and ±8 g over the Int16 range.
+        let g = Float(2048.0 * Double.pi / 180 / 32767), a = Float(8.0 / 32768)
+        return ReportPadState(buttons: held,
+                              axes: [0: stick(d[1], centre: 0x80), 1: stick(d[2], centre: 0x80),
+                                     2: stick(d[3], centre: 0x80), 3: stick(d[4], centre: 0x80),
+                                     4: trigger(d[9]), 5: trigger(d[8])],
+                              gyro: [-s16(16) * g, -s16(14) * g, -s16(12) * g], acceleration: [s16(22) * a, s16(18) * a, -s16(20) * a])
+    }
     /// Google Stadia Controller (SDL_hidapi_stadia.c): report 3; Capture and Assistant as Share and a paddle.
     static func stadia(_ d: [UInt8]) -> ReportPadState? {
         guard d.count >= 10, d[0] == 0x03 else { return nil }
