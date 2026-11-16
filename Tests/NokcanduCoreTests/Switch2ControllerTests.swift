@@ -86,3 +86,21 @@ final class GIPControllerTests: XCTestCase {
         XCTAssertNil(GIPController.acknowledge([0x20, 0x00, 0x05, 0x0e]))
     }
 }
+
+final class GameCubeAdapterTests: XCTestCase {
+    func testPorts() {
+        var d = [UInt8](repeating: 0, count: 37); d[0] = 0x21
+        // Port 2 (index 1): wired, A and Start, stick up, L clicked.
+        let p = 1 + 9
+        d[p] = 0x10; d[p + 1] = 0x01; d[p + 2] = 0x01 | 0x08
+        d[p + 3] = 128; d[p + 4] = 216; d[p + 5] = 128; d[p + 6] = 128; d[p + 7] = 40; d[p + 8] = 40
+        let ports = try! XCTUnwrap(GameCubeAdapter.decode(d))
+        XCTAssertNil(ports[0]); XCTAssertNil(ports[2])
+        let c = try! XCTUnwrap(ports[1])
+        XCTAssertEqual(c.buttons, [.a, .start])
+        XCTAssertEqual(c.axes[1], -32767, "up is −y")
+        XCTAssertEqual(c.axes[0], 0)
+        XCTAssertEqual(c.axes[4], 32767); XCTAssertEqual(c.axes[5], 0)
+        XCTAssertNil(GameCubeAdapter.decode([0x22] + d.dropFirst()))
+    }
+}

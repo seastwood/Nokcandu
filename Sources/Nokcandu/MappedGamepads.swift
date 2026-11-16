@@ -50,6 +50,7 @@ final class MappedGamepads {
         token = HIDDevices.shared.listen { [weak self] info, ev in self?.event(info, ev) }
         Switch2USB.shared.start()
         XInputUSB.shared.start()
+        GameCubeAdapterHID.shared.start()
         observer = NotificationCenter.default.addObserver(forName: .hidDevicesChanged, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { MappedGamepads.shared.refresh() }
         }
@@ -61,6 +62,7 @@ final class MappedGamepads {
             !info.gamepad && !excluded.contains { !$0.isGamepad && info.matches($0) }
                 && !(info.vendorID == Switch2Controller.vendor && Switch2Controller.products.contains(info.productID))
                 && info.vendorID != 0x28DE           // Steam Controllers: read by SteamControllerUSB
+                && !(info.vendorID == GameCubeAdapter.vendor && info.productID == GameCubeAdapter.product)
                 && Self.mapping(info) != nil
         }
         let ids = Set(now.map(\.id))
