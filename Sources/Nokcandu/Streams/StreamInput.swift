@@ -32,7 +32,7 @@ import NokcanduStreamCore
     var mask: Int {
         if settings.sendAs == .profileOnly { return 0 }
         if usesProfile { return 1 }
-        let n = GCController.controllers().filter { $0.extendedGamepad != nil }.count
+        let n = GCController.controllers().filter { $0.extendedGamepad != nil }.count + MappedGamepads.shared.sources.count
         return n == 0 ? 1 : (settings.multipleControllers ? (1 << min(n, 16)) - 1 : 1)
     }
 
@@ -44,6 +44,11 @@ import NokcanduStreamCore
             return
         }
         for c in GCController.controllers() where c.extendedGamepad != nil { connect(c) }
+        // Controllers macOS doesn't know, read by Nokcandu itself (MappedGamepads): players too.
+        MappedGamepads.shared.start()
+        mappedToken = MappedGamepads.shared.listen { [weak self] source, held, axes in
+            MainActor.assumeIsolated { self?.mapped(source, held, axes) }
+        }
         let nc = NotificationCenter.default
         observers.append(nc.addObserver(forName: .GCControllerDidConnect, object: nil, queue: .main) { n in
             MainActor.assumeIsolated { if let c = n.object as? GCController { self.connect(c) } }
@@ -58,6 +63,7 @@ import NokcanduStreamCore
         if active { for n in pads.keys { LiSendMultiControllerEvent(Int16(n), 0, 0, 0, 0, 0, 0, 0, 0) } }
         active = false
         observers.forEach(NotificationCenter.default.removeObserver); observers = []
+        MappedGamepads.shared.stopListening(mappedToken); mappedToken = nil; mappedNumbers = [:]
         for c in GCController.controllers() {
             c.extendedGamepad?.valueChangedHandler = nil
             c.motion?.valueChangedHandler = nil
@@ -103,9 +109,32 @@ import NokcanduStreamCore
         send(n)
     }
 
+    private var mappedToken: UUID?
+    private var mappedNumbers: [String: Int] = [:]
+    private func mapped(_ source: String, _ held: Set<PadProfiles.Input>?, _ axes: [Int: Int]) {
+        guard active else { return }
+        guard let held else {
+            if let n = mappedNumbers.removeValue(forKey: source) { pads[n] = nil; LiSendMultiControllerEvent(Int16(n), activeMask, 0, 0, 0, 0, 0, 0, 0) }
+            return
+        }
+        let n: Int
+        if let known = mappedNumbers[source] { n = known }
+        else {
+            let used = Set(numbers.values).union(mappedNumbers.values)
+            guard settings.multipleControllers || used.isEmpty, let free = (0..<16).first(where: { !used.contains($0) }) else { return }
+            n = free; mappedNumbers[source] = n
+            arrive(n, controller: nil)
+        }
+        var p = Pad()
+        for input in held { p.buttons |= Self.flag(input, swap: settings.swapFaceButtons) }
+        for (axis, v) in axes { Self.apply(axis: axis, value: axis >= 4 ? Double(v) / 32767 : Double(v) / 32767, to: &p) }
+        pads[n] = p
+        send(n)
+    }
+
     private func connect(_ c: GCController) {
         guard let g = c.extendedGamepad, numbers[ObjectIdentifier(c)] == nil else { return }
-        let used = Set(numbers.values)
+        let used = Set(numbers.values).union(mappedNumbers.values)
         let n = settings.multipleControllers ? (0..<16).first { !used.contains($0) } ?? 0 : 0
         numbers[ObjectIdentifier(c)] = n
         arrive(n, controller: c)
