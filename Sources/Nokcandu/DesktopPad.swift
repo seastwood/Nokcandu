@@ -412,7 +412,7 @@ final class DesktopPad: ObservableObject {
         else {
             PadFeedback.shared.rumble(feed.mainControllers(), strength: strength, seconds: seconds)
             XInputUSB.shared.rumble(strength: strength, seconds: seconds)
-            EightBitDoHID.shared.rumble(strength: strength, seconds: seconds)
+            ReportPadsHID.shared.rumble(strength: strength, seconds: seconds)
         }
     }
     private var layerRumble = PadProfiles.Profile.defaultLayerRumble

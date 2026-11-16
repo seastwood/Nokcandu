@@ -130,3 +130,26 @@ final class EightBitDoControllerTests: XCTestCase {
         XCTAssertEqual(s.buttons, [.b]); XCTAssertEqual(s.axes[4], 32767); XCTAssertNil(s.gyro)
     }
 }
+
+final class ReportPadTests: XCTestCase {
+    func testFind() {
+        XCTAssertEqual(ReportPadDriver.find(vendor: 0x2DC8, product: 0x6003), .eightBitDo(product: 0x6003))
+        XCTAssertEqual(ReportPadDriver.find(vendor: 0x18D1, product: 0x9400), .stadia)
+        XCTAssertNil(ReportPadDriver.find(vendor: 0x2DC8, product: 0x3019))
+    }
+    func testStadia() {
+        var d = [UInt8](repeating: 0x80, count: 10); d[0] = 0x03; d[1] = 8; d[2] = 0x01 | 0x02; d[3] = 0x40; d[8] = 0; d[9] = 255
+        var dec = ReportPadDecoder(.stadia)
+        let s = dec.decode(d)!
+        XCTAssertEqual(s.buttons, [.misc, .paddle1, .a]); XCTAssertEqual(s.axes[0], 0); XCTAssertEqual(s.axes[5], 32767)
+        XCTAssertEqual(ReportPadDriver.stadia.rumble(low: 1, high: 0), [0x05, 0xFF, 0xFF, 0, 0])
+    }
+    func testLunaBluetoothHomeReport() {
+        var dec = ReportPadDecoder(.lunaBluetooth)
+        XCTAssertNil(dec.decode([0x02, 0x01]))
+        var d = [UInt8](repeating: 0, count: 17); d[0] = 0x01; d[2] = 0x7F; d[4] = 0x7F; d[6] = 0x7F; d[8] = 0x7F
+        d[13] = 1; d[16] = 0x02; d[9] = 0xFF; d[10] = 0x03
+        let s = dec.decode(d)!
+        XCTAssertEqual(s.buttons, [.guide, .up, .misc]); XCTAssertEqual(s.axes[4], 32767); XCTAssertEqual(s.axes[1], 0)
+    }
+}

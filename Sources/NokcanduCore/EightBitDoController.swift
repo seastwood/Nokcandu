@@ -20,13 +20,7 @@ public enum EightBitDoController {
         }
     }
 
-    public struct State: Equatable {
-        public var buttons: Set<PadProfiles.Input>
-        /// SDL's order, y down; triggers 0…32767.
-        public var axes: [Int: Int]
-        /// In Nokcandu's axes: gyro rad/s, acceleration g; nil when the report has none.
-        public var gyro: [Float]?, acceleration: [Float]?
-    }
+    public typealias State = ReportPadState
 
     public static func decode(_ d: [UInt8]) -> State? {
         if d.count == 9 { return old(d) }
@@ -71,7 +65,7 @@ public enum EightBitDoController {
                      gyro: nil, acceleration: nil)
     }
 
-    static func hat(_ v: UInt8) -> Set<PadProfiles.Input> {
+    public static func hat(_ v: UInt8) -> Set<PadProfiles.Input> {
         switch v {
         case 0: return [.up]
         case 1: return [.up, .right]
