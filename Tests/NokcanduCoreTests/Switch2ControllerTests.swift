@@ -68,3 +68,21 @@ final class XInputControllerTests: XCTestCase {
         XCTAssertEqual(XInputController.rumble(low: 10, high: 20), [0, 8, 0, 10, 20, 0, 0, 0])
     }
 }
+
+final class GIPControllerTests: XCTestCase {
+    func testInputAndGuide() {
+        var d = [UInt8](repeating: 0, count: 18); d[0] = 0x20; d[3] = 0x0e
+        d[4] = 0x10 | 0x04; d[5] = 0x01 | 0x10; d[6] = 0xff; d[7] = 0x03
+        d[12] = 0xff; d[13] = 0x7f                     // left y full up
+        var g = GIPController.Decoder()
+        let s = try! XCTUnwrap(g.decode(d, last: nil))
+        XCTAssertEqual(s.buttons, [.a, .start, .up, .lb])
+        XCTAssertEqual(s.axes[4], 32767); XCTAssertEqual(s.axes[1], -32767)
+        let guide = try! XCTUnwrap(g.decode([0x07, 0x20, 0x02, 0x02, 0x01, 0x5b], last: s))
+        XCTAssertTrue(guide.buttons.contains(.guide))
+        XCTAssertTrue(g.decode(d, last: guide)!.buttons.contains(.guide), "held until released")
+        XCTAssertNil(g.decode([0x03, 0x20, 0x01, 0x04], last: nil))
+        XCTAssertEqual(GIPController.acknowledge([0x07, 0x30, 0x05, 0x02])?.prefix(4).map { $0 }, [0x01, 0x20, 0x05, 0x09])
+        XCTAssertNil(GIPController.acknowledge([0x20, 0x00, 0x05, 0x0e]))
+    }
+}

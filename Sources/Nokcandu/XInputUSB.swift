@@ -10,7 +10,7 @@ import NokcanduCore
 final class XInputUSB: @unchecked Sendable {
     static let shared = XInputUSB()
     private var port: IONotificationPortRef?
-    private var iterator: io_iterator_t = 0
+    private var iterator: io_iterator_t = 0, gipIterator: io_iterator_t = 0
     private let lock = NSLock()
     private var running: Set<UInt64> = []
     private var started = false
@@ -18,17 +18,23 @@ final class XInputUSB: @unchecked Sendable {
     @MainActor func start() {
         guard !started else { return }
         started = true
-        guard let matching = IOServiceMatching("IOUSBHostInterface") as NSMutableDictionary? else { return }
-        matching["bInterfaceClass"] = XInputController.interfaceClass
-        matching["bInterfaceSubClass"] = XInputController.interfaceSubclass
-        matching["bInterfaceProtocol"] = XInputController.interfaceProtocol
+        func matching(_ c: Int, _ sub: Int, _ proto: Int) -> CFDictionary? {
+            guard let m = IOServiceMatching("IOUSBHostInterface") as NSMutableDictionary? else { return nil }
+            m["bInterfaceClass"] = c; m["bInterfaceSubClass"] = sub; m["bInterfaceProtocol"] = proto
+            return m as CFDictionary
+        }
         let p = IONotificationPortCreate(kIOMainPortDefault)
         IONotificationPortSetDispatchQueue(p, DispatchQueue(label: "Nokcandu.XInputUSB.match"))
         port = p
-        IOServiceAddMatchingNotification(p, kIOFirstMatchNotification, matching as CFDictionary, { _, it in
-            XInputUSB.shared.matched(it)
-        }, nil, &iterator)
-        matched(iterator)
+        if let m = matching(XInputController.interfaceClass, XInputController.interfaceSubclass, XInputController.interfaceProtocol) {
+            IOServiceAddMatchingNotification(p, kIOFirstMatchNotification, m, { _, it in XInputUSB.shared.matched(it) }, nil, &iterator)
+            matched(iterator)
+        }
+        // Xbox One and Series (GIP) — only when macOS doesn't drive them (then the interface can't be opened).
+        if let m = matching(GIPController.interfaceClass, GIPController.interfaceSubclass, GIPController.interfaceProtocol) {
+            IOServiceAddMatchingNotification(p, kIOFirstMatchNotification, m, { _, it in XInputUSB.shared.matched(it) }, nil, &gipIterator)
+            matched(gipIterator)
+        }
     }
 
     private func matched(_ it: io_iterator_t) {
@@ -62,14 +68,19 @@ final class XInputUSB: @unchecked Sendable {
             }
             current = UnsafeRawPointer(ep).assumingMemoryBound(to: IOUSBDescriptorHeader.self)
         }
+        let gip = (IORegistryEntryCreateCFProperty(service, "bInterfaceProtocol" as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() as? NSNumber)?.intValue == GIPController.interfaceProtocol
         guard inAddress != 0, let inPipe = try? iface.copyPipe(withAddress: inAddress) else { return }
-        if outAddress != 0, let outPipe = try? iface.copyPipe(withAddress: outAddress) {
-            let data = NSMutableData(bytes: XInputController.playerLight, length: XInputController.playerLight.count)
+        let outPipe = outAddress != 0 ? try? iface.copyPipe(withAddress: outAddress) : nil
+        func send(_ bytes: [UInt8]) {
+            guard let outPipe else { return }
+            let data = NSMutableData(bytes: bytes, length: bytes.count)
             var n = 0
             _ = try? outPipe.__sendIORequest(with: data, bytesTransferred: &n, completionTimeout: 1)
         }
+        send(gip ? GIPController.powerOn : XInputController.playerLight)
         let source = "xinput:\(id)"
-        ControllerLog.add("Controller: \(product) read as an Xbox 360 (XInput) controller")
+        ControllerLog.add("Controller: \(product) read as an \(gip ? "Xbox One/Series (GIP)" : "Xbox 360 (XInput)") controller")
+        var gipDecoder = GIPController.Decoder()
         var last: (Set<PadProfiles.Input>, [Int: Int])?
         while true {
             let data = NSMutableData(length: 32)!
@@ -77,7 +88,8 @@ final class XInputUSB: @unchecked Sendable {
             do { try inPipe.__sendIORequest(with: data, bytesTransferred: &n, completionTimeout: 0) }
             catch { break }                              // unplugged
             let bytes = Array(UnsafeRawBufferPointer(start: data.bytes, count: n))
-            guard let s = XInputController.decode(bytes) else { continue }
+            if gip, let ack = GIPController.acknowledge(bytes) { send(ack) }
+            guard let s = gip ? gipDecoder.decode(bytes, last: last.map { ($0.0, $0.1) }) : XInputController.decode(bytes) else { continue }
             if let last, last.0 == s.buttons, last.1 == s.axes { continue }
             last = (s.buttons, s.axes)
             DispatchQueue.main.async { MainActor.assumeIsolated { MappedGamepads.shared.publish(source, name: product, buttons: s.buttons, axes: s.axes) } }
