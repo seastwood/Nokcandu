@@ -153,3 +153,25 @@ final class ReportPadTests: XCTestCase {
         XCTAssertEqual(s.buttons, [.guide, .up, .misc]); XCTAssertEqual(s.axes[4], 32767); XCTAssertEqual(s.axes[1], 0)
     }
 }
+
+final class SInputTests: XCTestCase {
+    func testReportAndFeatures() {
+        var dec = ReportPadDecoder(.sinput)
+        var f = [UInt8](repeating: 0, count: 64); f[0] = 0x02; f[1] = 0x02; f[4] = 0x40   // left analog trigger only
+        f[10] = 4; f[12] = 0xE8; f[13] = 0x03                                                // ±4 g, ±1000 °/s
+        XCTAssertNil(dec.decode(f))
+        var d = [UInt8](repeating: 0, count: 64); d[0] = 0x01
+        d[3] = 0x02 | 0x10                 // South, d-pad up
+        d[4] = 0x20                        // right digital trigger
+        d[5] = 0x04                        // Guide
+        d[7] = 0xFF; d[8] = 0x7F           // left x full right
+        d[15] = 0xFF; d[16] = 0x7F         // left trigger full
+        d[29] = 0x00; d[30] = 0x80         // gyro x −32768
+        let s = try! XCTUnwrap(dec.decode(d))
+        XCTAssertEqual(s.buttons, [.a, .up, .guide])
+        XCTAssertEqual(s.axes[0], 32767); XCTAssertEqual(s.axes[4], 32767); XCTAssertEqual(s.axes[5], 32767)
+        XCTAssertEqual(Double(s.gyro![0]), 1000 * Double.pi / 180, accuracy: 0.001)
+        XCTAssertEqual(ReportPadDriver.sinput.startOutput?.count, 48)
+        XCTAssertEqual(ReportPadDriver.find(vendor: 0x2E8A, product: 0x10DF), .sinput)
+    }
+}

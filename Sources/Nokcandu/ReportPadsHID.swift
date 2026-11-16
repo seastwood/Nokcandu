@@ -41,6 +41,9 @@ final class ReportPadsHID {
             let id = UInt64(UInt(bitPattern: ctx))
             MainActor.assumeIsolated { ReportPadsHID.shared.report(report, id: id) }
         }, UnsafeMutableRawPointer(bitPattern: UInt(id)))
+        if var out = driver.startOutput {
+            _ = IOHIDDeviceSetReport(d, kIOHIDReportTypeOutput, CFIndex(out[0]), &out, out.count)
+        }
         // Reading this feature report is what switches some controllers to their full report (as SDL does).
         if let feature = driver.enableFeature {
             var bytes = [UInt8](repeating: 0, count: 64); bytes[0] = feature
