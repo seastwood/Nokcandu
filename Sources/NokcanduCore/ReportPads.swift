@@ -15,7 +15,7 @@ public struct ReportPadState: Equatable {
 /// Controllers whose own reports carry more than their generic HID description lets macOS see (extra buttons,
 /// motion, rumble): each driver's decoder, start-up and rumble, from SDL's HIDAPI drivers.
 public enum ReportPadDriver: Equatable {
-    case eightBitDo(product: Int), stadia, lunaUSB, lunaBluetooth, sinput, zuiki(product: Int), horiSteam, gameSir, shield(product: Int)
+    case eightBitDo(product: Int), stadia, lunaUSB, lunaBluetooth, sinput, zuiki(product: Int), horiSteam, gameSir, shield(product: Int), wii
 
     public static func find(vendor: Int, product: Int) -> ReportPadDriver? {
         switch (vendor, product) {
@@ -29,6 +29,7 @@ public enum ReportPadDriver: Equatable {
         case (0x0F0D, 0x01AB), (0x0F0D, 0x0196): return .horiSteam
         case (0x3537, 0x10B8), (0x3537, 0x103C): return .gameSir
         case (0x0955, let p) where p == 0x7210 || p == 0x7214: return .shield(product: p)
+        case (WiiController.vendor, let p) where WiiController.products.contains(p): return .wii
         default: return nil
         }
     }
@@ -37,6 +38,7 @@ public enum ReportPadDriver: Equatable {
         EightBitDoController.products.map { (EightBitDoController.vendor, $0) } + [(0x18D1, 0x9400), (0x1949, 0x0419), (0x0171, 0x0419)]
             + SInput.raspberryPiProducts.map { (0x2E8A, $0) } + [(0x38D2, 0x1014)] + Zuiki.names.keys.map { (0x33DD, $0) }
             + [(0x0F0D, 0x01AB), (0x0F0D, 0x0196), (0x3537, 0x10B8), (0x3537, 0x103C), (0x0955, 0x7210), (0x0955, 0x7214)]
+            + WiiController.products.map { (WiiController.vendor, $0) }
     }
 
     public var name: String {
@@ -49,6 +51,7 @@ public enum ReportPadDriver: Equatable {
         case .horiSteam: return "Wireless HORIPAD for Steam"
         case .gameSir: return "GameSir 8K Controller"
         case .shield: return "NVIDIA SHIELD Controller"
+        case .wii: return "Wii Remote"
         }
     }
     /// A feature report to read (get) once at start, which some controllers need before they send everything.
@@ -79,6 +82,7 @@ public enum ReportPadDriver: Equatable {
         case .horiSteam: return nil
         case .gameSir: return Self.gameSirCommand([0x03, byte(low), byte(high)])
         case .shield(let p): return p == 0x7210 ? [0x01, 0x00, byte(low), 0x00, byte(high), 0x00, 0x00] : nil
+        case .wii: return WiiController.rumble(max(low, high) > 0.2)
         }
     }
     static func gameSirCommand(_ body: [UInt8]) -> [UInt8] { [0xA2] + body + [UInt8](repeating: 0, count: 63 - body.count) }
@@ -90,6 +94,13 @@ public struct ReportPadDecoder {
     private var guide = false
     private var sinput = SInput.Features()
     private var touchClick = false
+    private var wii = WiiController()
+    /// The name to show: the driver's, or for a Wii controller what's attached to it.
+    public var name: String { driver == .wii ? wii.name : driver.name }
+    /// Reports to send at start (beyond the driver's fixed `startOutput`).
+    public mutating func start() -> [[UInt8]] { driver == .wii ? wii.start() : [] }
+    /// Reports the last decoded input calls for.
+    public mutating func takeOutputs() -> [[UInt8]] { driver == .wii ? wii.takeOutputs() : [] }
     public init(_ driver: ReportPadDriver) { self.driver = driver }
 
     public mutating func decode(_ d: [UInt8]) -> ReportPadState? {
@@ -108,6 +119,7 @@ public struct ReportPadDecoder {
         case .zuiki(let p): return p == 0x0017 ? Zuiki.bluetooth(d) : Zuiki.usb(d)
         case .horiSteam: return Self.horiSteam(d)
         case .gameSir: return Self.gameSir(d)
+        case .wii: return wii.decode(d)
         case .shield:
             if d.count >= 2, d[0] == 0x02 { touchClick = d[1] & 0x01 != 0; return nil }   // the touchpad's report
             guard var s = Self.shield(d) else { return nil }

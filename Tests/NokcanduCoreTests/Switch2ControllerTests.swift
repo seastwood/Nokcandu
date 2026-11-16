@@ -248,3 +248,34 @@ final class ShieldTests: XCTestCase {
         XCTAssertEqual(t.buttons, [.up, .guide])
     }
 }
+
+final class WiiControllerTests: XCTestCase {
+    func testWiiUProConversation() {
+        var dec = ReportPadDecoder(.wii)
+        let first = dec.start()
+        XCTAssertEqual(first.first?.prefix(6), [0x16, 0x04, 0xA4, 0x00, 0xF0, 0x01])
+        _ = dec.decode([0x22, 0, 0, 0x16, 0]); XCTAssertEqual(dec.takeOutputs().first?[4], 0xFB)
+        _ = dec.decode([0x22, 0, 0, 0x16, 0]); XCTAssertEqual(dec.takeOutputs().first?.first, 0x17)
+        _ = dec.decode([0x21, 0, 0, 0x10, 0x00, 0xFE, 0x01, 0x20] + [UInt8](repeating: 0, count: 14))
+        XCTAssertEqual(dec.takeOutputs(), [[0x12, 0x04, 0x3D], [0x11, 0x10]])
+        XCTAssertEqual(dec.name, "Wii U Pro Controller")
+        func report(_ lx: Int, a: Bool) -> [UInt8] {
+            var e = [UInt8](repeating: 0, count: 21)
+            for i in 0..<4 { let v = i == 0 ? lx : 2000; e[i * 2] = UInt8(v & 0xFF); e[i * 2 + 1] = UInt8(v >> 8) }
+            e[8] = 0xFF; e[9] = a ? 0xFF & ~0x40 : 0xFF; e[10] = 0xFF
+            return [0x3D] + e
+        }
+        _ = dec.decode(report(2000, a: false))                  // centres the sticks
+        let s = try! XCTUnwrap(dec.decode(report(3000, a: true)))
+        XCTAssertEqual(s.buttons, [.a]); XCTAssertEqual(s.axes[0], 32767); XCTAssertEqual(s.axes[4], 0)
+    }
+    func testRemoteAlone() {
+        var dec = ReportPadDecoder(.wii)
+        _ = dec.start()
+        _ = dec.decode([0x22, 0, 0, 0x16, 0]); _ = dec.decode([0x22, 0, 0, 0x16, 7]); _ = dec.takeOutputs()
+        _ = dec.decode([0x21, 0, 0, 0x17, 0x00, 0xFE, 0, 0])   // error 7: nothing attached
+        XCTAssertEqual(dec.takeOutputs().first, [0x12, 0x04, 0x30])
+        let s = try! XCTUnwrap(dec.decode([0x30, 0x10, 0x08]))
+        XCTAssertEqual(s.buttons, [.start, .b])
+    }
+}

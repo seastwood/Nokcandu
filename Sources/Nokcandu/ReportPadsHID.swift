@@ -48,6 +48,7 @@ final class ReportPadsHID {
         if var out = driver.startOutput {
             _ = IOHIDDeviceSetReport(d, kIOHIDReportTypeOutput, CFIndex(out[0]), &out, out.count)
         }
+        for out in pads[id]?.decoder.start() ?? [] { Self.send(out, to: d) }
         // Reading this feature report is what switches some controllers to their full report (as SDL does).
         if let feature = driver.enableFeature {
             var bytes = [UInt8](repeating: 0, count: 64); bytes[0] = feature
@@ -59,7 +60,7 @@ final class ReportPadsHID {
         let id = Self.id(d)
         if claimed.remove(id) != nil {
             MappedGamepads.shared.publish("report:\(id)", name: "", buttons: nil, axes: [:])
-            ControllerLog.add("Controller: \(pads[id]?.decoder.driver.name ?? "controller") disconnected")
+            ControllerLog.add("Controller: \(pads[id]?.decoder.name ?? "controller") disconnected")
         }
         pads[id] = nil
         buffers.removeValue(forKey: id)?.deallocate()
@@ -68,9 +69,11 @@ final class ReportPadsHID {
     private func report(_ bytes: [UInt8], id: UInt64) {
         guard var pad = pads[id] else { return }
         let s = pad.decoder.decode(bytes)
+        let replies = pad.decoder.takeOutputs()
         pads[id] = pad
+        for out in replies { Self.send(out, to: pad.device) }
         guard let s else { return }
-        let name = pad.decoder.driver.name
+        let name = pad.decoder.name
         if !claimed.contains(id) {
             // Left to macOS's own controller support, or to a profile that reads it as its own device.
             if let info = HIDDevices.shared.connected.first(where: { $0.id == id }),
@@ -91,9 +94,13 @@ final class ReportPadsHID {
     private func send(low: Double, high: Double) {
         for id in claimed {
             guard let p = pads[id], let r = p.decoder.driver.rumble(low: low, high: high) else { continue }
-            // Report ID 0 means the device has none: the bytes after it are the report.
-            var bytes = r[0] == 0 ? Array(r.dropFirst()) : r
-            _ = IOHIDDeviceSetReport(p.device, kIOHIDReportTypeOutput, CFIndex(r[0]), &bytes, bytes.count)
+            Self.send(r, to: p.device)
         }
+    }
+    /// An output report; a first byte (report ID) of 0 means the device has none, so the bytes after it are sent.
+    private static func send(_ r: [UInt8], to d: IOHIDDevice) {
+        guard !r.isEmpty else { return }
+        var bytes = r[0] == 0 ? Array(r.dropFirst()) : r
+        _ = IOHIDDeviceSetReport(d, kIOHIDReportTypeOutput, CFIndex(r[0]), &bytes, bytes.count)
     }
 }

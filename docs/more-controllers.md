@@ -21,6 +21,7 @@ its own device ("Add Device"), is left alone.
 | HORI Wireless HORIPAD for Steam | 0F0D:01AB, 0196 (BT) | `ReportPadsHID` | M1/M2 and FL/FR back buttons, Quick Access (Share), stick touch, gyro |
 | GameSir G7 Pro 8K, Tarantula 8K | 3537:10B8, 103C | `ReportPadsHID` (switches it to its full mode) | L4/R4, L5/R5, Share, gyro, rumble |
 | NVIDIA SHIELD controller (2015, 2017) | 0955:7210, 7214 | `ReportPadsHID` | + and − (paddles), touchpad click, rumble on the 2015 one |
+| Wii Remote (alone, + Nunchuk, + Classic Controller), Wii U Pro Controller | 057E:0306, 0330 (Bluetooth) | `ReportPadsHID` + `WiiController` (identifies the extension, sets the report mode) | works at all, rumble (on/off) |
 | SInput (GP2040-CE, Handheld Legend ProGCC/GC Ultimate, Firebird…) | 2E8A:10C6/10DF/10DD/10E0/10E5, 38D2:1014 | `ReportPadsHID` | paddles, Capture, touchpad click, gyro, rumble |
 
 `ReportPadsHID` takes a controller from the generic mapping only once a report it understands arrives, so a
