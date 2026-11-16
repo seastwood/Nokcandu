@@ -40,7 +40,7 @@ extension ControllerProfileEditor {
                     for (input, key) in zip(directions, side == 0 ? [13, 1, 0, 2] : [126, 125, 123, 124]) { profile.layers[layerIndex][input] = .as(.key(key)) }
                 }
             })) {
-                Text(side == 0 ? "Existing touchpad settings" : "Joystick settings").tag(PadSteamTrackpadSettings.Mode.existing)
+                Text(side == 0 ? "Existing touchpad settings" : family == .steam2026 ? "Right stick, as it is (alongside the joystick)" : "Joystick settings").tag(PadSteamTrackpadSettings.Mode.existing)
                 Text("Trackpad mouse").tag(PadSteamTrackpadSettings.Mode.mouse)
                 Text("Trackball mouse").tag(PadSteamTrackpadSettings.Mode.trackball)
                 Text(side == 0 ? "Four directions (W A S D…)" : "Four directions (arrows…)").tag(PadSteamTrackpadSettings.Mode.directions)
@@ -163,10 +163,11 @@ extension ControllerProfileEditor {
                 Section(input.title(family)) { inputEditor(input) }
             }
         }
-        if settings.wrappedValue.mode == .existing {
+        // The 2026 controller's right pad has a click of its own (its right stick click is the stick's).
+        if settings.wrappedValue.mode == .existing, !(family == .steam2026 && side == 1) {
             if side == 0 { legacyTouchpadInspector } else { joystickInspector(1) }
         } else {
-            Section("Trackpad Click") { inputEditor(side == 0 ? .touchpad : .rs) }
+            Section("Trackpad Click") { inputEditor(side == 0 ? .touchpad : family == .steam2026 ? .rpclick : .rs) }
         }
     }
 }

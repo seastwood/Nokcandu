@@ -236,7 +236,9 @@ extension ControllerProfileEditor {
         } header: {
             InspectorTitle(title: "Feedback", subtitle: nil, symbol: "waveform")
         } footer: {
-            Text(inputSource == .steamUSB
+            Text(inputSource == .steamUSB && family == .steam2026
+                 ? "The Steam Controller (2026) rumbles through the motors in its grips and taps its trackpads, while this profile is reading it. Give a button “Rumble” to buzz on purpose."
+                 : inputSource == .steamUSB
                  ? "The Steam Controller rumbles through its trackpads, while this profile is reading it. Give a button “Rumble” to buzz on purpose. The on-screen note (Settings) shows layer changes too."
                  : "The light is on DualSense and DualShock 4 controllers; rumble on controllers macOS can rumble (give a button “Rumble” to buzz on purpose). Games' own vibration reaches the controller as usual. The on-screen note (Settings) shows layer changes too.")
                 .font(.caption).foregroundStyle(.secondary)

@@ -234,7 +234,9 @@ if [ "${1:-}" = --install ]; then
   if [ -e .quit-for-install ] && /usr/bin/pgrep -xq Nokcandu; then
     /usr/bin/osascript -e 'tell application "Nokcandu" to quit' >/dev/null 2>&1 || true
     for _ in $(seq 1 20); do /usr/bin/pgrep -xq Nokcandu || break; sleep 0.5; done
-    /usr/bin/pkill -x Nokcandu 2>/dev/null || true; sleep 1
+    /usr/bin/pkill -x Nokcandu 2>/dev/null || true
+    for _ in $(seq 1 20); do /usr/bin/pgrep -xq Nokcandu || break; sleep 0.5; done
+    /usr/bin/pkill -9 -x Nokcandu 2>/dev/null || true; sleep 1
     REOPEN=1
   fi
   "$APP/Contents/Resources/nokcandu-settings" --install-app "$(pwd)/$APP" "$HOME/Applications/Nokcandu.app"

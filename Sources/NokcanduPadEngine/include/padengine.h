@@ -29,7 +29,10 @@ enum {
     // A trackpad's zones (up to five, the layout chosen by the host): tapped, and clicked.
     PE_LPAD_ZT1, PE_LPAD_ZT2, PE_LPAD_ZT3, PE_LPAD_ZT4, PE_LPAD_ZT5, PE_LPAD_ZC1, PE_LPAD_ZC2, PE_LPAD_ZC3, PE_LPAD_ZC4, PE_LPAD_ZC5,
     PE_RPAD_ZT1, PE_RPAD_ZT2, PE_RPAD_ZT3, PE_RPAD_ZT4, PE_RPAD_ZT5, PE_RPAD_ZC1, PE_RPAD_ZC2, PE_RPAD_ZC3, PE_RPAD_ZC4, PE_RPAD_ZC5,
-    PE_INPUTS                               // 77
+    // Steam Controller (2026): the right trackpad's click (it has a right stick of its own), and its touch
+    // sensors: Grip Sense on each grip and a thumb on each stick. Held by the host like buttons (pe_button).
+    PE_RPAD_CLICK, PE_LGRIP, PE_RGRIP, PE_LS_TOUCH, PE_RS_TOUCH,
+    PE_INPUTS                               // 82
 };
 // Axes: SDL2's order. Sticks -32768…32767 (y down), triggers 0…32767.
 enum { PE_AXIS_LX, PE_AXIS_LY, PE_AXIS_RX, PE_AXIS_RY, PE_AXIS_LT, PE_AXIS_RT, PE_AXES };

@@ -17,12 +17,22 @@ public struct SteamControllerReport {
         public var leftTouch: Bool, rightTouch: Bool
         public var leftTrigger: Float, rightTrigger: Float
         public var gyro: [Float], acceleration: [Float]
+        /// Which Steam Controller: the original (its right trackpad is its right stick) or the 2026 one (a right
+        /// stick of its own, square trackpads with pressure).
+        public var kind: SteamControllerModel = .original
+        public var rightStick = Point()
+        /// The 2026 controller's trackpad pressure, 0…1.
+        public var leftPressure: Float = 0, rightPressure: Float = 0
         /// Axes use the existing engine's SDL order and y-down convention.
         public var axes: [Int: Int] {
-            [0: Self.axis(stick.x), 1: Self.axis(-stick.y),
-             2: Self.axis(rightTouch ? rightPad.x : 0), 3: Self.axis(rightTouch ? -rightPad.y : 0),
-             4: Self.axis(leftTrigger), 5: Self.axis(rightTrigger)]
+            let right = kind == .original ? (rightTouch ? rightPad : Point()) : rightStick
+            return [0: Self.axis(stick.x), 1: Self.axis(-stick.y),
+                    2: Self.axis(right.x), 3: Self.axis(-right.y),
+                    4: Self.axis(leftTrigger), 5: Self.axis(rightTrigger)]
         }
+        /// The input a trackpad's click is: the left one is the touchpad click; the original's right one is its
+        /// right stick click (its right pad is that stick), the 2026 controller's its own.
+        public func padClick(_ side: Int) -> PadProfiles.Input { side == 0 ? .touchpad : kind == .original ? .rs : .rpclick }
         /// The stick axes for the engine, with either pad as an analog stick when it is set to be one: the pad
         /// drives its side's stick (left pad: the left stick, which it shares with the joystick — whichever is
         /// pushed further wins).
@@ -30,7 +40,10 @@ public struct SteamControllerReport {
             var result = mappingAxes(rightTrackpadAsStick: right.mode == .existing)
             if right.mode == .stick {
                 let v = rightTouch ? PadSteamPadStick.vector(x: Double(rightPad.x), y: Double(rightPad.y), settings: right) : (x: 0, y: 0)
-                result[2] = Self.axis(Float(v.x)); result[3] = Self.axis(Float(-v.y))
+                // The 2026 controller's right stick is real: the pad takes over only while pushed further.
+                if kind == .original || v.x * v.x + v.y * v.y > Double(rightStick.x * rightStick.x + rightStick.y * rightStick.y) {
+                    result[2] = Self.axis(Float(v.x)); result[3] = Self.axis(Float(-v.y))
+                }
             }
             if left.mode == .stick, leftTouch {
                 let v = PadSteamPadStick.vector(x: Double(leftPad.x), y: Double(leftPad.y), settings: left)
@@ -42,7 +55,12 @@ public struct SteamControllerReport {
         }
         public func mappingAxes(rightTrackpadAsStick: Bool) -> [Int: Int] {
             var result = axes
-            if !rightTrackpadAsStick { result[2] = 0; result[3] = 0 }
+            if kind == .original {
+                if !rightTrackpadAsStick { result[2] = 0; result[3] = 0 }
+            } else if rightTrackpadAsStick, rightTouch,
+                      rightPad.x * rightPad.x + rightPad.y * rightPad.y > rightStick.x * rightStick.x + rightStick.y * rightStick.y {
+                result[2] = Self.axis(rightPad.x); result[3] = Self.axis(-rightPad.y)
+            }
             return result
         }
         private static func axis(_ v: Float) -> Int { Int(max(-32768, min(32767, v * 32767))) }
@@ -111,6 +129,14 @@ public struct SteamControllerStream {
         guard state != nil, let received else { return false }
         guard time.isFinite, time >= received, time-received <= timeout else { reset(); return true }
         return false
+    }
+    /// A state already decoded (the 2026 controller's): kept for freshness like the others.
+    public mutating func acceptDecoded(_ next: SteamControllerReport.State, at time: Double) -> Bool {
+        guard time.isFinite else { return false }
+        if let received, time < received { reset() }
+        received = time
+        state = next
+        return true
     }
     /// A Bluetooth input report (a segment): returns the state once a whole state packet is in.
     public mutating func acceptBluetooth(_ bytes: [UInt8], at time: Double) -> SteamControllerReport.State? {

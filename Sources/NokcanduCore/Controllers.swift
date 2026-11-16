@@ -28,9 +28,14 @@ public enum Controllers {
 
     /// Controller makers with their own Windows support worth passing through.
     public enum Family: String, CaseIterable, Sendable {
-        case nintendo, playstation, valve
-        public var vendorID: Int { switch self { case .nintendo: 0x057E; case .playstation: 0x054C; case .valve: 0x28DE } }
-        public var title: String { switch self { case .nintendo: "Nintendo"; case .playstation: "PlayStation"; case .valve: "Steam" } }
+        /// `steam2026`: the Steam Controller (2026), for its labels and picture only. Valve's controllers reach
+        /// Windows as `valve`, so it isn't among `allCases` (which decides that).
+        case nintendo, playstation, valve, steam2026
+        public static var allCases: [Family] { [.nintendo, .playstation, .valve] }
+        public var vendorID: Int { switch self { case .nintendo: 0x057E; case .playstation: 0x054C; case .valve, .steam2026: 0x28DE } }
+        public var title: String { switch self { case .nintendo: "Nintendo"; case .playstation: "PlayStation"; case .valve: "Steam"; case .steam2026: "Steam Controller (2026)" } }
+        /// Valve's layout (either Steam Controller): its trackpads and back grips.
+        public var isSteam: Bool { self == .valve || self == .steam2026 }
         public static func of(vendorID: Int) -> Family? { allCases.first { $0.vendorID == vendorID } }
     }
 
@@ -179,7 +184,7 @@ public enum Controllers {
             switch family {
             case .nintendo: return [0x2006, 0x2007, 0x2009, 0x200E, 0x2066, 0x2067, 0x2069].contains(productID)
             case .playstation: return true
-            case .valve: return true
+            case .valve, .steam2026: return true
             case nil: return false
             }
         }

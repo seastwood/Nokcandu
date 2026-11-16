@@ -37,7 +37,7 @@ extension ControllerProfileEditor {
         guard layerIndex > 0 else { return false }
         let l = profile.layers[layerIndex]
         let own = (s == 0 ? l.leftStick : l.rightStick) != nil
-        let pad = inputSource == .steamUSB && s == 1 && l.steamRightTrackpad != nil
+        let pad = inputSource == .steamUSB && s == 1 && family != .steam2026 && l.steamRightTrackpad != nil
         return own || pad || PadProfiles.Input.stickDirections(s).contains { l[$0] != nil }
     }
 

@@ -86,7 +86,8 @@ public struct PadSteamTrackpadSettings: Codable, Hashable, Sendable {
     public var dialReverse: Bool?
     public var dialHaptic: Double?
     public static let defaultDialStep = 30.0
-    public static let defaultSmoothing = 0.4
+    /// None by default: smoothing trades a little delay at slow speeds for steadiness, so it is the player's choice.
+    public static let defaultSmoothing = 0.0
     /// The pad's own directions unless you choose an angle. Valve's ±15° made a straight up-and-down swipe
     /// come out partly sideways for at least one player, which felt like the cursor hooking.
     public static func defaultRotation(side: Int) -> Double { 0 }
@@ -480,7 +481,7 @@ extension PadProfiles {
         let key = side == 0 ? "touch" : "rstick"
         let route = stack(profile, all: all).compactMap { $0.controlRoutes?[key] }.last
         if routing == .native || (routing == .selective && (route == .native || route == .disabled)) { settings.mode = .existing }
-        // Unset means the recommended feel; an explicit 0 keeps raw, unturned movement.
+        // Unset means the defaults: no smoothing, the pad's own directions.
         if settings.smoothing == nil { settings.smoothing = PadSteamTrackpadSettings.defaultSmoothing }
         if settings.rotation == nil { settings.rotation = PadSteamTrackpadSettings.defaultRotation(side: side) }
         return settings

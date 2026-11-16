@@ -184,7 +184,8 @@ static const char *input_names[PE_INPUTS] = {
     "tz1", "tz2", "tz3", "tz4", "tc1", "tc2", "tc3", "tc4", "tiltleft", "tiltright", "tiltfwd", "tiltback",
     "lpup", "lpdown", "lpleft", "lpright", "lpedge", "rpup", "rpdown", "rpleft", "rpright", "rpedge", "lptap", "rptap",
     "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpc1", "lpc2", "lpc3", "lpc4", "lpc5",
-    "rpt1", "rpt2", "rpt3", "rpt4", "rpt5", "rpc1", "rpc2", "rpc3", "rpc4", "rpc5"
+    "rpt1", "rpt2", "rpt3", "rpt4", "rpt5", "rpc1", "rpc2", "rpc3", "rpc4", "rpc5",
+    "rpclick", "lgrip", "rgrip", "lstouch", "rstouch"
 };
 static int dev_in(int slot, int k) { return PE_INPUTS + (slot - 1) * PE_DEV_INPUTS + k; }
 enum { K_HAT = PE_DEV_BUTTONS, K_AXIS = PE_DEV_BUTTONS + 4 };
@@ -754,6 +755,9 @@ bool pe_input_bound(const pe_engine *e, int input) {
 }
 
 void pe_button(pe_engine *e, int button, bool down, double now) {
+    // The Steam Controller (2026)'s extra click and touch sensors: inputs like any other, never sent on as a
+    // controller button (the controller presented to games has none).
+    if (e && button >= PE_RPAD_CLICK && button < PE_INPUTS) { pe_tick(e, now); set_input(e, button, down, now); return; }
     if (!e || button < 0 || button >= PE_PAD_BUTTONS) return;
     if (e->route[button]) {
         if (e->route_down[button] == down) return;

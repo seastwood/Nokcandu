@@ -611,7 +611,7 @@ final class DesktopPad: ObservableObject {
             case .none: break
             }
             // A click in a zone that has something set goes to that zone instead of the pad's own click.
-            let clickButton: PadProfiles.Input = side == 0 ? .touchpad : .rs
+            let clickButton = state.padClick(side)
             let routed = steamZoneClicks[side].click(side: side, down: state.buttons.contains(clickButton), touching: touching,
                                                     x: Double(pad.x), y: Double(pad.y), settings: settings, bound: bound)
             if let c = routed.change { pe_pad_zone(e, pe_input_named(c.input.rawValue), c.down, now) }

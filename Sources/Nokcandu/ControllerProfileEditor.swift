@@ -38,6 +38,8 @@ struct ControllerProfileEditor: View {
     enum Part: Hashable {
         case input(PadProfiles.Input), stick(Int), gyro, triggers, deviceInput(String, String), deviceAxis(String, Int)
         case touchpad, tilt, macros, sequences, menus, feedback, headMotion
+        /// A Steam Controller (2026) trackpad (left 0, right 1): its right stick is a real stick, so `stick(1)` is that.
+        case steamPad(Int)
     }
     /// The device shown on the left instead of the controller (nil: the controller).
     @State private var shownDevice: String?
@@ -121,8 +123,8 @@ struct ControllerProfileEditor: View {
     func left(_ width: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             sourceRow("Controller input", info: inputSource == .steamUSB
-                      ? "Nokcandu reads the original 2015 Steam Controller itself, by cable or wireless receiver, so its trackpads (as a mouse, trackball, dial or stick), grips, pad clicks and trackpad haptics can be mapped. Games still get the controller as their Emulated controller (below) sets.\n\nWhile it's read, the controller's built-in desktop mouse and keyboard are switched off and motion is turned on, so only this profile acts. Its own mode comes back when Nokcandu lets go. No pairing or firmware change is made. Plug in the cable before choosing this to prefer USB."
-                      : "The controllers macOS recognizes. For the original 2015 Steam Controller, choose “Steam Controller, read directly” to map its trackpads and use their haptics.") {
+                      ? "Nokcandu reads the Steam Controller itself — the original (2015) by cable, wireless receiver or Bluetooth, and the 2026 one by cable, Puck or Bluetooth — so its trackpads (as a mouse, trackball, dial or stick), back buttons, pad clicks, trackpad haptics and, on the 2026 one, Grip Sense and stick touch can be mapped. Games still get the controller as their Emulated controller (below) sets.\n\nWhile it's read, the controller's built-in desktop mouse and keyboard are switched off and motion is turned on, so only this profile acts. Its own mode comes back when Nokcandu lets go. No pairing or firmware change is made. Plug in the cable before choosing this to prefer USB."
+                      : "The controllers macOS recognizes. For a Steam Controller (2015 or 2026), choose “Steam Controller, read directly” to map its trackpads and use their haptics.") {
                 Picker("Controller input", selection: Binding(get: { inputSource }, set: { profile.controllerSource = $0 })) {
                     Text("Automatic (controllers macOS recognizes)").tag(PadProfiles.ControllerSource.automatic)
                     Text("Steam Controller, read directly (trackpads, haptics)").tag(PadProfiles.ControllerSource.steamUSB)
@@ -205,7 +207,7 @@ struct ControllerProfileEditor: View {
                     }
                     .onReceive(tester.$sticks) { now in
                         // On the Steam Controller the right "stick" is its trackpad: only the joystick picks directions.
-                        assigner.sticksChanged(now, sticksShown: inputSource == .steamUSB ? [0] : [0, 1],
+                        assigner.sticksChanged(now, sticksShown: inputSource == .steamUSB && family != .steam2026 ? [0] : [0, 1],
                                                select: { selection = .stick($0) }, assign: assignPressed)
                     }
                 ExtraButtons(tester: tester, family: family, selection: $selection,
@@ -432,7 +434,8 @@ struct ControllerProfileEditor: View {
             Text("Xbox").tag(Controllers.Family?.none)
             Text("PlayStation").tag(Controllers.Family?.some(.playstation))
             Text("Nintendo").tag(Controllers.Family?.some(.nintendo))
-            Text("Steam").tag(Controllers.Family?.some(.valve))
+            Text("Steam Controller (2015)").tag(Controllers.Family?.some(.valve))
+            Text("Steam Controller (2026)").tag(Controllers.Family?.some(.steam2026))
         }.fixedSize().help("Button names and diagram style for this profile only. Other profiles keep their own choice.")
         buildsOnMenu
     }
@@ -551,7 +554,7 @@ struct ControllerProfileEditor: View {
 
     /// What a stick does, short enough for the picture (nil: it's a stick, as it is).
     func stickLabel(_ s: Int) -> String? {
-        if inputSource == .steamUSB && s == 1 {
+        if inputSource == .steamUSB && s == 1 && family != .steam2026 {
             let mode = steamTrackpadBinding(1).wrappedValue.mode
             if mode != .existing { return mode == .trackball ? "Trackball" : mode == .directions ? "Directions" : mode == .stick ? "Stick" : mode == .dial ? "Scroll wheel" : "Trackpad mouse" }
         }
@@ -617,6 +620,7 @@ struct ControllerProfileEditor: View {
         case .deviceInput(let id, let k): deviceInputInspector(id, k)
         case .deviceAxis(let id, let n): deviceAxisInspector(id, n)
         case .touchpad: touchpadInspector
+        case .steamPad(let side): steamTrackpadInspector(side)
         case .tilt: tiltInspector
         case .macros: macrosInspector
         case .sequences: sequencesInspector
@@ -687,7 +691,7 @@ struct ControllerProfileEditor: View {
     }
 
     @ViewBuilder func stickInspector(_ s: Int) -> some View {
-        if inputSource == .steamUSB && s == 1 { steamTrackpadInspector(1) }
+        if inputSource == .steamUSB && s == 1 && family != .steam2026 { steamTrackpadInspector(1) }
         else { joystickInspector(s) }
     }
     @ViewBuilder func joystickInspector(_ s: Int) -> some View {
@@ -731,7 +735,7 @@ struct ControllerProfileEditor: View {
             }
         } header: {
             HStack {
-                InspectorTitle(title: s == 0 ? "Left Stick" : inputSource == .steamUSB ? "Right Trackpad (as stick)" : "Right Stick", subtitle: nil, symbol: s == 0 ? "l.joystick" : "r.joystick")
+                InspectorTitle(title: s == 0 ? "Left Stick" : inputSource == .steamUSB && family != .steam2026 ? "Right Trackpad (as stick)" : "Right Stick", subtitle: nil, symbol: s == 0 ? "l.joystick" : "r.joystick")
                 Spacer()
                 if profile.layers.count > 1 { copyStickMenu(s).font(.callout) }
             }
@@ -785,6 +789,17 @@ struct ControllerProfileEditor: View {
         } header: { Text("Stick Click") } footer: {
             if (s == 0 ? profile.leftStick : profile.rightStick) != nil, !profile.buildsOn.isEmpty {
                 Button("Use the Settings of the Profile Underneath") { if s == 0 { profile.leftStick = nil } else { profile.rightStick = nil } }.buttonStyle(.link).font(.caption)
+            }
+        }
+        if family == .steam2026 {
+            // The 2026 controller's sticks feel a resting thumb: an input of its own (a layer, gyro on, a key…).
+            let touch: PadProfiles.Input = s == 0 ? .lstouch : .rstouch
+            Section {
+                BindingEditor(binding: bindingFor(touch), input: touch, family: family,
+                              layers: profile.layers.dropFirst().map(\.name), inLayer: layerIndex > 0,
+                              inherited: profile.layers[layerIndex][touch] == nil ? inherited(touch).map(describe) : nil)
+            } header: { Text("Stick Touch") } footer: {
+                Text("The stick senses your thumb resting on it, without moving or clicking it. Set it to Gyro on to aim with motion only while your thumb is on the stick, or to a layer.").font(.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -1251,7 +1266,9 @@ struct ExtraButtons: View {
 
     var body: some View {
         FlowRow(spacing: 6) {
-            ForEach(family == .valve ? [PadProfiles.Input.paddle1, .paddle2, .touchpad, .rs] : [PadProfiles.Input.paddle1, .paddle2, .paddle3, .paddle4, .touchpad, .misc], id: \.self) { i in
+            ForEach(family == .valve ? [PadProfiles.Input.paddle1, .paddle2, .touchpad, .rs]
+                    : family == .steam2026 ? [PadProfiles.Input.paddle2, .paddle4, .paddle1, .paddle3, .touchpad, .rpclick, .misc, .lgrip, .rgrip, .lstouch, .rstouch]
+                    : [PadProfiles.Input.paddle1, .paddle2, .paddle3, .paddle4, .touchpad, .misc], id: \.self) { i in
                 Button { selection = .input(i) } label: {
                     Text(i.title(family)).font(.caption)
                         .padding(.horizontal, 6).padding(.vertical, 3)

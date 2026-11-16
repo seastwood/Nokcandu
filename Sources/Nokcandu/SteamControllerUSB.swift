@@ -24,8 +24,9 @@ final class SteamControllerUSB: ObservableObject {
     private final class Channel {
         let device: IOHIDDevice
         let transport: SteamControllerTransport
+        let model: SteamControllerModel
         let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 64)
-        init(_ device: IOHIDDevice, _ transport: SteamControllerTransport) { self.device = device; self.transport = transport }
+        init(_ device: IOHIDDevice, _ transport: SteamControllerTransport, _ model: SteamControllerModel = .original) { self.device = device; self.transport = transport; self.model = model }
         deinit { buffer.deallocate() }
     }
     private var channels: [UInt64: Channel] = [:]
@@ -48,7 +49,14 @@ final class SteamControllerUSB: ObservableObject {
     private var recoveryURL: URL { NokPaths.support.appendingPathComponent("steam-controller-mode-lease.json") }
     private var latest: SteamControllerReport.State? { stream.state }
     var connected: Bool { device != nil }
-    var controllerName: String? { active.map { "Steam Controller (2015 · \($0.transport.title))" } }
+    var controllerName: String? { active.map { "Steam Controller (\($0.model == .steam2026 ? "2026" : "2015") · \($0.transport.title))" } }
+    /// The Steam Controller being read, if any.
+    var model: SteamControllerModel? { active?.model }
+    /// Taken over: the original under a verified mode lease; the 2026 controller once its reports come in (it
+    /// needs no lease: it goes back to its own mode by itself when the keep-alives stop).
+    private var captured: Bool { modeLease != nil || active?.model == .steam2026 }
+    private var lastKeepAlive: Double = 0
+    private var counter2026: UInt32 = 0
 
     func listen(_ id: UUID, _ callback: @escaping (SteamControllerReport.State?) -> Void) {
         let existed = listeners[id] != nil
@@ -71,8 +79,8 @@ final class SteamControllerUSB: ObservableObject {
         let m = IOHIDManagerCreate(kCFAllocatorDefault, 0)
         IOHIDManagerSetDeviceMatchingMultiple(m, ([0x1102, 0x1142].map { product in
             [kIOHIDVendorIDKey:0x28de,kIOHIDProductIDKey:product,kIOHIDDeviceUsagePageKey:0xff00,kIOHIDDeviceUsageKey:1] as [String: Any]
-        } + SteamControllerBLE.products.map { product in
-            // Bluetooth: the controller is one device whatever its first collection is, so match it by product.
+        } + (SteamControllerBLE.products + SteamController2026.products).map { product in
+            // Bluetooth, and the 2026 controller: matched by product; its reports tell which interface is its own.
             [kIOHIDVendorIDKey:0x28de,kIOHIDProductIDKey:product] as [String: Any]
         }) as CFArray)
         IOHIDManagerRegisterDeviceMatchingCallback(m, { _,_,_,d in
@@ -87,23 +95,37 @@ final class SteamControllerUSB: ObservableObject {
         }
         IOHIDManagerScheduleWithRunLoop(m, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
         let r = IOHIDManagerOpen(m,0)
-        status = r == kIOReturnSuccess ? "Connect the original Steam Controller by USB, wake it with its receiver connected, or connect it by Bluetooth" : "Steam Controller interface could not be opened"
+        status = r == kIOReturnSuccess ? "Connect a Steam Controller by USB, its receiver or Puck, or Bluetooth" : "Steam Controller interface could not be opened"
         let t = Timer(timeInterval: 0.1, repeats: true) { _ in MainActor.assumeIsolated { SteamControllerUSB.shared.expire() } }
         RunLoop.main.add(t, forMode: .common); timer = t
     }
     private func add(_ d: IOHIDDevice) {
         func number(_ key: String) -> Int { (IOHIDDeviceGetProperty(d,key as CFString) as? NSNumber)?.intValue ?? 0 }
         let interface = (IORegistryEntrySearchCFProperty(IOHIDDeviceGetService(d),kIOServicePlane,"bInterfaceNumber" as CFString,kCFAllocatorDefault,IOOptionBits(kIORegistryIterateRecursively | kIORegistryIterateParents)) as? NSNumber)?.intValue ?? -1
-        guard let transport = SteamControllerTransport.identify(vendor:number(kIOHIDVendorIDKey), product:number(kIOHIDProductIDKey), page:number(kIOHIDPrimaryUsagePageKey), usage:number(kIOHIDPrimaryUsageKey), interface:interface) else { return }
+        let product = number(kIOHIDProductIDKey)
+        let model: SteamControllerModel = SteamController2026.products.contains(product) ? .steam2026 : .original
+        guard let transport = model == .steam2026 ? SteamController2026.identify(vendor:number(kIOHIDVendorIDKey), product:product, interface:interface)
+                : SteamControllerTransport.identify(vendor:number(kIOHIDVendorIDKey), product:product, page:number(kIOHIDPrimaryUsagePageKey), usage:number(kIOHIDPrimaryUsageKey), interface:interface) else { return }
         let id = registryID(d)
         guard channels[id] == nil else { return }
-        let channel = Channel(d,transport); channels[id] = channel
+        let channel = Channel(d,transport,model); channels[id] = channel
+        if model == .steam2026 {
+            ControllerLog.add("Steam Controller (2026): \(transport.title) interface found (product \(String(format: "0x%04x", product)), interface \(interface))")
+        }
         if transport == .bluetooth {
             ControllerLog.add("Steam Controller: Bluetooth controller found (product \(String(format: "0x%04x", number(kIOHIDProductIDKey))))")
         }
         IOHIDDeviceRegisterInputReportCallback(d,channel.buffer,64,{ ctx,result,_,_,id,bytes,count in
             guard result == kIOReturnSuccess, let ctx else { return }
             let channel = Unmanaged<Channel>.fromOpaque(ctx).takeUnretainedValue()
+            if channel.model == .steam2026 {
+                // Numbered reports; IOKit's buffer may or may not start with the number.
+                guard count > 0 else { return }
+                var report = Array(UnsafeBufferPointer(start:bytes,count:count))
+                if id != 0, report[0] != UInt8(truncatingIfNeeded: id) { report.insert(UInt8(truncatingIfNeeded: id), at: 0) }
+                MainActor.assumeIsolated { SteamControllerUSB.shared.report2026(report,from:channel) }
+                return
+            }
             if channel.transport == .bluetooth {
                 // Report 3 is Valve's; the controller's keyboard and mouse reports are ignored.
                 guard id == UInt32(SteamControllerBLE.reportID) || (id == 0 && count > 0 && bytes[0] == SteamControllerBLE.reportID) else { return }
@@ -122,7 +144,7 @@ final class SteamControllerUSB: ObservableObject {
         // Cable first at initial selection; never switch away from a live controller.
         // Cable, then receiver, then Bluetooth (the slowest and least steady link).
         func rank(_ t: SteamControllerTransport) -> Int { t == .cable ? 0 : t == .receiver ? 1 : 2 }
-        let candidates = channels.values.sorted { a,b in
+        let candidates = channels.values.filter { $0.model == .original }.sorted { a,b in
             if a.transport != b.transport { return rank(a.transport) < rank(b.transport) }
             return registryID(a.device) < registryID(b.device)
         }
@@ -133,6 +155,10 @@ final class SteamControllerUSB: ObservableObject {
             feedback.reset(); feedbackFailed = false; feedbackStatus = ""
             status = "\(channel.transport.title) connected; waiting for full controller input"
             for f in Array(listeners.values) { f(nil) }
+            return
+        }
+        if channels.values.contains(where: { $0.model == .steam2026 }) && !channels.values.contains(where: { $0.model == .original }) {
+            status = "Steam Controller (2026) found; waiting for its input"
             return
         }
         status = channels.values.contains(where: { $0.transport == .receiver })
@@ -167,8 +193,49 @@ final class SteamControllerUSB: ObservableObject {
         if status != next { status = next }
         for f in Array(listeners.values) { f(state) }
     }
+    /// A report from a 2026 controller's interface: taken over on its first state report when nothing else is
+    /// being read (the interface that sends them is the controller's own), then read like the original.
+    private func report2026(_ bytes: [UInt8], from channel: Channel) {
+        guard channels[registryID(channel.device)] === channel else { return }
+        if let event = SteamController2026.event(bytes) {
+            if event == .disconnected, active === channel {
+                outputGate.cancel(); device = nil; active = nil; session = UUID(); feedback.reset(); reset()
+                status = "Wireless controller disconnected — Puck still connected"
+            }
+            return
+        }
+        guard bytes.first.map({ [SteamController2026.stateReport, SteamController2026.bluetoothStateReport, SteamController2026.timestampedStateReport].contains($0) }) == true else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if device == nil {
+            featureQueue.sync {}
+            active = channel; device = channel.device; stream.reset(); session = UUID(); outputGate = SteamControllerOutputGate()
+            feedback.reset(); feedbackFailed = false; feedbackStatus = ""; counter2026 = 0
+            sendKeepAlive(now)
+            status = "\(channel.transport.title) connected; waiting for full controller input"
+            for f in Array(listeners.values) { f(nil) }
+        }
+        guard active === channel else { return }
+        counter2026 &+= 1
+        guard let state = SteamController2026.decode(bytes, counter: counter2026), stream.acceptDecoded(state, at: now) else { return }
+        let next = "Receiving Steam Controller (2026) input (\(channel.transport.title) · desktop controls captured)"
+        if status != next { status = next }
+        for f in Array(listeners.values) { f(state) }
+    }
+    /// Desktop mode off and motion on, again: the 2026 controller returns to desktop mode without it.
+    private func sendKeepAlive(_ now: Double) {
+        guard let device, active?.model == .steam2026 else { return }
+        lastKeepAlive = now
+        let gate = outputGate, report = SteamController2026.keepAlive
+        featureQueue.async {
+            guard gate.isActive else { return }
+            var bytes = report
+            let ok = IOHIDDeviceSetReport(device,kIOHIDReportTypeFeature,1,&bytes,bytes.count) == kIOReturnSuccess
+            if !ok { ControllerLog.add("Steam Controller (2026): desktop-mode keep-alive not accepted") }
+        }
+    }
     private func expire() {
         let now = ProcessInfo.processInfo.systemUptime
+        if active?.model == .steam2026, now - lastKeepAlive >= 2 { sendKeepAlive(now) }
         verifyCapture(at:now)
         if device == nil, !channels.isEmpty, now - lastScan >= 2 {
             lastScan = now; chooseController()
@@ -179,6 +246,12 @@ final class SteamControllerUSB: ObservableObject {
         let bluetooth = active?.transport == .bluetooth
         guard stream.expire(at:ProcessInfo.processInfo.systemUptime, after: bluetooth ? 1.0 : 0.3) else { return }
         reset(); feedback.reset()
+        if active?.model == .steam2026 {
+            // Let go, so whichever interface sends next is taken over (its reports are its own proof).
+            outputGate.cancel(); device = nil; active = nil; session = UUID(); lastScan = 0
+            status = "Steam Controller (2026) input paused — waiting for the controller"
+            return
+        }
         if bluetooth {
             status = "Bluetooth input paused — waiting for the controller"
             return
@@ -286,7 +359,23 @@ final class SteamControllerUSB: ObservableObject {
         return sendFeedback(bytes)
     }
     private func sendFeedback(_ report: [UInt8]) -> Bool {
-        guard !feedbackFailed, modeLease != nil, ownership != nil, let device else { return false }
+        guard !feedbackFailed, captured, ownership != nil, let device else { return false }
+        if active?.model == .steam2026 {
+            // Same pulse fields, as an output report.
+            guard let out = SteamController2026.pulse(fromOriginal: report), !hapticPending else { return false }
+            hapticPending = true
+            let token = session, gate = outputGate
+            featureQueue.async {
+                var bytes = out
+                let sent = gate.isActive && IOHIDDeviceSetReport(device,kIOHIDReportTypeOutput,CFIndex(out[0]),&bytes,bytes.count) == kIOReturnSuccess
+                Task { @MainActor in
+                    self.hapticPending = false
+                    guard self.session == token else { return }
+                    if !sent { self.feedbackFailed = true; self.feedbackStatus = "Pad haptics unavailable on this connection" }
+                }
+            }
+            return true
+        }
         var bytes = report
         if let transport = active?.transport, transport != .cable {
             guard !hapticPending else { return false }
@@ -316,6 +405,7 @@ final class SteamControllerUSB: ObservableObject {
     func rumble(strong: Bool) -> Bool { rumble(strength: strong ? 1 : 0.6, seconds: strong ? 0.4 : 0.15) }
     @discardableResult
     func rumble(strength: Double, seconds: Double) -> Bool {
+        if active?.model == .steam2026 { return rumble2026(strength: strength, seconds: seconds) }
         guard !feedbackFailed, modeLease != nil, ownership != nil, let device,
               let left = SteamControllerHaptics.rumble(side: 0, strength: strength, seconds: seconds),
               let right = SteamControllerHaptics.rumble(side: 1, strength: strength, seconds: seconds) else { return false }
@@ -337,9 +427,31 @@ final class SteamControllerUSB: ObservableObject {
         return IOHIDDeviceSetReport(device, kIOHIDReportTypeFeature, 0, &a, a.count) == kIOReturnSuccess
             && IOHIDDeviceSetReport(device, kIOHIDReportTypeFeature, 0, &b, b.count) == kIOReturnSuccess
     }
+    /// The 2026 controller's grip motors: the rumble report every 40 ms for the time asked, then off.
+    private func rumble2026(strength: Double, seconds: Double) -> Bool {
+        guard captured, ownership != nil, let device, !hapticPending, strength.isFinite, seconds.isFinite, strength > 0, seconds > 0 else { return false }
+        hapticPending = true
+        let level = UInt16(min(1, strength) * 65535), token = session, gate = outputGate
+        let repeats = max(1, Int(min(1, seconds) / 0.04))
+        featureQueue.async {
+            var sent = true
+            for i in 0...repeats {
+                guard gate.isActive else { break }
+                var bytes = SteamController2026.rumble(low: i == repeats ? 0 : level, high: i == repeats ? 0 : level)
+                sent = IOHIDDeviceSetReport(device,kIOHIDReportTypeOutput,0x80,&bytes,bytes.count) == kIOReturnSuccess && sent
+                if i < repeats { Thread.sleep(forTimeInterval: 0.04) }
+            }
+            Task { @MainActor in
+                self.hapticPending = false
+                guard self.session == token else { return }
+                if !sent { self.feedbackStatus = "Rumble didn't reach the controller" }
+            }
+        }
+        return true
+    }
     func testFeedback(side: Int, strength: Double, rate: Double = 40, spacingMS: Double = 1) {
         if movementFeedback(side: side, dx: 1, dy: 0, strength: strength, rate: rate, spacingMS: spacingMS) { feedbackStatus = "Short haptic burst sent — move the pad to feel the repeat rate" }
-        else if modeLease != nil && device != nil && !feedbackFailed { feedbackStatus = "Haptics are already pulsing — stop the pad before testing" }
+        else if captured && device != nil && !feedbackFailed { feedbackStatus = "Haptics are already pulsing — stop the pad before testing" }
         else { feedbackStatus = "Haptic pulse unavailable — connect the controller by USB or receiver and open its profile test" }
     }
 

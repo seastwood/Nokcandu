@@ -25,9 +25,13 @@ public enum PadProfiles {
         /// A trackpad's zones: tapped (t) and clicked (c), up to five per pad (PadSteamZoneLayout).
         case lpt1, lpt2, lpt3, lpt4, lpt5, lpc1, lpc2, lpc3, lpc4, lpc5
         case rpt1, rpt2, rpt3, rpt4, rpt5, rpc1, rpc2, rpc3, rpc4, rpc5
+        /// Steam Controller (2026): its right trackpad's click (its right stick has its own), Grip Sense on each grip,
+        /// and a thumb resting on each stick. Inputs to set, never controller buttons sent on to games.
+        case rpclick, lgrip, rgrip, lstouch, rstouch
+        public static let touchSensors: Set<Input> = [.rpclick, .lgrip, .rgrip, .lstouch, .rstouch]
         public var id: String { rawValue }
         /// Not a button on the controller: a stick direction, a touchpad zone or a tilt.
-        public var isVirtual: Bool { isStickDirection || Self.touchZones.contains(self) || Self.tilts.contains(self) || Self.padZones.contains(self) || self == .lptap || self == .rptap || Self.padZoneInputs.contains(self) }
+        public var isVirtual: Bool { isStickDirection || Self.touchZones.contains(self) || Self.tilts.contains(self) || Self.padZones.contains(self) || self == .lptap || self == .rptap || Self.padZoneInputs.contains(self) || Self.touchSensors.contains(self) }
         /// Zone `n` (0-based) of a pad: its tap, and its click.
         public static func padZoneTap(_ side: Int, _ n: Int) -> Input { (side == 0 ? [Input.lpt1, .lpt2, .lpt3, .lpt4, .lpt5] : [.rpt1, .rpt2, .rpt3, .rpt4, .rpt5])[min(4, max(0, n))] }
         public static func padZoneClick(_ side: Int, _ n: Int) -> Input { (side == 0 ? [Input.lpc1, .lpc2, .lpc3, .lpc4, .lpc5] : [.rpc1, .rpc2, .rpc3, .rpc4, .rpc5])[min(4, max(0, n))] }
@@ -56,7 +60,14 @@ public enum PadProfiles {
             case (.ltfull, .playstation): "L2 (full pull)"; case (.rtfull, .playstation): "R2 (full pull)"
             case (.ls, .playstation): "L3"; case (.rs, .playstation): "R3"
             case (.back, .playstation): "Create"; case (.start, .playstation): "Options"; case (.guide, .playstation): "PS"
-            case (.touchpad, .valve): "Left trackpad click"
+            case (.touchpad, .valve), (.touchpad, .steam2026): "Left trackpad click"
+            case (.guide, .steam2026): "Steam"; case (.misc, .steam2026): "Quick Access (QAM)"
+            case (.back, .steam2026): "View"; case (.start, .steam2026): "Menu"
+            case (.paddle1, .steam2026): "R4 (back)"; case (.paddle2, .steam2026): "L4 (back)"
+            case (.paddle3, .steam2026): "R5 (back)"; case (.paddle4, .steam2026): "L5 (back)"
+            case (.rpclick, _): "Right trackpad click"
+            case (.lgrip, _): "Left Grip Sense"; case (.rgrip, _): "Right Grip Sense"
+            case (.lstouch, _): "Left stick touched"; case (.rstouch, _): "Right stick touched"
             case (.rs, .valve): "Right trackpad click"
             case (.guide, .valve): "Steam"
             case (.back, .valve): "Back"; case (.start, .valve): "Start"
@@ -580,7 +591,8 @@ public enum PadProfiles {
             if saved == "xbox" { return nil }
             if let family = Controllers.Family(rawValue:saved) { return family }
         }
-        return top(profile,all:all,\.controllerSource) == .steamUSB ? .valve : connected
+        // The Steam Controller reader reads both Steam Controllers: the picture follows the one connected.
+        return top(profile,all:all,\.controllerSource) == .steamUSB ? (connected == .steam2026 ? .steam2026 : .valve) : connected
     }
 
     public enum RoutingMode: String, Codable, CaseIterable, Sendable {
