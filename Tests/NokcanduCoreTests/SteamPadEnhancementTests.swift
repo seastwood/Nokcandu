@@ -8,6 +8,8 @@ final class SteamPadEnhancementTests: XCTestCase {
         var settings = try JSONDecoder().decode(PadSteamTrackpadSettings.self,from:old)
         XCTAssertNil(settings.sensitivityX); XCTAssertNil(settings.gyroWhileTouched)
         settings.sensitivityX=2000; settings.sensitivityY=500
+        XCTAssertNil(settings.matchSideways, "old settings: Match sideways sensitivity unset, so on")
+        settings.matchSideways=false   // the axes exactly independent, as this test measures
         var pad=PadSteamTrackpad()
         _=pad.touch(down:true,x:0.5,y:0.5,at:1,settings:settings)
         let motion=pad.touch(down:true,x:0.6,y:0.6,at:1.02,settings:settings)

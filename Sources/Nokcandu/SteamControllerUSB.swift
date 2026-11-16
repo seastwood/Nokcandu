@@ -8,7 +8,14 @@ import NokcanduCore
 @MainActor
 final class SteamControllerUSB: ObservableObject {
     static let shared = SteamControllerUSB()
-    @Published private(set) var status = "Not reading Steam Controller"
+    @Published private(set) var status = "Not reading Steam Controller" {
+        didSet { if status != oldValue { ControllerLog.add("Steam Controller: \(status)") } }
+    }
+    /// Settings reads in a row that got no reply. Over the receiver one can go missing now and then (the radio
+    /// is busy); treating one as "the controller changed mode" released the controller for good, so it stopped
+    /// responding while it was still on (November 15, 2026). Only `missedReadsAllowed` in a row count.
+    private var missedReads = 0
+    static let missedReadsAllowed = 3
     @Published private(set) var feedbackStatus = ""
     private var feedback = SteamControllerHaptics()
     private var feedbackFailed = false
@@ -62,9 +69,12 @@ final class SteamControllerUSB: ObservableObject {
         }
         ownership = lock; captureResets = []; lastModeCheck = 0
         let m = IOHIDManagerCreate(kCFAllocatorDefault, 0)
-        IOHIDManagerSetDeviceMatchingMultiple(m, [0x1102, 0x1142].map { product in
-            [kIOHIDVendorIDKey:0x28de,kIOHIDProductIDKey:product,kIOHIDDeviceUsagePageKey:0xff00,kIOHIDDeviceUsageKey:1]
-        } as CFArray)
+        IOHIDManagerSetDeviceMatchingMultiple(m, ([0x1102, 0x1142].map { product in
+            [kIOHIDVendorIDKey:0x28de,kIOHIDProductIDKey:product,kIOHIDDeviceUsagePageKey:0xff00,kIOHIDDeviceUsageKey:1] as [String: Any]
+        } + SteamControllerBLE.products.map { product in
+            // Bluetooth: the controller is one device whatever its first collection is, so match it by product.
+            [kIOHIDVendorIDKey:0x28de,kIOHIDProductIDKey:product] as [String: Any]
+        }) as CFArray)
         IOHIDManagerRegisterDeviceMatchingCallback(m, { _,_,_,d in
             MainActor.assumeIsolated { SteamControllerUSB.shared.add(d) }
         }, nil)
@@ -77,7 +87,7 @@ final class SteamControllerUSB: ObservableObject {
         }
         IOHIDManagerScheduleWithRunLoop(m, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
         let r = IOHIDManagerOpen(m,0)
-        status = r == kIOReturnSuccess ? "Connect the original Steam Controller by USB or wake it with its receiver connected" : "Steam Controller interface could not be opened"
+        status = r == kIOReturnSuccess ? "Connect the original Steam Controller by USB, wake it with its receiver connected, or connect it by Bluetooth" : "Steam Controller interface could not be opened"
         let t = Timer(timeInterval: 0.1, repeats: true) { _ in MainActor.assumeIsolated { SteamControllerUSB.shared.expire() } }
         RunLoop.main.add(t, forMode: .common); timer = t
     }
@@ -88,9 +98,20 @@ final class SteamControllerUSB: ObservableObject {
         let id = registryID(d)
         guard channels[id] == nil else { return }
         let channel = Channel(d,transport); channels[id] = channel
+        if transport == .bluetooth {
+            ControllerLog.add("Steam Controller: Bluetooth controller found (product \(String(format: "0x%04x", number(kIOHIDProductIDKey))))")
+        }
         IOHIDDeviceRegisterInputReportCallback(d,channel.buffer,64,{ ctx,result,_,_,id,bytes,count in
-            guard result == kIOReturnSuccess, id == 0, count == 64, let ctx else { return }
+            guard result == kIOReturnSuccess, let ctx else { return }
             let channel = Unmanaged<Channel>.fromOpaque(ctx).takeUnretainedValue()
+            if channel.transport == .bluetooth {
+                // Report 3 is Valve's; the controller's keyboard and mouse reports are ignored.
+                guard id == UInt32(SteamControllerBLE.reportID) || (id == 0 && count > 0 && bytes[0] == SteamControllerBLE.reportID) else { return }
+                let report = Array(UnsafeBufferPointer(start:bytes,count:count))
+                MainActor.assumeIsolated { SteamControllerUSB.shared.report(report,from:channel) }
+                return
+            }
+            guard id == 0, count == 64 else { return }
             let report = Array(UnsafeBufferPointer(start:bytes,count:count))
             MainActor.assumeIsolated { SteamControllerUSB.shared.report(report,from:channel) }
         },Unmanaged.passUnretained(channel).toOpaque())
@@ -99,8 +120,10 @@ final class SteamControllerUSB: ObservableObject {
     private func chooseController() {
         guard device == nil else { return }
         // Cable first at initial selection; never switch away from a live controller.
+        // Cable, then receiver, then Bluetooth (the slowest and least steady link).
+        func rank(_ t: SteamControllerTransport) -> Int { t == .cable ? 0 : t == .receiver ? 1 : 2 }
         let candidates = channels.values.sorted { a,b in
-            if a.transport != b.transport { return a.transport == .cable }
+            if a.transport != b.transport { return rank(a.transport) < rank(b.transport) }
             return registryID(a.device) < registryID(b.device)
         }
         featureQueue.sync {} // finish feedback before starting another feature transaction
@@ -137,8 +160,9 @@ final class SteamControllerUSB: ObservableObject {
             } else if event == .connected, device == nil { chooseController() }
             return
         }
+        let now = ProcessInfo.processInfo.systemUptime
         guard active === channel, modeLease != nil,
-              let state = stream.accept(bytes,at:ProcessInfo.processInfo.systemUptime) else { return }
+              let state = channel.transport == .bluetooth ? stream.acceptBluetooth(bytes,at:now) : stream.accept(bytes,at:now) else { return }
         let next = "Receiving Steam Controller input (\(channel.transport.title) · desktop controls captured)"
         if status != next { status = next }
         for f in Array(listeners.values) { f(state) }
@@ -149,8 +173,16 @@ final class SteamControllerUSB: ObservableObject {
         if device == nil, !channels.isEmpty, now - lastScan >= 2 {
             lastScan = now; chooseController()
         }
-        guard stream.expire(at:ProcessInfo.processInfo.systemUptime) else { return }
+        // Bluetooth's reports can stall for a moment (the Mac's radio is shared with Wi-Fi): wait longer before
+        // letting go, and then only let go of held input. Taking the controller over again on every stall
+        // (November 15, 2026, the first Bluetooth test) briefly interrupted it twice in a few seconds.
+        let bluetooth = active?.transport == .bluetooth
+        guard stream.expire(at:ProcessInfo.processInfo.systemUptime, after: bluetooth ? 1.0 : 0.3) else { return }
         reset(); feedback.reset()
+        if bluetooth {
+            status = "Bluetooth input paused — waiting for the controller"
+            return
+        }
         if active?.transport == .receiver {
             // The USB slot survives wake, and a radio disconnect notification can
             // be missed. A stale lease must not prevent reacquiring that controller.
@@ -177,7 +209,21 @@ final class SteamControllerUSB: ObservableObject {
             Task { @MainActor in
                 self.modeCheckPending=false
                 guard self.session==token,self.modeLease==lease else{return}
-                if transport == .cable, current == nil { return }       // one missed reply over the cable is not a change
+                // A missed reply is not a change, over the cable or the radio, until several come in a row.
+                if current == nil {
+                    self.missedReads += 1
+                    ControllerLog.add("Steam Controller: settings read got no reply (\(self.missedReads) in a row, \(transport.title))")
+                    if self.missedReads < Self.missedReadsAllowed || transport == .cable { return }
+                    // The controller stopped answering: take it over again from scratch, the way a pause in its
+                    // input is handled, rather than giving up on it.
+                    self.missedReads = 0
+                    self.outputGate.cancel(); self.modeLease = nil; self.radioFingerprint = nil
+                    self.reset(); self.feedback.reset(); self.session = UUID()
+                    self.device = nil; self.active = nil; self.lastScan = 0
+                    self.status = "Wireless controller stopped answering — taking it over again"
+                    return
+                }
+                self.missedReads = 0
                 guard current==lease.applied else {
                     // A reset to our measured baseline can happen on wake even if
                     // vendor reports continue. Do not map alongside desktop mode.
@@ -192,6 +238,7 @@ final class SteamControllerUSB: ObservableObject {
                         self.status = transport == .cable ? "Steam Controller back in its own mode — taking it over again" : "Wireless desktop mode returned — checking capture again"
                     } else {
                         // Unknown/competing modes are preserved, not repeatedly fought.
+                        ControllerLog.add("Steam Controller: settings read differs from the applied mode (\(current == lease.original ? "its own mode" : "another mode"), \(self.captureResets.count) recent retakes)")
                         self.status="Wireless capture changed — outputs released. Turn profiles off and leave this test, then reopen to retry."
                     }
                     return
@@ -241,14 +288,14 @@ final class SteamControllerUSB: ObservableObject {
     private func sendFeedback(_ report: [UInt8]) -> Bool {
         guard !feedbackFailed, modeLease != nil, ownership != nil, let device else { return false }
         var bytes = report
-        if active?.transport == .receiver {
+        if let transport = active?.transport, transport != .cable {
             guard !hapticPending else { return false }
             hapticPending = true
             let token = session
             let report = bytes
             let gate = outputGate
             featureQueue.async {
-                let sent = Self.send(report,to:device,transport:.receiver,gate:gate)
+                let sent = Self.send(report,to:device,transport:transport,gate:gate)
                 Task { @MainActor in
                     self.hapticPending = false
                     guard self.session == token else { return }
@@ -272,16 +319,16 @@ final class SteamControllerUSB: ObservableObject {
         guard !feedbackFailed, modeLease != nil, ownership != nil, let device,
               let left = SteamControllerHaptics.rumble(side: 0, strength: strength, seconds: seconds),
               let right = SteamControllerHaptics.rumble(side: 1, strength: strength, seconds: seconds) else { return false }
-        if active?.transport == .receiver {
+        if let transport = active?.transport, transport != .cable {
             guard !hapticPending else { return false }
             hapticPending = true
             let token = session, gate = outputGate
             featureQueue.async {
-                let sent = Self.send(left, to: device, transport: .receiver, gate: gate) && Self.send(right, to: device, transport: .receiver, gate: gate)
+                let sent = Self.send(left, to: device, transport: transport, gate: gate) && Self.send(right, to: device, transport: transport, gate: gate)
                 Task { @MainActor in
                     self.hapticPending = false
                     guard self.session == token else { return }
-                    if !sent { self.feedbackStatus = "Rumble didn't reach the controller over the receiver" }
+                    if !sent { self.feedbackStatus = "Rumble didn't reach the controller over the \(transport == .bluetooth ? "Bluetooth link" : "receiver")" }
                 }
             }
             return true
@@ -302,7 +349,19 @@ final class SteamControllerUSB: ObservableObject {
         return value
     }
     nonisolated private static func send(_ data: [UInt8], to device: IOHIDDevice, transport: SteamControllerTransport, gate: SteamControllerOutputGate? = nil) -> Bool {
-        transport.transfer(attempt: {
+        if transport == .bluetooth {
+            // In 20-byte segments as report 3, each with the report number in front (as hidapi passes it).
+            for segment in SteamControllerBLE.segments(data) {
+                let sent = transport.transfer(attempt: {
+                    guard gate?.isActive != false else { return false }
+                    var bytes = segment
+                    return IOHIDDeviceSetReport(device,kIOHIDReportTypeFeature,CFIndex(SteamControllerBLE.reportID),&bytes,bytes.count) == kIOReturnSuccess
+                },pause: { Thread.sleep(forTimeInterval:0.002) })
+                if !sent { return false }
+            }
+            return true
+        }
+        return transport.transfer(attempt: {
             guard gate?.isActive != false else { return false }
             var bytes = data
             return IOHIDDeviceSetReport(device,kIOHIDReportTypeFeature,0,&bytes,bytes.count) == kIOReturnSuccess
@@ -313,6 +372,7 @@ final class SteamControllerUSB: ObservableObject {
     }
     nonisolated private static func readSettings(_ device: IOHIDDevice, transport: SteamControllerTransport) -> SteamControllerMode.Settings? {
         guard Self.send(SteamControllerMode.query,to:device,transport:transport) else { return nil }
+        if transport == .bluetooth { return readBluetoothReply(device).flatMap { SteamControllerMode.decode($0) } }
         for _ in 0..<(transport == .receiver ? 20 : 10) {
             if transport == .receiver { Thread.sleep(forTimeInterval:0.003) }
             var bytes = [UInt8](repeating:0,count:64), count = 64
@@ -324,6 +384,24 @@ final class SteamControllerUSB: ObservableObject {
                let value = SteamControllerMode.decode(Array(bytes.prefix(count))) { return value }
             if transport == .cable { Thread.sleep(forTimeInterval:0.001) }
         }
+        return nil
+    }
+    /// A command's reply over Bluetooth: report 3 read until its segments join (SDL tries 8 reads in a row
+    /// without data). On macOS the report number can come twice; the assembler takes either.
+    nonisolated private static func readBluetoothReply(_ device: IOHIDDevice) -> [UInt8]? {
+        var assembler = SteamControllerBLE.Assembler()
+        var empty = 0
+        while empty < 8 {
+            var bytes = [UInt8](repeating: 0, count: SteamControllerBLE.segmentSize + 2), count = bytes.count
+            bytes[0] = SteamControllerBLE.reportID
+            let got = IOHIDDeviceGetReport(device,kIOHIDReportTypeFeature,CFIndex(SteamControllerBLE.reportID),&bytes,&count) == kIOReturnSuccess
+            guard got, count > 2, count <= bytes.count else { empty += 1; Thread.sleep(forTimeInterval: 0.003); continue }
+            let segment = Array(bytes.prefix(count))
+            let start = segment[1] == SteamControllerBLE.reportID ? 2 : 1
+            if start < segment.count, segment[start] & 0x80 != 0 { empty = 0 } else { empty += 1 }
+            if let packet = assembler.add(segment) { return packet }
+        }
+        ControllerLog.add("Steam Controller: no whole reply over Bluetooth after 8 empty reads")
         return nil
     }
     private func write(_ values: SteamControllerMode.Settings, to device: IOHIDDevice, transport: SteamControllerTransport) -> Bool {
@@ -361,7 +439,7 @@ final class SteamControllerUSB: ObservableObject {
                 // A changed mode belongs to another owner and becomes the new baseline.
             }
         }
-        if transport == .cable, FileManager.default.fileExists(atPath: recoveryURL.path) {
+        if transport != .receiver, FileManager.default.fileExists(atPath: recoveryURL.path) {
             guard let data = try? Data(contentsOf: recoveryURL),
                   let prior = try? JSONDecoder().decode(SteamControllerMode.Lease.self, from: data),
                   prior.applied == SteamControllerMode.captured(prior.original) else { return false }

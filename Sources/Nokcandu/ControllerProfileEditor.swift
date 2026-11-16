@@ -846,12 +846,13 @@ struct ControllerProfileEditor: View {
                 slider("Sensitivity", g.sensitivity, 0.5...40, "%.1f", info: "Mouse movement per degree turned.")
                 axisSliders(x: Binding(get: { g.wrappedValue.xScale ?? 1 }, set: { var v = g.wrappedValue; v.xScale = $0 == 1 ? nil : $0; g.wrappedValue = v }),
                             y: Binding(get: { g.wrappedValue.yScale ?? 1 }, set: { var v = g.wrappedValue; v.yScale = $0 == 1 ? nil : $0; g.wrappedValue = v }))
-                Toggle("Faster when turning fast", isOn: Binding(get: { g.wrappedValue.fastSensitivity != nil },
+                Toggle("Acceleration", isOn: Binding(get: { g.wrappedValue.fastSensitivity != nil },
                                                                set: { var x = g.wrappedValue; x.fastSensitivity = $0 ? x.sensitivity * 2 : nil; g.wrappedValue = x }))
+                    .help("Fast turns move further than slow ones: slow, careful turns use Sensitivity, fast ones Fast sensitivity, and speeds in between blend smoothly from one to the other.")
                 if g.wrappedValue.fastSensitivity != nil {
-                    slider("Fast sensitivity", Binding(get: { g.wrappedValue.fastSensitivity ?? 0 }, set: { var x = g.wrappedValue; x.fastSensitivity = $0; g.wrappedValue = x }), 0.5...80, "%.1f")
-                    slider("Slow below", g.slowSpeed, 0...100, "%.0f °/s")
-                    slider("Fast above", g.fastSpeed, 10...400, "%.0f °/s")
+                    slider("Fast sensitivity", Binding(get: { g.wrappedValue.fastSensitivity ?? 0 }, set: { var x = g.wrappedValue; x.fastSensitivity = $0; g.wrappedValue = x }), 0.5...80, "%.1f", info: "Mouse movement per degree for fast turns. Higher than Sensitivity speeds up big turns while slow aiming stays precise.")
+                    slider("Slow below", g.slowSpeed, 0...100, "%.0f °/s", info: "Turns slower than this use Sensitivity exactly.")
+                    slider("Fast above", g.fastSpeed, 10...400, "%.0f °/s", info: "Turns faster than this use Fast sensitivity. In between, the two blend.")
                 }
                 }
             }

@@ -4,9 +4,20 @@ final class SteamControllerTransportTests: XCTestCase {
     func testOnlyOriginalVendorInterfacesAreAccepted() {
         XCTAssertEqual(SteamControllerTransport.identify(vendor:0x28de,product:0x1102,page:0xff00,usage:1,interface:2),.cable)
         for slot in 1...4 { XCTAssertEqual(SteamControllerTransport.identify(vendor:0x28de,product:0x1142,page:0xff00,usage:1,interface:slot),.receiver) }
-        for (vendor,product,page,usage,slot) in [(0x28de,0x1142,1,6,0),(0x28de,0x1142,0xff00,1,0),(0x28de,0x1142,0xff00,1,5),(0x28de,0x1105,0xff00,1,2),(0x28de,0x1205,0xff00,1,2),(0x1234,0x1142,0xff00,1,1)] {
+        for (vendor,product,page,usage,slot) in [(0x28de,0x1142,1,6,0),(0x28de,0x1142,0xff00,1,0),(0x28de,0x1142,0xff00,1,5),(0x28de,0x1205,0xff00,1,2),(0x1234,0x1142,0xff00,1,1)] {
             XCTAssertNil(SteamControllerTransport.identify(vendor:vendor,product:product,page:page,usage:usage,interface:slot))
         }
+    }
+    func testBluetoothControllersAreMatchedByProduct() {
+        for product in [0x1105, 0x1106] {
+            XCTAssertEqual(SteamControllerTransport.identify(vendor:0x28de,product:product,page:1,usage:6,interface:-1),.bluetooth)
+            XCTAssertEqual(SteamControllerTransport.identify(vendor:0x28de,product:product,page:0xff00,usage:1,interface:2),.bluetooth)
+        }
+        XCTAssertNil(SteamControllerTransport.identify(vendor:0x1234,product:0x1106,page:0xff00,usage:1,interface:0))
+        XCTAssertEqual(SteamControllerTransport.bluetooth.title,"Bluetooth")
+        var attempts=0, pauses=0
+        XCTAssertFalse(SteamControllerTransport.bluetooth.transfer(attempt:{attempts += 1;return false},pause:{pauses += 1}))
+        XCTAssertEqual(attempts,5);XCTAssertEqual(pauses,4)
     }
     func testRadioRetriesAreBoundedAndCableDoesNotRetry() {
         var attempts=0, pauses=0

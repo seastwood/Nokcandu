@@ -28,6 +28,15 @@ struct StreamsSidebar: View {
                 }
                 ForEach(m.library.hosts) { h in
                     Section {
+                        if !h.isPaired || m.status[h.id]?.needsPairing == true {
+                            // A real button in the list, not a link in the header: the header's collapse arrow
+                            // appears on hover and pushed header text sideways.
+                            // A sidebar row like "Add Stream Profile", in the accent colour so it reads as the next step.
+                            Button { m.pairAgain(h) } label: { Label(h.isPaired ? "Pair Again…" : "Pair…", systemImage: "lock.open") }
+                            .buttonStyle(.borderless).foregroundStyle(.tint).font(.callout)
+                            .help(h.isPaired ? "\(h.name) no longer accepts this Mac, or was reinstalled. Pair again with a PIN; your profiles are kept." : "Pair with \(h.name) using a PIN shown here and typed on the host.")
+                            .selectionDisabled()
+                        }
                         ForEach(m.library.profiles(for: h.id)) { p in
                             profileRow(p, host: h).tag("p:" + p.id)
                                 .contextMenu { profileMenu(p) }
@@ -39,6 +48,10 @@ struct StreamsSidebar: View {
                         }
                     } header: {
                         hostHeader(h).contextMenu { hostMenu(h) }
+                            // Clicking the host's name shows its page (addresses, Wake Up, Remove Host).
+                            .contentShape(Rectangle())
+                            .onTapGesture { m.selectedProfile = nil; m.selectedHost = h.id }
+                            .help("Show \(h.name)'s details. Right-click for more.")
                     }
                 }
                 if !m.newlyDiscovered.isEmpty {
@@ -83,11 +96,11 @@ struct StreamsSidebar: View {
         return HStack(spacing: 6) {
             Circle().fill(s?.online == true ? Color.green : Color.secondary.opacity(0.5)).frame(width: 7, height: 7)
             Text(h.name)
+            if !h.isPaired || s?.needsPairing == true {
+                Image(systemName: "lock.fill").font(.caption2).foregroundStyle(.secondary).help("Not paired")
+            }
             Spacer()
             if s?.checking == true { ProgressView().controlSize(.mini) }
-            else if !h.isPaired || s?.needsPairing == true {
-                Button("Pair…") { m.pairAgain(h) }.buttonStyle(.borderless).font(.caption).foregroundStyle(.orange)
-            }
             else if s?.online != true { Text("Offline").font(.caption2).foregroundStyle(.secondary) }
         }
     }
@@ -157,6 +170,7 @@ struct StreamsDetail: View {
 struct StreamHostSummary: View {
     let host: StreamHost
     @ObservedObject var m = StreamsModel.shared
+    @State private var confirmRemove = false
 
     var body: some View {
         let s = m.status[host.id]
@@ -175,7 +189,13 @@ struct StreamHostSummary: View {
                     else { Button("Pair…") { m.pairAgain(host) }.buttonStyle(.borderedProminent) }
                     if host.macAddress != nil, s?.online != true { Button("Wake Up") { m.wake(host) } }
                     if (s?.currentGame ?? 0) != 0 { Button("Quit App on Host", role: .destructive) { m.quitApp(on: host) } }
+                    Spacer()
+                    Button("Remove Host…", role: .destructive) { confirmRemove = true }
+                        .disabled(m.running?.hostID == host.id)
                 }
+                .confirmationDialog("Remove \(host.name)?", isPresented: $confirmRemove) {
+                    Button("Remove Host and Its Stream Profiles", role: .destructive) { m.removeHost(host.id) }
+                } message: { Text("Its stream profiles are removed too. To use it again, connect and pair with it again.") }
                 SettingsSection(title: "Addresses") {
                     LabeledContent("This network", value: host.localAddress ?? "—")
                     LabeledContent("Over the internet", value: host.remoteAddress ?? "—")
@@ -250,7 +270,7 @@ struct StreamProfileEditor: View {
                     SettingNote("Streaming now. Changes apply straight away, except the picture's resolution, frame rate, bitrate, codec, HDR and colour settings, sound channels, \"Also play on the host\", the app and the connection, which the host sets when a stream starts: those apply from the next stream.")
                 }
                 if !host.isPaired { SettingNote("Pair with \(host.name) to stream.", warning: true) }
-                else if status?.needsPairing == true { SettingNote("\(host.name) no longer accepts this Mac (its pairings may have been reset). Pair again.", warning: true) }
+                else if status?.needsPairing == true { SettingNote("\(host.name) needs pairing again: it no longer accepts this Mac, or it was reinstalled and has a new certificate. Your profiles for it are kept.", warning: true) }
                 else if status?.online == false { SettingNote("\(host.name) isn't answering. \(status?.error ?? "")", warning: true) }
                 else if status?.busy == true, (status?.currentGame ?? 0) != profile.appID { SettingNote("\(host.name) is already streaming to another device.") }
             }

@@ -228,6 +228,16 @@ echo "Built $(pwd)/$APP"
 if [ "${1:-}" = --install ]; then
   bash scripts/check-signing-continuity.sh "$HOME/Applications/Nokcandu.app" "$APP"
   mkdir -p "$HOME/Applications"
+  # Development only: `touch .quit-for-install` to quit a running Nokcandu (as Cmd-Q does, so a stream ends
+  # cleanly), install, and open the new one. Without it, installing stops if Nokcandu is running.
+  REOPEN=0
+  if [ -e .quit-for-install ] && /usr/bin/pgrep -xq Nokcandu; then
+    /usr/bin/osascript -e 'tell application "Nokcandu" to quit' >/dev/null 2>&1 || true
+    for _ in $(seq 1 20); do /usr/bin/pgrep -xq Nokcandu || break; sleep 0.5; done
+    /usr/bin/pkill -x Nokcandu 2>/dev/null || true; sleep 1
+    REOPEN=1
+  fi
   "$APP/Contents/Resources/nokcandu-settings" --install-app "$(pwd)/$APP" "$HOME/Applications/Nokcandu.app"
   echo "Installed ~/Applications/Nokcandu.app"
+  if [ "$REOPEN" = 1 ]; then /usr/bin/open "$HOME/Applications/Nokcandu.app"; echo "Reopened Nokcandu"; fi
 fi

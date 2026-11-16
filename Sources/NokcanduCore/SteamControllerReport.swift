@@ -1,7 +1,7 @@
 import Foundation
 
 /// Original cable / 2.4 GHz receiver Steam Controller full-state protocol.
-/// Not Deck, BLE or a receiver-presence claim.
+/// Not Deck or a receiver-presence claim; Bluetooth's packets are joined by SteamControllerBLE and end up in `state`.
 /// Layout facts checked against Valve's SDL controller_structs.h and SDL_hidapi_steam.c.
 /// No device commands are issued by this decoder.
 public struct SteamControllerReport {
@@ -47,36 +47,47 @@ public struct SteamControllerReport {
         }
         private static func axis(_ v: Float) -> Int { Int(max(-32768, min(32767, v * 32767))) }
     }
-    private var left = Point(), stick = Point()
+    private var left: [Int16] = [0, 0], stick: [Int16] = [0, 0]
     private var counter: UInt32?
     public init() {}
     public static func isInputReport(_ bytes: [UInt8]) -> Bool {
         bytes.count == 64 && bytes[0] == 1 && bytes[1] == 0 && bytes[2] == 1 && (44...60).contains(bytes[3])
+    }
+    /// The state from the cable's raw values (Bluetooth sends the same values in pieces: SteamControllerBLE).
+    /// `flags`: the 24 button bits; triggers 0–255; pads, stick and motion as the controller's signed 16-bit values.
+    public static func state(counter: UInt32, flags: UInt32, leftTrigger: UInt8, rightTrigger: UInt8, stick: [Int16], leftPad: [Int16],
+                             rightPad: [Int16], leftTouch: Bool, gyro: [Int16], acceleration: [Int16]) -> State {
+        func bit(_ n: Int) -> Bool { flags & (1 << n) != 0 }
+        func point(_ v: [Int16]) -> Point { Point(max(-1, Float(v[0]) / 32767), max(-1, Float(v[1]) / 32767)) }
+        let mappings: [(Int,PadProfiles.Input)] = [(2,.rb),(3,.lb),(4,.y),(5,.b),(6,.x),(7,.a),
+            (8,.up),(9,.right),(10,.left),(11,.down),(12,.back),(13,.guide),(14,.start),
+            (15,.paddle2),(16,.paddle1),(18,.rs),(22,.ls)]
+        var buttons = Set(mappings.filter { bit($0.0) }.map(\.1))
+        // Older firmware multiplexes the left pad click as the stick click.
+        if bit(17) { buttons.insert(leftTouch ? .touchpad : .ls) }
+        let gyroScale = Float(2000.0 / 32768.0 * Double.pi / 180)
+        return State(counter: counter, buttons: buttons, stick: point(stick), leftPad: point(leftPad), rightPad: point(rightPad),
+            leftTouch: leftTouch, rightTouch: bit(20),
+            leftTrigger: bit(1) ? 1 : Float(leftTrigger)/255, rightTrigger: bit(0) ? 1 : Float(rightTrigger)/255,
+            gyro: gyro.map { Float($0)*gyroScale },
+            acceleration: acceleration.map { Float($0)/16384 })
     }
     public mutating func decode(_ bytes: [UInt8]) -> State? {
         guard Self.isInputReport(bytes) else { return nil }
         let sequence = (0..<4).reduce(UInt32(0)) { $0 | UInt32(bytes[4+$1]) << (8*$1) }
         guard sequence != counter else { return nil }
         func signed(_ i: Int) -> Int16 { Int16(bitPattern: UInt16(bytes[i]) | UInt16(bytes[i+1]) << 8) }
-        func point(_ i: Int) -> Point { Point(max(-1,Float(signed(i))/32767),max(-1,Float(signed(i+2))/32767)) }
+        func raw(_ i: Int) -> [Int16] { [signed(i), signed(i+2)] }
         let flags = UInt32(bytes[8]) | UInt32(bytes[9]) << 8 | UInt32(bytes[10]) << 16
         func bit(_ n: Int) -> Bool { flags & (1 << n) != 0 }
         let isPad = bit(19), interleaved = bit(23)
-        if isPad { left = point(16); if !interleaved { stick = Point() } }
-        else { stick = point(16); if !interleaved { left = Point() } }
-        let mappings: [(Int,PadProfiles.Input)] = [(2,.rb),(3,.lb),(4,.y),(5,.b),(6,.x),(7,.a),
-            (8,.up),(9,.right),(10,.left),(11,.down),(12,.back),(13,.guide),(14,.start),
-            (15,.paddle2),(16,.paddle1),(18,.rs),(22,.ls)]
-        var buttons = Set(mappings.filter { bit($0.0) }.map(\.1))
-        // Older firmware multiplexes the left pad click as the stick click.
-        if bit(17) { buttons.insert(isPad || interleaved ? .touchpad : .ls) }
+        if isPad { left = raw(16); if !interleaved { stick = [0, 0] } }
+        else { stick = raw(16); if !interleaved { left = [0, 0] } }
         counter = sequence
-        let gyroScale = Float(2000.0 / 32768.0 * Double.pi / 180)
-        return State(counter: sequence, buttons: buttons, stick: stick, leftPad: left, rightPad: point(20),
-            leftTouch: isPad || interleaved, rightTouch: bit(20),
-            leftTrigger: bit(1) ? 1 : Float(bytes[11])/255, rightTrigger: bit(0) ? 1 : Float(bytes[12])/255,
-            gyro: [34,36,38].map { Float(signed($0))*gyroScale },
-            acceleration: [28,30,32].map { Float(signed($0))/16384 })
+        return Self.state(counter: sequence, flags: flags, leftTrigger: bytes[11], rightTrigger: bytes[12],
+                          stick: stick, leftPad: left,
+                          rightPad: [signed(20), signed(22)], leftTouch: isPad || interleaved,
+                          gyro: [signed(34), signed(36), signed(38)], acceleration: [signed(28), signed(30), signed(32)])
     }
 }
 
@@ -84,6 +95,8 @@ public struct SteamControllerReport {
 /// hold alive, while heartbeat/status packets cannot keep stale actions held.
 public struct SteamControllerStream {
     private var decoder = SteamControllerReport()
+    private var bleAssembler = SteamControllerBLE.Assembler()
+    private var bleDecoder = SteamControllerBLE.Decoder()
     public private(set) var state: SteamControllerReport.State?
     private var received: Double?
     public init() {}
@@ -99,5 +112,15 @@ public struct SteamControllerStream {
         guard time.isFinite, time >= received, time-received <= timeout else { reset(); return true }
         return false
     }
-    public mutating func reset() { decoder = SteamControllerReport(); state = nil; received = nil }
+    /// A Bluetooth input report (a segment): returns the state once a whole state packet is in.
+    public mutating func acceptBluetooth(_ bytes: [UInt8], at time: Double) -> SteamControllerReport.State? {
+        guard time.isFinite, let packet = bleAssembler.add(bytes), SteamControllerBLE.Decoder.isState(packet) else { return nil }
+        if let received, time < received { reset() }
+        received = time
+        guard let next = bleDecoder.decode(packet) else { return nil }
+        state = next; return next
+    }
+    public mutating func reset() {
+        decoder = SteamControllerReport(); bleAssembler.reset(); bleDecoder = SteamControllerBLE.Decoder(); state = nil; received = nil
+    }
 }

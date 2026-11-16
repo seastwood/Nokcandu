@@ -815,4 +815,19 @@ Not yet confirmed by the user on the controller.
 
 ### Match sideways sensitivity (different X and Y sensitivities)
 
-November 15, 2026. Asked for after the trace above showed X ≈ 2,214 and Y ≈ 1,158 px per pad: the user wants X's full speed across, without X magnifying the sideways wander of up/down movement. `matchSideways` (per pad, off unless set; shown only while X ≠ Y): the lower sensitivity stays as set, and the higher one is used in full only for movement straight along its own axis, coming down to the lower one's in proportion to the share of movement along its axis (cos² of the angle) by the direction averaged over about 25 ms (6 Hz). Only each report's size changes, never its timing (`testMatchSidewaysSensitivityFollowsTheDirection`: up/down steps identical report by report). Known cost: on a sharp turn from up/down to across, the higher sensitivity takes about 30 ms to come back. Not yet confirmed on the controller.
+November 15, 2026. Asked for after the trace above showed X ≈ 2,214 and Y ≈ 1,158 px per pad: the user wants X's full speed across, without X magnifying the sideways wander of up/down movement. `matchSideways` (per pad; on unless set to false since November 15, 2026, at the user's request: it is a Steam Controller trackpad setting and changes nothing while X = Y; the switch, shown only while X ≠ Y, has an (i) explanation): the lower sensitivity stays as set, and the higher one is used in full only for movement straight along its own axis, coming down to the lower one's in proportion to the share of movement along its axis (cos² of the angle) by the direction averaged over about 25 ms (6 Hz). Only each report's size changes, never its timing (`testMatchSidewaysSensitivityFollowsTheDirection`: up/down steps identical report by report). Known cost: on a sharp turn from up/down to across, the higher sensitivity takes about 30 ms to come back. Not yet confirmed on the controller.
+
+Later the same day it became **Directional sensitivity**, a choice, at the user's request: the sensitivity of the direction of movement (Y's straight up or down, X's straight across, cos² in between) applied to **the higher axis** ("Highest toward lowest", the default and the earlier switch's behaviour: nothing moves faster than set), **X** ("Vary X toward Y"), **Y** ("Vary Y toward X"), **both** (paths keep their shape) or **Off**. The axis names were the user's ("targeting X and Y is easiest to understand"; "Low"/"Max" were considered and dropped). Stored as `directionalSensitivity`; the earlier `matchSideways` still reads (false: Off, true or unset: the default). Not yet confirmed on the controller.
+
+## Steam Controller over Bluetooth (November 15, 2026)
+
+Written from Valve's SDL driver without a Bluetooth controller, then confirmed on the first connection: report 3
+in 20-byte segments, settings replies join, state packets carry only changed chunks (plus empty keep-alive
+packets). Bluetooth reports can stall for a moment, so a 0.3 s silence must not trigger a new takeover: over
+Bluetooth Nokcandu waits 1 s and then only lets go of held input. See docs/steam-controller-bluetooth.md.
+
+## A reinstalled Sunshine or Apollo host (November 15, 2026)
+
+A reinstall can bring a new certificate, a new host id and new app ids. The pinned certificate then fails as
+"changed since you paired" (offer Pair, not just Offline); pairing again must replace the saved host
+(`merge(placeholder:)`) so profiles carry over; a profile's app is found again by name.

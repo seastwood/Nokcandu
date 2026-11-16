@@ -34,10 +34,45 @@ public struct PadSteamTrackpadSettings: Codable, Hashable, Sendable {
     /// Straight flicks: a quick swipe within this many degrees of straight up, down or across goes exactly
     /// straight (0 or nil: off). See `PadSteamTrackpad.straighten`.
     public var straighten: Double?
-    /// Match sideways sensitivity: with X and Y sensitivities set differently, the higher one comes down to the
-    /// lower one's as movement turns towards the lower one's axis (nil or false: off). See
-    /// `PadSteamTrackpad.matchedSensitivity`.
+    /// Acceleration: how much faster than set the pointer goes for a fast finger (1: up to twice as far), rising
+    /// smoothly with speed to its full amount at `accelerationSpeed` pad-widths a second (nil or 0: off). Both axes
+    /// get the same gain, so the direction never changes. See `PadSteamTrackpad.accelerationGain`.
+    public var acceleration: Double?
+    public var accelerationSpeed: Double?
+    public static let defaultAccelerationSpeed = 3.0
+    /// Directional sensitivity: with X and Y sensitivities set differently, which of them follows the direction
+    /// of movement (nil: from `matchSideways`, else `.higher`, the default for Steam Controller trackpads). See `PadSteamTrackpad.matchedSensitivity`.
+    public var directionalSensitivity: DirectionalSensitivity?
+    /// The earlier on/off form of `directionalSensitivity` (November 14–15, 2026): false is `.off`; true or
+    /// nil is the default. Kept so a saved choice still reads.
     public var matchSideways: Bool?
+    /// Named by axis, as the user reads the X and Y sliders (chosen with the user, November 15, 2026).
+    public enum DirectionalSensitivity: String, Codable, CaseIterable, Sendable {
+        /// Whichever of X and Y is higher follows the direction, coming down towards the lower one's (the
+        /// default): moving that way doesn't magnify sideways wobble, and nothing moves faster than set.
+        case higher
+        /// X and Y as set, whatever the direction.
+        case off
+        /// X follows the direction: Y's value moving straight up or down, its own straight across.
+        case x
+        /// Y follows the direction: X's value moving straight across, its own straight up or down.
+        case y
+        /// Both follow it: each direction uses its own sensitivity on both axes, so paths keep their shape.
+        case both
+        public var title: String {
+            switch self {
+            case .higher: "Highest toward lowest"
+            case .off: "Off"
+            case .x: "Vary X toward Y"
+            case .y: "Vary Y toward X"
+            case .both: "Vary both"
+            }
+        }
+    }
+    /// The directional sensitivity in effect (unset: `.higher`).
+    public var directional: DirectionalSensitivity {
+        directionalSensitivity ?? (matchSideways == false ? .off : .higher)
+    }
     /// How much of the pad's radius, from the rim inward, counts as its edge (0: no edge). The edge is an
     /// input of its own, held while the finger is there, in every pad behavior.
     public var edge: Double?
@@ -86,18 +121,38 @@ public struct PadSteamTrackpad {
     /// The finger's direction for Match sideways sensitivity (pad-widths a second, after the pad angle),
     /// averaged over about 25 ms so a single wobble doesn't change it.
     private var headingX = 0.0, headingY = 0.0
-    /// The sensitivities (pixels per pad-width) for a finger heading (`vx`, `vy`). The lower of the two stays as
-    /// set; the higher is used in full only for movement straight along its own axis and comes down to the
-    /// lower one's for movement straight along the other, in proportion to the share of the movement along its
-    /// axis (the square of the cosine of the angle). With X at 2,214 and Y at 1,158 (a traced profile,
+    /// The finger's speed for acceleration (pad-widths a second), averaged over about 10 ms.
+    private var accelSpeed = 0.0
+    /// The gain for a finger moving at `speed` pad-widths a second: 1 when still, rising along a smoothstep (gentle
+    /// at first, so slow aiming is left alone) to 1 + `amount` at `full` and above.
+    public static func accelerationGain(speed: Double, amount: Double, full: Double) -> Double {
+        guard amount.isFinite, amount > 0, speed.isFinite, speed > 0 else { return 1 }
+        let t = min(1, speed / max(0.1, full.isFinite ? full : defaultAccelerationFull))
+        return 1 + min(4, amount) * t * t * (3 - 2 * t)
+    }
+    public static let defaultAccelerationFull = PadSteamTrackpadSettings.defaultAccelerationSpeed
+    /// The sensitivities (pixels per pad-width) for a finger heading (`vx`, `vy`). The direction's sensitivity
+    /// is X's for movement straight across and Y's straight up or down, in proportion to the share of the
+    /// movement along each axis (the square of the cosine of the angle). With X at 2,214 and Y at 1,158 (a traced profile,
     /// November 14, 2026), the thumb's sideways wander in an up/down movement was drawn nearly twice as large as
     /// its progress, so up and down zig-zagged while left and right didn't. Only the size of each report's
     /// movement changes, never its timing.
-    public static func matchedSensitivity(x sx: Double, y sy: Double, vx: Double, vy: Double) -> (x: Double, y: Double) {
+    /// `mode` decides which of them follows the sensitivity of the direction of movement (Y's straight up or
+    /// down, X's straight across, in between by the same share): the higher one (coming down to it), X, Y
+    /// or both.
+    public static func matchedSensitivity(x sx: Double, y sy: Double, vx: Double, vy: Double,
+                                          mode: PadSteamTrackpadSettings.DirectionalSensitivity) -> (x: Double, y: Double) {
         let speed2 = vx * vx + vy * vy
-        guard sx != sy, speed2 > 0, speed2.isFinite else { return (sx, sy) }
+        guard mode != .off, sx != sy, speed2 > 0, speed2.isFinite else { return (sx, sy) }
         let alongX = vx * vx / speed2
-        return sx > sy ? (sy + (sx - sy) * alongX, sy) : (sx, sx + (sy - sx) * (1 - alongX))
+        let direction = sy + (sx - sy) * alongX
+        switch mode {
+        case .off: return (sx, sy)
+        case .higher: return (min(sx, direction), min(sy, direction))
+        case .x: return (direction, sy)
+        case .y: return (sx, direction)
+        case .both: return (direction, direction)
+        }
     }
     /// Straight flicks act on quick swipes only: nothing below `straightenFrom` pad-widths a second, fully
     /// from `straightenFull`. A thumb's quick up or down flick lands several degrees either side of straight
@@ -232,7 +287,7 @@ public struct PadSteamTrackpad {
         defer { down = next; x = px; y = py; sampleTime = now; if next || wasDown { tickTime = now } }
         if next && !down {
             vx = 0; vy = 0; restX = 0; restY = 0; movedTime = nil; steadyX = 0; steadyY = 0; edgeEntryTime = nil; velocityHistory = []
-            filterX = px; filterY = py; rateX = 0; rateY = 0; landed = now; flickX = 0; flickY = 0; headingX = 0; headingY = 0
+            filterX = px; filterY = py; rateX = 0; rateY = 0; landed = now; flickX = 0; flickY = 0; headingX = 0; headingY = 0; accelSpeed = 0
             landX = px; landY = py; released = false; landing = true; slowSince = nil; recent = [(now, px, py)]
             return Motion()
         }
@@ -371,10 +426,18 @@ public struct PadSteamTrackpad {
             if s.vertical { moveX *= keep } else { moveY *= keep }
         }
         var sensitivityX = speed(settings.sensitivityX ?? settings.sensitivity), sensitivityY = speed(settings.sensitivityY ?? settings.sensitivity)
-        if settings.matchSideways == true, sensitivityX != sensitivityY {
+        if settings.directional != .off, sensitivityX != sensitivityY {
             let dt = max(0.0005, now - previous), blend = dt / (dt + 1 / (2 * Double.pi * 6))
             headingX += blend * (moveX / dt - headingX); headingY += blend * (moveY / dt - headingY)
-            (sensitivityX, sensitivityY) = Self.matchedSensitivity(x: sensitivityX, y: sensitivityY, vx: headingX, vy: headingY)
+            (sensitivityX, sensitivityY) = Self.matchedSensitivity(x: sensitivityX, y: sensitivityY, vx: headingX, vy: headingY, mode: settings.directional)
+        }
+        if let amount = settings.acceleration, amount.isFinite, amount > 0 {
+            // Only the size of this report's movement is scaled; the speed it's judged on is averaged over a few
+            // reports so one noisy report doesn't jolt it, and nothing is held back.
+            let dt = max(0.0005, now - previous), blend = dt / (dt + 1 / (2 * Double.pi * 15))
+            accelSpeed += blend * ((moveX * moveX + moveY * moveY).squareRoot() / dt - accelSpeed)
+            let gain = Self.accelerationGain(speed: accelSpeed, amount: amount, full: settings.accelerationSpeed ?? PadSteamTrackpadSettings.defaultAccelerationSpeed)
+            sensitivityX *= gain; sensitivityY *= gain
         }
         let dx = Self.steady(moveX * sensitivityX, amount:steadiness, remainder:&steadyX)
         let dy = Self.steady(moveY * sensitivityY * (settings.invertY ? -1 : 1), amount:steadiness, remainder:&steadyY)

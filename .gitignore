@@ -20,3 +20,4 @@ profiles-repo/
 commit-msg.txt
 __pycache__/
 .swiftpm/
+.quit-for-install

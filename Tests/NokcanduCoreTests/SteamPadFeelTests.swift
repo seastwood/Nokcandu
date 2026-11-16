@@ -139,10 +139,29 @@ final class SteamPadFeelTests: XCTestCase {
 
     /// Match sideways sensitivity: an up/down movement's sideways wander is drawn at the lower (Y) sensitivity;
     /// a movement across keeps the full X; the movement along the lower axis is identical on every report.
+    func testAccelerationLeavesSlowAimAloneAndBoostsFastSwipes() {
+        XCTAssertEqual(PadSteamTrackpad.accelerationGain(speed: 0, amount: 1, full: 3), 1)
+        XCTAssertEqual(PadSteamTrackpad.accelerationGain(speed: 3, amount: 1, full: 3), 2, accuracy: 1e-9)
+        XCTAssertEqual(PadSteamTrackpad.accelerationGain(speed: 30, amount: 1, full: 3), 2, accuracy: 1e-9)
+        XCTAssertLessThan(PadSteamTrackpad.accelerationGain(speed: 0.2, amount: 1, full: 3), 1.02, "slow aim stays nearly as set")
+        XCTAssertEqual(PadSteamTrackpad.accelerationGain(speed: 5, amount: nil ?? 0, full: 3), 1)
+        var accel = settings(); accel.acceleration = 1
+        // A slow aim (a fifth of the pad a second) barely changes; a fast swipe (five pads a second) doubles.
+        let slowOff = run(settings(), seconds: 1) { t in (0.3 + t * 0.2, 0.5) }
+        let slowOn = run(accel, seconds: 1) { t in (0.3 + t * 0.2, 0.5) }
+        XCTAssertEqual(Double(slowOn.x), Double(slowOff.x), accuracy: Double(slowOff.x) * 0.03)
+        let fastOff = run(settings(), seconds: 0.12) { t in (0.2 + t * 5, 0.5) }
+        let fastOn = run(accel, seconds: 0.12) { t in (0.2 + t * 5, 0.5) }
+        XCTAssertGreaterThan(Double(fastOn.x), Double(fastOff.x) * 1.7)
+        // The same gain on both axes: a diagonal keeps its direction.
+        let diagonal = run(accel, seconds: 0.12) { t in (0.2 + t * 4, 0.2 + t * 3) }
+        XCTAssertEqual(Double(diagonal.y) / Double(diagonal.x), 0.75, accuracy: 0.03)
+    }
+
     func testMatchSidewaysSensitivityFollowsTheDirection() {
         func settings(_ on: Bool) -> PadSteamTrackpadSettings {
             var s = PadSteamTrackpadSettings(mode: .mouse); s.sensitivityX = 2200; s.sensitivityY = 1100; s.smoothing = 0; s.rotation = 0
-            s.matchSideways = on ? true : nil; return s
+            s.matchSideways = on ? nil : false; return s
         }
         func run(_ s: PadSteamTrackpadSettings, path: (Double) -> (Double, Double)) -> (x: Double, y: Double, ySteps: [Double]) {
             var pad = PadSteamTrackpad(), x = 0.0, y = 0.0, steps: [Double] = [], t = 0.0
@@ -163,10 +182,34 @@ final class SteamPadFeelTests: XCTestCase {
         let across: (Double) -> (Double, Double) = { t in (0.2 + 0.6 * t, 0.5) }
         let acrossOff = run(settings(false), path: across), acrossOn = run(settings(true), path: across)
         XCTAssertEqual(acrossOn.x, acrossOff.x, accuracy: acrossOff.x * 0.03)
+        // Unset is on (the default); only an explicit false turns it off.
+        var unset = settings(true); unset.matchSideways = nil
+        XCTAssertEqual(run(unset, path: up).x, on.x, accuracy: 0.001)
+        // The modes, for X 2,000 and Y 1,000 (the direction's value: Y's straight up, X's straight across).
+        typealias Mode = PadSteamTrackpadSettings.DirectionalSensitivity
+        func m(_ mode: Mode, _ vx: Double, _ vy: Double) -> (x: Double, y: Double) { PadSteamTrackpad.matchedSensitivity(x: 2000, y: 1000, vx: vx, vy: vy, mode: mode) }
+        XCTAssertEqual(m(.x, 0, 1).x, 1000); XCTAssertEqual(m(.x, 0, 1).y, 1000)      // up: X down to Y
+        XCTAssertEqual(m(.x, 1, 0).x, 2000); XCTAssertEqual(m(.x, 1, 0).y, 1000)      // across: as set
+        XCTAssertEqual(m(.y, 0, 1).x, 2000); XCTAssertEqual(m(.y, 0, 1).y, 1000)      // up: as set
+        XCTAssertEqual(m(.y, 1, 0).x, 2000); XCTAssertEqual(m(.y, 1, 0).y, 2000)      // across: Y up to X
+        XCTAssertEqual(m(.both, 0, 1).x, 1000); XCTAssertEqual(m(.both, 1, 0).y, 2000)
+        XCTAssertEqual(m(.both, 1, 1).x, 1500, accuracy: 0.001); XCTAssertEqual(m(.both, 1, 1).y, 1500, accuracy: 0.001)
+        XCTAssertEqual(m(.off, 0, 1).x, 2000); XCTAssertEqual(m(.off, 0, 1).y, 1000)
+        // Unset is Highest toward lowest: the higher one varies, whichever axis it is.
+        XCTAssertEqual(m(.higher, 0, 1).x, 1000); XCTAssertEqual(m(.higher, 1, 0).x, 2000); XCTAssertEqual(m(.higher, 1, 0).y, 1000)
+        var yHigher = PadSteamTrackpadSettings(mode: .mouse); yHigher.sensitivityX = 1000; yHigher.sensitivityY = 2000
+        XCTAssertEqual(yHigher.directional, .higher)
+        let yAcross = PadSteamTrackpad.matchedSensitivity(x: 1000, y: 2000, vx: 1, vy: 0, mode: yHigher.directional)
+        XCTAssertEqual(yAcross.x, 1000); XCTAssertEqual(yAcross.y, 1000)             // across: Y down to X
+        // The earlier on/off setting still reads: false is Off; unset follows the higher axis.
+        var old = PadSteamTrackpadSettings(mode: .mouse); old.sensitivityX = 2000; old.sensitivityY = 1000
+        XCTAssertEqual(old.directional, .higher)
+        old.matchSideways = false; XCTAssertEqual(old.directional, .off)
+        old.directionalSensitivity = .both; XCTAssertEqual(old.directional, .both)
         // Equal sensitivities: nothing changes.
-        XCTAssertEqual(PadSteamTrackpad.matchedSensitivity(x: 1000, y: 1000, vx: 0, vy: 1).x, 1000)
-        XCTAssertEqual(PadSteamTrackpad.matchedSensitivity(x: 2000, y: 1000, vx: 1, vy: 1).x, 1500, accuracy: 0.001)
-        XCTAssertEqual(PadSteamTrackpad.matchedSensitivity(x: 1000, y: 2000, vx: 1, vy: 0).y, 1000, accuracy: 0.001)
+        XCTAssertEqual(PadSteamTrackpad.matchedSensitivity(x: 1000, y: 1000, vx: 0, vy: 1, mode: .both).x, 1000)
+        XCTAssertEqual(PadSteamTrackpad.matchedSensitivity(x: 2000, y: 1000, vx: 1, vy: 1, mode: .x).x, 1500, accuracy: 0.001)
+        XCTAssertEqual(PadSteamTrackpad.matchedSensitivity(x: 1000, y: 2000, vx: 1, vy: 0, mode: .y).y, 1000, accuracy: 0.001)
     }
 
     func testAStraightVerticalSwipeStaysStraightByDefault() {

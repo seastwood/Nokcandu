@@ -37,6 +37,9 @@ import NokcanduCore
         var address: String
         var name: String
         var pin: String
+        /// The saved host being paired again: the result replaces it, even if the host now reports a new id
+        /// (Sunshine or Apollo reinstalled), so its profiles carry over instead of a second copy appearing.
+        var replacing: String? = nil
         var stage: Stage = .waiting
         enum Stage: Equatable { case waiting, failed(String), done }
     }
@@ -155,7 +158,7 @@ import NokcanduCore
         let fetchApps = h.isPaired
         DispatchQueue.global(qos: .utility).async {
             var result: (StreamServerInfo, String, [StreamApp]?)?
-            var lastError: String?
+            var lastError: String?, certificateChanged = false
             var recovered: Data?
             for a in candidates {
                 let client = StreamClient(address: a, httpPort: h.httpPort, httpsPort: h.httpsPort, identity: identity, serverCertificate: cert)
@@ -172,6 +175,7 @@ import NokcanduCore
                     break
                 } catch {
                     lastError = (error as? LocalizedError)?.errorDescription
+                    if case StreamError.wrongCertificate = error { certificateChanged = true }
                     StreamLog.shared.add("Check \(h.name) at \(a): \(lastError ?? "\(error)")")
                 }
             }
@@ -197,6 +201,8 @@ import NokcanduCore
                         } else { m.status[h.id] = s }
                     } else {
                         s.online = false; s.error = lastError
+                        // Answering, but with a different certificate (reinstalled): offer to pair again.
+                        s.needsPairing = certificateChanged
                         m.status[h.id] = s
                     }
                 }
@@ -221,9 +227,23 @@ import NokcanduCore
 
     // MARK: Finding hosts on this network
 
+    /// Browses for hosts (Bonjour `_nvstream._tcp`). Started afresh each time the Connect sheet opens, so a
+    /// browser left stale by sleep or a network change doesn't show nothing; hosts that stop advertising leave
+    /// the list.
     func startDiscovery() {
-        guard browser == nil else { return }
+        browser?.cancel()
         let b = NWBrowser(for: .bonjour(type: "_nvstream._tcp", domain: nil), using: .tcp)
+        b.stateUpdateHandler = { state in
+            switch state {
+            case .failed(let e), .waiting(let e):
+                StreamLog.shared.add("Looking for hosts: \(e.localizedDescription)")
+                if case .failed = state {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) { MainActor.assumeIsolated {
+                        if StreamsModel.shared.browser === b { StreamsModel.shared.browser = nil; StreamsModel.shared.startDiscovery() } } }
+                }
+            default: break
+            }
+        }
         b.browseResultsChangedHandler = { results, _ in
             DispatchQueue.main.async { MainActor.assumeIsolated { StreamsModel.shared.resolve(Array(results)) } }
         }
@@ -231,16 +251,29 @@ import NokcanduCore
         browser = b
     }
 
+    func stopDiscovery() { browser?.cancel(); browser = nil }
+
     private func resolve(_ results: [NWBrowser.Result]) {
+        let names = Set(results.compactMap { r -> String? in if case .service(let n, _, _, _) = r.endpoint { return n }; return nil })
+        discovered.removeAll { !names.contains($0.name) }
         for r in results {
             guard case .service(let name, _, _, _) = r.endpoint else { continue }
             if discovered.contains(where: { $0.name == name }) { continue }
             // Resolve the service to an address by connecting to it.
-            let c = NWConnection(to: r.endpoint, using: .tcp)
+            // IPv4 first: a link-local IPv6 address can be slow or unreachable, and then the host never appeared.
+            let params = NWParameters.tcp
+            if let ip = params.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options { ip.version = .v4 }
+            let c = NWConnection(to: r.endpoint, using: params)
             resolving.append(c)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6) { MainActor.assumeIsolated {
+                let m = StreamsModel.shared
+                guard m.resolving.contains(where: { $0 === c }) else { return }
+                StreamLog.shared.add("Couldn't reach \(name), found on this network (\(c.state))")
+                c.cancel(); m.resolving.removeAll { $0 === c }
+            } }
             c.stateUpdateHandler = { state in
                 guard case .ready = state, let remote = c.currentPath?.remoteEndpoint, case .hostPort(let host, _) = remote else {
-                    if case .failed = state { c.cancel() }
+                    if case .failed(let e) = state { StreamLog.shared.add("Couldn't reach \(name), found on this network: \(e.localizedDescription)"); c.cancel() }
                     return
                 }
                 var address: String
@@ -257,6 +290,7 @@ import NokcanduCore
                         let m = StreamsModel.shared
                         m.resolving.removeAll { $0 === c }
                         if !m.discovered.contains(where: { $0.address == address }) {
+                            StreamLog.shared.add("Found \(name) on this network at \(address)")
                             m.discovered.append(Discovered(name: name, address: address))
                         }
                     }
@@ -277,6 +311,7 @@ import NokcanduCore
     func pairAgain(_ h: StreamHost) {
         showConnect = true
         connect(to: status[h.id]?.address ?? h.candidates().first ?? "", name: h.name)
+        pairing?.replacing = h.id
     }
 
     /// Adds the host at an address and pairs with it: shows a PIN to type on the host.
@@ -322,9 +357,11 @@ import NokcanduCore
 
     private func paired(info: StreamServerInfo, address: String, certificate: Data?, apps: [StreamApp] = []) {
         pairClient = nil
+        let replacing = pairing?.replacing
+        if let replacing, replacing != info.uniqueID { status[replacing] = nil }
         var id = ""
         update { lib in
-            id = lib.merge(info, reachedAt: address)
+            id = lib.merge(info, reachedAt: address, placeholder: replacing)
             if let i = lib.hosts.firstIndex(where: { $0.id == id }) {
                 if let certificate { lib.hosts[i].serverCertificate = certificate.base64EncodedString() }
                 if !apps.isEmpty { lib.hosts[i].apps = apps }
@@ -376,6 +413,18 @@ import NokcanduCore
     func stream(_ p: StreamProfile) {
         guard running == nil, let h = host(p.hostID) else { return }
         guard h.isPaired else { lastError = "Pair with \(h.name) first."; return }
+        var p = p
+        // A reinstalled host numbers its apps afresh: find the profile's app again by name, or say so (before,
+        // Stream did nothing until "Starts" was chosen again).
+        if let id = p.appID, !h.apps.isEmpty, !h.apps.contains(where: { $0.id == id }) {
+            guard let name = p.appName, let app = h.apps.first(where: { $0.name == name }) else {
+                lastError = "\(p.appName ?? "The app this profile starts") isn't on \(h.name) any more. Choose what it starts, under App."; return
+            }
+            p.appID = app.id
+            let pid = p.id
+            update { lib in if let i = lib.profiles.firstIndex(where: { $0.id == pid }) { lib.profiles[i].appID = app.id } }
+            StreamLog.shared.add("\(p.name): \(name) has a new id on \(h.name) (\(id) → \(app.id))")
+        }
         guard let identity = try? loadIdentity() else { lastError = "Couldn't load this Mac's certificate."; return }
         let address: String
         if case .manual(let a) = p.route { address = a }
