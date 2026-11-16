@@ -82,6 +82,8 @@ import NokcanduCore
     func host(_ id: String?) -> StreamHost? { id.flatMap { i in library.hosts.first { $0.id == i } } }
     func profile(_ id: String?) -> StreamProfile? { id.flatMap { i in library.profiles.first { $0.id == i } } }
 
+    /// The running stream's profile as it was when the stream started.
+    var runningStartProfile: StreamProfile? { running == nil ? nil : window?.startProfile }
     func setProfile(_ p: StreamProfile) {
         update { lib in if let i = lib.profiles.firstIndex(where: { $0.id == p.id }) { lib.profiles[i] = p } }
         // Changes that can apply during the stream do (the window decides which).

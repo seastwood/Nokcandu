@@ -48,14 +48,35 @@ extension EnvironmentValues {
         set { self[PendingControlTitlesKey.self] = newValue }
     }
 }
+private struct AppliedControlTitlesKey: EnvironmentKey { static let defaultValue = Set<String>() }
+private struct PendingControlHelpKey: EnvironmentKey { static let defaultValue: String? = nil }
+extension EnvironmentValues {
+    /// Settings (by lowercased name) that have just taken effect: marked "Applied" for a moment.
+    var appliedControlTitles: Set<String> {
+        get { self[AppliedControlTitlesKey.self] }
+        set { self[AppliedControlTitlesKey.self] = newValue }
+    }
+    /// What "Pending" means on this page (the default is a game's settings waiting for its environment).
+    var pendingControlHelp: String? {
+        get { self[PendingControlHelpKey.self] }
+        set { self[PendingControlHelpKey.self] = newValue }
+    }
+}
 struct PendingSettingBadge: View {
     @Environment(\.pendingControlTitles) private var pending
+    @Environment(\.appliedControlTitles) private var applied
+    @Environment(\.pendingControlHelp) private var pendingHelp
     let title: String
     var body: some View {
         if pending.contains(title.lowercased()) {
             Label("Pending", systemImage: "clock").font(.caption2).foregroundStyle(.orange)
-                .help("Saved; applies automatically once this Windows environment is idle.")
+                .help(pendingHelp ?? "Saved; applies automatically once this Windows environment is idle.")
                 .accessibilityLabel("\(title): pending")
+        } else if applied.contains(title.lowercased()) {
+            Label("Applied", systemImage: "checkmark.circle.fill").font(.caption2).foregroundStyle(.green)
+                .help("Changed in the stream that's running.")
+                .accessibilityLabel("\(title): applied")
+                .transition(.opacity)
         }
     }
 }

@@ -146,10 +146,16 @@ public enum SharedSteam {
          /bin/ps -p "$pid" -o command= 2>/dev/null | /usr/bin/grep -qiE 'wine|steam' || return 1
          ! /usr/bin/tail -n 3 "$LOG_DIR/steam.log" 2>/dev/null | /usr/bin/grep -q '] Shutdown'
         }
+        # Background programs of an earlier session can outlive its Wine server (and each would keep reading the
+        # controllers). Nothing is ended while a server of this Steam is running.
+        end_leftovers() {
+         [ -x "$STATE/nokcandu-settings" ] && "$STATE/nokcandu-settings" --end-leftovers "$CONTENTS" >>"$LOG_DIR/steam.log" 2>&1 || true
+        }
         stop_steam() {
          "$WINE" "$STEAM_EXE" -shutdown >/dev/null 2>&1 || true
          for _ in $(seq 1 90); do running || break; sleep 1; done
          "$SUPPORT/wine/bin/wineserver" -w >/dev/null 2>&1 || true
+         end_leftovers
         }
         # Steam started for a game closes with that game (once no Steam game is running for ~30 s), so the
         # next game can start Steam with its own graphics settings. Steam opened by itself stays open.
@@ -242,6 +248,7 @@ public enum SharedSteam {
         if [ -n "$APP" ]; then touch "$STATE/started-for-game"; else rm -f "$STATE/started-for-game"; fi
         [ -f "$LOG_DIR/steam.log" ] && [ "$(stat -f %z "$LOG_DIR/steam.log")" -gt 5000000 ] && mv -f "$LOG_DIR/steam.log" "$LOG_DIR/steam.previous.log"
         echo "== $(date) mode=$MODE app=${APP:-none}" >>"$LOG_DIR/steam.log"
+        end_leftovers
         # Steam also remembers GPU drawing in its own registry. Launch flags alone do not
         # override a saved GPUAccelWebViewsV3=0, so align it with Nokcandu before Steam starts.
         # Leave Wine 10's internal preference alone unless Nokcandu has an explicit choice.

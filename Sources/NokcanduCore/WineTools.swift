@@ -167,6 +167,41 @@ public enum WineTools {
         pathCache[pid] = (now, path)
         return path
     }
+    /// When a process started (seconds since 1970), or nil when it can't be read.
+    static func startTime(_ pid: Int32) -> Double? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+        return Double(info.pbi_start_tvsec) + Double(info.pbi_start_tvusec) / 1_000_000
+    }
+    /// Which of an environment's programs are leftovers: none while a Wine server of the environment is running
+    /// (that is a live session, never touched), otherwise those that have been running for `minimumAge` seconds
+    /// (a program only just started may be about to start its server).
+    static func leftovers(_ processes: [(pid: Int32, executable: String, started: Double)], now: Double, minimumAge: Double) -> [Int32] {
+        if processes.contains(where: { $0.executable.hasSuffix("/wine/bin/wineserver") }) { return [] }
+        return processes.filter { now - $0.started >= minimumAge }.map(\.pid)
+    }
+    /// Ends Windows programs of this environment that outlived its Wine server. A session's background programs
+    /// (its services, the controller driver, a launcher's browser helpers) can stay running after the server has
+    /// gone; each next session then adds another set, all of them reading the controllers and following the same
+    /// controller profile (found November 16, 2026: three sets in the shared Steam, one three days old). Does
+    /// nothing while a server of this environment is running. Returns the processes ended.
+    @discardableResult
+    public static func endLeftovers(contents: URL, minimumAge: Double = 15) -> [Int32] {
+        let owned = ownedProcesses(contents: contents).compactMap { pid -> (pid: Int32, executable: String, started: Double)? in
+            guard let path = executablePath(pid), let started = startTime(pid) else { return nil }
+            return (pid, URL(fileURLWithPath: path).standardizedFileURL.path, started)
+        }
+        let list = leftovers(owned, now: Date().timeIntervalSince1970, minimumAge: minimumAge)
+        guard !list.isEmpty else { return [] }
+        for pid in list where owns(pid: pid, contents: contents) { kill(pid, SIGTERM) }
+        for _ in 0..<20 {
+            if !list.contains(where: { kill($0, 0) == 0 }) { break }
+            usleep(100_000)
+        }
+        for pid in list where kill(pid, 0) == 0 && owns(pid: pid, contents: contents) { kill(pid, SIGKILL) }
+        return list
+    }
     static func ownedProcesses(contents: URL) -> [Int32] {
         guard let rows = try? Shell.run("/bin/ps", ["-axo", "pid="], timeout: 10), rows.ok else { return [] }
         return rows.stdout.split(whereSeparator: \.isWhitespace).compactMap { Int32($0) }.filter { owns(pid: $0, contents: contents) }

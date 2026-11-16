@@ -796,3 +796,23 @@ final class ControllerSummaryTests: XCTestCase {
         XCTAssertTrue(s.gyroByButton); XCTAssertEqual(s.gyro, .rightStick)
     }
 }
+
+final class StreamSettingChangesTests: XCTestCase {
+    func testWhatWaitsForTheNextStreamAndWhatAppliesNow() {
+        let start = StreamProfile(hostID: "h", name: "Home")
+        XCTAssertEqual(start.settingChanges(from: start), .init())
+        var p = start
+        p.video.fps = 120; p.video.codec = .hevc; p.video.width = 1920; p.video.height = 1080
+        p.audio.playOnHost = true; p.route = .remote
+        p.audio.volume = 0.5; p.video.pacing = .lowestLatency; p.controller.motion = false; p.audio.vban.gainDB = 6
+        let c = p.settingChanges(from: start)
+        XCTAssertEqual(c.nextStream, ["frame rate", "codec", "resolution", "size in pixels", "also play on the host", "connect through", "address"])
+        XCTAssertEqual(c.live, ["volume", "frame pacing", "send motion", "gain"])
+        // Changed back: nothing is waiting any more.
+        p.video = start.video; p.audio.playOnHost = false; p.route = start.route
+        XCTAssertTrue(p.settingChanges(from: start).nextStream.isEmpty)
+        // The name isn't a setting of the stream.
+        var renamed = start; renamed.name = "Away"
+        XCTAssertEqual(renamed.settingChanges(from: start), .init())
+    }
+}

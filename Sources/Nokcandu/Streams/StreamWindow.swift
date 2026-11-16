@@ -26,6 +26,8 @@ import SwiftUI
     let keyboard: StreamKeyboard
     /// The stream profile as it is now: settings changed during the stream that can apply, apply (see apply(_:)).
     private(set) var profile: StreamProfile
+    /// The profile as it was when this stream started: what the host was asked for.
+    let startProfile: StreamProfile
     private let identity: StreamIdentity
     private let streamView: StreamView
     private var statsTimer: Timer?
@@ -104,6 +106,7 @@ import SwiftUI
     init(host: StreamHost, profile: StreamProfile, address: String, identity: StreamIdentity) {
         connection = StreamConnection(host: host, profile: profile, address: address)
         self.profile = profile
+        startProfile = profile
         gamepads = StreamGamepads(settings: profile.controller)
         keyboard = StreamKeyboard(input: profile.input)
         self.identity = identity

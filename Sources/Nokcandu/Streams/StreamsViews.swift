@@ -239,7 +239,35 @@ struct StreamProfileEditor: View {
             padProfiles = PadProfiles.profiles()
             customResolution = profile.video.width != nil
         }
-        .onChange(of: profile) { _, p in m.setProfile(p) }
+        .environment(\.pendingControlTitles, pendingForNextStream)
+        .environment(\.appliedControlTitles, justApplied)
+        .environment(\.pendingControlHelp, "Saved. The host sets this when a stream starts, so it applies the next time you start this stream.")
+        .onChange(of: profile) { old, p in
+            m.setProfile(p)
+            // During the stream: what took effect just now says so for a moment.
+            guard running else { return }
+            let live = p.settingChanges(from: old).live
+            guard !live.isEmpty else { return }
+            appliedMark += 1
+            let mark = appliedMark
+            withAnimation { justApplied = live }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { if appliedMark == mark { withAnimation { justApplied = [] } } }
+        }
+        .onChange(of: running) { _, now in
+            justApplied = []
+            // "Restart Stream to Apply": the stream has ended, so start it again with the settings as they are now.
+            guard !now, restartWhenEnded else { return }
+            restartWhenEnded = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { if m.running == nil { m.stream(profile) } }
+        }
+    }
+    @State private var restartWhenEnded = false
+    @State private var justApplied: Set<String> = []
+    @State private var appliedMark = 0
+    /// While this profile's stream runs: the settings changed since it started that the host only takes at the start.
+    private var pendingForNextStream: Set<String> {
+        guard running, let start = m.runningStartProfile else { return [] }
+        return profile.settingChanges(from: start).nextStream
     }
 
     // MARK: Header
@@ -267,7 +295,14 @@ struct StreamProfileEditor: View {
                     if !host.isPaired || status?.needsPairing == true { Button("Pair…") { m.pairAgain(host) }.controlSize(.large) }
                 }
                 if running {
-                    SettingNote("Streaming now. Changes apply straight away, except the picture's resolution, frame rate, bitrate, codec, HDR and colour settings, sound channels, \"Also play on the host\", the app and the connection, which the host sets when a stream starts: those apply from the next stream.")
+                    SettingNote("Streaming now. A setting you change is marked Applied when it takes effect straight away, or Pending when the host only sets it at the start: restart the stream to use those.")
+                    if !pendingForNextStream.isEmpty {
+                        Button("Restart Stream to Apply \(pendingForNextStream.count == 1 ? "the Pending Setting" : "Pending Settings")") {
+                            restartWhenEnded = true
+                            m.endStream(quitApp: false)
+                        }
+                        .help("Ends the stream without closing the app on the host, then starts it again with the settings marked Pending.")
+                    }
                 }
                 if !host.isPaired { SettingNote("Pair with \(host.name) to stream.", warning: true) }
                 else if status?.needsPairing == true { SettingNote("\(host.name) needs pairing again: it no longer accepts this Mac, or it was reinstalled and has a new certificate. Your profiles for it are kept.", warning: true) }

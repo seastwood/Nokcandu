@@ -37,6 +37,13 @@ import NokcanduCore
             catch { fputs(error.localizedDescription + "\n", stderr); exit(1) }
             return
         }
+        // A launcher's script, before it starts a session and after it ends one: programs left from an earlier
+        // session of this environment (never a running one's) are ended.
+        if args.count == 3, args[1] == "--end-leftovers" {
+            let ended = WineTools.endLeftovers(contents: URL(fileURLWithPath: args[2]).standardizedFileURL)
+            if !ended.isEmpty { print("nokcandu: ended \(ended.count) program\(ended.count == 1 ? "" : "s") left from an earlier session") }
+            return
+        }
         if args.count == 5, args[3] == "--state-root" { PendingSettings.stateRootOverride = URL(fileURLWithPath: args[4]) }
         guard (args.count == 3 || args.count == 5 && args[3] == "--state-root"), (args[1] == "--apply" || args[1] == "--status"), let game = GameLibrary.inspect(URL(fileURLWithPath: args[2]).standardizedFileURL) else { exit(64) }
         if args[1] == "--status" { print(PendingSettings.activity(for: game)); return }
