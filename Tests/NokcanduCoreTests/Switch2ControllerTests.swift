@@ -104,3 +104,29 @@ final class GameCubeAdapterTests: XCTestCase {
         XCTAssertNil(GameCubeAdapter.decode([0x22] + d.dropFirst()))
     }
 }
+
+final class EightBitDoControllerTests: XCTestCase {
+    func testFullReport() {
+        var d = [UInt8](repeating: 0, count: 34)
+        d[0] = 0x04; d[1] = 2                       // d-pad right
+        d[2] = 0x7F; d[3] = 0; d[4] = 0xFF; d[5] = 0x7F
+        d[6] = 255; d[7] = 0                        // right trigger full
+        d[8] = 0x01 | 0x04                          // A, back paddle
+        d[9] = 0x08 | 0x80                          // Start, Share
+        d[10] = 0x02
+        d[23] = 0x00; d[24] = 0x10                  // gyro y = 4096
+        let s = try! XCTUnwrap(EightBitDoController.decode(d))
+        XCTAssertEqual(s.buttons, [.right, .a, .paddle1, .start, .misc, .paddle3])
+        XCTAssertEqual(s.axes[0], 0); XCTAssertEqual(s.axes[1], -32767)
+        XCTAssertEqual(s.axes[2], 32767)
+        XCTAssertEqual(s.axes[5], 32767); XCTAssertEqual(s.axes[4], 0)
+        let g = try! XCTUnwrap(s.gyro)
+        XCTAssertLessThan(g[0], 0); XCTAssertEqual(g[1], 0); XCTAssertEqual(g[2], 0)
+        XCTAssertNil(EightBitDoController.decode([0x09] + d.dropFirst()))
+    }
+    func testOldReport() {
+        let d: [UInt8] = [0x02, 0x01, 0x0F, 0x7F, 0x7F, 0x7F, 0x7F, 0, 0]
+        let s = EightBitDoController.decode(d)!
+        XCTAssertEqual(s.buttons, [.b]); XCTAssertEqual(s.axes[4], 32767); XCTAssertNil(s.gyro)
+    }
+}
