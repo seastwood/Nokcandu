@@ -922,29 +922,7 @@ public enum PadProfiles {
     /// Profiles from shared text (or a single profile's JSON), with new ids so nothing is overwritten, names made
     /// unique, and what they build on pointing at the imported copies. The last one is the shared profile itself.
     public static func importText(_ text: String, existing: [Profile]) throws -> [Profile] {
-        struct Pack: Decodable { let nokcanduControllerProfiles: Int?; let profiles: [Profile] }
-        var body = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let r = body.range(of: #"```(?:json)?\s*\n[\s\S]*?```"#, options: .regularExpression) {
-            body = String(body[r]).replacingOccurrences(of: #"^```(?:json)?\s*\n"#, with: "", options: .regularExpression).replacingOccurrences(of: "```", with: "")
-        }
-        let data = Data(body.utf8)
-        let list: [Profile]
-        if let pack = try? JSONDecoder().decode(Pack.self, from: data) { list = pack.profiles }
-        else if let one = try? JSONDecoder().decode(Profile.self, from: data) { list = [one] }
-        else { throw NokError("That isn't a Nokcandu controller profile.") }
-        guard !list.isEmpty else { throw NokError("That isn't a Nokcandu controller profile.") }
-        var ids: [String: String] = [:]
-        for q in list { ids[q.id] = UUID().uuidString }
-        var names = Set(existing.map(\.name))
-        return list.map { q in
-            var c = q
-            c.id = ids[q.id]!
-            c.buildsOn = q.buildsOn.compactMap { b in ids[b] ?? (existing.contains { $0.id == b } ? b : nil) }
-            var n = q.name, i = 2
-            while names.contains(n) { n = "\(q.name) (\(i))"; i += 1 }
-            c.name = n; names.insert(n)
-            return c
-        }
+        merge([try parseShared(text)], existing: existing, skipIdentical: false).added
     }
 
     // MARK: Ready-made profiles to start from

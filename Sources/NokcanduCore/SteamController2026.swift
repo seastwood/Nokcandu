@@ -84,9 +84,10 @@ public enum SteamController2026 {
 
     // MARK: Reports out
 
-    /// Feature report 1: desktop mode ("lizard mode") off and raw motion on, as SDL sends it. 65 bytes.
+    /// Feature report 1: desktop mode ("lizard mode") off and raw motion on, as SDL sends it: 64 bytes with the
+    /// report number (SDL's buffer is HID_FEATURE_REPORT_BYTES long and starts with it).
     public static var keepAlive: [UInt8] {
-        var bytes = [UInt8](repeating: 0, count: 65)
+        var bytes = [UInt8](repeating: 0, count: 64)
         bytes[0] = 1
         bytes[1] = 0x87; bytes[2] = 6                     // set settings: two of three bytes
         bytes[3] = 9; bytes[4] = 0; bytes[5] = 0          // lizard mode off

@@ -164,7 +164,6 @@ final class DesktopPad: ObservableObject {
     /// (…/SharedSupport/GameApp/<Game>.app), or a Mac game.
     func game(for app: NSRunningApplication?) -> InstalledGame? {
         guard let url = app?.bundleURL?.resolvingSymlinksInPath() else { return nil }
-        let path = url.path
         if let wrapper = PadApplicationTarget.helperHost(url) {
             let host = wrapper.appendingPathComponent("Contents").standardizedFileURL
             let name = url.deletingPathExtension().lastPathComponent

@@ -151,7 +151,7 @@ struct ProfilesView: View {
             if selectedGroup == nil { selectedGroup = groups.first?.id }
             return
         }
-        selectedGroup = Profiles.groupKey(e.profile)
+        selectedGroup = Profiles.group(of: e, in: Profiles.groups(store.entries))?.id
         if detail == nil { detail = e }
     }
 
@@ -174,7 +174,7 @@ struct ProfilesView: View {
         }
         tab = "community"
         query = ""
-        selectedGroup = Profiles.groupKey(e.profile)
+        selectedGroup = Profiles.group(of: e, in: Profiles.groups(store.entries))?.id
         detail = e
     }
 

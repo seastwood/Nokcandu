@@ -31,6 +31,7 @@ Works system-wide. Using a profile outside Nokcandu's own games needs Accessibil
 - **Where a profile applies:** per game, per Mac app, per stream, per connected controller, or **Use Everywhere** from the menu bar. One switch turns it all off.
 - **Keyboard layouts** remap keys (including fn/Globe) for games and streams the same way.
 - Live test, Quick Setup, undo and redo, profiles that build on each other, and sharing a profile as a file or text.
+- Export every controller profile as one zip, a file per profile, to back them up or move them. Drop the zip, or any one file from it, on Nokcandu to bring them in.
 
 ## Streams
 

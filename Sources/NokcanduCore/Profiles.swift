@@ -221,16 +221,57 @@ public enum Profiles {
         public var title: String { switch self { case .liked: "Most liked"; case .recent: "Recently updated"; case .name: "A–Z" } }
     }
 
-    public static func groupKey(_ p: GameProfile) -> String {
-        if let id = p.match.steamAppID { return "steam:\(id)" }
-        if let u = p.match.battleNetUID { return "bnet:\(u.lowercased())" }
-        return "exe:" + (p.match.exeName ?? p.title).lowercased()
+    /// The keys that tie a profile to a game: its Steam app or Battle.net game, or otherwise both its title and the
+    /// program it starts. Profiles sharing any key are the same game, so a game with two programs (Battlefield 2's
+    /// BF2.exe and bf2hub.exe) and a game people name differently (same program) each stay one row. Program names
+    /// many games use ("game.exe", "launcher.exe") say nothing about which game it is, so those go by title alone.
+    static func groupKeys(_ p: GameProfile) -> [String] {
+        if let id = p.match.steamAppID { return ["steam:\(id)"] }
+        if let u = p.match.battleNetUID { return ["bnet:\(u.lowercased())"] }
+        var keys: [String] = []
+        if let exe = p.match.exeName?.trimmingCharacters(in: .whitespaces).lowercased(), !exe.isEmpty, !commonProgramNames.contains(exe) { keys.append("exe:" + exe) }
+        let title = titleKey(p.title)
+        if !title.isEmpty { keys.append("title:" + title) }
+        return keys.isEmpty ? ["title:"] : keys
+    }
+    static let commonProgramNames: Set<String> = ["game.exe", "launcher.exe", "start.exe", "play.exe", "main.exe", "setup.exe", "run.exe", "client.exe", "app.exe"]
+    /// A title for comparing: case, punctuation, spacing and ™/® don't make it a different game.
+    static func titleKey(_ title: String) -> String {
+        cleanTitle(title).lowercased().replacingOccurrences(of: "[™®©]", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "[^\\p{L}\\p{N}]+", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces)
+    }
+    /// A title as it should read: some game names arrive with characters written out as "\\x2122" (™).
+    public static func cleanTitle(_ title: String) -> String {
+        guard title.contains("\\x"), let re = try? NSRegularExpression(pattern: "\\\\x([0-9A-Fa-f]{4})") else { return title }
+        var out = title
+        for m in re.matches(in: title, range: NSRange(title.startIndex..., in: title)).reversed() {
+            guard let whole = Range(m.range, in: out), let hex = Range(m.range(at: 1), in: title),
+                  let v = UInt32(title[hex], radix: 16), let scalar = Unicode.Scalar(v) else { continue }
+            out.replaceSubrange(whole, with: String(Character(scalar)))
+        }
+        return out
+    }
+    /// The row a profile is in.
+    public static func group(of entry: CatalogEntry, in groups: [ProfileGroup]) -> ProfileGroup? {
+        groups.first { $0.entries.contains { $0.number == entry.number } }
     }
 
     /// Profiles grouped by game. Within a game: most 👍 first, then most recently updated; reported-broken last.
     public static func groups(_ entries: [CatalogEntry], sort: Sort = .liked) -> [ProfileGroup] {
-        let byKey = Dictionary(grouping: entries, by: { groupKey($0.profile) })
-        var out: [ProfileGroup] = byKey.map { key, list in
+        // Entries sharing any key are joined (and so on through what those share).
+        var parent = Array(entries.indices)
+        func root(_ i: Int) -> Int { var i = i; while parent[i] != i { parent[i] = parent[parent[i]]; i = parent[i] }; return i }
+        var firstWith: [String: Int] = [:]
+        for (i, e) in entries.enumerated() {
+            for key in groupKeys(e.profile) {
+                if let j = firstWith[key] { parent[root(i)] = root(j) } else { firstWith[key] = i }
+            }
+        }
+        var members: [Int: [CatalogEntry]] = [:]
+        for (i, e) in entries.enumerated() { members[root(i), default: []].append(e) }
+        var out: [ProfileGroup] = members.values.map { list in
+            // The same id however the catalog is ordered: the first of the group's keys.
+            let key = list.flatMap { groupKeys($0.profile) }.min() ?? ""
             let sorted = list.sorted {
                 if $0.reportedBroken != $1.reportedBroken { return !$0.reportedBroken }
                 if $0.score != $1.score { return $0.score > $1.score }
@@ -239,7 +280,7 @@ public enum Profiles {
             // The title most profiles use (people type names differently).
             let titles = Dictionary(grouping: list.map(\.profile.title), by: { $0 }).max { a, b in
                 a.value.count != b.value.count ? a.value.count < b.value.count : a.key > b.key }?.key ?? sorted[0].profile.title
-            return ProfileGroup(id: key, title: titles, source: sorted[0].profile.source, entries: sorted,
+            return ProfileGroup(id: key, title: cleanTitle(titles), source: sorted[0].profile.source, entries: sorted,
                                 steamAppID: sorted[0].profile.match.steamAppID)
         }
         switch sort {
@@ -272,6 +313,7 @@ public enum Profiles {
 
     static func decode(_ data: Data) -> [CatalogEntry]? {
         (try? JSONDecoder().decode(Catalog.self, from: data))?.profiles.filter { $0.profile.problems.isEmpty }
+            .map { var e = $0; e.profile.title = cleanTitle(e.profile.title); return e }
     }
 
     public static func cached() -> [CatalogEntry] {

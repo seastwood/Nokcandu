@@ -123,7 +123,7 @@ final class XInputUSB: @unchecked Sendable {
         var gipDecoder = GIPController.Decoder()
         var last: (Set<PadProfiles.Input>, [Int: Int])?
         while true {
-            let data = NSMutableData(length: 32)!
+            let data = NSMutableData(length: 64)!         // a whole packet: newer Xbox controllers send more than 32 bytes
             var n = 0
             do { try inPipe.__sendIORequest(with: data, bytesTransferred: &n, completionTimeout: 0) }
             catch { break }                              // unplugged
@@ -155,7 +155,7 @@ final class XInputUSB: @unchecked Sendable {
         send(XInputController.Wireless.presence)
         var last: (Set<PadProfiles.Input>, [Int: Int])?
         while true {
-            let data = NSMutableData(length: 32)!
+            let data = NSMutableData(length: 64)!         // a whole packet: newer Xbox controllers send more than 32 bytes
             var n = 0
             do { try inPipe.__sendIORequest(with: data, bytesTransferred: &n, completionTimeout: 0) }
             catch { break }                              // receiver unplugged

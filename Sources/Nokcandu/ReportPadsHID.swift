@@ -42,9 +42,29 @@ final class ReportPadsHID {
             MainActor.assumeIsolated { ReportPadsHID.shared.report(report, id: id) }
         }, UnsafeMutableRawPointer(bitPattern: UInt(id)))
         // Nothing is sent to a controller macOS's own support or a profile's own device reads: a mode switch
-        // would take it from them.
-        if let info = HIDDevices.shared.connected.first(where: { $0.id == id }),
-           info.gamepad || MappedGamepads.shared.excluded.contains(where: { !$0.isGamepad && info.matches($0) }) { return }
+        // would take it from them. macOS's support can connect a controller a moment after its device appears, so
+        // the start-up waits for that before it decides.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [self] in startUp(id) }
+    }
+    /// macOS's own controller support reads it, or a profile reads it as its own device: it isn't read here.
+    private func leftAlone(_ id: UInt64) -> Bool {
+        guard let info = HIDDevices.shared.connected.first(where: { $0.id == id }) else { return false }
+        return info.gamepad || MappedGamepads.shared.excluded.contains { !$0.isGamepad && info.matches($0) }
+    }
+    /// Devices found to be someone else's (leftAlone), so their reports are skipped without decoding them.
+    private var left: Set<UInt64> = []
+    /// The devices changed (MappedGamepads.refresh): macOS's support may have connected a controller after its
+    /// first reports were read here, or a profile may have taken a device as its own. Those are given up.
+    func recheck() {
+        left = []
+        for id in claimed.filter({ leftAlone($0) }) {
+            claimed.remove(id)
+            MappedGamepads.shared.publish("report:\(id)", name: "", buttons: nil, axes: [:])
+            ControllerLog.add("Controller: \(pads[id]?.decoder.name ?? "controller") left to macOS's controller support or a profile")
+        }
+    }
+    private func startUp(_ id: UInt64) {
+        guard let d = pads[id]?.device, let driver = pads[id]?.decoder.driver, !leftAlone(id) else { return }
         if let out = driver.startOutput { HIDOutput.send(out, to: d) }
         for out in pads[id]?.decoder.start() ?? [] { Self.send(out, to: d) }
         // Reading this feature report is what switches some controllers to their full report (as SDL does).
@@ -60,12 +80,12 @@ final class ReportPadsHID {
             MappedGamepads.shared.publish("report:\(id)", name: "", buttons: nil, axes: [:])
             ControllerLog.add("Controller: \(pads[id]?.decoder.name ?? "controller") disconnected")
         }
-        pads[id] = nil
+        pads[id] = nil; left.remove(id)
         buffers.removeValue(forKey: id)?.deallocate()
         MappedGamepads.shared.refresh()
     }
     private func report(_ bytes: [UInt8], id: UInt64) {
-        guard var pad = pads[id] else { return }
+        guard !left.contains(id), var pad = pads[id] else { return }
         let s = pad.decoder.decode(bytes)
         let replies = pad.decoder.takeOutputs()
         pads[id] = pad
@@ -74,8 +94,7 @@ final class ReportPadsHID {
         let name = pad.decoder.name
         if !claimed.contains(id) {
             // Left to macOS's own controller support, or to a profile that reads it as its own device.
-            if let info = HIDDevices.shared.connected.first(where: { $0.id == id }),
-               info.gamepad || MappedGamepads.shared.excluded.contains(where: { !$0.isGamepad && info.matches($0) }) { return }
+            if leftAlone(id) { left.insert(id); return }
             claimed.insert(id)
             ControllerLog.add("Controller: \(name) read with its own report\(s.gyro == nil ? "" : " (gyro on)")")
             MappedGamepads.shared.refresh()

@@ -69,7 +69,7 @@ xcrun clang -arch arm64 -arch x86_64 -mmacosx-version-min=11.0 -O2 -Wall -Wextra
 # specific to one architecture.
 HELPER_BUILD="$( { cat Resources/rawmouse/*.[cmh] Sources/NokcanduPadEngine/padengine.c Sources/NokcanduPadEngine/include/padengine.h; printf '%s' 'macos11-universal-O2-v1'; } | shasum -a 256 | cut -d' ' -f1)"
 printf '%s\n' "$HELPER_BUILD" > "$APP/Contents/Resources/helper-build.txt"
-xcrun clang -arch x86_64 -arch arm64 -mmacosx-version-min=11.0 -dynamiclib -fobjc-arc -O2 -Wall \
+xcrun clang -arch x86_64 -arch arm64 -mmacosx-version-min=11.0 -dynamiclib -fobjc-arc -O2 -Wall -DGL_SILENCE_DEPRECATION \
   -framework AppKit -framework GameController -framework CoreGraphics -framework IOKit -framework OpenGL \
   -framework AudioToolbox -framework CoreAudio \
   -ISources/NokcanduPadEngine/include \

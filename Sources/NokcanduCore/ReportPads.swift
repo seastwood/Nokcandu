@@ -114,7 +114,7 @@ public struct ReportPadDecoder {
 
     public mutating func decode(_ d: [UInt8]) -> ReportPadState? {
         switch driver {
-        case .eightBitDo: return EightBitDoController.decode(d)
+        case .eightBitDo(let p): return EightBitDoController.decode(d, product: p)
         case .stadia: return Self.stadia(d)
         case .lunaUSB: return d.count == 10 ? Self.lunaUSB(d) : nil
         case .lunaBluetooth:

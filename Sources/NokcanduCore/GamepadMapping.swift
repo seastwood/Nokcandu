@@ -149,7 +149,8 @@ public struct GamepadMapping: Sendable, Equatable {
         for (i, n) in ["leftx", "lefty", "rightx", "righty"].enumerated() where i < axes { parts.append("\(n):a\(i)") }
         if hat { parts += ["dpup:h0.1", "dpright:h0.2", "dpdown:h0.4", "dpleft:h0.8"] }
         let guid = String(format: "03000000%02x%02x0000%02x%02x000000000000", vendor & 255, vendor >> 8 & 255, product & 255, product >> 8 & 255)
-        return GamepadMapping(line: "\(guid),\(name) (guessed layout),\(parts.joined(separator: ","))")
+        // (A comma in the device's name would split the line.)
+        return GamepadMapping(line: "\(guid),\(name.replacingOccurrences(of: ",", with: " ")) (guessed layout),\(parts.joined(separator: ","))")
     }
     public static func find(vendor: Int, product: Int, version: Int? = nil, in db: [Int: [GamepadMapping]] = database) -> GamepadMapping? {
         guard let list = db[vendor << 16 | product] else { return nil }

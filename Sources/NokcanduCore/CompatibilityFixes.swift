@@ -332,7 +332,7 @@ public enum CompatibilityFixes {
         let upgrading = needsUpdate(fix, for: g)
         if isInstalled(fix, for: g) && !upgrading { throw NokError("This fix already has an installation record. Undo it before installing again.") }
         if let reason = unavailable(fix, for: g) { throw NokError(reason) }
-        guard var c = g.custom, let exe = program(g) else { throw NokError("Choose the game's program first.") }
+        guard var c = g.custom, program(g) != nil else { throw NokError("Choose the game's program first.") }
         let oldState = upgrading ? state(fix, g) : nil
         if let oldState {
             guard oldState.executable == c.exe else { throw NokError("The program changed. Undo the old IPX fix first.") }

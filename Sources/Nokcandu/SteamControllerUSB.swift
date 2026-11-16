@@ -1,6 +1,6 @@
 import Foundation
 import AppKit
-import IOKit.hid
+@preconcurrency import IOKit.hid
 import NokcanduCore
 
 /// Original wired/receiver Steam Controller source. Takes a verified, reversible volatile

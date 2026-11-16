@@ -55,7 +55,7 @@ struct FixesSection: View {
 
     func install(zips: [CinematicFix.Arch: URL] = [:]) {
         working = true; log = []
-        let g = game, l = logger
+        let g = game
         model.changeSetting(for: g, title: "Video Playback Fix", success: "Cinematic fix installed.", change: .cinematic(undo: false, zips: Dictionary(uniqueKeysWithValues: zips.map { ($0.key.rawValue, $0.value.path) })), completion: { _ in working = false; present = CinematicFix.isPresent(for: g) })
     }
 
@@ -74,7 +74,7 @@ struct FixesSection: View {
 
     func undo() {
         working = true; log = []
-        let g = game, l = logger
+        let g = game
         model.changeSetting(for: g, title: "Video Playback Fix", success: "Cinematic fix removed.", change: .cinematic(undo: true, zips: [:]), completion: { _ in working = false; present = CinematicFix.isPresent(for: g) })
     }
 }
@@ -223,7 +223,6 @@ private struct ComponentFixesView: View {
     func run(_ fix: CompatibilityFix, update: Bool = false) {
         working = fix; status = ""
         let undo = installed.contains(fix.id) && !update, g = game
-        let logger: @Sendable (String) -> Void = { line in Task { @MainActor in status = line } }
         model.changeSetting(for: g, title: fix.title, success: undo ? "Removed \(fix.title)." : "Installed \(fix.title).", change: .compatibility(fix, undo: undo), completion: { _ in reload(); working = nil })
     }
 }

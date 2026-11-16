@@ -72,6 +72,8 @@ struct ProfilesSidebar: View {
                     Divider()
                     Button("Import from File…") { ProfileActions.importFile(model: model) }
                     Button("Paste Shared Profile") { ProfileActions.importText(NSPasteboard.general.string(forType: .string) ?? "", model: model) }
+                    Divider()
+                    Button("Export All Controller Profiles…") { ProfileActions.exportAll(model: model) }.disabled(pads.isEmpty)
                 } label: { Label("New Controller Profile", systemImage: "plus.circle") }
                 // Both rows are menus of the same style, so they line up exactly.
                 Menu {
@@ -132,6 +134,9 @@ struct ProfilesSidebar: View {
         Button("Rename…") { renameText = p.name; renaming = "pad:" + p.id }
         Button("Duplicate") { ProfileActions.duplicate(p, model: model) }
         Divider()
+        Button("Save as File…") { ProfileActions.export(p, model: model) }
+        Button("Export All Controller Profiles…") { ProfileActions.exportAll(model: model) }
+        Divider()
         Button("Delete", role: .destructive) { ProfileActions.delete(p, model: model); model.profileSelection = "mac" }
     }
 
@@ -148,7 +153,7 @@ struct ProfilesSidebar: View {
             var n = l.name + " copy", i = 2
             while names.contains(n) { n = "\(l.name) copy \(i)"; i += 1 }
             let c = KeyRemap.Layout(name: n, mappings: l.mappings)
-            try? KeyRemap.store(c, environments: [])
+            _ = try? KeyRemap.store(c, environments: [])
             load(); model.profileSelection = "keys:" + c.id
         }
         Divider()
@@ -168,7 +173,7 @@ struct ProfilesSidebar: View {
             catch { model.fail(error); return }
         } else if id.hasPrefix("keys:"), var l = layouts.first(where: { $0.id == String(id.dropFirst(5)) }) {
             l.name = n
-            try? KeyRemap.store(l, environments: [])
+            _ = try? KeyRemap.store(l, environments: [])
         }
         renaming = nil
         NotificationCenter.default.post(name: .padProfilesChanged, object: nil)
@@ -209,7 +214,7 @@ struct ProfilesSidebar: View {
         var n = base, i = 2
         while layouts.contains(where: { $0.name == n }) { n = "\(base) \(i)"; i += 1 }
         let l = KeyRemap.Layout(name: n, mappings: source?.mappings ?? [])
-        try? KeyRemap.store(l, environments: [])
+        _ = try? KeyRemap.store(l, environments: [])
         load()
         model.profileSelection = "keys:" + l.id
     }
@@ -248,20 +253,56 @@ enum ProfileActions {
         do { try Data(PadProfiles.exportText(p, all: PadProfiles.profiles()).utf8).write(to: url, options: .atomic); model.say("Saved \(p.name) as \(url.lastPathComponent).") }
         catch { model.fail(error) }
     }
+    /// Every controller profile, one file each, in a zip: a backup, or to move or share them all at once.
+    @MainActor static func exportAll(model: AppModel) {
+        PadProfileEdits.shared.flushAll()
+        let all = PadProfiles.profiles()
+        guard !all.isEmpty else { model.say("There are no controller profiles to export yet."); return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = PadProfiles.archiveName
+        panel.allowedContentTypes = [.zip]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try PadProfiles.exportArchive(all, all: all, to: url)
+            model.say("Saved \(all.count) controller profile\(all.count == 1 ? "" : "s") in \(url.lastPathComponent). To bring them back, or into Nokcandu on another Mac, drop the zip (or any one file from it) on Nokcandu.")
+        } catch { model.fail(error) }
+    }
     @MainActor static func importFile(model: AppModel) {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.json, .plainText]
-        guard panel.runModal() == .OK, let url = panel.url, let text = try? String(contentsOf: url, encoding: .utf8) else { return }
-        importText(text, model: model)
+        panel.allowedContentTypes = [.json, .plainText, .zip]
+        panel.allowsMultipleSelection = true
+        panel.message = "Choose controller profile files, or a zip of them."
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        importFiles(panel.urls, model: model)
+    }
+    /// Profile files, zips of them or folders of them (chosen, or dropped on the window).
+    @MainActor static func importFiles(_ urls: [URL], model: AppModel) {
+        PadProfileEdits.shared.flushAll()
+        do { finishImport(try PadProfiles.importFiles(urls, existing: PadProfiles.profiles()), model: model) }
+        catch { model.fail(error) }
     }
     @MainActor static func importText(_ text: String, model: AppModel) {
         PadProfileEdits.shared.flushAll()
         do {
-            let new = try PadProfiles.importText(text, existing: PadProfiles.profiles())
-            for p in new { try PadProfiles.store(p, environments: []) }
-            NotificationCenter.default.post(name: .padProfilesChanged, object: nil)
-            if let last = new.last { model.profileSelection = "pad:" + last.id; model.say("Added \(last.name).") }
+            let merged = PadProfiles.merge([try PadProfiles.parseShared(text)], existing: PadProfiles.profiles(), skipIdentical: true)
+            finishImport(PadProfiles.Imported(added: merged.added, alreadyHere: merged.alreadyHere), model: model)
         } catch { model.fail(error) }
+    }
+    @MainActor private static func finishImport(_ result: PadProfiles.Imported, model: AppModel) {
+        do {
+            for p in result.added { try PadProfiles.store(p, environments: []) }
+        } catch { model.fail(error); return }
+        if !result.added.isEmpty { NotificationCenter.default.post(name: .padProfilesChanged, object: nil) }
+        if let last = result.added.last { model.profileSelection = "pad:" + last.id }
+        var parts: [String] = []
+        if result.added.count == 1 { parts.append("Added \(result.added[0].name).") }
+        else if result.added.count > 1 { parts.append("Added \(result.added.count) controller profiles.") }
+        if !result.alreadyHere.isEmpty {
+            parts.append(result.alreadyHere.count == 1 ? "\(result.alreadyHere[0]) is already here, unchanged." : "\(result.alreadyHere.count) are already here, unchanged.")
+        }
+        if !result.unreadable.isEmpty { parts.append("Not controller profiles: \(result.unreadable.joined(separator: ", ")).") }
+        if result.added.isEmpty && result.alreadyHere.isEmpty { model.fail(NokError("That isn't a Nokcandu controller profile.")) }
+        else { model.say(parts.joined(separator: " ")) }
     }
     @MainActor static func setDefault(_ p: PadProfiles.Profile?, model: AppModel) {
         PadProfileEdits.shared.flushAll()
@@ -450,7 +491,7 @@ struct KeyLayoutPage: View {
         }
         .formStyle(.grouped)
         .onChange(of: layout) { _, l in
-            try? KeyRemap.store(l, environments: KeyRemap.environments(model.games), shared: KeyRemap.sharedFolders(model.games))
+            _ = try? KeyRemap.store(l, environments: KeyRemap.environments(model.games), shared: KeyRemap.sharedFolders(model.games))
             NotificationCenter.default.post(name: .padProfilesChanged, object: nil)
         }
     }

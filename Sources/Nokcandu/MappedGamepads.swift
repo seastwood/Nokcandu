@@ -80,6 +80,7 @@ final class MappedGamepads {
     }
 
     func refresh() {
+        ReportPadsHID.shared.recheck()
         let now = HIDDevices.shared.connected.filter { info in
             !info.gamepad && !excluded.contains { !$0.isGamepad && info.matches($0) }
                 && !(info.vendorID == Switch2Controller.vendor && Switch2Controller.products.contains(info.productID))

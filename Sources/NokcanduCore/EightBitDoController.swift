@@ -22,22 +22,24 @@ public enum EightBitDoController {
 
     public typealias State = ReportPadState
 
-    public static func decode(_ d: [UInt8]) -> State? {
+    public static func decode(_ d: [UInt8], product: Int = 0) -> State? {
         if d.count == 9 { return old(d) }
         guard d.count >= 10, [0x01, 0x03, 0x04].contains(d[0]) else { return nil }
         var held = hat(d[1])
         let bits: [(UInt8, PadProfiles.Input)] = [(0x01, .a), (0x02, .b), (0x08, .x), (0x10, .y), (0x40, .lb), (0x80, .rb)]
         for (b, input) in bits where d[8] & b != 0 { held.insert(input) }
-        // The two back buttons: PL/PR on the Pro 2/3 and Ultimate 2, L4/R4 on the others.
-        if d[8] & 0x20 != 0 { held.insert(.paddle2) }
-        if d[8] & 0x04 != 0 { held.insert(.paddle1) }
+        // The two back buttons: PL (0x20) and PR (0x04) on the Pro 2/3 and Ultimate 2/3. The Ultimate 2C has
+        // them the other way round, as L4 (0x04) and R4 (0x20), in SDL's driver.
+        let leftBack: UInt8 = product == 0x301B ? 0x04 : 0x20, rightBack: UInt8 = product == 0x301B ? 0x20 : 0x04
+        if d[8] & leftBack != 0 { held.insert(.paddle2) }
+        if d[8] & rightBack != 0 { held.insert(.paddle1) }
         let bits9: [(UInt8, PadProfiles.Input)] = [(0x10, .guide), (0x04, .back), (0x08, .start), (0x20, .ls), (0x40, .rs), (0x80, .misc)]
         for (b, input) in bits9 where d[9] & b != 0 { held.insert(input) }
         if d.count > 10 {
             if d[10] & 0x01 != 0 { held.insert(.paddle4) }
             if d[10] & 0x02 != 0 { held.insert(.paddle3) }
         }
-        var axes = [0: stick(d[2]), 1: stick(d[3]), 2: stick(d[4]), 3: stick(d[5]),
+        let axes = [0: stick(d[2]), 1: stick(d[3]), 2: stick(d[4]), 3: stick(d[5]),
                     4: Int(d[7]) * 32767 / 255, 5: Int(d[6]) * 32767 / 255]
         var gyro: [Float]?, accel: [Float]?
         if d.count >= 27 {

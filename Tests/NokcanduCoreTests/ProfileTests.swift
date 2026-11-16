@@ -83,6 +83,31 @@ final class ProfileGroupTests: XCTestCase {
         XCTAssertEqual(g[0].entries.map(\.number), [2, 1, 3])
         XCTAssertEqual(Profiles.groups(g.flatMap(\.entries), sort: .recent).first?.title, "Portal")
     }
+
+    func other(_ n: Int, _ title: String, exe: String?, source: String = "folder") -> CatalogEntry {
+        CatalogEntry(number: n, url: URL(string: "https://x/\(n)")!, author: "a", up: 0, down: 0, comments: 0, updated: "2026-10-01T00:00:00Z",
+                     profile: GameProfile(title: title, match: .init(exeName: exe), source: source, install: nil, graphics: nil, arguments: nil,
+                                          environment: nil, rawMouse: nil, performance: nil, fixes: nil, rating: .works, tested: nil, notes: nil))
+    }
+    /// One game, one row: whether its profiles start different programs or name it differently.
+    func testOneRowPerGame() {
+        let entries = [
+            other(20, "Battlefield 2", exe: "BF2.exe"), other(21, "Battlefield 2", exe: "bf2hub.exe"),
+            other(22, "Battlefield 1942 (Moongamers)", exe: "BF1942.exe"),
+            other(30, "Warcraft III", exe: "war3.exe"), other(31, "WC3: Reign of Chaos", exe: "War3.exe"),
+            other(40, "Alpha", exe: "game.exe"), other(41, "Beta", exe: "Game.exe"),
+            other(50, "Battlefield: Bad Company\\x2122 2", exe: "BFBC2Game.exe"), other(51, "battlefield bad company™ 2", exe: nil),
+        ]
+        let g = Profiles.groups(entries, sort: .name)
+        XCTAssertEqual(g.map { $0.entries.map(\.number).sorted() }.sorted { $0[0] < $1[0] }, [[20, 21], [22], [30, 31], [40], [41], [50, 51]])
+        XCTAssertEqual(Set(g.map(\.id)).count, g.count)
+        let bf2 = try! XCTUnwrap(Profiles.group(of: entries[1], in: g))
+        XCTAssertEqual(bf2.title, "Battlefield 2"); XCTAssertEqual(bf2.entries.count, 2)
+        // The same rows and ids whatever order the catalog comes in.
+        XCTAssertEqual(Set(Profiles.groups(entries.reversed(), sort: .name).map(\.id)), Set(g.map(\.id)))
+        XCTAssertEqual(Profiles.cleanTitle("Battlefield: Bad Company\\x2122 2"), "Battlefield: Bad Company™ 2")
+        XCTAssertEqual(Profiles.cleanTitle("Plain"), "Plain")
+    }
 }
 
 final class MyProfilesTests: XCTestCase {

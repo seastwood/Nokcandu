@@ -403,7 +403,7 @@ final class StreamVideoDecoder: @unchecked Sendable {
         for (k, s) in starts.enumerated() {
             let end = k + 1 < starts.count ? starts[k + 1] : n
             let len = UInt32(end - s - 4).bigEndian
-            withUnsafeBytes(of: len) { memcpy(p + s, $0.baseAddress!, 4) }
+            _ = withUnsafeBytes(of: len) { memcpy(p + s, $0.baseAddress!, 4) }
         }
         return true
     }

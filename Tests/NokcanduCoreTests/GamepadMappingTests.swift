@@ -39,5 +39,9 @@ final class GamepadMappingTests: XCTestCase {
         var b = [Bool](repeating: false, count: 10); b[9] = true
         XCTAssertEqual(m.state(buttons: b, axes: [0, 0], hat: 4).buttons, [.start, .down])
         XCTAssertNil(GamepadMapping.guessed(vendor: 1, product: 1, name: "x", buttons: 2, axes: 2, hat: false))
+        // A comma in the device's name doesn't break the mapping.
+        let c = try! XCTUnwrap(GamepadMapping.guessed(vendor: 0x1234, product: 0xabcd, name: "ACME, Inc. Pad", buttons: 10, axes: 2, hat: true))
+        XCTAssertEqual(c.name, "ACME  Inc. Pad (guessed layout)")
+        XCTAssertEqual(c.state(buttons: b, axes: [0, 0], hat: 4).buttons, [.start, .down])
     }
 }

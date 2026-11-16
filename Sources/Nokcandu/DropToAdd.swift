@@ -11,6 +11,7 @@ enum DropToAdd {
         case gameFolder(URL)
         case folderOfGames(URL)            // a folder holding several game folders
         case nokcanduGames([URL])          // folders holding Nokcandu game apps
+        case controllerProfiles([URL])     // profile files (.nokpad.json), a zip of them, or a folder of them
         case unknown(String)
     }
 
@@ -20,6 +21,7 @@ enum DropToAdd {
         let fm = FileManager.default
         guard !urls.isEmpty else { return .unknown("Nothing to add.") }
         let ext = Set(urls.map { $0.pathExtension.lowercased() })
+        if urls.allSatisfy(holdsControllerProfiles) { return .controllerProfiles(urls) }
         if ext.isSubset(of: discTypes) { return .discs(Discs.sorted(urls)) }
         if urls.count == 1, ["exe", "msi"].contains(urls[0].pathExtension.lowercased()) { return .installer(urls[0]) }
         if urls.allSatisfy({ $0.pathExtension == "app" && GameLibrary.inspect($0) != nil }) {
@@ -31,7 +33,17 @@ enum DropToAdd {
             if !FolderOfGames.hasOwnProgram(urls[0]), FolderOfGames.scan(urls[0]).count > 1 { return .folderOfGames(urls[0]) }
             return .gameFolder(urls[0])
         }
-        return .unknown("Drop a setup program (.exe or .msi), disc images, a game folder, or games made with Nokcandu.")
+        return .unknown("Drop a setup program (.exe or .msi), disc images, a game folder, games made with Nokcandu, or controller profiles (their files or a zip of them).")
+    }
+    /// A controller profile file, a zip with profile files in it, or a folder with them directly in it.
+    static func holdsControllerProfiles(_ u: URL) -> Bool {
+        let name = u.lastPathComponent.lowercased()
+        if FileManager.default.isDirectory(u) { return PadProfiles.folderHasProfiles(u) }
+        if name.hasSuffix(PadProfiles.fileSuffix) { return true }
+        if u.pathExtension.lowercased() == "zip" { return PadProfiles.archiveHasProfiles(u) }
+        if u.pathExtension.lowercased() == "json", let size = (try? u.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size <= 16 << 20,
+           let text = try? String(contentsOf: u, encoding: .utf8) { return PadProfiles.isProfileText(text) }
+        return false
     }
 
     /// A name for the new game from what was dropped ("setup.exe" in "Age of Empires II" → "Age of Empires II").

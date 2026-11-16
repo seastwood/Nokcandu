@@ -132,7 +132,6 @@ public enum GamesVolume {
     /// Removes a games volume that holds no games: closes it, stops opening it automatically, forgets its library
     /// folder and moves the image to the Trash (so it can still be recovered until the Trash is emptied).
     public static func remove(_ image: URL, library: [InstalledGame]) throws {
-        let fm = FileManager.default
         let mount = attachedImages()[image.standardizedFileURL.path]
         if let mount {
             let inside = library.filter { $0.appURL.resolvingSymlinksInPath().path.hasPrefix(mount.resolvingSymlinksInPath().path + "/")

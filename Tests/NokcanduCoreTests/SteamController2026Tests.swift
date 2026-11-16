@@ -74,7 +74,7 @@ final class SteamController2026Tests: XCTestCase {
 
     func testReportsOut() {
         let k = SteamController2026.keepAlive
-        XCTAssertEqual(k.count, 65)
+        XCTAssertEqual(k.count, 64)
         XCTAssertEqual(Array(k.prefix(9)), [1, 0x87, 6, 9, 0, 0, 48, 0x18, 0])
         let original = try! XCTUnwrap(SteamControllerHaptics.pulse(side: 0, strength: 1))
         XCTAssertEqual(SteamController2026.pulse(fromOriginal: original), [0x81] + Array(original[2..<9]))

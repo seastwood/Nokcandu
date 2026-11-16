@@ -157,7 +157,7 @@ public enum RawMouse {
             try? NokPaths.ensure(folder(h))
             if (try? String(contentsOf: routeFile, encoding: .utf8)) != routeText { try? Data(routeText.utf8).write(to: routeFile, options: .atomic) }
             try? fm.createDirectory(at: folder(h), withIntermediateDirectories: true)
-            try? ensureLibrary(contents: h)
+            _ = try? ensureLibrary(contents: h)
             _ = try? ensureScreenTool(contents: h)
             let text = m.sorted { $0.key < $1.key }.map { "\($0.key)\t\($0.value)" }.joined(separator: "\n") + "\n"
             if !fm.fileExists(atPath: chosen(h).path) {

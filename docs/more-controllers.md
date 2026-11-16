@@ -28,6 +28,23 @@ its own device ("Add Device"), is left alone.
 `ReportPadsHID` takes a controller from the generic mapping only once a report it understands arrives, so a
 controller in some other mode keeps working as a mapped one.
 
+macOS's controller support can connect a controller a moment after its HID device appears. So `ReportPadsHID`
+waits a second before it sends a controller's start-up (mode switch, feature read, the Wii conversation), and
+whenever the devices change it gives up any controller macOS has since taken (`recheck`); such a controller's
+reports are then skipped without being decoded. (Review, November 16, 2026: before this a controller claimed in
+that moment stayed claimed and would have been read twice. Not observed on hardware.) "macOS reads it" is decided
+by the HID product name matching the `GCController`'s name (`HIDDevices.renumber`): a controller whose two names
+differ would be read by both. Unverified for the DualShock 4 — check its lines in Controllers.log.
+
+Every decoder, start-up command and rumble report was then compared with SDL's source line by line (November 16,
+2026). Two differences were found and corrected: the 8BitDo Ultimate 2C's two back buttons were swapped (SDL reads
+them as L4 0x04 / R4 0x20, the other models as PL 0x20 / PR 0x04), and the Steam Controller (2026) keep-alive was
+65 bytes where SDL sends 64 including the report number. Everything else matched; `ControllerDriverLayoutTests`
+holds the checks. Still unverified on hardware.
+
+`XInputUSB` reads 64 bytes at a time (a whole packet): with the earlier 32, a longer GIP message would have ended
+the read as if the controller had been unplugged.
+
 Rumble and motion are per controller: in a stream each player's controller gets the host's rumble for that player
 and sends its own gyro; at the desktop the profile's rumble goes to the controllers that feed it. Output reports go
 out on a queue of their own, so a slow Bluetooth controller never holds the app up. Not done: SHIELD (2017) rumble

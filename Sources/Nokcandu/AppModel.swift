@@ -281,6 +281,7 @@ final class AppModel: ObservableObject {
             let n = LibraryDiscovery.add(folders)
             refresh()
             say(n > 0 ? "Added the games in \(folders.map(\.lastPathComponent).joined(separator: ", ")). Nothing was copied." : "Those games are already in your library.")
+        case .controllerProfiles(let files): ProfileActions.importFiles(files, model: self)
         case .unknown(let why): fail(NokError(why))
         }
     }
