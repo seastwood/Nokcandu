@@ -53,3 +53,18 @@ final class Switch2ControllerTests: XCTestCase {
         XCTAssertEqual(Array(Switch2Controller.flashRead(0x13080)[12..<16]), [0x80, 0x30, 0x01, 0x00])
     }
 }
+
+final class XInputControllerTests: XCTestCase {
+    func testReports() {
+        var d = [UInt8](repeating: 0, count: 20); d[1] = 0x14
+        d[2] = 0x01 | 0x10; d[3] = 0x10 | 0x04; d[4] = 255; d[5] = 0
+        d[6] = 0xff; d[7] = 0x7f                       // left x full right
+        d[8] = 0x00; d[9] = 0x80                       // left y full down (−32768 up-positive)
+        let s = try! XCTUnwrap(XInputController.decode(d))
+        XCTAssertEqual(s.buttons, [.up, .start, .a, .guide])
+        XCTAssertEqual(s.axes[0], 32767); XCTAssertEqual(s.axes[1], 32767, "down is +y")
+        XCTAssertEqual(s.axes[4], 32767); XCTAssertEqual(s.axes[5], 0)
+        XCTAssertNil(XInputController.decode([0x01, 0x03, 0x06]))
+        XCTAssertEqual(XInputController.rumble(low: 10, high: 20), [0, 8, 0, 10, 20, 0, 0, 0])
+    }
+}

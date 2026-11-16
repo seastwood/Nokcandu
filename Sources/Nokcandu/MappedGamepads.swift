@@ -49,6 +49,7 @@ final class MappedGamepads {
         guard token == nil else { return }
         token = HIDDevices.shared.listen { [weak self] info, ev in self?.event(info, ev) }
         Switch2USB.shared.start()
+        XInputUSB.shared.start()
         observer = NotificationCenter.default.addObserver(forName: .hidDevicesChanged, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { MappedGamepads.shared.refresh() }
         }
