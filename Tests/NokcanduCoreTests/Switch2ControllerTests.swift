@@ -1,0 +1,55 @@
+import XCTest
+@testable import NokcanduCore
+
+/// Reports built to the layout in SDL's driver (SDL_hidapi_switch2.c).
+final class Switch2ControllerTests: XCTestCase {
+    private func report(_ set: [Int: UInt8] = [:], lx: Int = 2048, ly: Int = 2048, rx: Int = 2048, ry: Int = 2048) -> [UInt8] {
+        var d = [UInt8](repeating: 0, count: 64)
+        d[11] = UInt8(lx & 255); d[12] = UInt8(lx >> 8 & 0x0F) | UInt8(ly & 0x0F) << 4; d[13] = UInt8(ly >> 4)
+        d[14] = UInt8(rx & 255); d[15] = UInt8(rx >> 8 & 0x0F) | UInt8(ry & 0x0F) << 4; d[16] = UInt8(ry >> 4)
+        for (i, v) in set { d[i] = v }
+        return d
+    }
+
+    func testProButtonsByTheirLetters() {
+        let s = try! XCTUnwrap(Switch2Controller.decode(report([5: 0x08 | 0x80, 6: 0x10 | 0x20, 7: 0x02 | 0x40, 8: 0x01]), product: Switch2Controller.pro, calibration: .init()))
+        XCTAssertEqual(s.buttons, [.a, .guide, .misc, .up, .lb, .paddle1])
+        XCTAssertEqual(s.axes[5], 32767); XCTAssertEqual(s.axes[4], 0)
+    }
+
+    func testSticksWithAndWithoutCalibration() {
+        let raw = try! XCTUnwrap(Switch2Controller.decode(report(lx: 4095, ly: 0), product: Switch2Controller.pro, calibration: .init()))
+        XCTAssertGreaterThan(raw.axes[0]!, 32000)
+        XCTAssertGreaterThan(raw.axes[1]!, 32000, "stick down is y down")
+        var c = Switch2Controller.Calibration()
+        c.left.x = .init(neutral: 2000, max: 1000, min: 1000)
+        let cal = try! XCTUnwrap(Switch2Controller.decode(report(lx: 2500), product: Switch2Controller.pro, calibration: c))
+        XCTAssertEqual(cal.axes[0]!, 16383, accuracy: 2)
+    }
+
+    func testCalibrationParsing() {
+        // neutral x 0x123 y 0x456, max x 0x111 y 0x222, min x 0x333 y 0x444
+        let b: [UInt8] = [0x23, 0x61, 0x45, 0x11, 0x21, 0x22, 0x33, 0x43, 0x44]
+        let s = try! XCTUnwrap(Switch2Controller.stick(b[...]))
+        XCTAssertEqual(s.x, .init(neutral: 0x123, max: 0x111, min: 0x333))
+        XCTAssertEqual(s.y, .init(neutral: 0x456, max: 0x222, min: 0x444))
+    }
+
+    func testGameCubeTriggersAndMotion() {
+        var c = Switch2Controller.Calibration(); c.leftTriggerZero = 32
+        var r = report([5: 0x04, 61: 132, 62: 0])
+        r[0x37] = 0x10; r[0x38] = 0x00; r[0x31] = 0xff; r[0x32] = 0x0f
+        let s = try! XCTUnwrap(Switch2Controller.decode(r, product: Switch2Controller.gameCube, calibration: c))
+        XCTAssertEqual(s.buttons, [.a])
+        XCTAssertEqual(s.axes[4]!, 16383, accuracy: 2)
+        XCTAssertEqual(s.gyro[0], 16 * 34.8 / 32767, accuracy: 1e-6)
+        XCTAssertEqual(s.acceleration[0], 4095 * 8 / 32767, accuracy: 1e-4)
+        XCTAssertNil(Switch2Controller.decode(Array(r.prefix(40)), product: Switch2Controller.pro, calibration: c))
+        XCTAssertNil(Switch2Controller.decode(r, product: 0x1234, calibration: c))
+    }
+
+    func testCommands() {
+        for c in Switch2Controller.startup { XCTAssertEqual(c.count, Int(c[5]) + 8, "length is byte 5 plus 8") }
+        XCTAssertEqual(Array(Switch2Controller.flashRead(0x13080)[12..<16]), [0x80, 0x30, 0x01, 0x00])
+    }
+}

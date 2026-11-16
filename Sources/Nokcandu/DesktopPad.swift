@@ -490,8 +490,14 @@ final class DesktopPad: ObservableObject {
         MappedGamepads.shared.excluded = feed.devices
         if mappedToken == nil {
             mappedToken = MappedGamepads.shared.listen { source, held, axes in MainActor.assumeIsolated { DesktopPad.shared.readMapped(source, held, axes) } }
+            _ = MappedGamepads.shared.listenMotion { g, a in
+                MainActor.assumeIsolated {
+                    guard !DesktopPad.shared.steamSource, let e = DesktopPad.shared.engine else { return }
+                    pe_gyro(e, g[0], g[1], g[2], DesktopPad.now()); pe_accel(e, a[0], a[1], a[2], DesktopPad.now())
+                }
+            }
         }
-        let any = steamSource || GCController.controllers().contains { $0.extendedGamepad != nil } || feed.anyConnected || !MappedGamepads.shared.pads.isEmpty
+        let any = steamSource || GCController.controllers().contains { $0.extendedGamepad != nil } || feed.anyConnected || !MappedGamepads.shared.isEmpty
         if !any, let e = engine { pe_release_all(e, Self.now()); sourceState = PadSourceState() }
         // While a profile is mapping a controller, macOS must not nap Nokcandu behind the game: App Nap
         // stretches timers and delays callbacks, which is felt as late or uneven input.
@@ -511,7 +517,7 @@ final class DesktopPad: ObservableObject {
             return
         }
         SteamControllerUSB.shared.remove(steamReaderID)
-        let hasMain = !feed.mainControllers().isEmpty || !MappedGamepads.shared.pads.isEmpty
+        let hasMain = !feed.mainControllers().isEmpty || !MappedGamepads.shared.isEmpty
         if hadMainController && !hasMain, let e = engine {
             pe_release_main(e, Self.now()); sourceState = PadSourceState(); lastButtons = [:]; lastAxes = [:]
         }

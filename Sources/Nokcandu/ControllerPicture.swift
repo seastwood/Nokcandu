@@ -779,9 +779,14 @@ final class PadTester: ObservableObject {
 
     /// No controller macOS knows: a controller read with its community mapping (MappedGamepads), if one is connected.
     private func sampleMapped() {
-        guard let p = MappedGamepads.shared.pads.values.sorted(by: { $0.info.id < $1.info.id }).first else { return }
-        if controllerName != p.info.name { controllerName = p.info.name }
-        let s = p.mapping.state(buttons: p.buttons, axes: p.axes, hat: p.hat)
+        let s: (buttons: Set<PadProfiles.Input>, axes: [Int: Int])
+        if let n = MappedGamepads.shared.native.sorted(by: { $0.key < $1.key }).first?.value {
+            if controllerName != n.name { controllerName = n.name }
+            s = (n.buttons, n.axes)
+        } else if let p = MappedGamepads.shared.pads.values.sorted(by: { $0.info.id < $1.info.id }).first {
+            if controllerName != p.info.name { controllerName = p.info.name }
+            s = p.mapping.state(buttons: p.buttons, axes: p.axes, hat: p.hat)
+        } else { return }
         let buttons = PadProfiles.Input.padButtons.map { ($0, s.buttons.contains($0)) }
         let axes = (0..<6).map { (Int32($0), Float(s.axes[$0] ?? 0) / 32767) }
         readState(buttons, axes)
@@ -954,6 +959,20 @@ enum PadGC {
             buttons += [(.paddle1, xb.paddleButton1?.isPressed ?? false), (.paddle2, xb.paddleButton2?.isPressed ?? false),
                         (.paddle3, xb.paddleButton3?.isPressed ?? false), (.paddle4, xb.paddleButton4?.isPressed ?? false),
                         (.misc, xb.buttonShare?.isPressed ?? false)]
+        }
+        else {
+            // Controllers with extra buttons macOS names but GCExtendedGamepad doesn't list (DualSense Edge back
+            // paddles and function buttons, a Share or Capture button): by their names, so a controller without
+            // them is unaffected.
+            var extra: [I: Bool] = [:]
+            for (name, b) in g.buttons {
+                let n = name.lowercased(), left = n.contains("left"), right = n.contains("right")
+                let input: I? = n.contains("paddle") && (left || right) ? (left ? .paddle2 : .paddle1)
+                    : n.contains("function") && (left || right) ? (left ? .paddle4 : .paddle3)
+                    : n.contains("share") || n.contains("capture") ? .misc : nil
+                if let input { extra[input] = (extra[input] ?? false) || b.isPressed }
+            }
+            buttons += extra.sorted { $0.key.rawValue < $1.key.rawValue }.map { ($0.key, $0.value) }
         }
         let axes: [(Int32, Float)] = [(0, g.leftThumbstick.xAxis.value), (1, -g.leftThumbstick.yAxis.value),
                                       (2, g.rightThumbstick.xAxis.value), (3, -g.rightThumbstick.yAxis.value),
