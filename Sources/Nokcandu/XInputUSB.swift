@@ -14,6 +14,26 @@ final class XInputUSB: @unchecked Sendable {
     private let lock = NSLock()
     private var running: Set<UInt64> = []
     private var started = false
+    /// Each connected controller's way to send to it, and whether it speaks GIP.
+    private var senders: [UInt64: (gip: Bool, send: ([UInt8]) -> Void)] = [:]
+    private var gipSequence: UInt8 = 2
+
+    /// Buzzes every controller read here for `seconds` (at most one), at `strength` (0…1).
+    func rumble(strength: Double, seconds: Double) {
+        lock.lock(); let list = Array(senders.values); lock.unlock()
+        guard !list.isEmpty, strength.isFinite, strength > 0 else { return }
+        let level = UInt8(max(0, min(1, strength)) * 255)
+        for s in list {
+            if s.gip { lock.lock(); gipSequence &+= 1; let q = gipSequence; lock.unlock(); s.send(GIPController.rumble(strong: level, weak: level, sequence: q)) }
+            else { s.send(XInputController.rumble(low: level, high: level)) }
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + max(0.05, min(1, seconds))) { [self] in
+            for s in list {
+                if s.gip { lock.lock(); gipSequence &+= 1; let q = gipSequence; lock.unlock(); s.send(GIPController.rumble(strong: 0, weak: 0, sequence: q)) }
+                else { s.send(XInputController.rumble(low: 0, high: 0)) }
+            }
+        }
+    }
 
     @MainActor func start() {
         guard !started else { return }
@@ -78,6 +98,9 @@ final class XInputUSB: @unchecked Sendable {
             _ = try? outPipe.__sendIORequest(with: data, bytesTransferred: &n, completionTimeout: 1)
         }
         send(gip ? GIPController.powerOn : XInputController.playerLight)
+        let sendQueue = DispatchQueue(label: "Nokcandu.XInputUSB.send.\(id)")
+        lock.lock(); senders[id] = (gip, { bytes in sendQueue.async { send(bytes) } }); lock.unlock()
+        defer { lock.lock(); senders[id] = nil; lock.unlock() }
         let source = "xinput:\(id)"
         ControllerLog.add("Controller: \(product) read as an \(gip ? "Xbox One/Series (GIP)" : "Xbox 360 (XInput)") controller")
         var gipDecoder = GIPController.Decoder()

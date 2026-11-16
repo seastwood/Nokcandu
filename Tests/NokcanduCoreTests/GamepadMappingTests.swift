@@ -31,4 +31,13 @@ final class GamepadMappingTests: XCTestCase {
         XCTAssertNil(GamepadMapping(line: "nothex,Name,a:b0"))
         XCTAssertNil(GamepadMapping(line: "03000000000000000000000000000000,Name,a:b0"), "no vendor")
     }
+
+    func testGuessedLayout() {
+        let m = try! XCTUnwrap(GamepadMapping.guessed(vendor: 0x1234, product: 0xabcd, name: "Pad", buttons: 10, axes: 2, hat: true))
+        XCTAssertEqual(m.name, "Pad (guessed layout)")
+        XCTAssertEqual(m.vendorID, 0x1234); XCTAssertEqual(m.productID, 0xabcd)
+        var b = [Bool](repeating: false, count: 10); b[9] = true
+        XCTAssertEqual(m.state(buttons: b, axes: [0, 0], hat: 4).buttons, [.start, .down])
+        XCTAssertNil(GamepadMapping.guessed(vendor: 1, product: 1, name: "x", buttons: 2, axes: 2, hat: false))
+    }
 }

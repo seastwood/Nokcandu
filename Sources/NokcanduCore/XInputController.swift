@@ -36,6 +36,10 @@ public enum GIPController {
     public static let interfaceClass = 0xFF, interfaceSubclass = 0x47, interfaceProtocol = 0xD0
     /// Power on (sequence number 1).
     public static let powerOn: [UInt8] = [0x05, 0x20, 0x01, 0x01, 0x00]
+    /// Rumble (Linux's xpad): both handle motors, 0…255 each, the trigger motors off.
+    public static func rumble(strong: UInt8, weak: UInt8, sequence: UInt8) -> [UInt8] {
+        [0x09, 0x00, sequence, 0x09, 0x00, 0x0F, 0x00, 0x00, strong / 2, weak / 2, 0xFF, 0x00, 0xFF]
+    }
     /// Acknowledges a message that asks for it (byte 1 has 0x10): the controller repeats it until answered.
     public static func acknowledge(_ m: [UInt8]) -> [UInt8]? {
         guard m.count >= 4, m[1] & 0x10 != 0 else { return nil }

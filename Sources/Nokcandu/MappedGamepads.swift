@@ -60,7 +60,8 @@ final class MappedGamepads {
         let now = HIDDevices.shared.connected.filter { info in
             !info.gamepad && !excluded.contains { !$0.isGamepad && info.matches($0) }
                 && !(info.vendorID == Switch2Controller.vendor && Switch2Controller.products.contains(info.productID))
-                && GamepadMapping.find(vendor: info.vendorID, product: info.productID) != nil
+                && info.vendorID != 0x28DE           // Steam Controllers: read by SteamControllerUSB
+                && Self.mapping(info) != nil
         }
         let ids = Set(now.map(\.id))
         for (id, p) in pads where !ids.contains(id) {
@@ -69,7 +70,7 @@ final class MappedGamepads {
             for f in listeners.values { f("hidmap:\(id)", nil, [:]) }
         }
         for info in now where pads[info.id] == nil {
-            guard let m = GamepadMapping.find(vendor: info.vendorID, product: info.productID) else { continue }
+            guard let m = Self.mapping(info) else { continue }
             pads[info.id] = Pad(info: info, mapping: m, buttons: Array(repeating: false, count: max(32, info.buttonCount)), axes: Array(repeating: 0, count: max(8, info.axisNames.count)))
             ControllerLog.add("Controller: \(info.name) (\(String(format: "%04X:%04X", info.vendorID, info.productID))) read as a controller with the community mapping “\(m.name)”")
             // A PlayStation 3 controller by USB sends nothing until told to (SDL's PS3 driver, as every PS3 does).
@@ -80,6 +81,12 @@ final class MappedGamepads {
         }
     }
 
+    /// Its community mapping, or for a device that calls itself a gamepad, the generic layout.
+    static func mapping(_ info: HIDDevices.Info) -> GamepadMapping? {
+        if let m = GamepadMapping.find(vendor: info.vendorID, product: info.productID) { return m }
+        guard info.isGamepadUsage else { return nil }
+        return GamepadMapping.guessed(vendor: info.vendorID, product: info.productID, name: info.name, buttons: info.buttonCount, axes: info.axisNames.count, hat: info.hasHat)
+    }
     private func event(_ info: HIDDevices.Info, _ ev: HIDDevices.Event) {
         guard var p = pads[info.id] else { return }
         switch ev {

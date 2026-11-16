@@ -22,6 +22,8 @@ final class HIDDevices: ObservableObject {
         let buttonCount: Int
         let axisNames: [String]
         let hasHat: Bool
+        /// It calls itself a gamepad (rather than a joystick or other controller).
+        var isGamepadUsage = false
         func matches(_ d: PadProfiles.Device) -> Bool { vendorID == d.vendorID && productID == d.productID && nth == (d.nth ?? 0) }
         var device: PadProfiles.Device {
             PadProfiles.Device(name: name, productName: name, vendorID: vendorID, productID: productID, nth: nth == 0 ? nil : nth,
@@ -91,7 +93,8 @@ final class HIDDevices: ObservableObject {
         let name = (IOHIDDeviceGetProperty(d, kIOHIDProductKey as CFString) as? String) ?? "Device"
         let info = Info(id: id, name: name, vendorID: Self.int(d, kIOHIDVendorIDKey), productID: Self.int(d, kIOHIDProductIDKey), nth: 0,
                         gamepad: false, buttonCount: min(l.buttons.count, PadProfiles.Device.maxButtons),
-                        axisNames: Array(l.axes.map(\.name).prefix(PadProfiles.Device.maxAxes)), hasHat: l.hat != nil)
+                        axisNames: Array(l.axes.map(\.name).prefix(PadProfiles.Device.maxAxes)), hasHat: l.hat != nil,
+                        isGamepadUsage: Self.int(d, kIOHIDPrimaryUsagePageKey) == kHIDPage_GenericDesktop && Self.int(d, kIOHIDPrimaryUsageKey) == kHIDUsage_GD_GamePad)
         connected.removeAll { $0.id == id }
         connected.append(info)
         renumber()

@@ -138,6 +138,19 @@ public struct GamepadMapping: Sendable, Equatable {
         }
         return out
     }
+    /// For a gamepad that isn't in the database: the layout most generic USB gamepads use (four face buttons,
+    /// shoulders, triggers as buttons, select and start, stick clicks, then the rest), sticks on the first four axes
+    /// and the d-pad on the hat. A guess, said so in its name; the controller can still be set button by button.
+    public static func guessed(vendor: Int, product: Int, name: String, buttons: Int, axes: Int, hat: Bool) -> GamepadMapping? {
+        guard buttons >= 4 else { return nil }
+        var parts = ["a:b0", "b:b1", "x:b2", "y:b3"]
+        let more = ["leftshoulder", "rightshoulder", "lefttrigger", "righttrigger", "back", "start", "leftstick", "rightstick", "guide"]
+        for (i, n) in more.enumerated() where 4 + i < buttons { parts.append("\(n):b\(4 + i)") }
+        for (i, n) in ["leftx", "lefty", "rightx", "righty"].enumerated() where i < axes { parts.append("\(n):a\(i)") }
+        if hat { parts += ["dpup:h0.1", "dpright:h0.2", "dpdown:h0.4", "dpleft:h0.8"] }
+        let guid = String(format: "03000000%02x%02x0000%02x%02x000000000000", vendor & 255, vendor >> 8 & 255, product & 255, product >> 8 & 255)
+        return GamepadMapping(line: "\(guid),\(name) (guessed layout),\(parts.joined(separator: ","))")
+    }
     public static func find(vendor: Int, product: Int, version: Int? = nil, in db: [Int: [GamepadMapping]] = database) -> GamepadMapping? {
         guard let list = db[vendor << 16 | product] else { return nil }
         if let version, let exact = list.first(where: { $0.version == version }) { return exact }

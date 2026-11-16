@@ -409,7 +409,10 @@ final class DesktopPad: ObservableObject {
     private func rumbleMain(strong: Bool) { rumbleMain(strength: strong ? 1 : 0.6, seconds: strong ? 0.4 : 0.15) }
     private func rumbleMain(strength: Double, seconds: Double) {
         if steamSource { SteamControllerUSB.shared.rumble(strength: strength, seconds: seconds) }
-        else { PadFeedback.shared.rumble(feed.mainControllers(), strength: strength, seconds: seconds) }
+        else {
+            PadFeedback.shared.rumble(feed.mainControllers(), strength: strength, seconds: seconds)
+            XInputUSB.shared.rumble(strength: strength, seconds: seconds)
+        }
     }
     private var layerRumble = PadProfiles.Profile.defaultLayerRumble
 
