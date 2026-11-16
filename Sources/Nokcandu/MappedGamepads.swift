@@ -24,17 +24,38 @@ final class MappedGamepads {
     /// Controllers Nokcandu reads with a driver of its own (Switch2USB): their latest state, by source.
     struct Native { var name: String; var buttons: Set<PadProfiles.Input>; var axes: [Int: Int] }
     private(set) var native: [String: Native] = [:]
-    private var motionListeners: [UUID: ([Float], [Float]) -> Void] = [:]
+    private var motionListeners: [UUID: (String, [Float], [Float]) -> Void] = [:]
     var isEmpty: Bool { pads.isEmpty && native.isEmpty }
 
     /// A native driver's controller changed (nil buttons: it went away).
     func publish(_ source: String, name: String, buttons: Set<PadProfiles.Input>?, axes: [Int: Int]) {
-        if let buttons { native[source] = Native(name: name, buttons: buttons, axes: axes) } else { native[source] = nil }
+        if let buttons { native[source] = Native(name: name, buttons: buttons, axes: axes) } else { native[source] = nil; motionSources.remove(source) }
         for f in listeners.values { f(source, buttons, axes) }
     }
-    /// Its motion: gyro in rad/s and acceleration in g, in Nokcandu's axes.
-    func publishMotion(gyro: [Float], acceleration: [Float]) { for f in motionListeners.values { f(gyro, acceleration) } }
-    func listenMotion(_ f: @escaping ([Float], [Float]) -> Void) -> UUID { let id = UUID(); motionListeners[id] = f; return id }
+    /// A controller's motion: gyro in rad/s and acceleration in g, in Nokcandu's axes.
+    func publishMotion(_ source: String, gyro: [Float], acceleration: [Float]) {
+        motionSources.insert(source)
+        for f in motionListeners.values { f(source, gyro, acceleration) }
+    }
+    /// Controllers that have sent motion (drivers publish it before a report's buttons, so it's known at once).
+    private(set) var motionSources: Set<String> = []
+    func listenMotion(_ f: @escaping (String, [Float], [Float]) -> Void) -> UUID { let id = UUID(); motionListeners[id] = f; return id }
+    func stopListeningMotion(_ id: UUID?) { if let id { motionListeners[id] = nil } }
+
+    /// Buzzes these controllers (sources) for `seconds`, at `strength` (0…1), each with its own driver's rumble.
+    func rumble(_ sources: Set<String>, strength: Double, seconds: Double) {
+        for source in sources {
+            let parts = source.split(separator: ":")
+            guard parts.count >= 2, let id = UInt64(parts[1]) else { continue }
+            switch parts[0] {
+            case "xinput": XInputUSB.shared.rumble(id, strength: strength, seconds: seconds)
+            case "report": ReportPadsHID.shared.rumble(id, strength: strength, seconds: seconds)
+            case "gamecube": if parts.count == 3, let port = Int(parts[2]) { GameCubeAdapterHID.shared.rumble(id, port: port, strength: strength, seconds: seconds) }
+            case "switch2": Switch2USB.shared.rumble(id, strength: strength, seconds: seconds)
+            default: break
+            }
+        }
+    }
 
     func listen(_ f: @escaping (String, Set<PadProfiles.Input>?, [Int: Int]) -> Void) -> UUID {
         start()

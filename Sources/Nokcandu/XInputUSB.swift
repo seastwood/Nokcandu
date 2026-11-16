@@ -18,14 +18,18 @@ final class XInputUSB: @unchecked Sendable {
     private enum Kind { case wired, gip, wireless }
     private var senders: [UInt64: (kind: Kind, send: ([UInt8]) -> Void)] = [:]
     private var gipSequence: UInt8 = 2
+    private var rumbleEnds: [UInt64: Date] = [:]
 
     /// Buzzes every controller read here for `seconds` (at most one), at `strength` (0…1).
-    func rumble(strength: Double, seconds: Double) {
-        lock.lock(); let list = Array(senders.values); lock.unlock()
+    func rumble(_ id: UInt64, strength: Double, seconds: Double) {
+        lock.lock(); let list = senders[id].map { [$0] } ?? []; let end = Date().addingTimeInterval(max(0.05, min(1, seconds))); rumbleEnds[id] = end; lock.unlock()
         guard !list.isEmpty, strength.isFinite, strength > 0 else { return }
         let level = UInt8(max(0, min(1, strength)) * 255)
         for s in list { s.send(rumbleReport(s.kind, level)) }
-        DispatchQueue.global().asyncAfter(deadline: .now() + max(0.05, min(1, seconds))) { [self] in
+        DispatchQueue.global().asyncAfter(deadline: .now() + max(0.05, min(1, seconds)) + 0.01) { [self] in
+            // Only if no newer rumble has started since.
+            lock.lock(); let last = rumbleEnds[id] == end; if last { rumbleEnds[id] = nil }; lock.unlock()
+            guard last else { return }
             for s in list { s.send(rumbleReport(s.kind, 0)) }
         }
     }

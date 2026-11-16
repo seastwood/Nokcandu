@@ -45,9 +45,7 @@ final class ReportPadsHID {
         // would take it from them.
         if let info = HIDDevices.shared.connected.first(where: { $0.id == id }),
            info.gamepad || MappedGamepads.shared.excluded.contains(where: { !$0.isGamepad && info.matches($0) }) { return }
-        if var out = driver.startOutput {
-            _ = IOHIDDeviceSetReport(d, kIOHIDReportTypeOutput, CFIndex(out[0]), &out, out.count)
-        }
+        if let out = driver.startOutput { HIDOutput.send(out, to: d) }
         for out in pads[id]?.decoder.start() ?? [] { Self.send(out, to: d) }
         // Reading this feature report is what switches some controllers to their full report (as SDL does).
         if let feature = driver.enableFeature {
@@ -82,25 +80,26 @@ final class ReportPadsHID {
             ControllerLog.add("Controller: \(name) read with its own report\(s.gyro == nil ? "" : " (gyro on)")")
             MappedGamepads.shared.refresh()
         }
+        if let g = s.gyro, let a = s.acceleration { MappedGamepads.shared.publishMotion("report:\(id)", gyro: g, acceleration: a) }
         MappedGamepads.shared.publish("report:\(id)", name: name, buttons: s.buttons, axes: s.axes)
-        if let g = s.gyro, let a = s.acceleration { MappedGamepads.shared.publishMotion(gyro: g, acceleration: a) }
     }
 
-    func rumble(strength: Double, seconds: Double) {
-        guard !claimed.isEmpty, strength.isFinite, strength > 0 else { return }
-        send(low: strength, high: strength)
-        DispatchQueue.main.asyncAfter(deadline: .now() + max(0.05, min(1, seconds))) { [self] in send(low: 0, high: 0) }
-    }
-    private func send(low: Double, high: Double) {
-        for id in claimed {
-            guard let p = pads[id], let r = p.decoder.driver.rumble(low: low, high: high) else { continue }
-            Self.send(r, to: p.device)
+    /// Buzzes one controller; a newer rumble replaces the stop of an older one.
+    func rumble(_ id: UInt64, strength: Double, seconds: Double) {
+        guard claimed.contains(id), strength.isFinite, strength > 0 else { return }
+        send(id, low: strength, high: strength)
+        rumbleEnds[id] = Date().addingTimeInterval(max(0.05, min(1, seconds)))
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0.05, min(1, seconds)) + 0.01) { [self] in
+            guard let end = rumbleEnds[id], end <= Date() else { return }
+            rumbleEnds[id] = nil
+            send(id, low: 0, high: 0)
         }
     }
-    /// An output report; a first byte (report ID) of 0 means the device has none, so the bytes after it are sent.
-    private static func send(_ r: [UInt8], to d: IOHIDDevice) {
-        guard !r.isEmpty else { return }
-        var bytes = r[0] == 0 ? Array(r.dropFirst()) : r
-        _ = IOHIDDeviceSetReport(d, kIOHIDReportTypeOutput, CFIndex(r[0]), &bytes, bytes.count)
+    private var rumbleEnds: [UInt64: Date] = [:]
+    private func send(_ id: UInt64, low: Double, high: Double) {
+        guard let p = pads[id], let r = p.decoder.driver.rumble(low: low, high: high) else { return }
+        Self.send(r, to: p.device)
     }
+    /// An output report; a first byte (report ID) of 0 means the device has none, so the bytes after it are sent.
+    private static func send(_ r: [UInt8], to d: IOHIDDevice) { HIDOutput.send(r, to: d) }
 }

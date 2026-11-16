@@ -411,8 +411,11 @@ final class DesktopPad: ObservableObject {
         if steamSource { SteamControllerUSB.shared.rumble(strength: strength, seconds: seconds) }
         else {
             PadFeedback.shared.rumble(feed.mainControllers(), strength: strength, seconds: seconds)
-            XInputUSB.shared.rumble(strength: strength, seconds: seconds)
-            ReportPadsHID.shared.rumble(strength: strength, seconds: seconds)
+            // Nokcandu's own controllers that feed the profile: all of them, or in a stream sending the others as
+            // players of their own, only player one's.
+            let solo = streaming && stream?.otherControllersAsPlayers == true
+            let mine = solo ? Set([StreamGamepads.profileController().mapped].compactMap { $0 }) : MappedGamepads.shared.sources
+            MappedGamepads.shared.rumble(mine, strength: strength, seconds: seconds)
         }
     }
     private var layerRumble = PadProfiles.Profile.defaultLayerRumble
@@ -494,9 +497,11 @@ final class DesktopPad: ObservableObject {
         MappedGamepads.shared.excluded = feed.devices
         if mappedToken == nil {
             mappedToken = MappedGamepads.shared.listen { source, held, axes in MainActor.assumeIsolated { DesktopPad.shared.readMapped(source, held, axes) } }
-            _ = MappedGamepads.shared.listenMotion { g, a in
+            _ = MappedGamepads.shared.listenMotion { source, g, a in
                 MainActor.assumeIsolated {
-                    guard !DesktopPad.shared.steamSource, let e = DesktopPad.shared.engine else { return }
+                    let runtime = DesktopPad.shared
+                    guard !runtime.steamSource, let e = runtime.engine else { return }
+                    if runtime.streaming, runtime.stream?.otherControllersAsPlayers == true, StreamGamepads.profileController().mapped != source { return }
                     pe_gyro(e, g[0], g[1], g[2], DesktopPad.now()); pe_accel(e, a[0], a[1], a[2], DesktopPad.now())
                 }
             }

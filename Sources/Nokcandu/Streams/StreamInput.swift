@@ -65,6 +65,13 @@ import NokcanduStreamCore
         mappedToken = MappedGamepads.shared.listen { [weak self] source, held, axes in
             MainActor.assumeIsolated { self?.mapped(source, held, axes) }
         }
+        mappedMotionToken = MappedGamepads.shared.listenMotion { [weak self] source, g, a in
+            MainActor.assumeIsolated {
+                guard let self, let n = self.mappedNumbers[source], !(self.usesProfile && n == 0) else { return }
+                self.motion(n, gyro: GCRotationRate(x: Double(g[0]), y: Double(g[1]), z: Double(g[2])),
+                            accel: GCAcceleration(x: Double(a[0]), y: Double(a[1]), z: Double(a[2])))
+            }
+        }
         let nc = NotificationCenter.default
         observers.append(nc.addObserver(forName: .GCControllerDidConnect, object: nil, queue: .main) { n in
             MainActor.assumeIsolated { if let c = n.object as? GCController { self.connect(c) } }
@@ -80,6 +87,7 @@ import NokcanduStreamCore
         active = false
         observers.forEach(NotificationCenter.default.removeObserver); observers = []
         MappedGamepads.shared.stopListening(mappedToken); mappedToken = nil; mappedNumbers = [:]
+        MappedGamepads.shared.stopListeningMotion(mappedMotionToken); mappedMotionToken = nil
         for c in GCController.controllers() {
             c.extendedGamepad?.valueChangedHandler = nil
             c.motion?.valueChangedHandler = nil
@@ -114,10 +122,10 @@ import NokcanduStreamCore
         }
     }
 
-    private func arrive(_ n: Int, controller c: GCController?) {
+    private func arrive(_ n: Int, controller c: GCController?, motion: Bool = false) {
         pads[n] = Pad()
         var caps = UInt16(LI_CCAP_ANALOG_TRIGGERS | LI_CCAP_RUMBLE)
-        if c?.motion != nil { caps |= UInt16(LI_CCAP_GYRO | LI_CCAP_ACCEL) }
+        if c?.motion != nil || motion { caps |= UInt16(LI_CCAP_GYRO | LI_CCAP_ACCEL) }
         if c?.light != nil { caps |= UInt16(LI_CCAP_RGB_LED) }
         if c?.extendedGamepad is GCDualSenseGamepad || c?.extendedGamepad is GCDualShockGamepad { caps |= UInt16(LI_CCAP_TOUCHPAD) }
         let all: UInt32 = 0x3FFFFF
@@ -125,7 +133,7 @@ import NokcanduStreamCore
         send(n)
     }
 
-    private var mappedToken: UUID?
+    private var mappedToken: UUID?, mappedMotionToken: UUID?
     private var mappedNumbers: [String: Int] = [:]
     private func mapped(_ source: String, _ held: Set<PadProfiles.Input>?, _ axes: [Int: Int]) {
         guard active else { return }
@@ -140,7 +148,7 @@ import NokcanduStreamCore
             let used = Set(numbers.values).union(mappedNumbers.values)
             guard settings.multipleControllers || used.isEmpty, let free = (0..<16).first(where: { !used.contains($0) }) else { return }
             n = free; mappedNumbers[source] = n
-            arrive(n, controller: nil)
+            arrive(n, controller: nil, motion: MappedGamepads.shared.motionSources.contains(source))
         }
         var p = Pad()
         for input in held { p.buttons |= Self.flag(input, swap: settings.swapFaceButtons) }
@@ -328,6 +336,7 @@ import NokcanduStreamCore
             if usesProfile && n == 0 { DesktopPad.shared.rumbleProfileController(strength: strength, seconds: 0.25); continue }
             let cs = GCController.controllers().filter { numbers[ObjectIdentifier($0)] == n }
             PadFeedback.shared.rumble(cs, strength: strength, seconds: 0.25)
+            MappedGamepads.shared.rumble(Set(mappedNumbers.filter { $0.value == n }.map(\.key)), strength: strength, seconds: 0.25)
         }
     }
 

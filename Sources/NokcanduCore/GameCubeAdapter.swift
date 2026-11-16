@@ -6,6 +6,8 @@ import Foundation
 public enum GameCubeAdapter {
     public static let vendor = 0x057E, product = 0x0337
     public static let start: [UInt8] = [0x13]
+    /// Each port's motor, on (1) or off (0).
+    public static func rumble(_ ports: [UInt8]) -> [UInt8] { [0x11] + (0..<4).map { $0 < ports.count ? min(1, ports[$0]) : 0 } }
 
     /// Each port's controller, or nil when nothing is plugged into it. Axes in SDL's order (y down, triggers
     /// 0…32767); the triggers' clicks at the end of their travel are full pulls.

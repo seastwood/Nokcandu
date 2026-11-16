@@ -89,6 +89,10 @@ final class ControllerRumbleRouter {
         let haptic = GCController.controllers().filter { $0.haptics != nil }
         let named = haptic.filter { ($0.vendorName ?? "").caseInsensitiveCompare(r.name) == .orderedSame }
         let targets = !named.isEmpty ? named : (haptic.count == 1 ? haptic : [])
+        // A controller Nokcandu reads itself, when it's the only controller there is.
+        if targets.isEmpty, haptic.isEmpty, MappedGamepads.shared.sources.count == 1 {
+            MappedGamepads.shared.rumble(MappedGamepads.shared.sources, strength: strength, seconds: seconds); return
+        }
         PadFeedback.shared.rumble(targets, strength: strength, seconds: seconds)
     }
 

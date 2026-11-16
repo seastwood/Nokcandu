@@ -10,6 +10,30 @@ final class GameCubeAdapterHID {
     private var manager: IOHIDManager?
     private var buffers: [UInt64: UnsafeMutablePointer<UInt8>] = [:]
     private var ports: [UInt64: Set<Int>] = [:]
+    private var devices: [UInt64: IOHIDDevice] = [:]
+    private var motors: [UInt64: [UInt8]] = [:]
+    private var rumbleEnds: [String: Date] = [:]
+
+    /// Buzzes one port's controller (its motor is on or off) for `seconds`. The adapter needs its second USB
+    /// plug (power) for rumble.
+    func rumble(_ id: UInt64, port: Int, strength: Double, seconds: Double) {
+        guard devices[id] != nil, (0..<4).contains(port), strength.isFinite, strength > 0.1 else { return }
+        set(id, port: port, on: true)
+        let key = "\(id):\(port)", end = Date().addingTimeInterval(max(0.05, min(1, seconds)))
+        rumbleEnds[key] = end
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0.05, min(1, seconds)) + 0.01) { [self] in
+            guard rumbleEnds[key] == end else { return }
+            rumbleEnds[key] = nil
+            set(id, port: port, on: false)
+        }
+    }
+    private func set(_ id: UInt64, port: Int, on: Bool) {
+        guard let d = devices[id] else { return }
+        var m = motors[id] ?? [0, 0, 0, 0]
+        m[port] = on ? 1 : 0
+        motors[id] = m
+        HIDOutput.send(GameCubeAdapter.rumble(m), to: d)
+    }
 
     func start() {
         guard manager == nil else { return }
@@ -28,6 +52,7 @@ final class GameCubeAdapterHID {
         guard buffers[id] == nil else { return }
         let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 64)
         buffers[id] = buffer
+        devices[id] = d
         IOHIDDeviceRegisterInputReportCallback(d, buffer, 64, { ctx, result, _, _, _, bytes, count in
             guard result == kIOReturnSuccess, count >= 37 else { return }
             let report = Array(UnsafeBufferPointer(start: bytes, count: count))
@@ -42,6 +67,7 @@ final class GameCubeAdapterHID {
         let id = Self.id(d)
         for port in ports[id] ?? [] { MappedGamepads.shared.publish("gamecube:\(id):\(port)", name: "", buttons: nil, axes: [:]) }
         ports[id] = nil
+        devices[id] = nil; motors[id] = nil
         buffers.removeValue(forKey: id)?.deallocate()
     }
     private func report(_ bytes: [UInt8], id: UInt64) {

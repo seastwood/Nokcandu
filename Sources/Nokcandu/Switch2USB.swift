@@ -19,6 +19,8 @@ final class Switch2USB {
         let name: String
         var calibration = Switch2Controller.Calibration()
         var started = false
+        var rumble = Switch2Controller.Rumble(), rumbleUntil = Date.distantPast, lastRumbleSent = Date.distantPast
+        var last: Switch2Controller.State?
         let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 128)
         init(device: IOHIDDevice, product: Int, name: String) { self.device = device; self.product = product; self.name = name }
         deinit { buffer.deallocate() }
@@ -49,7 +51,10 @@ final class Switch2USB {
         let transport = (IOHIDDeviceGetProperty(d, kIOHIDTransportKey as CFString) as? String) ?? ""
         guard transport.uppercased() == "USB" else { return }      // Bluetooth isn't supported by this protocol
         let product = Self.number(d, kIOHIDProductIDKey)
-        let name = (IOHIDDeviceGetProperty(d, kIOHIDProductKey as CFString) as? String) ?? (product == Switch2Controller.pro ? "Switch 2 Pro Controller" : "GameCube Controller (Switch 2)")
+        let fallback = [Switch2Controller.pro: "Switch 2 Pro Controller", Switch2Controller.gameCube: "GameCube Controller (Switch 2)",
+                        Switch2Controller.joyConLeft: "Joy-Con 2 (L)", Switch2Controller.joyConRight: "Joy-Con 2 (R)"]
+        let name = (IOHIDDeviceGetProperty(d, kIOHIDProductKey as CFString) as? String) ?? fallback[product] ?? "Switch 2 Controller"
+        let location = Self.number(d, kIOHIDLocationIDKey)
         // macOS's own controller support reads it: leave it there.
         if GCController.controllers().contains(where: { $0.vendorName == name && $0.extendedGamepad != nil }) { return }
         let pad = Pad(device: d, product: product, name: name)
@@ -63,7 +68,7 @@ final class Switch2USB {
         ControllerLog.add("Controller: \(name) found by USB (\(String(format: "%04X", product))); starting it")
         let vendor = Switch2Controller.vendor
         queue.async {
-            let result = Self.startUp(vendor: vendor, product: product)
+            let result = Self.startUp(vendor: vendor, product: product, location: location)
             Task { @MainActor in
                 guard let pad = self.pads[id] else { return }
                 if let result {
@@ -78,23 +83,71 @@ final class Switch2USB {
     private func removed(_ d: IOHIDDevice) {
         let id = Self.id(d)
         guard let pad = pads.removeValue(forKey: id) else { return }
-        MappedGamepads.shared.publish("switch2:\(id)", name: pad.name, buttons: nil, axes: [:])
+        if Switch2Controller.isJoyCon(pad.product) { pad.last = nil; publishJoyCons() }
+        else { MappedGamepads.shared.publish("switch2:\(id)", name: pad.name, buttons: nil, axes: [:]) }
         ControllerLog.add("Controller: \(pad.name) disconnected")
     }
     private func report(_ bytes: [UInt8], id: UInt64) {
         guard let pad = pads[id], let s = Switch2Controller.decode(bytes, product: pad.product, calibration: pad.calibration) else { return }
-        MappedGamepads.shared.publish("switch2:\(id)", name: pad.name, buttons: s.buttons, axes: s.axes)
+        sendRumble(pad)
+        if Switch2Controller.isJoyCon(pad.product) { pad.last = s; publishJoyCons(); return }
         if s.gyro.contains(where: { $0 != 0 }) || s.acceleration.contains(where: { $0 != 0 }) {
-            MappedGamepads.shared.publishMotion(gyro: s.gyro, acceleration: s.acceleration)
+            MappedGamepads.shared.publishMotion("switch2:\(id)", gyro: s.gyro, acceleration: s.acceleration)
         }
+        MappedGamepads.shared.publish("switch2:\(id)", name: pad.name, buttons: s.buttons, axes: s.axes)
+    }
+
+    /// Joy-Con 2 are one controller between them (the first left and right connected), under the left one's
+    /// name when there is one.
+    private var joyConSource: String?
+    private func publishJoyCons() {
+        let left = pads.filter { $0.value.product == Switch2Controller.joyConLeft }.min { $0.key < $1.key }
+        let right = pads.filter { $0.value.product == Switch2Controller.joyConRight }.min { $0.key < $1.key }
+        let source = "switch2:\((left ?? right).map { String($0.key) } ?? "")"
+        if let old = joyConSource, old != source { MappedGamepads.shared.publish(old, name: "", buttons: nil, axes: [:]) }
+        guard let s = Switch2Controller.merge(left: left?.value.last, right: right?.value.last) else { joyConSource = nil; return }
+        joyConSource = source
+        let name = left != nil && right != nil ? "Joy-Con 2 (L/R)" : (left ?? right)!.value.name
+        if s.gyro.contains(where: { $0 != 0 }) || s.acceleration.contains(where: { $0 != 0 }) {
+            MappedGamepads.shared.publishMotion(source, gyro: s.gyro, acceleration: s.acceleration)
+        }
+        MappedGamepads.shared.publish(source, name: name, buttons: s.buttons, axes: s.axes)
+    }
+
+    /// Buzzes one controller (both Joy-Con for the pair's source) for `seconds`.
+    func rumble(_ id: UInt64, strength: Double, seconds: Double) {
+        guard let pad = pads[id], strength.isFinite, strength > 0 else { return }
+        let targets = Switch2Controller.isJoyCon(pad.product) ? pads.values.filter { Switch2Controller.isJoyCon($0.product) } : [pad]
+        let level = UInt16(max(0, min(1, strength)) * 65535)
+        for p in targets {
+            p.rumble.low = level; p.rumble.high = level
+            p.rumbleUntil = Date().addingTimeInterval(max(0.05, min(1, seconds)))
+            sendRumble(p)
+        }
+    }
+    /// Rumble goes out with the input reports while it's on (at most every 12 ms), then once more to stop it.
+    private func sendRumble(_ pad: Pad) {
+        let now = Date()
+        if pad.rumble.isOn, now >= pad.rumbleUntil { pad.rumble.low = 0; pad.rumble.high = 0 }
+        else if !pad.rumble.isOn { return }
+        guard now.timeIntervalSince(pad.lastRumbleSent) >= 0.012 || !pad.rumble.isOn else { return }
+        pad.lastRumbleSent = now
+        HIDOutput.send(pad.rumble.report(product: pad.product), to: pad.device)
+        if !pad.rumble.isOn { pad.lastRumbleSent = .distantPast }
     }
 
     /// The start-up over interface 1's bulk endpoints, with the stick calibration read on the way. nil: no
     /// interface 1 to use (another program has it, or it isn't this kind of controller).
-    nonisolated private static func startUp(vendor: Int, product: Int) -> Switch2Controller.Calibration? {
+    nonisolated private static func startUp(vendor: Int, product: Int, location: Int) -> Switch2Controller.Calibration? {
         guard let matching = IOServiceMatching("IOUSBHostInterface") as NSMutableDictionary? else { return nil }
         matching["idVendor"] = vendor; matching["idProduct"] = product; matching["bInterfaceNumber"] = 1
-        let service = IOServiceGetMatchingService(kIOMainPortDefault, matching as CFDictionary)
+        // This controller's own interface, when several of the same kind are plugged in (else the first found).
+        var service: io_service_t = 0
+        if location != 0, let m = matching.mutableCopy() as? NSMutableDictionary {
+            m["locationID"] = location
+            service = IOServiceGetMatchingService(kIOMainPortDefault, m as CFDictionary)
+        }
+        if service == 0 { service = IOServiceGetMatchingService(kIOMainPortDefault, matching as CFDictionary) }
         guard service != 0 else { return nil }
         defer { IOObjectRelease(service) }
         guard let iface = try? IOUSBHostInterface(__ioService: service, options: [], queue: nil, interestHandler: nil) else { return nil }
