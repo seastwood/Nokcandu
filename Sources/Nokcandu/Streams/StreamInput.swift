@@ -28,10 +28,23 @@ import NokcanduStreamCore
         usesProfile = settings.profileID != nil
     }
 
+    /// The controller a profile maps (player one): the first macOS knows, else the first Nokcandu reads itself.
+    /// A profile reading the Steam Controller itself has that as player one, and every other controller is free.
+    static func profileController(steam: Bool = false) -> (gc: GCController?, mapped: String?) {
+        if steam { return (nil, nil) }
+        if let c = GCController.controllers().first(where: { $0.extendedGamepad != nil }) { return (c, nil) }
+        return (nil, MappedGamepads.shared.sources.sorted().first)
+    }
+    var profileReadsSteam: Bool {
+        guard let id = settings.profileID, let p = PadProfiles.profiles().first(where: { $0.id == id }) else { return false }
+        return PadProfiles.top(p, all: PadProfiles.profiles(), \.controllerSource) == .steamUSB
+    }
+    var othersAsPlayers: Bool { usesProfile && settings.multipleControllers && settings.sendAs != .profileOnly }
+
     /// Bitmask of the controllers the host should create, for the launch request.
     var mask: Int {
         if settings.sendAs == .profileOnly { return 0 }
-        if usesProfile { return 1 }
+        if usesProfile && !settings.multipleControllers { return 1 }
         let n = GCController.controllers().filter { $0.extendedGamepad != nil }.count + MappedGamepads.shared.sources.count
         return n == 0 ? 1 : (settings.multipleControllers ? (1 << min(n, 16)) - 1 : 1)
     }
@@ -40,8 +53,11 @@ import NokcanduStreamCore
         active = true
         if settings.sendAs == .profileOnly { return }
         if usesProfile {
-            arrive(0, controller: GCController.controllers().first { $0.extendedGamepad != nil })
-            return
+            let first = Self.profileController(steam: profileReadsSteam)
+            arrive(0, controller: first.gc)
+            guard settings.multipleControllers else { return }
+            if let c = first.gc { numbers[ObjectIdentifier(c)] = 0 }
+            if let m = first.mapped { mappedNumbers[m] = 0 }
         }
         for c in GCController.controllers() where c.extendedGamepad != nil { connect(c) }
         // Controllers macOS doesn't know, read by Nokcandu itself (MappedGamepads): players too.
@@ -113,6 +129,7 @@ import NokcanduStreamCore
     private var mappedNumbers: [String: Int] = [:]
     private func mapped(_ source: String, _ held: Set<PadProfiles.Input>?, _ axes: [Int: Int]) {
         guard active else { return }
+        if usesProfile, mappedNumbers[source] == 0 { return }       // player one: the profile sends it
         guard let held else {
             if let n = mappedNumbers.removeValue(forKey: source) { pads[n] = nil; LiSendMultiControllerEvent(Int16(n), activeMask, 0, 0, 0, 0, 0, 0, 0) }
             return
@@ -137,6 +154,7 @@ import NokcanduStreamCore
         let used = Set(numbers.values).union(mappedNumbers.values)
         let n = settings.multipleControllers ? (0..<16).first { !used.contains($0) } ?? 0 : 0
         numbers[ObjectIdentifier(c)] = n
+        if usesProfile && n == 0 { return }                        // player one: the profile sends it
         arrive(n, controller: c)
         g.valueChangedHandler = { [weak self] pad, _ in MainActor.assumeIsolated { self?.read(pad, number: n) } }
         if let m = c.motion {
@@ -147,6 +165,21 @@ import NokcanduStreamCore
         }
         PadGC.watchTouchpads(c) { finger, down, x, y in
             LiSendControllerTouchEvent(UInt8(n), UInt8(down ? LI_TOUCH_EVENT_DOWN : LI_TOUCH_EVENT_UP), UInt32(finger), x, y, down ? 1 : 0)
+        }
+    }
+
+    /// The players' controllers sent as themselves read into the stream again (DesktopPad set up player one's).
+    func rearm() {
+        guard active else { return }
+        for c in GCController.controllers() {
+            guard let g = c.extendedGamepad, let n = numbers[ObjectIdentifier(c)], !(usesProfile && n == 0) else { continue }
+            g.valueChangedHandler = { [weak self] pad, _ in MainActor.assumeIsolated { self?.read(pad, number: n) } }
+            if let m = c.motion {
+                m.valueChangedHandler = { [weak self] motion in
+                    let r = motion.rotationRate, a = motion.acceleration
+                    MainActor.assumeIsolated { self?.motion(n, gyro: r, accel: a) }
+                }
+            }
         }
     }
 
@@ -426,6 +459,11 @@ enum StreamMouseButtons {
     var profileID: String? { get }
     /// The stream window is the key window of the active app.
     var isFront: Bool { get }
+    /// With a profile and Multiple controllers on: only the first controller goes through the profile (player
+    /// one); the others are sent to the host as themselves, players two and up.
+    var otherControllersAsPlayers: Bool { get }
+    /// Points the other players' controllers back at the stream (after the profile's controller was set up).
+    func rearmOtherPlayers()
     func padButton(_ b: Int, _ down: Bool)
     func padAxis(_ a: Int, _ v: Int)
     func key(_ mac: Int, _ down: Bool)

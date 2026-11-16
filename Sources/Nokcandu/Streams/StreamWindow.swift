@@ -634,6 +634,8 @@ import SwiftUI
 
     // MARK: StreamPadRoute (a Nokcandu profile's output)
 
+    var otherControllersAsPlayers: Bool { gamepads.othersAsPlayers }
+    func rearmOtherPlayers() { gamepads.rearm() }
     func padButton(_ b: Int, _ down: Bool) { gamepads.profileButton(b, down) }
     func padAxis(_ a: Int, _ v: Int) { gamepads.profileAxis(a, v) }
     func key(_ mac: Int, _ down: Bool) { keyboard.profileKey(mac, down) }

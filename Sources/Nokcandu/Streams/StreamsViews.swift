@@ -414,8 +414,12 @@ struct StreamProfileEditor: View {
                             ? "No controller is sent. Choose a Nokcandu controller profile above to use your controller as keys and mouse."
                             : "No controller is sent: the profile's keys, mouse and scrolling go to the host.")
             }
-            if profile.controller.profileID == nil, profile.controller.sendAs != .profileOnly {
-                SettingToggle(title: "Each controller is its own player", isOn: $profile.controller.multipleControllers)
+            if profile.controller.sendAs != .profileOnly {
+                SettingToggle(title: "Each controller is its own player",
+                              info: profile.controller.profileID == nil
+                                ? "Every connected controller is a player of its own on the host, including controllers Nokcandu reads itself (Steam Controllers aside). Off: they all act as player one."
+                                : "The first controller goes through the controller profile as player one; every other controller is a player of its own, sent as it is. Off: all of them go through the profile as player one.",
+                              isOn: $profile.controller.multipleControllers)
             }
             SettingToggle(title: "Swap A/B and X/Y", info: "For Nintendo-style layouts, where the confirm button is on the right.", isOn: $profile.controller.swapFaceButtons)
             if profile.controller.profileID == nil {

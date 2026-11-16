@@ -523,8 +523,12 @@ final class DesktopPad: ObservableObject {
         }
         hadMainController = hasMain
         consume(sourceState.retain(Set(feed.mainControllers().map { String(describing: ObjectIdentifier($0)) }).union(headStickActive ? ["head-motion"] : []).union(MappedGamepads.shared.sources)))
+        // A stream sending the other controllers as players of their own: only player one's goes through the profile.
+        let soloStream = streaming && stream?.otherControllersAsPlayers == true
+        let first = StreamGamepads.profileController()
         for c in feed.mainControllers() {
             guard let gp = c.extendedGamepad else { continue }
+            if soloStream, first.gc !== c { continue }
             let sourceID = String(describing: ObjectIdentifier(c))
             gp.valueChangedHandler = { pad, _ in MainActor.assumeIsolated { DesktopPad.shared.read(pad, source: sourceID) } }
             if let m = c.motion {
@@ -554,12 +558,15 @@ final class DesktopPad: ObservableObject {
                 MainActor.assumeIsolated { if !DesktopPad.shared.steamSource, let e = DesktopPad.shared.engine { pe_touch(e, Int32(f), down, x, y, DesktopPad.now()) } }
             }
         }
+        // The other controllers are the stream's players: their handlers are the stream's again.
+        if soloStream { stream?.rearmOtherPlayers() }
     }
 
     private var mappedToken: UUID?
     /// A controller macOS doesn't know, read with its community mapping (MappedGamepads): like any other.
     private func readMapped(_ source: String, _ held: Set<PadProfiles.Input>?, _ axes: [Int: Int]) {
         guard engine != nil, !steamSource else { return }
+        if streaming, stream?.otherControllersAsPlayers == true, StreamGamepads.profileController().mapped != source { return }
         guard let held else { consume(sourceState.retain(sourceState.sourceNames.subtracting([source]))); return }
         if OnScreenKeyboard.shared.isOpen {
             OnScreenKeyboard.shared.handle(held, stick: CGPoint(x: Double(axes[0] ?? 0) / 32767, y: -Double(axes[1] ?? 0) / 32767))
