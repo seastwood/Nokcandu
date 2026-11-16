@@ -10,10 +10,10 @@ its own device ("Add Device"), is left alone.
 | --- | --- | --- | --- |
 | Generic / third-party HID gamepads | any | SDL_GameControllerDB (Mac lines, `GamepadMapping`), else a guessed layout | works at all |
 | PlayStation 3 controller | 054C:0268 | mapping + start feature report F4 | starts sending |
-| Switch 2 Pro, GameCube (Switch 2) | 057E:2069, 2073 | `Switch2USB` (see switch-2-controllers.md) | full support by USB |
+| Switch 2 Pro, GameCube (Switch 2), Joy-Con 2 | 057E:2069, 2073, 2066/2067 | `Switch2USB` (see switch-2-controllers.md) | full support by USB, rumble; a left and right Joy-Con 2 are one controller |
 | Xbox 360 / Xbox One wired (and clones) | XInput / GIP class | `XInputUSB` (IOUSBHost) | works at all, rumble |
 | Xbox 360 Wireless Receiver (and clones) | XInput class, protocol 0x81 | `XInputUSB` | up to four wireless 360 controllers, slot lights, rumble |
-| GameCube adapter (Wii U / Switch) | 057E:0337 | `GameCubeAdapterHID` | four ports, four players |
+| GameCube adapter (Wii U / Switch) | 057E:0337 | `GameCubeAdapterHID` | four ports, four players, rumble (with its power plug in) |
 | 8BitDo SF30/SN30 Pro, Pro 2/3, Ultimate 2/2C/3 (D-input) | 2DC8:… | `ReportPadsHID` | back buttons, Share, gyro, rumble |
 | Google Stadia | 18D1:9400 | `ReportPadsHID` | Capture (Share), Assistant (paddle 1), rumble |
 | Amazon Luna | 1949:0419, 0171:0419 (BT) | `ReportPadsHID` | microphone button (Share), Home over BT, rumble over BT |
@@ -21,11 +21,18 @@ its own device ("Add Device"), is left alone.
 | HORI Wireless HORIPAD for Steam | 0F0D:01AB, 0196 (BT) | `ReportPadsHID` | M1/M2 and FL/FR back buttons, Quick Access (Share), stick touch, gyro |
 | GameSir G7 Pro 8K, Tarantula 8K | 3537:10B8, 103C | `ReportPadsHID` (switches it to its full mode) | L4/R4, L5/R5, Share, gyro, rumble |
 | NVIDIA SHIELD controller (2015, 2017) | 0955:7210, 7214 | `ReportPadsHID` | + and − (paddles), touchpad click, rumble on the 2015 one |
-| Wii Remote (alone, + Nunchuk, + Classic Controller), Wii U Pro Controller | 057E:0306, 0330 (Bluetooth) | `ReportPadsHID` + `WiiController` (identifies the extension, sets the report mode) | works at all, rumble (on/off) |
+| Wii Remote (alone, + Nunchuk, + Classic Controller), Wii U Pro Controller | 057E:0306, 0330 (Bluetooth) | `ReportPadsHID` + `WiiController` (identifies the extension, sets the report mode) | works at all, accelerometer, MotionPlus gyro (remote alone), rumble (on/off) |
+| PlayStation 4/5-compatible controllers macOS doesn't read (HORI, Nacon, Razer, PDP, Mad Catz…) | SDL's list | `ReportPadsHID` | gyro, touchpad click, mute (PS5) as Share, rumble by USB |
 | SInput (GP2040-CE, Handheld Legend ProGCC/GC Ultimate, Firebird…) | 2E8A:10C6/10DF/10DD/10E0/10E5, 38D2:1014 | `ReportPadsHID` | paddles, Capture, touchpad click, gyro, rumble |
 
 `ReportPadsHID` takes a controller from the generic mapping only once a report it understands arrives, so a
 controller in some other mode keeps working as a mapped one.
+
+Rumble and motion are per controller: in a stream each player's controller gets the host's rumble for that player
+and sends its own gyro; at the desktop the profile's rumble goes to the controllers that feed it. Output reports go
+out on a queue of their own, so a slow Bluetooth controller never holds the app up. Not done: SHIELD (2017) rumble
+(its commands hang on macOS, as SDL found), PlayStation Bluetooth rumble, and touchpad positions for these
+controllers (the click works).
 
 Extra buttons are named this way: Share/Capture/microphone → `misc`; left back button(s) → `paddle2`/`paddle4`,
 right → `paddle1`/`paddle3`. Motion is turned into Nokcandu's axes with SDL's axes for the original Steam Controller

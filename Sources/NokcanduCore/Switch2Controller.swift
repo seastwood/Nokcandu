@@ -7,8 +7,9 @@ import Foundation
 /// see docs/switch-2-controllers.md.
 public enum Switch2Controller {
     public static let vendor = 0x057E
-    public static let pro = 0x2069, gameCube = 0x2073
-    public static let products = [pro, gameCube]
+    public static let pro = 0x2069, gameCube = 0x2073, joyConLeft = 0x2067, joyConRight = 0x2066
+    public static let products = [pro, gameCube, joyConLeft, joyConRight]
+    public static func isJoyCon(_ product: Int) -> Bool { product == joyConLeft || product == joyConRight }
 
     /// Each command, then up to 64 bytes of reply read back. Exactly SDL's sequence; the length of a command is
     /// its byte 5 plus 8.
@@ -79,7 +80,8 @@ public enum Switch2Controller {
         var held = Set<PadProfiles.Input>()
         func on(_ byte: Int, _ bit: UInt8, _ i: PadProfiles.Input) { if d[byte] & bit != 0 { held.insert(i) } }
         var lt = 0, rt = 0
-        if product == pro {
+        if product != gameCube {
+            // Joy-Con 2 use the same bytes for their half of the controller (SDL's "combined" layout).
             // The Pro Controller's buttons by the letters printed on them, as macOS reports Nintendo controllers.
             on(5, 0x01, .y); on(5, 0x02, .x); on(5, 0x04, .b); on(5, 0x08, .a); on(5, 0x40, .rb)
             on(6, 0x01, .back); on(6, 0x02, .start); on(6, 0x04, .rs); on(6, 0x08, .ls); on(6, 0x10, .guide); on(6, 0x20, .misc); on(6, 0x40, .paddle3)
@@ -100,14 +102,62 @@ public enum Switch2Controller {
         on(7, 0x01, .down); on(7, 0x02, .up); on(7, 0x04, .right); on(7, 0x08, .left)
         let lx = Int(d[11]) | (Int(d[12]) & 0x0F) << 8, ly = Int(d[12]) >> 4 | Int(d[13]) << 4
         let rx = Int(d[14]) | (Int(d[15]) & 0x0F) << 8, ry = Int(d[15]) >> 4 | Int(d[16]) << 4
-        let axes = [0: axis(lx, c.left.x, invert: false), 1: axis(ly, c.left.y, invert: true),
-                    2: axis(rx, c.right.x, invert: false), 3: axis(ry, c.right.y, invert: true), 4: lt, 5: rt]
+        // A right Joy-Con's one stick has its calibration where other controllers keep the left stick's.
+        let rightCal = product == joyConRight ? c.left : c.right
+        var axes = [0: axis(lx, c.left.x, invert: false), 1: axis(ly, c.left.y, invert: true),
+                    2: axis(rx, rightCal.x, invert: false), 3: axis(ry, rightCal.y, invert: true), 4: lt, 5: rt]
+        // A Joy-Con has only its own half: the other half's sticks and trigger aren't there.
+        if product == joyConLeft { axes[2] = nil; axes[3] = nil; axes[5] = nil }
+        if product == joyConRight { axes[0] = nil; axes[1] = nil; axes[4] = nil }
         func s16(_ i: Int) -> Float { Float(Int16(bitPattern: UInt16(d[i]) | UInt16(d[i + 1]) << 8)) }
         // SDL gives gyro (0x37, 0x3b, −0x39) and acceleration (0x31, 0x35, −0x33) in its axes; the original Steam
         // Controller's SDL axes (x, z, y) of its own make this, in Nokcandu's: gyro (0x37, −0x39, 0x3b), and
-        // acceleration (0x31, 0x33, 0x35). Gyro: 34.8 rad/s full scale; acceleration: ±8 g.
+        // acceleration (0x31, −0x33, 0x35). Gyro: 34.8 rad/s full scale; acceleration: ±8 g.
         let g = Float(34.8) / 32767, a = Float(8) / 32767
         return State(buttons: held, axes: axes, gyro: [s16(0x37) * g, -s16(0x39) * g, s16(0x3b) * g],
-                     acceleration: [s16(0x31) * a, s16(0x33) * a, s16(0x35) * a])
+                     acceleration: [s16(0x31) * a, -s16(0x33) * a, s16(0x35) * a])
+    }
+
+    /// A left and a right Joy-Con 2 as one controller (either may be missing): buttons and axes from both, motion
+    /// from the right one when it's there (as SDL does).
+    public static func merge(left: State?, right: State?) -> State? {
+        guard left != nil || right != nil else { return nil }
+        var axes = [0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0]
+        for s in [left, right].compactMap({ $0 }) { for (k, v) in s.axes { axes[k] = v } }
+        let motion = right ?? left!
+        return State(buttons: (left?.buttons ?? []).union(right?.buttons ?? []), axes: axes, gyro: motion.gyro, acceleration: motion.acceleration)
+    }
+
+    /// Rumble state: sent with every input report while it's on (SDL sends it every 12 ms at most).
+    public struct Rumble: Equatable, Sendable {
+        public var low: UInt16 = 0, high: UInt16 = 0
+        var sequence: UInt8 = 0, error: UInt32 = 0
+        public init() {}
+        public var isOn: Bool { low != 0 || high != 0 }
+        /// The 64-byte output report (its first byte is the report ID) for this controller, advancing the sequence.
+        public mutating func report(product: Int) -> [UInt8] {
+            var r = [UInt8](repeating: 0, count: 64)
+            r[1] = 0x50 | (sequence & 0x0F)
+            sequence &+= 1
+            if product == gameCube {
+                // On or off only: spread over time to give the strength.
+                r[0] = 0x03
+                let m = UInt32(max(low, high))
+                if m == 0 { r[2] = 2; error = 0 }
+                else if error < m { r[2] = 1; error += 65535 - m }
+                else { r[2] = 0; error -= m }
+                return r
+            }
+            // Kept short of the motors' full strength, as SDL does (29000 of 65535).
+            let lo = UInt16(Int(low) * 29000 / 65535), hi = UInt16(Int(high) * 29000 / 65535)
+            let hiFreq: UInt16 = 0x187, loFreq: UInt16 = 0x112
+            r[2] = UInt8(hiFreq & 0xFF)
+            r[3] = UInt8(((hi >> 4) & 0xFC) | ((hiFreq >> 8) & 0x03))
+            r[4] = UInt8(((hi >> 12) | (loFreq << 4)) & 0xFF)
+            r[5] = UInt8((lo & 0xC0) | ((loFreq >> 4) & 0x3F))
+            r[6] = UInt8(lo >> 8)
+            if product == pro { r[0] = 0x02; for i in 0..<6 { r[0x11 + i] = r[1 + i] } } else { r[0] = 0x01 }
+            return r
+        }
     }
 }

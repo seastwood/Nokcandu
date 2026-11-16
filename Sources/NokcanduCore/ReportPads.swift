@@ -15,7 +15,7 @@ public struct ReportPadState: Equatable {
 /// Controllers whose own reports carry more than their generic HID description lets macOS see (extra buttons,
 /// motion, rumble): each driver's decoder, start-up and rumble, from SDL's HIDAPI drivers.
 public enum ReportPadDriver: Equatable {
-    case eightBitDo(product: Int), stadia, lunaUSB, lunaBluetooth, sinput, zuiki(product: Int), horiSteam, gameSir, shield(product: Int), wii
+    case eightBitDo(product: Int), stadia, lunaUSB, lunaBluetooth, sinput, zuiki(product: Int), horiSteam, gameSir, shield(product: Int), wii, ps4, ps5
 
     public static func find(vendor: Int, product: Int) -> ReportPadDriver? {
         switch (vendor, product) {
@@ -30,6 +30,8 @@ public enum ReportPadDriver: Equatable {
         case (0x3537, 0x10B8), (0x3537, 0x103C): return .gameSir
         case (0x0955, let p) where p == 0x7210 || p == 0x7214: return .shield(product: p)
         case (WiiController.vendor, let p) where WiiController.products.contains(p): return .wii
+        case let (v, p) where PlayStationPad.ps4.contains(PlayStationPad.key(v, p)): return .ps4
+        case let (v, p) where PlayStationPad.ps5.contains(PlayStationPad.key(v, p)): return .ps5
         default: return nil
         }
     }
@@ -39,6 +41,7 @@ public enum ReportPadDriver: Equatable {
             + SInput.raspberryPiProducts.map { (0x2E8A, $0) } + [(0x38D2, 0x1014)] + Zuiki.names.keys.map { (0x33DD, $0) }
             + [(0x0F0D, 0x01AB), (0x0F0D, 0x0196), (0x3537, 0x10B8), (0x3537, 0x103C), (0x0955, 0x7210), (0x0955, 0x7214)]
             + WiiController.products.map { (WiiController.vendor, $0) }
+            + PlayStationPad.ps4.union(PlayStationPad.ps5).map { ($0 >> 16, $0 & 0xFFFF) }
     }
 
     public var name: String {
@@ -52,6 +55,8 @@ public enum ReportPadDriver: Equatable {
         case .gameSir: return "GameSir 8K Controller"
         case .shield: return "NVIDIA SHIELD Controller"
         case .wii: return "Wii Remote"
+        case .ps4: return "PlayStation 4 Controller"
+        case .ps5: return "PlayStation 5 Controller"
         }
     }
     /// A feature report to read (get) once at start, which some controllers need before they send everything.
@@ -83,6 +88,10 @@ public enum ReportPadDriver: Equatable {
         case .gameSir: return Self.gameSirCommand([0x03, byte(low), byte(high)])
         case .shield(let p): return p == 0x7210 ? [0x01, 0x00, byte(low), 0x00, byte(high), 0x00, 0x00] : nil
         case .wii: return WiiController.rumble(max(low, high) > 0.2)
+        case .ps4:
+            var r = [UInt8](repeating: 0, count: 32); r[0] = 0x05; r[1] = 0x01; r[4] = byte(high); r[5] = byte(low); return r
+        case .ps5:
+            var r = [UInt8](repeating: 0, count: 48); r[0] = 0x02; r[1] = 0x03; r[3] = byte(high); r[4] = byte(low); return r
         }
     }
     static func gameSirCommand(_ body: [UInt8]) -> [UInt8] { [0xA2] + body + [UInt8](repeating: 0, count: 63 - body.count) }
@@ -120,6 +129,8 @@ public struct ReportPadDecoder {
         case .horiSteam: return Self.horiSteam(d)
         case .gameSir: return Self.gameSir(d)
         case .wii: return wii.decode(d)
+        case .ps4: return PlayStationPad.ps4Report(d)
+        case .ps5: return PlayStationPad.ps5Report(d)
         case .shield:
             if d.count >= 2, d[0] == 0x02 { touchClick = d[1] & 0x01 != 0; return nil }   // the touchpad's report
             guard var s = Self.shield(d) else { return nil }
@@ -329,6 +340,71 @@ public enum Zuiki {
         held.formUnion(ReportPadDecoder.bits(d[15], [(0x04, .back), (0x08, .start), (0x10, .guide), (0x20, .ls), (0x40, .rs)]))
         let (gyro, accel) = motion(d, gyro: 17, accel: 23)
         return ReportPadState(buttons: held, axes: [0: stick(1), 1: stick(3), 2: stick(5), 3: stick(7), 4: trigger(9), 5: trigger(11)],
+                              gyro: gyro, acceleration: accel)
+    }
+}
+
+/// PlayStation 4 and 5 controllers (licensed and compatible ones: HORI, Nacon, Razer, PDP, Mad Catz…) that macOS's
+/// own controller support doesn't read: their reports give the gyro, the touchpad's click and, by USB, rumble.
+/// IDs from SDL's controller list; layouts from SDL's PS4 and PS5 drivers.
+public enum PlayStationPad {
+    static func key(_ v: Int, _ p: Int) -> Int { v << 16 | p }
+    public static let ps4: Set<Int> = Set([
+        (0x0079, 0x181b), (0x046d, 0xc260), (0x044f, 0xd00e), (0x054c, 0x05c4), (0x054c, 0x05c5), (0x054c, 0x09cc), (0x054c, 0x0ba0),
+        (0x0738, 0x8250), (0x0738, 0x8384), (0x0738, 0x8480), (0x0738, 0x8481), (0x0c12, 0x0e10), (0x0c12, 0x0e13), (0x0c12, 0x0e15),
+        (0x0c12, 0x0e20), (0x0c12, 0x0ef6), (0x0c12, 0x1cf6), (0x0c12, 0x1e10), (0x0c12, 0x2e18), (0x0e6f, 0x0203), (0x0e6f, 0x0207),
+        (0x0e6f, 0x020a), (0x0f0d, 0x0055), (0x0f0d, 0x005e), (0x0f0d, 0x0066), (0x0f0d, 0x0084), (0x0f0d, 0x0087), (0x0f0d, 0x008a),
+        (0x0f0d, 0x009c), (0x0f0d, 0x00a0), (0x0f0d, 0x00c9), (0x0f0d, 0x00ee), (0x0f0d, 0x011c), (0x0f0d, 0x0123), (0x0f0d, 0x0162),
+        (0x11c0, 0x4001), (0x146b, 0x0d01), (0x146b, 0x0d02), (0x146b, 0x0d06), (0x146b, 0x0d08), (0x146b, 0x0d09), (0x146b, 0x0d10),
+        (0x146b, 0x0d13), (0x146b, 0x1103), (0x1532, 0x1000), (0x1532, 0x1004), (0x1532, 0x1007), (0x1532, 0x1008), (0x1532, 0x1009),
+        (0x1532, 0x100A), (0x1532, 0x1100), (0x20d6, 0x792a), (0x2c22, 0x2000), (0x2c22, 0x2300), (0x2c22, 0x2500), (0x3285, 0x0d16),
+        (0x3285, 0x0d17), (0x7545, 0x0104), (0x9886, 0x0025), (0x7545, 0x1122),
+    ].map { key($0.0, $0.1) })
+    public static let ps5: Set<Int> = Set([
+        (0x054c, 0x0ce6), (0x054c, 0x0e5f), (0x0e6f, 0x0209), (0x0f0d, 0x0163), (0x0f0d, 0x0184), (0x0f0d, 0x01b0), (0x1532, 0x100b),
+        (0x1532, 0x100c), (0x1532, 0x1012), (0x1532, 0x1024), (0x1532, 0x1026), (0x3285, 0x0d18), (0x3285, 0x0d19), (0x358a, 0x0104),
+        (0x358a, 0x0304),
+    ].map { key($0.0, $0.1) })
+
+    static let face: [(UInt8, PadProfiles.Input)] = [(0x10, .x), (0x20, .a), (0x40, .b), (0x80, .y)]
+    static let shoulders: [(UInt8, PadProfiles.Input)] = [(0x01, .lb), (0x02, .rb), (0x10, .back), (0x20, .start), (0x40, .ls), (0x80, .rs)]
+    /// Motion: gyro 1/16 °/s per unit (DS4's usual calibration) and 8192 a g, in SDL's axes, which are these
+    /// controllers' own; Nokcandu's (SDL's x, z, y).
+    static func motion(_ d: [UInt8], gyro gi: Int, accel ai: Int) -> ([Float]?, [Float]?) {
+        guard d.count >= ai + 6 else { return (nil, nil) }
+        func s16(_ i: Int) -> Float { Float(Int16(bitPattern: UInt16(d[i]) | UInt16(d[i + 1]) << 8)) }
+        let g = Float(Double.pi / 180 / 16), a = Float(1.0 / 8192)
+        let gyro = [s16(gi) * g, s16(gi + 4) * g, s16(gi + 2) * g], accel = [s16(ai) * a, s16(ai + 4) * a, s16(ai + 2) * a]
+        return gyro == [0, 0, 0] && accel == [0, 0, 0] ? (nil, nil) : (gyro, accel)
+    }
+    /// PS4: report 1 by USB (or the short Bluetooth report), report 0x11 (2 bytes further on) by Bluetooth.
+    static func ps4Report(_ r: [UInt8]) -> ReportPadState? {
+        let o: Int
+        if r.first == 0x01, r.count >= 10 { o = 0 } else if r.first == 0x11, r.count >= 12 { o = 2 } else { return nil }
+        let d = Array(r.dropFirst(o))
+        var held = EightBitDoController.hat(d[5] & 0x0F)
+        held.formUnion(ReportPadDecoder.bits(d[5], face))
+        held.formUnion(ReportPadDecoder.bits(d[6], shoulders))
+        held.formUnion(ReportPadDecoder.bits(d[7], [(0x01, .guide), (0x02, .touchpad)]))
+        let (gyro, accel) = d.count >= 25 ? motion(d, gyro: 13, accel: 19) : (nil, nil)
+        return ReportPadState(buttons: held, axes: [0: ReportPadDecoder.stick(d[1], centre: 0x80), 1: ReportPadDecoder.stick(d[2], centre: 0x80),
+                                                    2: ReportPadDecoder.stick(d[3], centre: 0x80), 3: ReportPadDecoder.stick(d[4], centre: 0x80),
+                                                    4: ReportPadDecoder.trigger(d[8]), 5: ReportPadDecoder.trigger(d[9])],
+                              gyro: gyro, acceleration: accel)
+    }
+    /// PS5: report 1 by USB, report 0x31 (1 byte further on) by Bluetooth. The mute button is Share.
+    static func ps5Report(_ r: [UInt8]) -> ReportPadState? {
+        let o: Int
+        if r.first == 0x01, r.count >= 11 { o = 0 } else if r.first == 0x31, r.count >= 12 { o = 1 } else { return nil }
+        let d = Array(r.dropFirst(o))
+        var held = EightBitDoController.hat(d[8] & 0x0F)
+        held.formUnion(ReportPadDecoder.bits(d[8], face))
+        held.formUnion(ReportPadDecoder.bits(d[9], shoulders))
+        held.formUnion(ReportPadDecoder.bits(d[10], [(0x01, .guide), (0x02, .touchpad), (0x04, .misc)]))
+        let (gyro, accel) = d.count >= 28 ? motion(d, gyro: 16, accel: 22) : (nil, nil)
+        return ReportPadState(buttons: held, axes: [0: ReportPadDecoder.stick(d[1], centre: 0x80), 1: ReportPadDecoder.stick(d[2], centre: 0x80),
+                                                    2: ReportPadDecoder.stick(d[3], centre: 0x80), 3: ReportPadDecoder.stick(d[4], centre: 0x80),
+                                                    4: ReportPadDecoder.trigger(d[5]), 5: ReportPadDecoder.trigger(d[6])],
                               gyro: gyro, acceleration: accel)
     }
 }

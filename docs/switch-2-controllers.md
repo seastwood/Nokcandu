@@ -14,7 +14,11 @@ Added November 15, 2026, **without the controllers to test against**; the protoc
   by position. Capture is `misc`, the C button `paddle3`, the Pro's back buttons GR/GL `paddle1`/`paddle2`.
 - Motion is turned into Nokcandu's axes using SDL's axes for the original Steam Controller as the bridge; the
   gyro's full scale is SDL's 34.8 rad/s (its timestamp check that can switch it to 40 isn't done).
-- Not done: Joy-Con 2 (left 2067, right 2066), rumble, Bluetooth (SDL can't either). A controller macOS's own
+- Joy-Con 2 (left 2067, right 2066) by USB read the same bytes for their half; a left and a right are one
+  controller between them (motion from the right one). Rumble: HD rumble for the Pro and Joy-Con 2 (kept short of
+  full strength, as SDL does), on/off spread over time for the GameCube controller, sent with each input report.
+- Several controllers of the same kind each start on their own USB interface (matched by location).
+- Not done: Bluetooth (SDL can't either). A controller macOS's own
   controller support reads is left to it.
 
 Check on first use: Controllers.log says whether it was found and started; then the buttons, stick directions and

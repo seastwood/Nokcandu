@@ -274,8 +274,73 @@ final class WiiControllerTests: XCTestCase {
         _ = dec.start()
         _ = dec.decode([0x22, 0, 0, 0x16, 0]); _ = dec.decode([0x22, 0, 0, 0x16, 7]); _ = dec.takeOutputs()
         _ = dec.decode([0x21, 0, 0, 0x17, 0x00, 0xFE, 0, 0])   // error 7: nothing attached
-        XCTAssertEqual(dec.takeOutputs().first, [0x12, 0x04, 0x30])
-        let s = try! XCTUnwrap(dec.decode([0x30, 0x10, 0x08]))
+        XCTAssertEqual(dec.takeOutputs().first?.prefix(5), [0x17, 0x04, 0xA6, 0x00, 0xFE], "asks for a MotionPlus")
+        _ = dec.decode([0x21, 0, 0, 0x17, 0x00, 0xFE, 0, 0])   // none
+        XCTAssertEqual(dec.takeOutputs().first, [0x12, 0x04, 0x31])
+        let s = try! XCTUnwrap(dec.decode([0x31, 0x10, 0x08, 0x80, 0x80, 0x99]))
         XCTAssertEqual(s.buttons, [.start, .b])
+        XCTAssertEqual(Double(s.acceleration![2]), 1, accuracy: 0.05, "flat: one g")
+    }
+    func testMotionPlus() {
+        var dec = ReportPadDecoder(.wii)
+        _ = dec.start()
+        _ = dec.decode([0x22, 0, 0, 0x16, 0]); _ = dec.decode([0x22, 0, 0, 0x16, 7]); _ = dec.takeOutputs()
+        _ = dec.decode([0x21, 0, 0, 0x17, 0x00, 0xFE, 0, 0])
+        _ = dec.takeOutputs()
+        _ = dec.decode([0x21, 0, 0, 0x10, 0x00, 0xFE, 0x00, 0x05])  // a MotionPlus, off
+        XCTAssertEqual(dec.takeOutputs().first?.prefix(7), [0x16, 0x04, 0xA6, 0x00, 0xFE, 0x01, 0x04])
+        _ = dec.decode([0x22, 0, 0, 0x16, 0])
+        XCTAssertEqual(dec.takeOutputs().first, [0x12, 0x04, 0x35])
+        var r = [UInt8](repeating: 0, count: 22); r[0] = 0x35; r[3] = 0x80; r[4] = 0x80; r[5] = 0x80
+        // Extension bytes from 6: x, y, z low; then high bits with the slow flags; byte 5 bit 1: MotionPlus data.
+        r[6] = 0x00; r[7] = 0x00; r[8] = 0x00; r[9] = 0x80 | 0x02 | 0x01; r[10] = 0x80 | 0x02; r[11] = 0x82
+        let s = try! XCTUnwrap(dec.decode(r))
+        XCTAssertEqual(s.gyro?.map { abs($0) < 0.0001 }, [true, true, true], "centred: still")
+    }
+}
+
+
+final class Switch2JoyConTests: XCTestCase {
+    func testJoyConHalvesMerge() {
+        var d = [UInt8](repeating: 0, count: 64)
+        d[7] = 0x02 | 0x80                    // up, ZL
+        d[11] = 0x00; d[12] = 0x08; d[13] = 0x80   // left stick centre-ish
+        let l = try! XCTUnwrap(Switch2Controller.decode(d, product: Switch2Controller.joyConLeft, calibration: .init()))
+        XCTAssertNil(l.axes[2]); XCTAssertEqual(l.axes[4], 32767); XCTAssertTrue(l.buttons.contains(.up))
+        var e = [UInt8](repeating: 0, count: 64); e[5] = 0x08
+        let r = try! XCTUnwrap(Switch2Controller.decode(e, product: Switch2Controller.joyConRight, calibration: .init()))
+        XCTAssertNil(r.axes[0]); XCTAssertTrue(r.buttons.contains(.a))
+        let m = try! XCTUnwrap(Switch2Controller.merge(left: l, right: r))
+        XCTAssertEqual(m.buttons, [.up, .a]); XCTAssertEqual(m.axes[4], 32767); XCTAssertEqual(m.axes[5], 0)
+    }
+    func testRumbleReports() {
+        var pro = Switch2Controller.Rumble(); pro.low = 65535; pro.high = 65535
+        let r = pro.report(product: Switch2Controller.pro)
+        XCTAssertEqual(r.count, 64); XCTAssertEqual(r[0], 0x02); XCTAssertEqual(r[1], 0x50); XCTAssertEqual(Array(r[0x11...0x16]), Array(r[1...6]))
+        XCTAssertEqual(pro.report(product: Switch2Controller.pro)[1], 0x51, "sequence advances")
+        var gc = Switch2Controller.Rumble()
+        XCTAssertEqual(gc.report(product: Switch2Controller.gameCube)[2], 2, "off")
+        gc.low = 65535
+        XCTAssertEqual(gc.report(product: Switch2Controller.gameCube)[2], 1, "full: on")
+    }
+}
+
+final class PlayStationPadTests: XCTestCase {
+    func testPS4AndPS5Reports() {
+        XCTAssertEqual(ReportPadDriver.find(vendor: 0x0F0D, product: 0x0066), .ps4)
+        XCTAssertEqual(ReportPadDriver.find(vendor: 0x1532, product: 0x100B), .ps5)
+        var dec = ReportPadDecoder(.ps4)
+        var d = [UInt8](repeating: 0x80, count: 64); d[0] = 0x01; d[5] = 0x08 | 0x20; d[6] = 0x20; d[7] = 0x02; d[8] = 0; d[9] = 255
+        for i in 10..<64 { d[i] = 0 }
+        d[15] = 0x10                          // gyro (axis 2 in the report) = 16 → 1 °/s
+        let s = try! XCTUnwrap(dec.decode(d))
+        XCTAssertEqual(s.buttons, [.a, .start, .touchpad]); XCTAssertEqual(s.axes[5], 32767)
+        XCTAssertEqual(Double(s.gyro![2]), Double.pi / 180, accuracy: 0.0001)
+        var dec5 = ReportPadDecoder(.ps5)
+        var e = [UInt8](repeating: 0, count: 64); e[0] = 0x01; e[1] = 0x80; e[2] = 0x80; e[3] = 0x80; e[4] = 0x80
+        e[8] = 0x08 | 0x80; e[10] = 0x04
+        let t = try! XCTUnwrap(dec5.decode(e))
+        XCTAssertEqual(t.buttons, [.y, .misc])
+        XCTAssertEqual(ReportPadDriver.ps5.rumble(low: 1, high: 0)?[4], 255)
     }
 }
