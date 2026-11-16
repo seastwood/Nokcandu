@@ -175,3 +175,19 @@ final class SInputTests: XCTestCase {
         XCTAssertEqual(ReportPadDriver.find(vendor: 0x2E8A, product: 0x10DF), .sinput)
     }
 }
+
+final class ZuikiTests: XCTestCase {
+    func testUSBAndBluetooth() {
+        var dec = ReportPadDecoder(.zuiki(product: 0x001D))
+        var d = [UInt8](repeating: 0, count: 20); d[0] = 0x04 | 0x80; d[1] = 0x20; d[2] = 0x0F
+        d[3] = 0x7F; d[4] = 0x7F; d[5] = 0x7F; d[6] = 0x7F; d[8] = 0x00; d[9] = 0x40
+        let s = try! XCTUnwrap(dec.decode(d))
+        XCTAssertEqual(s.buttons, [.a, .misc]); XCTAssertEqual(s.axes[5], 32767); XCTAssertGreaterThan(s.gyro![0], 0)
+        var bt = ReportPadDecoder(.zuiki(product: 0x0017))
+        var b = [UInt8](repeating: 0, count: 30); b[1] = 0x00; b[2] = 0x80; b[3] = 0xFF; b[4] = 0xFF; b[13] = 3; b[15] = 0x10
+        b[5] = 0; b[6] = 0x80; b[7] = 0; b[8] = 0x80
+        let t = try! XCTUnwrap(bt.decode(b))
+        XCTAssertEqual(t.buttons, [.right, .guide]); XCTAssertEqual(t.axes[0], 0); XCTAssertEqual(t.axes[1], 32767); XCTAssertNil(t.gyro)
+        XCTAssertEqual(ReportPadDriver.zuiki(product: 0x0020).rumble(low: 1, high: 1), nil)
+    }
+}

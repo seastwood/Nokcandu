@@ -86,8 +86,10 @@ final class ReportPadsHID {
     }
     private func send(low: Double, high: Double) {
         for id in claimed {
-            guard let p = pads[id], var bytes = p.decoder.driver.rumble(low: low, high: high) else { continue }
-            _ = IOHIDDeviceSetReport(p.device, kIOHIDReportTypeOutput, CFIndex(bytes[0]), &bytes, bytes.count)
+            guard let p = pads[id], let r = p.decoder.driver.rumble(low: low, high: high) else { continue }
+            // Report ID 0 means the device has none: the bytes after it are the report.
+            var bytes = r[0] == 0 ? Array(r.dropFirst()) : r
+            _ = IOHIDDeviceSetReport(p.device, kIOHIDReportTypeOutput, CFIndex(r[0]), &bytes, bytes.count)
         }
     }
 }

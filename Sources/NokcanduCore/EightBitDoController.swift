@@ -78,7 +78,7 @@ public enum EightBitDoController {
         default: return []
         }
     }
-    static func stick(_ v: UInt8) -> Int {
+    public static func stick(_ v: UInt8) -> Int {
         if v == 0x7F { return 0 }
         let x = Double(Int(v) - 0x7F)
         return Int(x < 0 ? x / 127 * 32768 : x / 128 * 32767).clamped(-32767, 32767)

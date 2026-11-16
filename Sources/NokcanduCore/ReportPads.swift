@@ -15,7 +15,7 @@ public struct ReportPadState: Equatable {
 /// Controllers whose own reports carry more than their generic HID description lets macOS see (extra buttons,
 /// motion, rumble): each driver's decoder, start-up and rumble, from SDL's HIDAPI drivers.
 public enum ReportPadDriver: Equatable {
-    case eightBitDo(product: Int), stadia, lunaUSB, lunaBluetooth, sinput
+    case eightBitDo(product: Int), stadia, lunaUSB, lunaBluetooth, sinput, zuiki(product: Int)
 
     public static func find(vendor: Int, product: Int) -> ReportPadDriver? {
         switch (vendor, product) {
@@ -25,13 +25,14 @@ public enum ReportPadDriver: Equatable {
         case (0x0171, 0x0419): return .lunaBluetooth
         case (0x2E8A, let p) where SInput.raspberryPiProducts.contains(p): return .sinput
         case (0x38D2, 0x1014): return .sinput
+        case (0x33DD, let p) where Zuiki.names[p] != nil: return .zuiki(product: p)
         default: return nil
         }
     }
     /// Every (vendor, product) handled, for device matching.
     public static var matching: [(vendor: Int, product: Int)] {
         EightBitDoController.products.map { (EightBitDoController.vendor, $0) } + [(0x18D1, 0x9400), (0x1949, 0x0419), (0x0171, 0x0419)]
-            + SInput.raspberryPiProducts.map { (0x2E8A, $0) } + [(0x38D2, 0x1014)]
+            + SInput.raspberryPiProducts.map { (0x2E8A, $0) } + [(0x38D2, 0x1014)] + Zuiki.names.keys.map { (0x33DD, $0) }
     }
 
     public var name: String {
@@ -40,6 +41,7 @@ public enum ReportPadDriver: Equatable {
         case .stadia: return "Google Stadia Controller"
         case .lunaUSB, .lunaBluetooth: return "Amazon Luna Controller"
         case .sinput: return "SInput Controller"
+        case .zuiki(let p): return Zuiki.names[p] ?? "ZUIKI Controller"
         }
     }
     /// A feature report to read (get) once at start, which some controllers need before they send everything.
@@ -52,7 +54,8 @@ public enum ReportPadDriver: Equatable {
         if case .sinput = self { return SInput.command(0x02, []) }
         return nil
     }
-    /// The output report for rumble at these strengths (0…1), or nil when it has none.
+    /// The output report for rumble at these strengths (0…1), or nil when it has none. A first byte of 0 is "no
+    /// report ID" (not sent), as with hidapi.
     public func rumble(low: Double, high: Double) -> [UInt8]? {
         func byte(_ v: Double) -> UInt8 { UInt8(max(0, min(1, v)) * 255) }
         switch self {
@@ -64,6 +67,7 @@ public enum ReportPadDriver: Equatable {
             return [0x03, 0x0F, 0x00, 0x00, UInt8(max(0, min(1, low)) * 100), UInt8(max(0, min(1, high)) * 100), 0xFF, 0x00, 0xEB]
         case .lunaUSB: return nil
         case .sinput: return SInput.command(0x01, [2, byte(low), 0, byte(high), 0])
+        case .zuiki(let p): return p == 0x0020 ? nil : [0, 0, 0, 0, byte(low), byte(high), 0, 0]
         }
     }
 }
@@ -88,6 +92,7 @@ public struct ReportPadDecoder {
         case .sinput:
             if let f = SInput.features(d) { sinput = f; return nil }
             return SInput.decode(d, sinput)
+        case .zuiki(let p): return p == 0x0017 ? Zuiki.bluetooth(d) : Zuiki.usb(d)
         }
     }
 
@@ -182,5 +187,48 @@ public enum SInput {
         var gyro: [Float]? = [-gx * g, -gy * g, gz * g], accel: [Float]? = [-ax * a, -ay * a, az * a]
         if gyro == [0, 0, 0], accel == [0, 0, 0] { gyro = nil; accel = nil }
         return ReportPadState(buttons: held, axes: axes, gyro: gyro, acceleration: accel)
+    }
+}
+
+/// ZUIKI's controllers (SDL_hidapi_zuiki.c): the EVOTOP (gyro on its PC and 2.4 GHz modes and some Bluetooth
+/// firmware), the EVOTOP AXIS and the MASCON PRO, in their D-input modes.
+public enum Zuiki {
+    public static let names: [Int: String] = [0x0006: "ZUIKI MASCON PRO", 0x001C: "ZUIKI EVOTOP", 0x001D: "ZUIKI EVOTOP",
+                                              0x0017: "ZUIKI EVOTOP", 0x0020: "ZUIKI EVOTOP AXIS"]
+    static func s16(_ d: [UInt8], _ i: Int) -> Float { Float(Int16(bitPattern: UInt16(d[i]) | UInt16(d[i + 1]) << 8)) }
+    /// Gyro ±1024 °/s and acceleration ±8 g over the Int16 range. SDL's axes are (x, z, −y) of these; Nokcandu's
+    /// (SDL's x, z, y) then (x, −y, z).
+    static func motion(_ d: [UInt8], gyro gi: Int, accel ai: Int) -> ([Float]?, [Float]?) {
+        guard d.count >= ai + 6 else { return (nil, nil) }
+        let g = Float(1024.0 * Double.pi / 180 / 32768), a = Float(8.0 / 32768)
+        let gyro = [s16(d, gi) * g, -s16(d, gi + 2) * g, s16(d, gi + 4) * g]
+        let accel = [s16(d, ai) * a, -s16(d, ai + 2) * a, s16(d, ai + 4) * a]
+        return gyro == [0, 0, 0] && accel == [0, 0, 0] ? (nil, nil) : (gyro, accel)
+    }
+    /// By USB or its 2.4 GHz receiver: no report ID; the d-pad as a hat in byte 2.
+    static func usb(_ d: [UInt8]) -> ReportPadState? {
+        guard d.count >= 7 else { return nil }
+        var held = EightBitDoController.hat(d[2])
+        held.formUnion(ReportPadDecoder.bits(d[0], [(0x01, .y), (0x02, .b), (0x04, .a), (0x08, .x), (0x10, .lb), (0x20, .rb)]))
+        held.formUnion(ReportPadDecoder.bits(d[1], [(0x01, .back), (0x02, .start), (0x04, .ls), (0x08, .rs), (0x10, .guide), (0x20, .misc)]))
+        let (gyro, accel) = motion(d, gyro: 8, accel: 14)
+        return ReportPadState(buttons: held, axes: [0: EightBitDoController.stick(d[3]), 1: EightBitDoController.stick(d[4]),
+                                                    2: EightBitDoController.stick(d[5]), 3: EightBitDoController.stick(d[6]),
+                                                    4: d[0] & 0x40 != 0 ? 32767 : 0, 5: d[0] & 0x80 != 0 ? 32767 : 0],
+                              gyro: gyro, acceleration: accel)
+    }
+    /// The EVOTOP by Bluetooth: 16-bit sticks, 10-bit triggers, d-pad 1…8.
+    static func bluetooth(_ d: [UInt8]) -> ReportPadState? {
+        guard d.count >= 16 else { return nil }
+        func u16(_ i: Int) -> Int { Int(d[i]) | Int(d[i + 1]) << 8 }
+        func stick(_ i: Int) -> Int { max(-32767, u16(i) - 32768) }
+        func trigger(_ i: Int) -> Int { min(1023, u16(i)) * 32767 / 1023 }
+        let h = d[13]
+        var held = (1...8).contains(h) ? EightBitDoController.hat(h - 1) : []
+        held.formUnion(ReportPadDecoder.bits(d[14], [(0x01, .a), (0x02, .b), (0x08, .x), (0x10, .y), (0x40, .lb), (0x80, .rb)]))
+        held.formUnion(ReportPadDecoder.bits(d[15], [(0x04, .back), (0x08, .start), (0x10, .guide), (0x20, .ls), (0x40, .rs)]))
+        let (gyro, accel) = motion(d, gyro: 17, accel: 23)
+        return ReportPadState(buttons: held, axes: [0: stick(1), 1: stick(3), 2: stick(5), 3: stick(7), 4: trigger(9), 5: trigger(11)],
+                              gyro: gyro, acceleration: accel)
     }
 }
