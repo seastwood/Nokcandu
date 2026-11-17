@@ -5,6 +5,8 @@ One controller profile follows you everywhere: Mac apps, Windows games, and game
 
 ![The Controls tab: a Steam Controller profile with layers, the controller picture showing what every input does, and gyro settings](docs/controls.png)
 
+![The Controls tab: a Steam Controller  2026 profile with layers](docs/SteamController2026.png)
+
 [**Download the latest release →**](https://github.com/seastwood/Nokcandu/releases/latest) · [Discord](https://discord.gg/FDZMVgPD2S) · Apple silicon, macOS 14 or newer · free and open source (GPL v3)
 
 ## Why it's different
