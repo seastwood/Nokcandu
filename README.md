@@ -4,16 +4,17 @@
 One controller profile follows you everywhere: Mac apps, Windows games, and games streamed from your PC.
 
 <p align="center">
-  <img src="docs/controls.png"
-       alt="Steam Controller profile with layers and gyro settings"
-       width="800">
+  <img src="docs/controls.png" width="800" alt="Steam Controller">
+  <br>
+  <em>Steam Controller profile with layers and gyro settings</em>
 </p>
 
 <p align="center">
-  <img src="docs/SteamController2026.png"
-       alt="Steam Controller 2026 profile with layers"
-       width="800">
+  <img src="docs/SteamController2026.png" width="800" alt="Steam Controller 2026">
+  <br>
+  <em>Steam Controller 2026 profile</em>
 </p>
+
 [**Download the latest release →**](https://github.com/seastwood/Nokcandu/releases/latest) · [Discord](https://discord.gg/FDZMVgPD2S) · Apple silicon, macOS 14 or newer · free and open source (GPL v3)
 
 ## Why it's different
