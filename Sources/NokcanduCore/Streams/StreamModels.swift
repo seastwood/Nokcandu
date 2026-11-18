@@ -196,6 +196,8 @@ public struct StreamProfile: Codable, Hashable, Identifiable, Sendable {
     public struct Controller: Codable, Hashable, Sendable {
         /// A Nokcandu controller profile to map the controller with, or nil for the controller as it is.
         public var profileID: String?
+        /// An active Use Everywhere profile takes priority without changing the saved stream profile.
+        public var allowEverywhereOverride = false
         public var sendAs: SendAs = .automatic
         /// Each controller is its own player on the host; off sends them all as player one.
         public var multipleControllers = true
@@ -323,10 +325,11 @@ extension StreamProfile.Audio {
     }
 }
 extension StreamProfile.Controller {
-    private enum CodingKeys: String, CodingKey { case profileID, sendAs, multipleControllers, swapFaceButtons, motion }
+    private enum CodingKeys: String, CodingKey { case profileID, allowEverywhereOverride, sendAs, multipleControllers, swapFaceButtons, motion }
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         profileID = try c.decodeIfPresent(String.self, forKey: .profileID)
+        allowEverywhereOverride = try c.decodeIfPresent(Bool.self, forKey: .allowEverywhereOverride) ?? false
         sendAs = (try? c.decodeIfPresent(SendAs.self, forKey: .sendAs)) ?? .automatic
         multipleControllers = try c.decodeIfPresent(Bool.self, forKey: .multipleControllers) ?? true
         swapFaceButtons = try c.decodeIfPresent(Bool.self, forKey: .swapFaceButtons) ?? false

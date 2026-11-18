@@ -22,8 +22,11 @@ Nokcandu isn't signed with a paid Apple Developer certificate yet, so the first 
   • Confirm with your password or Touch ID.
 You only need to do this once. Nokcandu updates itself after that.
 
-Requirements: a Mac with Apple silicon (M1 or later), macOS 14 or newer. Nokcandu installs Rosetta 2
-and downloads its Wine engine on first launch (about 260 MB).
+Requirements: a Mac with Apple silicon (M1 or later), macOS 14 or newer.
+Choose Games, Remapping and/or Streaming on the welcome screen. Change your choices later in
+Settings → General → Features. Hiding a feature keeps its games, profiles and paired PCs saved.
+Windows games need Rosetta 2 and a downloaded Wine engine; remapping and streaming don't require
+that setup. Enable Games to set up Windows games when you need them.
 
 Source code, help and updates: https://github.com/seastwood/Nokcandu
 TXT

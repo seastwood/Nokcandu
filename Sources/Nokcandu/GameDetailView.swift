@@ -212,6 +212,7 @@ struct GameDetailView: View {
                             Text("Installed \(u.installed) · newest \(u.latest)").font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
+                        UpdateNoticeControl(notice: .init(kind: .store, target: game.id, version: u.latest))
                         Button("Update") { model.updateGame(game) }.buttonStyle(.borderedProminent)
                             .disabled({ if case .launcherRunning = model.runStates[game.id] ?? .notRunning { return true }; return false }())
                     }

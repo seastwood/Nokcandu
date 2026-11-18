@@ -30,23 +30,52 @@ final class RadialHUD {
     private var panel: NSPanel?
     private var titles: [String] = []
     private var name = ""
+    private var layout: PadProfiles.RadialMenu.Layout = .radial
 
     func open(_ menu: PadProfiles.RadialMenu) {
-        titles = menu.slices.map { $0.displayTitle() }; name = menu.name
+        titles = Array(menu.slices.prefix(8)).map { $0.displayTitle() }; name = menu.name; layout = menu.layout ?? .radial
         update(-1)
     }
     func update(_ selected: Int) {
         let p = panel ?? padOverlayPanel()
         panel = p
-        let host = NSHostingView(rootView: RadialView(name: name, titles: titles, selected: selected))
-        host.frame.size = NSSize(width: 340, height: 340)
+        let host = NSHostingView(rootView: MenuOverlayView(name: name, titles: titles, selected: selected, layout: layout))
+        host.frame.size = NSSize(width:layout == .horizontal ? max(340,min(920,CGFloat(titles.count)*110+32)):340,
+                                 height:layout == .horizontal ? 180:340)
         p.contentView = host
         p.setContentSize(host.frame.size)
-        if let f = screenUnderPointer()?.frame { p.setFrameOrigin(NSPoint(x: f.midX - 170, y: f.midY - 170)) }
+        if let f = screenUnderPointer()?.frame { p.setFrameOrigin(NSPoint(x: f.midX-host.frame.size.width/2, y:f.midY-host.frame.size.height/2)) }
         p.alphaValue = 1
         p.orderFrontRegardless()
     }
     func close() { panel?.orderOut(nil) }
+}
+
+private struct MenuOverlayView: View {
+    let name: String
+    let titles: [String]
+    let selected: Int
+    let layout: PadProfiles.RadialMenu.Layout
+    var body: some View {
+        if layout == .radial { RadialView(name:name,titles:titles,selected:selected) }
+        else {
+            VStack(spacing:12) {
+                Text(name).font(.headline)
+                let columns = layout == .horizontal ? max(1,titles.count) : Int(ceil(sqrt(Double(max(1,titles.count)))))
+                LazyVGrid(columns:Array(repeating:GridItem(.flexible()),count:columns),spacing:8) {
+                    ForEach(Array(titles.enumerated()), id: \.offset) { index,title in
+                        VStack(spacing:4) {
+                            if layout == .quick { Text(["A","B","X","Y","LB","RB","View","Menu"][index]).font(.caption.bold()) }
+                            Text(title.isEmpty ? "—":title).lineLimit(3).font(.system(size:12))
+                        }.frame(maxWidth:.infinity,minHeight:48)
+                            .padding(4).background(selected == index ? Color.white : Color.white.opacity(0.12),in:RoundedRectangle(cornerRadius:8))
+                            .foregroundStyle(selected == index ? Color.black:Color.white)
+                    }
+                }
+            }.padding(16).foregroundStyle(.white).background(.black.opacity(0.8),in:RoundedRectangle(cornerRadius:16))
+                .frame(width:layout == .horizontal ? max(340,min(920,CGFloat(titles.count)*110+32)):340,height:layout == .horizontal ? 180:340)
+        }
+    }
 }
 
 private struct RadialView: View {

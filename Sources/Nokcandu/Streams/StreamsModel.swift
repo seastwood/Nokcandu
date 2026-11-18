@@ -133,6 +133,7 @@ import NokcanduCore
 
     /// Asks every saved host whether it's on, and refreshes its apps. Repeats every 20 seconds while the tab is shown.
     func startWatching() {
+        guard AppFeatures.current.contains(.streams) else { return }
         refresh()
         startDiscovery()
         guard refreshTimer == nil else { return }
@@ -146,6 +147,7 @@ import NokcanduCore
     }
 
     func refresh() {
+        guard AppFeatures.current.contains(.streams) else { return }
         // Like Moonlight, don't poll hosts during a stream: the host is busy, and its secure port is the same one
         // that has stopped answering after streams (docs/streams.md).
         guard running == nil, let identity = try? loadIdentity() else { return }
@@ -233,6 +235,7 @@ import NokcanduCore
     /// browser left stale by sleep or a network change doesn't show nothing; hosts that stop advertising leave
     /// the list.
     func startDiscovery() {
+        guard AppFeatures.current.contains(.streams) else { return }
         browser?.cancel()
         let b = NWBrowser(for: .bonjour(type: "_nvstream._tcp", domain: nil), using: .tcp)
         b.stateUpdateHandler = { state in
@@ -413,6 +416,7 @@ import NokcanduCore
     // MARK: Streaming
 
     func stream(_ p: StreamProfile) {
+        guard AppFeatures.current.contains(.streams) else { lastError = "Enable Streaming in Settings → General to start a stream."; return }
         guard running == nil, let h = host(p.hostID) else { return }
         guard h.isPaired else { lastError = "Pair with \(h.name) first."; return }
         var p = p

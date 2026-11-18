@@ -2,18 +2,24 @@ import Foundation
 
 public struct PadSteamTrackpadSettings: Codable, Hashable, Sendable {
     public enum Mode: String, Codable, CaseIterable, Sendable {
-        case existing, mouse, trackball, directions, stick, dial
+        case existing, mouse, trackball, directions, stick, dial, absolute, gestures
         /// The pad moves the pointer itself (rather than acting as mappings or directions).
         public var movesPointer: Bool { self == .mouse || self == .trackball }
         public var title: String { switch self {
         case .directions: "Four directions"
         case .stick: "Analog stick"
+        case .absolute: "Absolute mouse region"
+        case .gestures: "Drawn gestures"
         case .dial: "Scroll wheel (circle)"
         case .existing: "Existing mappings"
         case .mouse: "Trackpad mouse"
         case .trackball: "Trackball mouse"
         } }
     }
+    public var region: PadMouseRegion?
+    public var gesturePatterns: [String]?
+    public var gestureTolerance: Double?
+    public var gestureStroke: Double?
     public var mode: Mode = .existing
     public var sensitivity: Double = 1500
     public var halfLife: Double = 0.16

@@ -212,6 +212,7 @@ struct StreamHostSummary: View {
 /// One stream profile: what the host starts and how the stream looks, sounds and takes input.
 struct StreamProfileEditor: View {
     @State var profile: StreamProfile
+    @ObservedObject private var desktopPad = DesktopPad.shared
     let host: StreamHost
     @ObservedObject var m = StreamsModel.shared
     @State private var padProfiles: [PadProfiles.Profile] = []
@@ -242,6 +243,7 @@ struct StreamProfileEditor: View {
         .environment(\.pendingControlTitles, pendingForNextStream)
         .environment(\.appliedControlTitles, justApplied)
         .environment(\.pendingControlHelp, "Saved. The host sets this when a stream starts, so it applies the next time you start this stream.")
+        .onReceive(NotificationCenter.default.publisher(for: .padProfilesChanged)) { _ in padProfiles = PadProfiles.profiles() }
         .onChange(of: profile) { old, p in
             m.setProfile(p)
             // During the stream: what took effect just now says so for a moment.
@@ -427,6 +429,11 @@ struct StreamProfileEditor: View {
         }
     }
 
+    private var controllerRouting: StreamControllerRouting {
+        StreamControllerRouting(settings: profile.controller, everywhereID: desktopPad.everywhereID,
+                                profilesEnabled: desktopPad.enabled, profiles: padProfiles)
+    }
+
     private var controllerSection: some View {
         SettingsSection(title: "Controller", info: "With a Nokcandu controller profile, the stream gets exactly what the profile makes of your controller: its remapped buttons, sticks, gyro aiming, trackpads, keys and mouse, layers and radial menus. Without one, controllers go to the host as they are.") {
             SettingRow(title: "Controller profile") {
@@ -437,6 +444,17 @@ struct StreamProfileEditor: View {
                 }
                 .labelsHidden().frame(maxWidth: 260)
             }
+            SettingToggle(title: "Let Use Everywhere override",
+                          info: "When Use Everywhere is active, use that controller profile instead of the one selected above, including Controller as it is. When it stops, return to this stream's selected profile. Applies during the stream.",
+                          isOn: $profile.controller.allowEverywhereOverride)
+            if profile.controller.allowEverywhereOverride {
+                if controllerRouting.usesEverywhere,
+                   let active = padProfiles.first(where: { $0.id == controllerRouting.settings.profileID }) {
+                    SettingNote("Using Use Everywhere: \(active.name). This stream's selected profile is kept as the fallback.")
+                } else {
+                    SettingNote("Use Everywhere isn't active. This stream uses its selected controller profile.")
+                }
+            }
             SettingRow(title: "Emulated controller type", info: "The kind of controller the host's games see. Automatic sends each controller as its own kind (PlayStation pads as PlayStation, Switch pads as Switch, others as Xbox), or as the Nokcandu profile's Emulated controller when it has one. PlayStation adds the touchpad and motion; Switch uses Nintendo's button layout. \"No controller\" sends none at all: with a Nokcandu profile, only what it turns into keys, clicks, mouse movement and scrolling reaches the host, so games see a keyboard and mouse.") {
                 Picker("Emulated controller type", selection: $profile.controller.sendAs) {
                     ForEach(StreamProfile.Controller.SendAs.allCases.filter { $0 != .profileOnly }, id: \.self) { Text($0.title).tag($0) }
@@ -446,19 +464,19 @@ struct StreamProfileEditor: View {
                 .labelsHidden().frame(maxWidth: 260)
             }
             if profile.controller.sendAs == .profileOnly {
-                SettingNote(profile.controller.profileID == nil
+                SettingNote(controllerRouting.settings.profileID == nil
                             ? "No controller is sent. Choose a Nokcandu controller profile above to use your controller as keys and mouse."
                             : "No controller is sent: the profile's keys, mouse and scrolling go to the host.")
             }
             if profile.controller.sendAs != .profileOnly {
                 SettingToggle(title: "Each controller is its own player",
-                              info: profile.controller.profileID == nil
+                              info: controllerRouting.settings.profileID == nil
                                 ? "Every connected controller is a player of its own on the host, including controllers Nokcandu reads itself (Steam Controllers aside). Off: they all act as player one."
                                 : "The first controller goes through the controller profile as player one; every other controller is a player of its own, sent as it is. Off: all of them go through the profile as player one.",
                               isOn: $profile.controller.multipleControllers)
             }
             SettingToggle(title: "Swap A/B and X/Y", info: "For Nintendo-style layouts, where the confirm button is on the right.", isOn: $profile.controller.swapFaceButtons)
-            if profile.controller.profileID == nil {
+            if controllerRouting.settings.profileID == nil {
                 SettingToggle(title: "Send motion", info: "Passes the controller's gyro and accelerometer to games that ask for them (sent as a PlayStation or Switch controller). With a Nokcandu profile, its own gyro settings apply instead.", isOn: $profile.controller.motion)
             }
         }

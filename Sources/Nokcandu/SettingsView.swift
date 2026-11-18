@@ -13,15 +13,22 @@ struct SettingsView: View {
     var body: some View {
         TabView(selection: $tab) {
             GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }.tag("general")
-            StorageView(embedded: true).tabItem { Label("Storage", systemImage: "internaldrive") }.tag("storage")
-            AccountsSettings().tabItem { Label("Accounts", systemImage: "person.crop.circle") }.tag("accounts")
+            if model.gamesEnabled {
+                StorageView(embedded: true).tabItem { Label("Storage", systemImage: "internaldrive") }.tag("storage")
+                AccountsSettings().tabItem { Label("Accounts", systemImage: "person.crop.circle") }.tag("accounts")
+            }
             UpdatesView(embedded: true)
                 .tabItem { Label(model.updateCount > 0 ? "Updates (\(model.updateCount))" : "Updates", systemImage: "arrow.down.circle") }
                 .tag("updates")
-            AdvancedSettings().tabItem { Label("Advanced", systemImage: "wrench.and.screwdriver") }.tag("advanced")
+            if model.gamesEnabled { AdvancedSettings().tabItem { Label("Advanced", systemImage: "wrench.and.screwdriver") }.tag("advanced") }
             CreditsSettings().tabItem { Label("Credits", systemImage: "heart") }.tag("credits")
         }
         .frame(width: 780, height: 640)
+        .onAppear { normalizeTab() }
+        .onChange(of: model.gamesEnabled) { _, _ in normalizeTab() }
+    }
+    private func normalizeTab() {
+        if !model.gamesEnabled && ["storage", "accounts", "advanced"].contains(tab) { tab = "general" }
     }
 }
 
@@ -33,64 +40,81 @@ struct GeneralSettings: View {
 
     var body: some View {
         Form {
+            Section("Features") {
+                FeatureChoices(selection: Binding(get: { model.features }, set: { model.setFeatures($0) }))
+                Text("Hide what you don't use. Games, saves, profiles, paired PCs and settings stay on disk and return when you show the feature again. Running games and streams keep running.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("Hiding Remapping pauses desktop profiles and releases its background controller ownership. Profiles assigned to games and streams still work.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Startup") {
                 Toggle("Open Nokcandu at login, in the menu bar", isOn: Binding(get: { SMAppService.mainApp.status == .enabled }, set: { on in
                     if on { try? SMAppService.mainApp.register(); UserDefaults.standard.set(true, forKey: MenuBarSetting.key) } else { try? SMAppService.mainApp.unregister() }
                     model.objectWillChange.send()
                 }))
-                .help("So your controller works on the Mac from the moment you sign in, without opening Nokcandu.")
+                .help("Keeps Nokcandu available from the moment you sign in.")
 
             }
-            Section("Library") {
-                Picker("Sort games by", selection: Binding(get: { model.sortMode }, set: { model.setSort($0) })) {
-                    ForEach(LibraryOrganizer.Sort.allCases) { Text($0.title).tag($0) }
-                }
-                Text("Drag games in the sidebar to put them in your own order; right-click a game to add it to Favorites.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Toggle("Ask before quitting a game", isOn: Binding(get: { !model.quitWithoutAsking }, set: { model.quitWithoutAsking = !$0 }))
-                Text("Quitting a game loses unsaved progress. Launchers with no game running in them always quit without asking.")
-                    .font(.caption).foregroundStyle(.secondary)
+            Section("Menu bar") {
                 Toggle("Show Nokcandu in the menu bar", isOn: Binding(get: { MenuBarSetting.on }, set: { UserDefaults.standard.set($0, forKey: MenuBarSetting.key); model.objectWillChange.send() }))
-                Text("Running games with Quit, recent games with Play, and the way back to your library. Nokcandu keeps running in the menu bar when you close its window.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Toggle("Mac notifications while Nokcandu is in the background", isOn: Binding(get: { Notifier.enabled }, set: { Notifier.enabled = $0; model.objectWillChange.send() }))
-                Text("When a store game is added, a game doesn't start, or a game is running low on memory. Click one to open that game.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Toggle("Lower store apps' priority while a game is in front", isOn: Binding(
-                    get: { !FileManager.default.fileExists(atPath: NokPaths.support.appendingPathComponent("launchers-normal-priority").path) },
-                    set: { on in
-                        let f = NokPaths.support.appendingPathComponent("launchers-normal-priority")
-                        if on { try? FileManager.default.removeItem(at: f) } else { try? NokPaths.ensure(NokPaths.support); FileManager.default.createFile(atPath: f.path, contents: Data()) }
-                        model.objectWillChange.send()
-                    }))
-                Text("Store apps you aren't playing through keep running (downloads, sign-in, friends) but stop competing with the game until you switch to them. The one your game belongs to keeps its normal priority, since the game relies on it online. Games also ask macOS for its fastest cores.")
-                    .font(.caption).foregroundStyle(.secondary)
-                NetworkSteadySetting()
-                Toggle("Take a restore point before big changes", isOn: Binding(get: { RestorePoints.automaticChosen }, set: { RestorePoints.automaticChosen = $0; model.objectWillChange.send() }))
-                Text("Before a fix, an engine change or Reset to Recommended, keeps one copy of the game's Windows environment to go back to (the newest replaces the last). Off by default: those changes have their own Undo, and you can take a restore point yourself any time in a game's Storage tab.")
+                Text("Quick access to Nokcandu and active features. Nokcandu keeps running in the menu bar when you close its window.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Section("Controllers") {
-                Text("Controller profiles on the Mac, the gyro, notes, pointer capture, headphone motion and connected controllers are in the Controls tab.")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                Button("Open Controller Settings") {
-                    model.sidebarTab = .profiles; model.profileSelection = "settings"
-                    NSApp.activate(ignoringOtherApps: true)
-                    if let w = NSApp.windows.first(where: { $0.isVisible && $0.title == "Nokcandu" }) { w.makeKeyAndOrderFront(nil) }
-                    else { openWindow(id: "library") }
+            if model.gamesEnabled {
+                Section("Library") {
+                    Picker("Sort games by", selection: Binding(get: { model.sortMode }, set: { model.setSort($0) })) {
+                        ForEach(LibraryOrganizer.Sort.allCases) { Text($0.title).tag($0) }
+                    }
+                    Text("Drag games in the sidebar to put them in your own order; right-click a game to add it to Favorites.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Toggle("Ask before quitting a game", isOn: Binding(get: { !model.quitWithoutAsking }, set: { model.quitWithoutAsking = !$0 }))
+                    Text("Quitting a game loses unsaved progress. Launchers with no game running in them always quit without asking.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Toggle("Mac notifications while Nokcandu is in the background", isOn: Binding(get: { Notifier.enabled }, set: { Notifier.enabled = $0; model.objectWillChange.send() }))
+                    Text("When a store game is added, a game doesn't start, or a game is running low on memory. Click one to open that game.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Toggle("Lower store apps' priority while a game is in front", isOn: Binding(
+                        get: { !FileManager.default.fileExists(atPath: NokPaths.support.appendingPathComponent("launchers-normal-priority").path) },
+                        set: { on in
+                            let f = NokPaths.support.appendingPathComponent("launchers-normal-priority")
+                            if on { try? FileManager.default.removeItem(at: f) } else { try? NokPaths.ensure(NokPaths.support); FileManager.default.createFile(atPath: f.path, contents: Data()) }
+                            model.objectWillChange.send()
+                        }))
+                    Text("Store apps you aren't playing through keep running (downloads, sign-in, friends) but stop competing with the game until you switch to them. The one your game belongs to keeps its normal priority, since the game relies on it online. Games also ask macOS for its fastest cores.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Toggle("Take a restore point before big changes", isOn: Binding(get: { RestorePoints.automaticChosen }, set: { RestorePoints.automaticChosen = $0; model.objectWillChange.send() }))
+                    Text("Before a fix, an engine change or Reset to Recommended, keeps one copy of the game's Windows environment to go back to (the newest replaces the last). Off by default: those changes have their own Undo, and you can take a restore point yourself any time in a game's Storage tab.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            Section("Discord") {
-                Toggle("Show what you're playing in Discord", isOn: Binding(get: { DiscordBridge.enabled }, set: { DiscordBridge.enabled = $0; discordTick += 1 }))
-                Text("Windows games that support Discord Rich Presence show up in your Discord status. Nokcandu adds a small bridge (rpc-bridge, the one Sikarugir uses) to each game's Windows environment the next time it starts; turning this off removes it.")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    .id(discordTick)
+            if model.remappingEnabled {
+                Section("Controllers") {
+                    Text("Controller profiles on the Mac, the gyro, notes, pointer capture, headphone motion and connected controllers are in the Controls tab.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Button("Open Controller Settings") {
+                        model.sidebarTab = .profiles; model.profileSelection = "settings"
+                        NSApp.activate(ignoringOtherApps: true)
+                        if let w = NSApp.windows.first(where: { $0.isVisible && $0.title == "Nokcandu" }) { w.makeKeyAndOrderFront(nil) }
+                        else { openWindow(id: "library") }
+                    }
+                }
             }
-            Section("New games") {
-                DefaultWineSetting()
-                InstallFolderPicker(folder: $installTo)
-                Text("Where installs go unless you choose otherwise. Manage folders and drives under Storage.")
-                    .font(.caption).foregroundStyle(.secondary)
+            if model.gamesEnabled {
+                Section("Discord") {
+                    Toggle("Show what you're playing in Discord", isOn: Binding(get: { DiscordBridge.enabled }, set: { DiscordBridge.enabled = $0; discordTick += 1 }))
+                    Text("Windows games that support Discord Rich Presence show up in your Discord status. Nokcandu adds a small bridge (rpc-bridge, the one Sikarugir uses) to each game's Windows environment the next time it starts; turning this off removes it.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        .id(discordTick)
+                }
+                Section("New games") {
+                    DefaultWineSetting()
+                    InstallFolderPicker(folder: $installTo)
+                    Text("Where installs go unless you choose otherwise. Manage folders and drives under Storage.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if model.gamesEnabled || model.streamsEnabled {
+                Section("Network") { NetworkSteadySetting() }
             }
             Section("About") {
                 LabeledContent("Version", value: AppUpdate.currentVersion)
@@ -100,7 +124,7 @@ struct GeneralSettings: View {
                     }
                 }
                 HStack {
-                    Button("Setup Checklist…") { model.welcomePage = .games; model.showWelcome = true }
+                    if model.gamesEnabled { Button("Setup Checklist…") { model.welcomePage = .games; model.showWelcome = true } }
                     Button("Nokcandu on GitHub") { NSWorkspace.shared.open(URL(string: "https://github.com/seastwood/Nokcandu")!) }
                     Button("Report a Problem") { NSWorkspace.shared.open(URL(string: "https://github.com/seastwood/Nokcandu/issues/new")!) }
                 }

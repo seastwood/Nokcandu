@@ -243,7 +243,7 @@ final class DeviceFeed {
     func attachGamepads() {
         reconcile()
         for (c, slot, d) in gamepadSlots() {
-            c.motion?.valueChangedHandler = nil
+            PadMotionHandlers.set(c,handler:nil)
             let rateID = "gc:\(ObjectIdentifier(c)):buttons"
             c.extendedGamepad?.valueChangedHandler = { [weak self] pad, _ in
                 ControllerReportDiagnostics.shared.record(rateID, label: "GameController · changed values")

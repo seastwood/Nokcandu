@@ -51,9 +51,19 @@ final class AppModel: ObservableObject {
     @Published var showWhatsNew = false
     @Published var showSeveralGames = false
     /// "profiles" is the Controls tab; its saved name predates the rename.
-    enum SidebarTab: String { case games, profiles, streams }
+    typealias SidebarTab = AppFeature
+    @Published private(set) var features = AppFeatures.current
+    @Published private(set) var updatePreferences = UpdateNoticePreferences(defaults: .standard)
+    @Published private(set) var updateNotices: [UpdateNotice] = []
+    private var featureServicesReady = UserDefaults.standard.bool(forKey: "welcomeDone")
+    var gamesEnabled: Bool { featureServicesReady && features.contains(.games) }
+    var remappingEnabled: Bool { featureServicesReady && features.contains(.profiles) }
+    var streamsEnabled: Bool { featureServicesReady && features.contains(.streams) }
     @Published var sidebarTab: SidebarTab = SidebarTab(rawValue: UserDefaults.standard.string(forKey: "sidebarTab") ?? "") ?? .games {
-        didSet { UserDefaults.standard.set(sidebarTab.rawValue, forKey: "sidebarTab") }
+        didSet {
+            if let visible = features.selection(sidebarTab), visible != sidebarTab { sidebarTab = visible }
+            UserDefaults.standard.set(sidebarTab.rawValue, forKey: "sidebarTab")
+        }
     }
     /// Selected in the Profiles tab: "pad:<id>", "keys:<id>" or "mac".
     @Published var profileSelection: String? = "mac"
@@ -78,7 +88,7 @@ final class AppModel: ObservableObject {
     @Published var storeDownloads: [String: StoreDownload] = [:]
     @Published var interruptedDownloads: [StoreJob] = []
     /// GOG/Epic games with a newer version (game id → versions), and updates running now.
-    @Published var storeUpdates: [String: StoreUpdates.Available] = StoreUpdates.cached()?.value ?? [:]
+    @Published var storeUpdates: [String: StoreUpdates.Available] = StoreUpdates.cached()?.value ?? [:] { didSet { recountUpdates() } }
     @Published var updating: [String: StoreDownload] = [:]
     struct StoreDownload: Equatable { var line: String; var progress: StoreTools.Progress? }
     @Published var showUpdates = false
@@ -92,7 +102,7 @@ final class AppModel: ObservableObject {
     /// Which welcome page opens: Setup Checklist… goes straight to what Windows games need.
     @Published var welcomePage: WelcomePage = .choose
     /// A newer Nokcandu on GitHub Releases, if any.
-    @Published var appUpdate: AppUpdate.Release? { didSet { recountUpdates() } }
+    @Published var appUpdate: AppUpdate.Release? = AppUpdateAvailability.load(defaults: .standard, currentVersion: AppUpdate.currentVersion) { didSet { recountUpdates() } }
     /// What's available upstream (Wine engine, wrapper template, LAV Filters); refreshed daily.
     @Published var catalog: UpdateCatalog? = Updates.cached() { didSet { recountUpdates() } }
 
@@ -113,8 +123,10 @@ final class AppModel: ObservableObject {
     private var lastStoreDiscoveryErrors: [String] = []
 
     init() {
-        ControllerOwnershipCoordinator.shared.start()
-        SharedSteam.refreshHostScriptsIfNeeded()
+        if featureServicesReady { ControllerOwnershipCoordinator.shared.start() }
+        if let visible = features.selection(sidebarTab) { sidebarTab = visible }
+        if gamesEnabled { SharedSteam.refreshHostScriptsIfNeeded() }
+        if featureServicesReady { DesktopPad.shared.start(); PadDSUBridge.shared.configure() }
         Notifier.shared.start { [weak self] id in self?.selection = id }
         showWhatsNew = !showWelcome && WhatsNew.shouldShow()
         refresh()
@@ -123,7 +135,7 @@ final class AppModel: ObservableObject {
         if Date().timeIntervalSince(StoreUpdates.cached()?.saved ?? .distantPast) > 6 * 3600 {
             Task { await checkStoreUpdates() }
         }
-        if let j = interruptedDownloads.first {
+        if gamesEnabled, let j = interruptedDownloads.first {
             let more = interruptedDownloads.count > 1 ? " (and \(interruptedDownloads.count - 1) more)" : ""
             say("\(j.game.title)'s download didn't finish\(more). Resume it in Game Stores.")
         }
@@ -132,8 +144,12 @@ final class AppModel: ObservableObject {
             fail(NokError("Nokcandu version change: " + text))
             try? FileManager.default.removeItem(at: replacementFailure)
         }
-        if Updates.isStale { Task { await checkForUpdates(quiet: true) } }
-        Task.detached(priority: .utility) { await AntiCheat.refreshIfStale() }
+        let lastAppCheck = UserDefaults.standard.object(forKey: "lastAppUpdateCheck") as? Date ?? .distantPast
+        if Date().timeIntervalSince(lastAppCheck) > 86_400 || (gamesEnabled && Updates.isStale) {
+            Task { await checkForUpdates(quiet: true) }
+        }
+        if gamesEnabled { Task.detached(priority: .utility) { await AntiCheat.refreshIfStale() } }
+        recountUpdates()
         scheduleStatusTimer()
         // A drive plugged in or out: games on it become playable or show "Connect … to play" right away.
         let ws = NSWorkspace.shared.notificationCenter
@@ -142,14 +158,14 @@ final class AppModel: ObservableObject {
                 Task { @MainActor in
                     self?.refresh()
                     // A drive holding a games volume was connected: open the volume too.
-                    if n.name == NSWorkspace.didMountNotification {
+                    if self?.gamesEnabled == true, n.name == NSWorkspace.didMountNotification {
                         Task.detached(priority: .utility) { GamesVolume.attachRegistered() }
                         self?.discoverLibraries()
                     }
                 }
             }
         }
-        Task.detached(priority: .utility) { GamesVolume.attachRegistered() }
+        if gamesEnabled { Task.detached(priority: .utility) { GamesVolume.attachRegistered() } }
         // Games start and quit as Mac apps: notice right away instead of polling quickly.
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
             ws.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
@@ -217,6 +233,7 @@ final class AppModel: ObservableObject {
     /// Re-reads the library. The scan runs off the main thread (a game drive that is asleep or slow must
     /// never freeze the window); calls that arrive meanwhile are merged into one more scan.
     func refresh(automatic: Bool = false) {
+        guard gamesEnabled else { return }
         if !automatic { libraryRevision += 1 }
         if scanningLibrary { rescanRequested = true; return }
         scanningLibrary = true
@@ -228,6 +245,7 @@ final class AppModel: ObservableObject {
                 return (found, LibraryExtras.load(found))
             }.value
             scanningLibrary = false
+            guard gamesEnabled else { rescanRequested = false; return }
             if rescanRequested { rescanRequested = false; refresh(); return }
             // An automatic check that found the same library changes nothing on screen.
             if automatic, scanned.0.map(\.appURL) == games.map(\.appURL), scanned.0.map(\.name) == games.map(\.name),
@@ -241,7 +259,7 @@ final class AppModel: ObservableObject {
             // engine): open the setup checklist. Someone using only Controls or Streams never needs them.
             if firstLoad, !showWelcome, games.contains(where: { $0.native == nil }) {
                 Task {
-                    guard await Task.detached(operation: { Setup.needsAttention }).value, !showWelcome else { return }
+                    guard await Task.detached(operation: { Setup.needsAttention }).value, gamesEnabled, !showWelcome else { return }
                     welcomePage = .games; showWelcome = true
                 }
             }
@@ -261,6 +279,7 @@ final class AppModel: ObservableObject {
     @Published var droppedFolder: URL?
     @Published var folderOfGames: URL?
     func chooseFolderOfGames() {
+        guard gamesEnabled else { return }
         let p = NSOpenPanel()
         p.canChooseDirectories = true; p.canChooseFiles = false
         p.message = "Choose the folder that holds your game folders."
@@ -268,6 +287,7 @@ final class AppModel: ObservableObject {
         if p.runModal() == .OK, let u = p.url { folderOfGames = u }
     }
     func handleDrop(_ urls: [URL]) {
+        guard gamesEnabled else { say("Enable Games in Settings → General to add games."); return }
         switch DropToAdd.classify(urls) {
         case .installer(let u):
             installer.startCustom(name: DropToAdd.name(for: u), source: .installer, library: games, inputs: ["installerPath": u.path])
@@ -295,7 +315,7 @@ final class AppModel: ObservableObject {
     @Published var foundFolders: [FoundFolder] = []
     private var discovering = false
     func discoverLibraries() {
-        guard !discovering else { return }
+        guard gamesEnabled, !discovering else { return }
         discovering = true
         let library = games
         Task {
@@ -303,6 +323,7 @@ final class AppModel: ObservableObject {
                 LibraryDiscovery.notDeclined(LibraryDiscovery.onConnectedDrives(library: library))
             }.value
             discovering = false
+            guard gamesEnabled else { return }
             let list = found.map { FoundFolder(url: $0.folder, games: $0.games) }
             if !list.isEmpty, list != foundFolders { foundFolders = list }
         }
@@ -321,6 +342,7 @@ final class AppModel: ObservableObject {
     private var libraryExtras = LibraryExtras()
 
     private func didRefresh() {
+        guard gamesEnabled else { return }
         let snapshot = games
         refreshStoreGames(force: true)
         Task.detached(priority: .utility) { AutomaticDriveMappings.reconcile(games: snapshot) }
@@ -385,11 +407,12 @@ final class AppModel: ObservableObject {
         // Finding newly installed store games reads every launcher's library (often on an external drive):
         // every 2 minutes while Nokcandu is in front, every 15 in the background; drive changes force it.
         let interval: TimeInterval = NSApp?.isActive == true ? 120 : 900
-        guard !discoveringStoreGames, force || Date().timeIntervalSince(lastStoreDiscovery) >= interval else { return }
+        guard gamesEnabled, !discoveringStoreGames, force || Date().timeIntervalSince(lastStoreDiscovery) >= interval else { return }
         discoveringStoreGames = true
         lastStoreDiscovery = Date()
         Task {
             let result = await Task.detached(priority: .utility) { StoreGameDiscovery.refresh() }.value
+            guard gamesEnabled else { discoveringStoreGames = false; return }
             // Keep the guard set through refresh(), which also requests discovery.
             if !result.added.isEmpty {
                 await StorageInventory.shared.invalidate()
@@ -458,42 +481,85 @@ final class AppModel: ObservableObject {
     }
 
     func checkForUpdates(quiet: Bool = false) async {
-        if let r = try? await AppUpdate.check() { appUpdate = r }
         do {
-            catalog = try await Updates.check()
-            if !quiet {
-                let n = await Task.detached(priority: .userInitiated) { [games, catalog, appUpdate] in AppModel.countUpdates(games: games, catalog: catalog, appUpdate: appUpdate) }.value
-                say(n == 0 ? "Everything is up to date." : "\(n) update\(n == 1 ? "" : "s") available.")
-            }
+            appUpdate = try await AppUpdate.check()
+            AppUpdateAvailability.save(appUpdate, defaults: .standard)
+            UserDefaults.standard.set(Date(), forKey: "lastAppUpdateCheck")
         } catch { if !quiet { fail(error) } }
+        if gamesEnabled {
+            do { catalog = try await Updates.check() }
+            catch { if !quiet && gamesEnabled { fail(error) } }
+        }
+        recountUpdates()
+        if !quiet { say("Update check complete. Ignored versions remain available in Updates.") }
     }
 
-    /// Apps whose engine is older than the newest available, plus LAV installs older than the latest.
-    /// Counted off the main thread (it reads each app's engine records) and kept for the views.
-    @Published private(set) var updateCount = 0
+    @Published private(set) var updateSummary = UpdateNoticeSummary(notices: [], features: AppFeatures(), preferences: UpdateNoticePreferences())
+    var updateCount: Int { updateSummary.count }
     private var countingUpdates = false, recountRequested = false
-    private func recountUpdates() {
+    func recountUpdates() {
         if countingUpdates { recountRequested = true; return }
         countingUpdates = true
-        let games = games, catalog = catalog, app = appUpdate
+        let games = games, catalog = catalog, app = appUpdate, includeGames = gamesEnabled, stores = storeUpdates
         Task {
-            let n = await Task.detached(priority: .utility) { AppModel.countUpdates(games: games, catalog: catalog, appUpdate: app) }.value
+            let notices = await Task.detached(priority: .utility) {
+                UpdateNotice.available(games: games, catalog: catalog, app: app, includeGames: includeGames, storeUpdates: stores)
+            }.value
             countingUpdates = false
-            if updateCount != n { updateCount = n }
+            updateNotices = notices
+            updateSummary = UpdateNoticeSummary(notices: notices, features: features, preferences: updatePreferences)
             if recountRequested { recountRequested = false; recountUpdates() }
         }
     }
-    nonisolated static func countUpdates(games: [InstalledGame], catalog: UpdateCatalog?, appUpdate: AppUpdate.Release?) -> Int {
-        var n = appUpdate == nil ? 0 : 1
-        guard let cat = catalog else { return n }
-        if let latest = cat.latestEngine?.version,
-           !EngineSelfTests.failed(RuntimeManager.runtimeID(engine: latest, template: cat.latestTemplate?.version ?? .tested)) {
-            n += EngineUpdate.hosts(in: games).filter { g in EngineUpdate.current(g).map { $0 < latest } ?? false }.count
+    func ignoreUpdate(_ notice: UpdateNotice, _ ignored: Bool = true) {
+        updatePreferences.setIgnored(notice, ignored)
+        updatePreferences.save(to: .standard)
+        updateSummary = UpdateNoticeSummary(notices: updateNotices, features: features, preferences: updatePreferences)
+    }
+    func ignoreCurrentUpdates() {
+        for notice in updateNotices where notice.kind == .app || gamesEnabled { updatePreferences.setIgnored(notice, true) }
+        updatePreferences.save(to: .standard)
+        updateSummary = UpdateNoticeSummary(notices: updateNotices, features: features, preferences: updatePreferences)
+    }
+    func restoreUpdateNotices() {
+        updatePreferences.reset(); updatePreferences.save(to: .standard)
+        updateSummary = UpdateNoticeSummary(notices: updateNotices, features: features, preferences: updatePreferences)
+    }
+
+    func finishFeatureWelcome(_ selection: AppFeatures) {
+        UserDefaults.standard.set(true, forKey: "welcomeDone")
+        setFeatures(selection)
+    }
+
+    func setFeatures(_ next: AppFeatures) {
+        let previous = featureServicesReady ? features : AppFeatures(enabled: [])
+        guard next != previous || !featureServicesReady else { return }
+        featureServicesReady = true
+        features = next; features.save(to: .standard)
+        ControllerOwnershipCoordinator.shared.start()
+        DesktopPad.shared.start()
+        if let visible = features.selection(sidebarTab) { sidebarTab = visible }
+        if !gamesEnabled {
+            showInstaller = false; showStores = false; showSteamLibrary = false; showProfiles = false
+            foundFolders = []; categoryPrompt = nil
         }
-        if let lav = cat.lav {
-            n += EngineUpdate.hosts(in: games).filter { g in CinematicFix.state(for: g).map { $0.version != lav.version } ?? false }.count
+        if !streamsEnabled { StreamsModel.shared.stopWatching() }
+        if previous.contains(.profiles) != next.contains(.profiles) { PadDSUBridge.shared.configure() }
+        // Shared input processing remains available to profiles assigned to enabled games or streams.
+        DesktopPad.shared.games = games
+        DesktopPad.shared.evaluate(force: true)
+        if previous.contains(.profiles) != next.contains(.profiles) { SteamControllerUSB.shared.updateFeatureVisibility() }
+        updateSummary = UpdateNoticeSummary(notices: updateNotices, features: features, preferences: updatePreferences)
+        recountUpdates()
+        if gamesEnabled && !previous.contains(.games) {
+            refresh()
+            Task.detached(priority: .utility) {
+                SharedSteam.refreshHostScriptsIfNeeded()
+                GamesVolume.attachRegistered()
+                await AntiCheat.refreshIfStale()
+            }
+            Task { await checkForUpdates(quiet: true); await checkStoreUpdates() }
         }
-        return n
     }
 
     private var refreshingRunStates = false
@@ -501,13 +567,16 @@ final class AppModel: ObservableObject {
         // A timer must not queue another scan behind a slow one. All filesystem,
         // process and LaunchServices queries stay off the main actor.
         guard !refreshingRunStates else { return }
+        let monitorGames = gamesEnabled
+        let snapshot = monitorGames ? games : games.filter { isRunning($0) }
+        guard !snapshot.isEmpty || monitorGames else { return }
         refreshingRunStates = true
-        let snapshot = games, revision = libraryRevision
+        let revision = libraryRevision
         // Which helper build each running session loaded only changes when something starts, stops or is
         // repaired: check it then, and otherwise once a minute.
         // A game that just started records its loaded helper a moment later: keep checking until it has.
         let unsettled = helperActivation.values.contains { $0 == .unknown || $0 == .restartRequired }
-        let checkHelpers = helperCheckNeeded || unsettled || Date().timeIntervalSince(lastHelperCheck) > 60
+        let checkHelpers = monitorGames && (helperCheckNeeded || unsettled || Date().timeIntervalSince(lastHelperCheck) > 60)
         let previousHelpers = helperActivation
         Task {
             let states = await Task.detached(priority: .utility) {
@@ -515,11 +584,13 @@ final class AppModel: ObservableObject {
                 KeyRemap.recoverIfStale()
                 var states = GameLauncher.runStates(of: snapshot)
                 var heavy: [(InstalledGame, MemoryWatch.Session)] = []
-                for game in snapshot where game.native == nil {
+                for game in snapshot where monitorGames && game.native == nil {
                     if case .launcherRunning = states[game.id] ?? .notRunning, let s = MemoryWatch.sample(game), MemoryWatch.isHeavy(s) { heavy.append((game, s)) }
                 }
                 // Crash reports are kept per environment (one stat each when nothing changed).
-                for contents in Set(snapshot.compactMap { $0.native == nil ? WineTools.hostContents(for: $0) : nil }) { CrashReports.archive(contents: contents) }
+                if monitorGames {
+                    for contents in Set(snapshot.compactMap { $0.native == nil ? WineTools.hostContents(for: $0) : nil }) { CrashReports.archive(contents: contents) }
+                }
                 if snapshot.contains(where: { $0.native != nil }) {
                     let running = NSWorkspace.shared.runningApplications
                     let apps = running.compactMap { app -> (URL, Int32)? in
@@ -537,11 +608,11 @@ final class AppModel: ObservableObject {
                 if case .launcherRunning = states.0[g.id] ?? .notRunning { return !LibraryOrganizer.isLauncher(g) }
                 return false
             }
-            if playing { warnAboutPower() }
+            if playing && gamesEnabled { warnAboutPower() }
             // A stream counts as playing: over Wi-Fi it suffers from AWDL's channel hopping just as an online game does.
             let streaming = StreamsModel.shared.running != nil
             Task.detached(priority: .utility) { NetworkSteady.setPlaying(playing || streaming) }
-            for (game, session) in states.2 where memoryWarned.insert("\(game.id)#\(session.pid)").inserted {
+            for (game, session) in states.2 where gamesEnabled && memoryWarned.insert("\(game.id)#\(session.pid)").inserted {
                 let text = "\(game.name) is using \(MemoryWatch.gigabytes(session.peak)) of this Mac's \(MemoryWatch.gigabytes(MemoryWatch.physicalMemory)) memory. Closing other apps helps; its page has more after you quit."
                 say(text, game: game.id)
                 Notifier.post(title: "\(game.name) is low on memory", body: text, gameID: game.id)
@@ -578,7 +649,7 @@ final class AppModel: ObservableObject {
     private var unknownStreak = 0
 
     func applyIdleSettings(retry: Bool = false) {
-        guard !checkingPending else { return }
+        guard gamesEnabled, !checkingPending else { return }
         checkingPending = true
         let snapshot = games, monitor = pendingMonitor
         Task {
@@ -633,7 +704,7 @@ final class AppModel: ObservableObject {
             runStates = s
             // Something just started or stopped: if Steam is closed now, bring its helper up to date
             // (it can only be replaced while Steam isn't running).
-            Task.detached(priority: .utility) { SharedSteam.refreshHostScriptsIfNeeded() }
+            if gamesEnabled { Task.detached(priority: .utility) { SharedSteam.refreshHostScriptsIfNeeded() } }
             return true
         }
         return false
@@ -660,6 +731,7 @@ final class AppModel: ObservableObject {
     }
 
     func play(_ g: InstalledGame) {
+        guard gamesEnabled else { say("Enable Games in Settings → General to launch games here."); return }
         if let m = GameMover.missingDrive(g) { fail(NokError(m)); return }
         launchProblems.removeValue(forKey: g.id)
         // Resizable window: each game has its own choice; a launcher running with another one restarts.
@@ -826,6 +898,7 @@ final class AppModel: ObservableObject {
         // nokcandu://profile/123 from the profiles website
         if url.scheme == "nokcandu", url.host == "stores" { openStores(); return }
         if url.scheme == "nokcandu" {
+            guard gamesEnabled else { say("Enable Games in Settings → General to browse game recipes."); return }
             if url.host == "profile", let n = Int(url.lastPathComponent) { profileFocus = n } else { profileFocus = nil }
             showProfiles = true
             return
@@ -973,6 +1046,7 @@ final class AppModel: ObservableObject {
 
     /// Re-presents the store sheet even if a previous presentation left the flag set.
     func openStores() {
+        guard gamesEnabled else { say("Enable Games in Settings → General to open stores."); return }
         showStores = false
         DispatchQueue.main.async { self.showStores = true }
     }
@@ -1030,12 +1104,14 @@ final class AppModel: ObservableObject {
     }
 
     func checkStoreUpdates() async {
+        guard gamesEnabled else { return }
         let gs = games
         storeUpdates = await Task.detached(priority: .utility) { await StoreUpdates.check(gs) }.value
     }
 
     func updateGame(_ g: InstalledGame) {
-        guard updating[g.id] == nil else { return }
+        guard gamesEnabled, updating[g.id] == nil else { return }
+        guard !isRunning(g) else { say("Quit \(g.name) before updating it."); return }
         updating[g.id] = StoreDownload(line: "Starting update…", progress: nil)
         let id = g.id
         Task {

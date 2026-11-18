@@ -28,14 +28,17 @@ public enum PadProfiles {
         /// Steam Controller (2026): its right trackpad's click (its right stick has its own), Grip Sense on each grip,
         /// and a thumb resting on each stick. Inputs to set, never controller buttons sent on to games.
         case rpclick, lgrip, rgrip, lstouch, rstouch
+        case lpg1, lpg2, lpg3, lpg4, rpg1, rpg2, rpg3, rpg4
         public static let touchSensors: Set<Input> = [.rpclick, .lgrip, .rgrip, .lstouch, .rstouch]
         public var id: String { rawValue }
         /// Not a button on the controller: a stick direction, a touchpad zone or a tilt.
-        public var isVirtual: Bool { isStickDirection || Self.touchZones.contains(self) || Self.tilts.contains(self) || Self.padZones.contains(self) || self == .lptap || self == .rptap || Self.padZoneInputs.contains(self) || Self.touchSensors.contains(self) }
+        public var isVirtual: Bool { isStickDirection || Self.touchZones.contains(self) || Self.tilts.contains(self) || Self.padZones.contains(self) || self == .lptap || self == .rptap || Self.padZoneInputs.contains(self) || Self.touchSensors.contains(self) || Self.gestureInputs.contains(self) }
         /// Zone `n` (0-based) of a pad: its tap, and its click.
         public static func padZoneTap(_ side: Int, _ n: Int) -> Input { (side == 0 ? [Input.lpt1, .lpt2, .lpt3, .lpt4, .lpt5] : [.rpt1, .rpt2, .rpt3, .rpt4, .rpt5])[min(4, max(0, n))] }
         public static func padZoneClick(_ side: Int, _ n: Int) -> Input { (side == 0 ? [Input.lpc1, .lpc2, .lpc3, .lpc4, .lpc5] : [.rpc1, .rpc2, .rpc3, .rpc4, .rpc5])[min(4, max(0, n))] }
         public static let padZoneInputs: Set<Input> = Set((0..<2).flatMap { s in (0..<5).flatMap { [padZoneTap(s, $0), padZoneClick(s, $0)] } })
+        public static func padGesture(_ side: Int, _ n: Int) -> Input { (side == 0 ? [Input.lpg1, .lpg2, .lpg3, .lpg4] : [.rpg1, .rpg2, .rpg3, .rpg4])[max(0, min(3, n))] }
+        public static let gestureInputs = Set((0..<2).flatMap { side in (0..<4).map { padGesture(side, $0) } })
         public static func padTap(_ side: Int) -> Input { side == 0 ? .lptap : .rptap }
         /// Up, down, left, right of the left (0) or right (1) trackpad, and that pad's edge.
         public static func padDirections(_ side: Int) -> [Input] { side == 0 ? [.lpup, .lpdown, .lpleft, .lpright] : [.rpup, .rpdown, .rpleft, .rpright] }
@@ -65,6 +68,10 @@ public enum PadProfiles {
             case (.back, .steam2026): "View"; case (.start, .steam2026): "Menu"
             case (.paddle1, .steam2026): "R4 (back)"; case (.paddle2, .steam2026): "L4 (back)"
             case (.paddle3, .steam2026): "R5 (back)"; case (.paddle4, .steam2026): "L5 (back)"
+            case (.lpg1, _): "Left pad gesture 1"; case (.lpg2, _): "Left pad gesture 2"
+            case (.lpg3, _): "Left pad gesture 3"; case (.lpg4, _): "Left pad gesture 4"
+            case (.rpg1, _): "Right pad gesture 1"; case (.rpg2, _): "Right pad gesture 2"
+            case (.rpg3, _): "Right pad gesture 3"; case (.rpg4, _): "Right pad gesture 4"
             case (.rpclick, _): "Right trackpad click"
             case (.lgrip, _): "Left Grip Sense"; case (.rgrip, _): "Right Grip Sense"
             case (.lstouch, _): "Left stick touched"; case (.rstouch, _): "Right stick touched"
@@ -223,7 +230,7 @@ public enum PadProfiles {
             case .wheel(let up): up ? "Scroll up" : "Scroll down"
             case .gyroOn: "Gyro on while held"; case .gyroOff: "Gyro off while held"; case .gyroToggle: "Gyro on/off"
             case .layerHold(let n): "\(n) while held"; case .layerToggle(let n): "\(n) on/off"
-            case .macro: "Macro"; case .menu: "Radial menu"; case .keyboard: "On-screen keyboard"; case .calibrate: "Calibrate the gyro"; case .rumble: "Rumble"
+            case .macro: "Macro"; case .menu: "On-screen menu"; case .keyboard: "On-screen keyboard"; case .calibrate: "Calibrate the gyro"; case .rumble: "Rumble"
             case .nothing: "Nothing"
             }
         }
@@ -571,6 +578,12 @@ public enum PadProfiles {
         public var id: String
         public var name: String
         /// 0 the left stick, 1 the right, 2 relative mouse/gyro direction.
+        public enum Layout: String, Codable, CaseIterable, Sendable {
+            case radial, grid, horizontal, quick
+            public var title: String { switch self { case .radial: "Radial"; case .grid: "Grid"; case .horizontal: "Horizontal"; case .quick: "Button shortcuts" } }
+            public var engine: Int { Self.allCases.firstIndex(of: self)! }
+        }
+        public var layout: Layout?
         public var stick: Int
         public var slices: [Slice]
         public init(id: String = UUID().uuidString, name: String, stick: Int = 1, slices: [Slice] = []) { self.id = id; self.name = name; self.stick = stick; self.slices = slices }
@@ -579,6 +592,14 @@ public enum PadProfiles {
     public struct Triggers: Codable, Hashable, Sendable {
         /// How far a trigger is pulled to count as pressed, and as fully pulled (0…1).
         public var soft = 0.3, full = 0.95
+        public enum Behavior: String, Codable, CaseIterable, Sendable {
+            case standard, hipFire, exclusive, hair
+            public var title: String { switch self { case .standard: "Standard two-stage"; case .hipFire: "Fast full pull skips soft pull"; case .exclusive: "Soft or full, never both"; case .hair: "Hair trigger" } }
+            public var engine: Int { Self.allCases.firstIndex(of: self)! }
+        }
+        public var behavior: Behavior?
+        public var decisionTime: Double?
+        public var releaseDistance: Double?
         public init() {}
     }
 
@@ -842,10 +863,17 @@ public enum PadProfiles {
         }
         for (i, mn) in menus.enumerated() {
             var parts = ["menu \(i) stick=\(mn.stick == 0 ? 0 : mn.stick == 2 ? 2 : 1)"]
+            if let layout = mn.layout, layout != .radial { parts.append("layout=\(layout.engine)") }
             for (j, sl) in mn.slices.prefix(8).enumerated() { parts.append("s\(j)=\(outs(sl.outputs) ?? "none")") }
             lines.append(parts.joined(separator: " "))
         }
-        for t in 0..<2 { lines.append("trigger \(t) soft=\(n(m.triggers.soft)) full=\(n(m.triggers.full))") }
+        for t in 0..<2 {
+            var line = "trigger \(t) soft=\(n(m.triggers.soft)) full=\(n(m.triggers.full))"
+            if let behavior = m.triggers.behavior, behavior != .standard {
+                line += " behavior=\(behavior.engine) delay=\(n(m.triggers.decisionTime ?? 0.15)) distance=\(n(m.triggers.releaseDistance ?? 0.08))"
+            }
+            lines.append(line)
+        }
         let devs = Array(devices(p, all: all).prefix(4))
         var slotOf: [String: Int] = [:]
         for (i, d) in devs.enumerated() {

@@ -66,10 +66,6 @@ import Charts
             if next.input.mouse == .capture { if window?.isKeyWindow == true { captureMouse() } } else { releaseMouse() }
         }
         if next.controller != old.controller, state.connected {
-            // The host sees the controllers leave and arrive again, as the new kind and with the new profile.
-            gamepads.stop()
-            gamepads = StreamGamepads(settings: next.controller)
-            gamepads.start()
             DesktopPad.shared.evaluate(force: true)
         }
         applyVBAN(next.audio.vban)
@@ -105,7 +101,18 @@ import Charts
     private var clipboardUnsupported = false
     var onEnd: ((String?) -> Void)?
 
-    var profileID: String? { profile.controller.profileID }
+    var profileID: String? { gamepads.settings.profileID }
+    @discardableResult func refreshControllerProfile(profiles: [PadProfiles.Profile]) -> Bool {
+        guard state.connected, !ended else { return false }
+        let next = StreamGamepads.routing(for: profile.controller, profiles: profiles)
+        guard next != gamepads.routing else { return false }
+        // Release the old profile's keyboard/mouse holds before replacing its controller output route.
+        if DesktopPad.shared.stream === self { DesktopPad.shared.releaseStreamProfileOutputs() }
+        gamepads.stop()
+        gamepads = StreamGamepads(routing: next)
+        gamepads.start()
+        return true
+    }
     var isFront: Bool { NSApp.isActive && window?.isKeyWindow == true && state.connected }
 
     init(host: StreamHost, profile: StreamProfile, address: String, identity: StreamIdentity) {
@@ -228,6 +235,8 @@ import Charts
     func streamStarted() {
         state.connected = true
         state.stage = ""
+        // Use Everywhere may have changed while connecting to the host.
+        gamepads = StreamGamepads(settings: profile.controller)
         gamepads.start()
         DesktopPad.shared.stream = self
         // Every mouse movement report, not the coalesced few per frame.
@@ -668,6 +677,10 @@ import Charts
     func key(_ mac: Int, _ down: Bool) { keyboard.profileKey(mac, down) }
     func mouseButton(_ b: Int, _ down: Bool) {
         LiSendMouseButtonEvent(CChar(down ? BUTTON_ACTION_PRESS : BUTTON_ACTION_RELEASE), StreamMouseButtons.from(engine: b))
+    }
+    func absoluteMouse(_ point: CGPoint) {
+        guard state.connected, point.x.isFinite, point.y.isFinite else { return }
+        LiSendMousePositionEvent(Int16(max(0,min(1,point.x))*4096),Int16(max(0,min(1,point.y))*4096),4096,4096)
     }
     func mouseMove(_ dx: Int, _ dy: Int) { LiSendMouseMoveEvent(Int16(clamping: dx), Int16(clamping: dy)) }
     func wheel(_ clicks: Int) { LiSendHighResScrollEvent(Int16(clamping: clicks * 120)) }

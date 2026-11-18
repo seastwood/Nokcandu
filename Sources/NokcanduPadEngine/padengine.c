@@ -96,7 +96,7 @@ typedef struct { unsigned char kind; out_t o; int ms; char *text; } mstep_t;
 typedef struct { mstep_t step[MAX_STEPS]; int n; } macro_t;
 typedef struct { out_t o[MAX_STEPS]; int n; } macro_hold_t;
 typedef struct { int in[8]; int n; double step; outs_t out; } seq_t;
-typedef struct { bool set; int stick; int n; outs_t slice[8]; } menu_t;
+typedef struct { bool set; int stick, layout; int n; outs_t slice[8]; } menu_t;
 enum { TM_OFF, TM_MOUSE, TM_SCROLL, TM_ZONES };
 
 // What a held input is doing (captured at press, so a layer change can't strand a key).
@@ -133,7 +133,10 @@ struct pe_engine {
     int axis_out[PE_AXES];
     int raw_axis[PE_AXES];
     stick_t stick[2];
-    int trig_mode[2]; double trig_soft[2], trig_full[2];
+    int trig_mode[2], trig_behavior[2]; double trig_soft[2], trig_full[2], trig_delay[2], trig_distance[2];
+    bool trig_started[2], trig_fast[2], trig_hair[2], trig_hair_seen[2];
+    double trig_at[2], trig_peak[2], trig_bottom[2];
+    bool menu_consumed[PE_PAD_BUTTONS];
     // gyro
     int gyro_out, gyro_yaw; bool gyro_default, gyro_toggled; int gyro_on_holds, gyro_off_holds;
     bool gyro_touch_required, gyro_touched;
@@ -174,6 +177,8 @@ struct pe_engine {
 static void apply_layers(pe_engine *e);
 static void run_macro(pe_engine *e, int n, double now);
 static void menu_begin(pe_engine *e, int n);
+static void close_menu_without_action(pe_engine *e);
+static int menu_pick(const menu_t *menu, double x, double y);
 static void menu_end(pe_engine *e);
 static void pulse(pe_engine *e, const outs_t *o, double now);
 
@@ -185,7 +190,8 @@ static const char *input_names[PE_INPUTS] = {
     "lpup", "lpdown", "lpleft", "lpright", "lpedge", "rpup", "rpdown", "rpleft", "rpright", "rpedge", "lptap", "rptap",
     "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpc1", "lpc2", "lpc3", "lpc4", "lpc5",
     "rpt1", "rpt2", "rpt3", "rpt4", "rpt5", "rpc1", "rpc2", "rpc3", "rpc4", "rpc5",
-    "rpclick", "lgrip", "rgrip", "lstouch", "rstouch"
+    "rpclick", "lgrip", "rgrip", "lstouch", "rstouch",
+    "lpg1", "lpg2", "lpg3", "lpg4", "rpg1", "rpg2", "rpg3", "rpg4"
 };
 static int dev_in(int slot, int k) { return PE_INPUTS + (slot - 1) * PE_DEV_INPUTS + k; }
 enum { K_HAT = PE_DEV_BUTTONS, K_AXIS = PE_DEV_BUTTONS + 4 };
@@ -371,6 +377,9 @@ pe_engine *pe_create(const char *text, pe_sink sink) {
             int t = atoi(words[1]); if (t < 0 || t > 1) continue;
             const char *m = OPT("mode"); if (m) e->trig_mode[t] = !strcmp(m, "none") ? 1 : 0;
             e->trig_soft[t] = opt_d(OPT("soft"), e->trig_soft[t]); e->trig_full[t] = opt_d(OPT("full"), e->trig_full[t]);
+            e->trig_behavior[t] = (int)fmax(0, fmin(3, opt_d(OPT("behavior"), 0)));
+            e->trig_delay[t] = fmax(0.01, fmin(0.5, opt_d(OPT("delay"), 0.15)));
+            e->trig_distance[t] = fmax(0.01, fmin(0.5, opt_d(OPT("distance"), 0.08)));
         } else if (!strcmp(words[0], "touch")) {
             const char *m = OPT("mode");
             e->touch_mode = !m ? TM_OFF : !strcmp(m, "mouse") ? TM_MOUSE : !strcmp(m, "scroll") ? TM_SCROLL : !strcmp(m, "zones") ? TM_ZONES : TM_OFF;
@@ -391,7 +400,7 @@ pe_engine *pe_create(const char *text, pe_sink sink) {
             if (q->n < 2) q->n = 0;
         } else if (!strcmp(words[0], "menu") && nw > 1) {
             int n = atoi(words[1]); if (n < 0 || n >= MAX_MENUS) continue;
-            menu_t *mn = &e->menus[n]; mn->set = true;
+            menu_t *mn = &e->menus[n]; mn->set = true; mn->layout = (int)fmax(0, fmin(3, opt_d(OPT("layout"), 0)));
             double pick = opt_d(OPT("stick"), 1); mn->stick = pick == 0 ? 0 : pick == 2 ? 2 : 1; mn->n = 0;
             for (int i = 0; i < 8; i++) {
                 char key[4]; snprintf(key, sizeof key, "s%d", i);
@@ -540,7 +549,7 @@ static void out_set(pe_engine *e, out_t o, bool down) {
     case O_MACRO:
         if (down && !e->macro_run[o.code] && e->macros[o.code].n) { e->macro_owner[o.code] = e->current_input; e->macro_run[o.code] = true; e->macro_pos[o.code] = 0; e->macro_held[o.code].n = 0; run_macro(e, o.code, e->last_tick); }
         break;
-    case O_MENU: if (down) { e->menu_owner = e->current_input; menu_begin(e, o.code); } else if (e->menu_open == o.code) menu_end(e); break;
+    case O_MENU: if (down) { e->menu_owner = e->current_input; menu_begin(e, o.code); } else if (e->menu_open == o.code && e->menus[o.code].layout != 3) menu_end(e); break;
     case O_KEYBOARD: if (down && e->sink.menu) e->sink.menu(e->sink.ctx, PE_KEYBOARD_MENU, 1); break;
     case O_CALIBRATE: if (down) pe_calibrate(e, e->last_tick); break;
     case O_RUMBLE: if (down && e->sink.menu) e->sink.menu(e->sink.ctx, PE_RUMBLE_MENU, 1); break;
@@ -747,7 +756,7 @@ static void set_input(pe_engine *e, int in, bool down, double now) {
 static int touch_zone_of(double x, double y) { return (x >= 0.5) + 2 * (y >= 0.5); }
 
 void pe_pad_zone(pe_engine *e, int input, bool down, double now) {
-    if (!e || input < PE_LPAD_UP || input > PE_RPAD_ZC5) return;
+    if (!e || input < PE_LPAD_UP || input >= PE_INPUTS) return;
     set_input(e, input, down, now);
 }
 bool pe_input_bound(const pe_engine *e, int input) {
@@ -759,6 +768,17 @@ void pe_button(pe_engine *e, int button, bool down, double now) {
     // controller button (the controller presented to games has none).
     if (e && button >= PE_RPAD_CLICK && button < PE_INPUTS) { pe_tick(e, now); set_input(e, button, down, now); return; }
     if (!e || button < 0 || button >= PE_PAD_BUTTONS) return;
+    if (e->menu_consumed[button]) { if (!down) e->menu_consumed[button] = false; return; }
+    if (down && e->menu_open >= 0 && e->menus[e->menu_open].layout == 3) {
+        pe_tick(e, now);
+        static const int keys[8] = { PE_A, PE_B, PE_X, PE_Y, PE_LB, PE_RB, PE_BACK, PE_START };
+        if (button == PE_GUIDE) { e->menu_consumed[button] = true; close_menu_without_action(e); return; }
+        for (int i = 0; i < e->menus[e->menu_open].n; i++) if (keys[i] == button) {
+            e->menu_consumed[button] = true; e->menu_sel = i;
+            int old_origin = e->current_input; e->current_input = e->menu_owner;
+            menu_end(e); e->current_input = old_origin; return;
+        }
+    }
     if (e->route[button]) {
         if (e->route_down[button] == down) return;
         e->route_down[button] = down;
@@ -806,6 +826,30 @@ static void trigger_input(pe_engine *e, int t, double now) {
     double v = e->raw_axis[PE_AXIS_LT + t] / 32767.0;
     int soft = PE_LT + t, full = PE_LT_FULL + t;
     bool sdown = v >= e->trig_soft[t], fdown = v >= e->trig_full[t];
+    int behavior = e->trig_behavior[t];
+    if (behavior == 1 || behavior == 2) {
+        if (!sdown) { e->trig_started[t] = e->trig_fast[t] = false; }
+        else {
+            if (!e->trig_started[t]) { e->trig_started[t] = true; e->trig_at[t] = now; }
+            if (fdown && now - e->trig_at[t] < e->trig_delay[t] && !e->physical[soft]) e->trig_fast[t] = true;
+            sdown = !e->trig_fast[t] && now - e->trig_at[t] >= e->trig_delay[t];
+            if (behavior == 2 && (sdown || e->physical[soft])) fdown = false;
+        }
+    } else if (behavior == 3) {
+        if (v < 0.02) { e->trig_hair_seen[t] = e->trig_hair[t] = false; }
+        else if (!e->trig_hair_seen[t] && sdown) {
+            e->trig_hair_seen[t] = e->trig_hair[t] = true; e->trig_peak[t] = v;
+        } else if (e->trig_hair_seen[t]) {
+            if (e->trig_hair[t]) {
+                e->trig_peak[t] = fmax(e->trig_peak[t], v);
+                if (e->trig_peak[t] - v >= e->trig_distance[t]) { e->trig_hair[t] = false; e->trig_bottom[t] = v; }
+            } else {
+                e->trig_bottom[t] = fmin(e->trig_bottom[t], v);
+                if (v - e->trig_bottom[t] >= e->trig_distance[t]) { e->trig_hair[t] = true; e->trig_peak[t] = v; }
+            }
+        }
+        sdown = e->trig_hair[t];
+    }
     // Pressing: soft pull, then full. Letting go: full, then soft.
     if (sdown && !e->physical[soft]) { e->physical[soft] = true; input_down(e, soft, now); }
     if (fdown != e->physical[full]) { e->physical[full] = fdown; if (fdown) input_down(e, full, now); else input_up(e, full, now); }
@@ -949,9 +993,7 @@ void pe_axis(pe_engine *e, int axis, int value, double now) {
     if (e->menu_open >= 0 && e->menus[e->menu_open].stick == s) {
         const menu_t *mn = &e->menus[e->menu_open];
         if (mn->n > 0 && sqrt(k->x * k->x + k->y * k->y) > 0.5) {
-            double a = atan2(k->x, k->y) * 180 / M_PI; if (a < 0) a += 360;
-            double w = 360.0 / mn->n;
-            int sel = (int)floor((a + w / 2) / w) % mn->n;
+            int sel = menu_pick(mn, k->x, k->y);
             if (sel != e->menu_sel) { e->menu_sel = sel; if (e->sink.menu) e->sink.menu(e->sink.ctx, e->menu_open, sel); }
         }
         k->x = k->y = 0;
@@ -1206,6 +1248,7 @@ void pe_tick(pe_engine *e, double now) {
     if (dt > 0.1) dt = 0.1;
     if (dt > 0) sticks_continuous(e, dt);
     e->last_tick = now;
+    for (int t = 0; t < 2; t++) if (e->trig_behavior[t] == 1 || e->trig_behavior[t] == 2) trigger_input(e, t, now);
     bool again = true;
     while (again) {
         again = false;
@@ -1258,6 +1301,9 @@ double pe_next_deadline(const pe_engine *e) {
     double d = 0;
     for (int i = 0; i < e->ntimers; i++) if (!d || e->timers[i].at < d) d = e->timers[i].at;
     bool continuous = false;
+    for (int t = 0; t < 2; t++) if (e->trig_started[t] && !e->trig_fast[t] && !e->physical[PE_LT + t] && (e->trig_behavior[t] == 1 || e->trig_behavior[t] == 2)) {
+        double at = e->trig_at[t] + e->trig_delay[t]; if (!d || at < d) d = at;
+    }
     for (int s = 0; s < 2; s++) {
         const stick_t *k = &e->stick[s];
         if (k->mode == S_MOUSE && sqrt(k->x * k->x + k->y * k->y) > k->dz) continuous = true;
@@ -1284,8 +1330,11 @@ static void release_all(pe_engine *e, double now, bool report) {
     if (!e || e->releasing) return;
     e->releasing = true;
     e->gyro_touched = false;
+    memset(e->menu_consumed,0,sizeof e->menu_consumed);
     close_menu_without_action(e);
     memset(e->raw_axis, 0, sizeof e->raw_axis);
+    memset(e->trig_started, 0, sizeof e->trig_started); memset(e->trig_fast, 0, sizeof e->trig_fast);
+    memset(e->trig_hair, 0, sizeof e->trig_hair); memset(e->trig_hair_seen, 0, sizeof e->trig_hair_seen);
     for (int s = 0; s < 2; s++) e->stick[s].x = e->stick[s].y = 0;
     for (int d = 1; d <= PE_MAX_DEVICES; d++) for (int a = 0; a < PE_DEV_AXES; a++) e->dev[d].ax[a].v = 0;
     for (int i = 0; i < PE_ALL_INPUTS; i++) if (e->physical[i] || e->press[i].phase != P_IDLE) {
@@ -1455,6 +1504,24 @@ complete:
 
 // MARK: Radial menus
 
+static int menu_pick(const menu_t *mn, double x, double y) {
+    if (!mn->n || mn->layout == 3) return -1;
+    if (mn->layout == 1) {
+        int cols = (int)ceil(sqrt(mn->n)), rows = (mn->n + cols - 1) / cols;
+        int col = (int)floor((x + 1) * 0.5 * cols), row = (int)floor((1 - y) * 0.5 * rows);
+        col = col < 0 ? 0 : col >= cols ? cols - 1 : col; row = row < 0 ? 0 : row >= rows ? rows - 1 : row;
+        int pick = row * cols + col; return pick < mn->n ? pick : mn->n - 1;
+    }
+    if (mn->layout == 2) { int i = (int)floor((x + 1) * 0.5 * mn->n); return i < 0 ? 0 : i >= mn->n ? mn->n - 1 : i; }
+    double angle = atan2(x, y) * 180 / M_PI; if (angle < 0) angle += 360;
+    return (int)floor((angle + 180.0 / mn->n) / (360.0 / mn->n)) % mn->n;
+}
+bool pe_menu_absolute(pe_engine *e, double x, double y) {
+    if (!e || e->menu_open < 0 || e->menus[e->menu_open].stick != 2 || !isfinite(x) || !isfinite(y)) return false;
+    int sel = menu_pick(&e->menus[e->menu_open], fmax(-1,fmin(1,x*2-1)), fmax(-1,fmin(1,1-y*2)));
+    if (sel != e->menu_sel) { e->menu_sel = sel; if (e->sink.menu) e->sink.menu(e->sink.ctx,e->menu_open,sel); }
+    return true;
+}
 #define PE_MENU_REACH 80.0   /* the virtual stick's length (mouse counts) */
 #define PE_MENU_PICK 30.0    /* how far it must be pushed before a slice is chosen */
 bool pe_menu_mouse(pe_engine *e, double dx, double dy) {
@@ -1467,10 +1534,7 @@ bool pe_menu_mouse(pe_engine *e, double dx, double dy) {
     double reach = sqrt(e->menu_vx * e->menu_vx + e->menu_vy * e->menu_vy);
     if (reach > PE_MENU_REACH) { e->menu_vx *= PE_MENU_REACH / reach; e->menu_vy *= PE_MENU_REACH / reach; reach = PE_MENU_REACH; }
     if (reach < PE_MENU_PICK) return true;
-    double angle = atan2(e->menu_vx, -e->menu_vy) * 180 / M_PI;
-    if (angle < 0) angle += 360;
-    double width = 360.0 / mn->n;
-    int selected = (int)floor((angle + width / 2) / width) % mn->n;
+    int selected = menu_pick(mn, e->menu_vx / PE_MENU_REACH, -e->menu_vy / PE_MENU_REACH);
     if (selected != e->menu_sel) {
         e->menu_sel = selected;
         if (e->sink.menu) e->sink.menu(e->sink.ctx, e->menu_open, selected);
@@ -1831,6 +1895,9 @@ void pe_release_main(pe_engine *e, double now) {
         e->stick[s].rest_x = e->stick[s].rest_y = e->stick[s].ramp_t = 0;
     }
     memset(e->raw_axis, 0, sizeof e->raw_axis);
+    memset(e->trig_started,0,sizeof e->trig_started); memset(e->trig_fast,0,sizeof e->trig_fast);
+    memset(e->trig_hair,0,sizeof e->trig_hair); memset(e->trig_hair_seen,0,sizeof e->trig_hair_seen);
+    memset(e->menu_consumed,0,sizeof e->menu_consumed);
     e->gyro_stick_x = e->gyro_stick_y = 0; e->last_gyro = 0;
     e->cal_mode = 0; e->still_since = 0; e->eu_init = false; e->q_start = 0; e->acc_init = false;
     memset(e->smooth_buf, 0, sizeof e->smooth_buf); e->smooth_i = 0;

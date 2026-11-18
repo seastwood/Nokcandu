@@ -6,6 +6,7 @@ import NokcanduCore
 struct WelcomeView: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) var dismiss
+    @State private var selectedFeatures = AppFeatures.current
     @State private var rosetta = Setup.rosettaInstalled
     @State private var engine = Setup.engineReady
     @State private var working: String?
@@ -23,7 +24,7 @@ struct WelcomeView: View {
         }
         .padding(24)
         .frame(width: 560)
-        .onDisappear { UserDefaults.standard.set(true, forKey: "welcomeDone") }
+        .onDisappear { model.finishFeatureWelcome(model.features) }
     }
 
     func header(_ title: String, _ subtitle: String) -> some View {
@@ -37,25 +38,23 @@ struct WelcomeView: View {
     }
 
     @ViewBuilder var chooser: some View {
-        header("Welcome to Nokcandu", "One app for your controllers, your gaming PC and your Windows games. Start with any of them; the others are a tab away.")
-        Text("What would you like to do first?").font(.headline)
-        choice("gamecontroller", "Remap a controller",
-               "Buttons, sticks, triggers, trackpads and gyro as keys, mouse or another controller. One profile works in Mac apps, Windows games and streams. Nothing to install.") {
-            model.sidebarTab = .profiles; model.profileSelection = "mac"; dismiss()
-        }
-        choice("tv", "Stream games from your PC",
-               "Play from a PC running Sunshine, Apollo or NVIDIA GameStream, with your controller profile, keyboard, mouse and microphone sent to it.") {
-            model.sidebarTab = .streams; dismiss()
-        }
-        choice("square.stack.3d.up", "Play Windows games on this Mac",
-               "Install games you own from a disc, an installer or a store. Each becomes its own Mac app. Needs Rosetta and a one-time engine download.") {
-            model.sidebarTab = .games; model.welcomePage = .games
-        }
-        Text("Using a controller profile outside Nokcandu's games needs Accessibility access; macOS asks once. Open this again from Help → Getting Started.")
+        header("Welcome to Nokcandu", "Choose what belongs in your workspace. You can change this anytime in Settings → General.")
+        FeatureChoices(selection: $selectedFeatures)
+        Text("Hidden features keep their saved content. Only Games needs Rosetta and a Wine download; you can set those up later.")
             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         HStack {
+            if selectedFeatures.contains(.games) {
+                Button("Set Up Windows Games…") {
+                    model.finishFeatureWelcome(selectedFeatures)
+                    model.sidebarTab = .games; model.welcomePage = .games
+                }
+            }
             Spacer()
-            Button("Later") { dismiss() }.keyboardShortcut(.cancelAction)
+            Button("Continue") {
+                model.finishFeatureWelcome(selectedFeatures)
+                if let feature = selectedFeatures.visible.first { model.sidebarTab = feature }
+                dismiss()
+            }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
         }
     }
 
@@ -143,6 +142,29 @@ struct WelcomeView: View {
             }
             Spacer()
             button()
+        }
+    }
+}
+
+/// The same three choices on first run and in General settings.
+struct FeatureChoices: View {
+    @Binding var selection: AppFeatures
+    var body: some View {
+        ForEach(AppFeature.allCases) { feature in
+            Toggle(isOn: Binding(get: { selection.contains(feature) }, set: { on in
+                var next = selection
+                if on { next.enabled.insert(feature) } else { next.enabled.remove(feature) }
+                selection = next
+            })) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: feature.symbol).frame(width: 24).foregroundStyle(.tint)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(feature.title).font(.body.weight(.semibold))
+                        Text(feature.detail).font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }.toggleStyle(.switch).padding(.vertical, 5)
         }
     }
 }

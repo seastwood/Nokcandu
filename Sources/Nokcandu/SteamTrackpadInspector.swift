@@ -46,6 +46,13 @@ extension ControllerProfileEditor {
                 Text(side == 0 ? "Four directions (W A S D…)" : "Four directions (arrows…)").tag(PadSteamTrackpadSettings.Mode.directions)
                 Text(side == 0 ? "Analog stick (left stick)" : "Analog stick (right stick)").tag(PadSteamTrackpadSettings.Mode.stick)
                 Text("Scroll wheel (circle)").tag(PadSteamTrackpadSettings.Mode.dial)
+                Text("Absolute mouse region").tag(PadSteamTrackpadSettings.Mode.absolute)
+                Text("Drawn gestures").tag(PadSteamTrackpadSettings.Mode.gestures)
+            }
+            if settings.wrappedValue.mode == .absolute { PadRegionSettings(settings:settings) }
+            if settings.wrappedValue.mode == .gestures {
+                slider("Gesture tolerance", Binding(get:{ settings.wrappedValue.gestureTolerance ?? 0 },set:{ settings.wrappedValue.gestureTolerance = $0 }),0...0.4,"%.0f%%",scale:100,info:"0 requires the exact sequence of directions. Higher accepts small differences. No command fires until you lift your finger.")
+                slider("Stroke length", Binding(get:{ settings.wrappedValue.gestureStroke ?? 0.18 },set:{ settings.wrappedValue.gestureStroke = $0 }),0.08...0.4,"%.0f%%",scale:100)
             }
             slider("Pad angle", Binding(get: { settings.wrappedValue.rotation ?? PadSteamTrackpadSettings.defaultRotation(side: side) }, set: { settings.wrappedValue.rotation = $0 }), -30...30, "%.0f°", info: "Turns the pad’s axes and tap/click zones to match your thumb’s sweep, in every behavior. 0° is straight up/down and left/right. Circular scrolling keeps the same steps and direction; its zones still turn. The picture shows the angle.")
             Toggle("Touch haptics", isOn: Binding(get: { (settings.wrappedValue.touchFeedback ?? 0) > 0 }, set: { settings.wrappedValue.touchFeedback = $0 ? 0.2 : nil }))
@@ -125,6 +132,22 @@ extension ControllerProfileEditor {
             Text("Each pad chooses its behavior independently, and a layer can have pad settings of its own. Trackpad mouse follows finger movement; trackball mouse continues after a flick and lift; four directions holds a key or button for each way you push; analog stick works as a real stick. Profile changes, focus changes and lost input cancel momentum.")
                 .font(.caption).foregroundStyle(.secondary)
         }
+        if settings.wrappedValue.mode == .gestures {
+            ForEach(0..<4,id: \.self) { index in
+                Section("Gesture \(index+1)") {
+                    let pattern = Binding<String>(get:{
+                        let list = settings.wrappedValue.gesturePatterns ?? ["U","D","L","R"]
+                        return list.indices.contains(index) ? list[index] : ""
+                    },set:{ value in
+                        var list = settings.wrappedValue.gesturePatterns ?? ["U","D","L","R"]
+                        while list.count < 4 { list.append("") }
+                        list[index] = PadGestureRecognizer.normalized(value); settings.wrappedValue.gesturePatterns = list
+                    })
+                    HStack { TextField("Pattern (U D L R)",text:pattern); PadGestureRecordButton(side:side,settings:settings.wrappedValue,pattern:pattern) }
+                    inputEditor(PadProfiles.Input.padGesture(side,index))
+                }
+            }
+        }
         if PadSteamPadZones.edgeSize(settings.wrappedValue) > 0 {
             Section {
                 inputEditor(PadProfiles.Input.padEdge(side))
@@ -132,10 +155,12 @@ extension ControllerProfileEditor {
                 Text("Held while your finger is in the ring at the rim, together with whatever the pad is doing there.").font(.caption).foregroundStyle(.secondary)
             }
         }
-        Section {
-            inputEditor(PadProfiles.Input.padTap(side))
-        } header: { Text("Tap") } footer: {
-            Text("A quick touch and lift without moving. Choose “Double” in its settings for a double tap. Taps work in every pad behavior.").font(.caption).foregroundStyle(.secondary)
+        if settings.wrappedValue.mode != .gestures {
+            Section {
+                inputEditor(PadProfiles.Input.padTap(side))
+            } header: { Text("Tap") } footer: {
+                Text("A quick touch and lift without moving. Choose “Double” in its settings for a double tap. Gesture mode uses drawings instead of taps.").font(.caption).foregroundStyle(.secondary)
+            }
         }
         Section {
             Picker("Zones", selection: Binding(get: { settings.wrappedValue.zoneLayout ?? .off }, set: { settings.wrappedValue.zoneLayout = $0 == .off ? nil : $0 })) {

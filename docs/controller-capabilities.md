@@ -1,5 +1,8 @@
 # Controller capability and validation matrix
 
+November 18: opt-in absolute pad regions, recorded/drawn gestures, trigger modes, alternate menus and
+local DSU motion are implemented. See [setup, scope, migration and verification limits](advanced-controller-remapping.md).
+
 November 17 ownership update: Controls → Controller Settings now offers exclusive **Steam Controller**
 access, on by default when no preference is saved. The direct reader requests IOHID seizure for original
 and 2026 Steam Controllers across its supported transports, stays alive while Nokcandu runs (including with

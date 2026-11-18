@@ -1,5 +1,9 @@
 # Streams
 
+November 18: mapped streams now support the shared trigger/menu additions and direct Steam pad
+regions/gestures. Absolute regions address the streamed display using Moonlight absolute coordinates.
+See [advanced remapping and pending hardware acceptance](advanced-controller-remapping.md).
+
 ## November 17: stalls, session protection and independent graphs
 
 The stream now owns latency-critical activity protection from connection startup through finish/cancel/error,
@@ -54,6 +58,29 @@ URLSession and Network.framework need a `SecIdentity` for a client certificate, 
 7. **Controllers**:
    - *Controller as it is*: each GameController controller is announced to the host with its type (PlayStation, Switch or Xbox, or as chosen) and capabilities, then sent on every change. Host rumble, motion requests and light colours go back to it.
    - *A Nokcandu profile*: while the stream window is the key window, `DesktopPad` uses the stream's profile and routes everything it outputs to the stream instead of the Mac: the mapped controller as player one, keys, mouse buttons and movement, scrolling and typed text. This is the full profile — layers, gyro aiming, Steam Controller trackpads, radial menus. "Keys and mouse only" sends no controller at all. Accessibility permission isn't needed for this, as nothing is posted to macOS.
+
+### Use Everywhere controller override (November 18)
+
+Streams → a stream profile → Controller → **Let Use Everywhere override** is an opt-in, per-stream
+setting (`controller.allowEverywhereOverride`). It defaults off for both new and existing stream profiles.
+When enabled and controller profiles are on, a valid active Use Everywhere profile takes priority over
+the selected controller profile, including Controller as it is. Stopping Use Everywhere, disabling
+controller profiles, or removing that global profile restores the stream's saved selection. A missing
+selected profile resolves to controller-as-is; saved choices are never overwritten.
+
+`StreamControllerRouting` resolves one snapshot for mapping, physical reader, player allocation and
+Automatic emulated identity. Explicit Xbox/PlayStation/Switch/No controller choices remain intact. Profile
+inheritance is respected. Changes to the override, the Everywhere profile, and its source/identity apply
+during a stream: old mapped holds are released before the host controller is replaced, and input callbacks
+are reattached even if the mapping engine updates the profile in place. Resolution shares the editor's
+pending profile definitions; it does not add another profile-file read to each mapping evaluation.
+
+Verified: app compilation and 24 focused tests (including eight override regressions) cover legacy decode,
+round-trip persistence, opting in/out, raw-controller choice, stopping/disabled/missing global profiles,
+missing selected profiles, inherited reader/identity and live-setting classification. Hardware acceptance
+of mid-stream profile switching, release of real held keys and multiple-player routing remains pending.
+The running signed app has not yet been rebuilt for this addition. Undo: turn the toggle off; an older
+build ignores the new JSON field and uses its original selected profile. No profile/game migration needed.
 
 Shortcuts during a stream: ⌃⌥⇧Q ends it, ⌃⌥⇧Z frees or captures the pointer, ⌃⌥⇧X switches full screen, ⌃⌥⇧S cycles the statistics, ⌃⌥⇧D minimises.
 

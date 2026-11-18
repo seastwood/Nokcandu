@@ -36,6 +36,7 @@ extension StreamProfile {
         live(window.statistics != o.window.statistics, "statistics")
         live(window.graphs != o.window.graphs, "performance graphs")
         live(controller.profileID != o.controller.profileID, "controller profile")
+        live(controller.allowEverywhereOverride != o.controller.allowEverywhereOverride, "let use everywhere override")
         live(controller.sendAs != o.controller.sendAs, "emulated controller type")
         live(controller.multipleControllers != o.controller.multipleControllers, "each controller is its own player")
         live(controller.swapFaceButtons != o.controller.swapFaceButtons, "swap a/b and x/y")

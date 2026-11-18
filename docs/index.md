@@ -4,6 +4,9 @@ The project README introduces the app. This folder keeps the implementation know
 
 | Document | What belongs there |
 | --- | --- |
+| [Advanced controller remapping](advanced-controller-remapping.md) | Absolute pad regions, drawn gestures, trigger arbitration, alternate menus, local DSU motion, compatibility and acceptance limits. |
+| [sc-controller remapping comparison](investigations/sc-controller-comparison-2026-11-18.md) | Verified feature candidates, Nokcandu overlap, recommended priorities and platform limits. |
+| [Optional features and update notifications](optional-features.md) | Welcome/General feature choices, preserved data and running sessions, feature-scoped services, version ignores, badge priority and Undo. |
 | [Controller ownership, 2026 diagram and pad angle](investigations/controller-ownership-and-picture-2026-11-17.md) | Steam direct-reader exclusivity, annotation geometry, all-behavior pad angles, hardware limits and Undo. |
 | [Streaming stalls and statistics](investigations/stream-stalls-and-statistics-2026-11-17.md) | VoidLink Integration comparison, controller-independent activity protection, richer statistics, separate compact graphs and pending no-controller acceptance. |
 | [Receiver stalls and report rates](investigations/controller-receiver-stalls-and-rates-2026-11-17.md) | Receiver capture retention, missing-feature-reply recovery, callback-rate diagnostics, delivery audit and hardware validation limits. |

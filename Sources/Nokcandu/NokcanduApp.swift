@@ -6,6 +6,7 @@ import NokcanduCore
 struct NokcanduApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var model = AppModel()
+    @ObservedObject private var streams = StreamsModel.shared
     @Environment(\.openWindow) private var openWindow
     @AppStorage(MenuBarSetting.key) private var menuBarMenu = true
     init() { ListCache.installImageCache() }      // store artwork loads once, not on every visit
@@ -22,21 +23,21 @@ struct NokcanduApp: App {
         .handlesExternalEvents(matching: ["*"])
         .commands {
             CommandGroup(after: .newItem) {
-                Button("Add a Game…") { model.showInstaller = true }.keyboardShortcut("i", modifiers: [.command, .shift])
-                Button("Add a Folder of Games…") { model.chooseFolderOfGames() }
-                Button("Game Stores…") { model.openStores() }.keyboardShortcut("l", modifiers: [.command, .shift])
-                Button("Refresh Library") { model.refresh() }.keyboardShortcut("r")
-                Button("Check for Game Updates") { Task { await model.checkStoreUpdates(); model.say(model.storeUpdates.isEmpty ? "Your GOG and Epic games are up to date." : "\(model.storeUpdates.count) game update(s) available.") } }
+                if model.gamesEnabled {
+                    Button("Add a Game…") { model.showInstaller = true }.keyboardShortcut("i", modifiers: [.command, .shift])
+                    Button("Add a Folder of Games…") { model.chooseFolderOfGames() }
+                    Button("Game Stores…") { model.openStores() }.keyboardShortcut("l", modifiers: [.command, .shift])
+                    Button("Refresh Library") { model.refresh() }.keyboardShortcut("r")
+                    Button("Check for Game Updates") { Task { await model.checkStoreUpdates(); model.say(model.storeUpdates.isEmpty ? "Your GOG and Epic games are up to date." : "\(model.storeUpdates.count) game update(s) available.") } }
+                }
                 Button("Updates…") { model.showUpdates = true }.keyboardShortcut("u", modifiers: [.command, .shift])
-                Button("Setup Checklist…") { model.welcomePage = .games; model.showWelcome = true }
+                if model.gamesEnabled { Button("Setup Checklist…") { model.welcomePage = .games; model.showWelcome = true } }
             }
-            CommandMenu("Game") {
-                GameCommands(model: model)
-            }
-            CommandMenu("Stream") { StreamCommands() }
+            if model.gamesEnabled { CommandMenu("Game") { GameCommands(model: model) } }
+            if model.streamsEnabled || streams.running != nil { CommandMenu("Stream") { StreamCommands() } }
             CommandGroup(after: .help) {
                 Button("Getting Started…") { model.welcomePage = .choose; model.showWelcome = true }
-                Button("Controller Input Test…") { openWindow(id: "pad-input-test") }
+                if model.remappingEnabled { Button("Controller Input Test…") { openWindow(id: "pad-input-test") } }
                 Button("What's New in Nokcandu") { model.showWhatsNew = true }
                 Button("Report a Problem…") { model.showReport = true }
             }
@@ -98,7 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     /// With the menu bar menu on, Nokcandu keeps running after its window closes (the menu brings it back).
-    func applicationWillTerminate(_ notification: Notification) { MainActor.assumeIsolated { StreamsModel.shared.endStreamForQuit(); PadProfileEdits.shared.flushAll(); MacGameKeys.shared.stop(); DesktopPad.shared.stop() } }
+    func applicationWillTerminate(_ notification: Notification) { MainActor.assumeIsolated { StreamsModel.shared.endStreamForQuit(); PadDSUBridge.shared.stop(); PadProfileEdits.shared.flushAll(); MacGameKeys.shared.stop(); DesktopPad.shared.stop() } }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !MenuBarSetting.on }
 }
 
@@ -214,22 +215,35 @@ struct LibraryView: View {
         NavigationSplitView {
             VStack(spacing: 0) {
                 VStack(spacing: 8) {
-                    Picker("Show", selection: $model.sidebarTab) {
-                        Text("Games").tag(AppModel.SidebarTab.games)
-                        Text("Controls").tag(AppModel.SidebarTab.profiles)
-                        Text("Streams").tag(AppModel.SidebarTab.streams)
+                    if model.features.visible.count > 1 {
+                        Picker("Show", selection: $model.sidebarTab) {
+                            ForEach(model.features.visible) { feature in
+                                Text(feature == .profiles ? "Controls" : feature == .streams ? "Streams" : "Games").tag(feature)
+                            }
+                        }
+                        .pickerStyle(.segmented).labelsHidden()
+                    } else if let feature = model.features.visible.first {
+                        Label(feature.title, systemImage: feature.symbol).font(.headline)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .pickerStyle(.segmented).labelsHidden()
-                    if model.sidebarTab == .games {
+                    if model.gamesEnabled && model.sidebarTab == .games {
                         SidebarGameSearch(query: $model.librarySearch, focusRequest: $model.focusSearch)
                     }
                 }
                 .padding(.horizontal, 10).padding(.vertical, 6)
                 Group {
-                    switch model.sidebarTab {
-                    case .profiles: ProfilesSidebar()
-                    case .streams: StreamsSidebar()
-                    case .games: gamesList
+                    if model.features.enabled.isEmpty {
+                        VStack(spacing: 12) {
+                            Text("Your workspace").font(.headline)
+                            Text("Choose features in General settings.").font(.callout).foregroundStyle(.secondary)
+                            Button("Choose Features…") { showSettings("general") }
+                        }.padding()
+                    } else {
+                        switch model.sidebarTab {
+                        case .profiles: ProfilesSidebar()
+                        case .streams: StreamsSidebar()
+                        case .games: gamesList
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
@@ -240,7 +254,7 @@ struct LibraryView: View {
                 // Sort and filter share one button so the sidebar's buttons all fit when it's narrow. They only
                 // apply to the games list, so the button is only there on the Games tab (it used to show, and do
                 // nothing visible, over Controls and Streams). It sits left of the other two, which stay put.
-                if model.sidebarTab == .games { ToolbarItem(placement: .automatic) {
+                if model.gamesEnabled && model.sidebarTab == .games { ToolbarItem(placement: .automatic) {
                     Menu {
                         Picker("Show", selection: $model.libraryFilter) {
                             ForEach([AppModel.LibraryFilter.all, .running, .windows, .mac, .steam, .battleNet] + model.driveFilters) { Text($0.title).tag($0) }
@@ -265,7 +279,7 @@ struct LibraryView: View {
                     SettingsLink {
                         Image(systemName: "gearshape")
                             .overlay(alignment: .topTrailing) {
-                                if model.updateCount > 0 { Circle().fill(.red).frame(width: 7, height: 7).offset(x: 3, y: -2) }
+                                if model.updateCount > 0 { Circle().fill(model.updateSummary.badge == .app ? Color.red : Color.orange).frame(width: 7, height: 7).offset(x: 3, y: -2) }
                             }
                     }
                     .help(model.updateCount > 0 ? "Settings — \(model.updateCount) update\(model.updateCount == 1 ? "" : "s") available" : "Settings")
@@ -273,7 +287,15 @@ struct LibraryView: View {
                 }
             }
         } detail: {
-            if model.sidebarTab == .profiles {
+            if model.features.enabled.isEmpty {
+                ContentUnavailableView {
+                    Label("Make Nokcandu yours", systemImage: "slider.horizontal.3")
+                } description: {
+                    Text("Choose Games, Remapping or Streaming in General settings. Your saved content is kept.")
+                } actions: {
+                    Button("Choose Features…") { showSettings("general") }
+                }
+            } else if model.sidebarTab == .profiles {
                 ProfilesTabDetail()
             } else if model.sidebarTab == .streams {
                 StreamsDetail()
@@ -403,7 +425,7 @@ struct GameRow: View {
         if model.moving.contains(game.id) { return model.moveStatus[game.id] ?? "Moving…" }
         if let d = model.missingDrive[game.id] { return "Connect \(d) to play" }
         if let u = model.updating[game.id] { return "Updating" + (u.progress.map { " · \($0.label)" } ?? "…") }
-        if model.storeUpdates[game.id] != nil { return "Update available" }
+        if let update = model.storeUpdates[game.id], !model.updatePreferences.contains(.init(kind: .store, target: game.id, version: update.latest)) { return "Update available" }
         if let custom = model.subtitles[game.id] { return custom }
         var s: String
         if let n = game.native { s = n.store.map { "Mac game · \($0.store.title)" } ?? "Mac game" }
@@ -590,7 +612,7 @@ struct LibrarySheets: ViewModifier {
                 group.notify(queue: .main) { model.handleDrop(urls) }
                 return true
             }
-            .alert("Found games on your drives", isPresented: Binding(get: { !model.foundFolders.isEmpty && !model.showWelcome && !model.showWhatsNew }, set: { if !$0 && !model.foundFolders.isEmpty { model.declineFoundFolders() } })) {
+            .alert("Found games on your drives", isPresented: Binding(get: { model.gamesEnabled && !model.foundFolders.isEmpty && !model.showWelcome && !model.showWhatsNew }, set: { if !$0 && !model.foundFolders.isEmpty { model.declineFoundFolders() } })) {
                 Button("Add Them") { model.addFoundFolders() }
                 Button("Not Now", role: .cancel) { model.declineFoundFolders() }
             } message: {
@@ -637,10 +659,10 @@ struct RunningStrip: View {
                     .accessibilityLabel("Streaming \(name)")
                     .contextMenu {
                         Button("Show Stream") { streams.showStream() }
-                        Button("Show in Streams") {
+                        if model.streamsEnabled { Button("Show in Streams") {
                             model.sidebarTab = .streams
                             if let r = streams.running { streams.selectedHost = r.hostID; streams.selectedProfile = r.profileID }
-                        }
+                        } }
                         Divider()
                         Button("End Stream") { streams.endStream(quitApp: false) }
                         Button("End Stream and Quit the App on the Host") { streams.endStream(quitApp: true) }
@@ -674,6 +696,7 @@ struct RunningStrip: View {
     }
 
     func show(_ g: InstalledGame) {
+        guard model.gamesEnabled else { return }
         model.sidebarTab = .games
         if !model.matchesLibrary(g) { model.librarySearch = ""; model.libraryFilter = .all }
         model.selection = g.id

@@ -556,7 +556,7 @@ struct ControllerProfileEditor: View {
     func stickLabel(_ s: Int) -> String? {
         if inputSource == .steamUSB && s == 1 && family != .steam2026 {
             let mode = steamTrackpadBinding(1).wrappedValue.mode
-            if mode != .existing { return mode == .trackball ? "Trackball" : mode == .directions ? "Directions" : mode == .stick ? "Stick" : mode == .dial ? "Scroll wheel" : "Trackpad mouse" }
+            if mode == .absolute { return "Mouse region" }; if mode == .gestures { return "Gestures" }; if mode != .existing { return mode == .trackball ? "Trackball" : mode == .directions ? "Directions" : mode == .stick ? "Stick" : mode == .dial ? "Scroll wheel" : "Trackpad mouse" }
         }
         let st = layerStick(s) ?? baseStick(s)
         switch st.mode {
@@ -916,6 +916,15 @@ struct ControllerProfileEditor: View {
         let t = Binding(get: { profile.triggers ?? merged.triggers }, set: { profile.triggers = $0 })
         Section {
             slider("Pressed at", t.soft, 0.05...0.9, "%.0f%%", scale: 100, info: "How far a trigger is pulled to count as pressed when it's set to a key or button.")
+            Picker("Behavior", selection: Binding(get: { t.wrappedValue.behavior ?? .standard }, set: { t.wrappedValue.behavior = $0 })) {
+                ForEach(PadProfiles.Triggers.Behavior.allCases, id: \.self) { Text($0.title).tag($0) }
+            }
+            if t.wrappedValue.behavior == .hipFire || t.wrappedValue.behavior == .exclusive {
+                slider("Decision time", Binding(get: { t.wrappedValue.decisionTime ?? 0.15 }, set: { t.wrappedValue.decisionTime = $0 }), 0.02...0.4, "%.2f s", info: "Wait this long before the soft action. A fast pull to the full threshold skips it. Exclusive mode keeps a slow soft pull from also firing the full action.")
+            }
+            if t.wrappedValue.behavior == .hair {
+                slider("Release distance", Binding(get: { t.wrappedValue.releaseDistance ?? 0.08 }, set: { t.wrappedValue.releaseDistance = $0 }), 0.02...0.3, "%.0f%%", scale: 100, info: "After the first press, ease off by this much to release, then pull by this much to press again without returning to rest.")
+            }
             slider("Full pull at", t.full, 0.5...1, "%.0f%%", scale: 100, info: "When \(PadProfiles.Input.ltfull.title(family)) and \(PadProfiles.Input.rtfull.title(family)) count: a second action at the end of the pull.")
         } header: {
             InspectorTitle(title: "Trigger Pull", subtitle: nil, symbol: "r2.button.roundedtop.horizontal")
@@ -1215,7 +1224,7 @@ struct OutputMenu: View {
             Menu("Macro") { ForEach(extras.macros, id: \.0) { m in Button(m.1) { pick(.macro(m.0)) } } }
         }
         if !extras.menus.isEmpty {
-            Menu("Radial menu") { ForEach(extras.menus, id: \.0) { m in Button(m.1 + " (while held)") { pick(.menu(m.0)) } } }
+            Menu("On-screen menu") { ForEach(extras.menus, id: \.0) { m in Button(m.1) { pick(.menu(m.0)) } } }
         }
         Button("On-screen keyboard") { pick(.keyboard) }
         if !layers.isEmpty {
@@ -1278,7 +1287,7 @@ struct ExtraButtons: View {
             }
             Button { selection = .triggers } label: { Text("Trigger pull").font(.caption) }.buttonStyle(.link)
             ForEach([("Touchpad", ControllerProfileEditor.Part.touchpad), ("Tilt", .tilt), ("Macros", .macros), ("Sequences", .sequences),
-                     ("Radial menus", .menus), ("Feedback", .feedback)], id: \.0) { t, part in
+                     ("On-screen menus", .menus), ("Feedback", .feedback)], id: \.0) { t, part in
                 Button { selection = part } label: { Text(t).font(.caption).fontWeight(selection == part ? .bold : .regular) }.buttonStyle(.link)
             }
         }

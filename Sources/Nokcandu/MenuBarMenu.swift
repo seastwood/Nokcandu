@@ -22,17 +22,19 @@ struct MenuBarMenu: View {
             }
         }
         StreamMenuBarSection()
-        if !recent.isEmpty {
+        if model.gamesEnabled && !recent.isEmpty {
             Section("Recent") {
                 ForEach(recent) { g in Button("Play \(g.name)") { model.play(g) } }
             }
         }
         Divider()
-        DesktopPadMenu()
+        if model.remappingEnabled { DesktopPadMenu() }
         Divider()
         Button("Open Nokcandu") { show() }.keyboardShortcut("o")
-        Button("Add a Game…") { model.showInstaller = true; show() }
-        Button("Add a Folder of Games…") { show(); model.chooseFolderOfGames() }
+        if model.gamesEnabled {
+            Button("Add a Game…") { model.showInstaller = true; show() }
+            Button("Add a Folder of Games…") { show(); model.chooseFolderOfGames() }
+        }
         Divider()
         Button("Quit Nokcandu") { NSApp.terminate(nil) }.keyboardShortcut("q")
     }

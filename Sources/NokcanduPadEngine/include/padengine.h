@@ -32,7 +32,8 @@ enum {
     // Steam Controller (2026): the right trackpad's click (it has a right stick of its own), and its touch
     // sensors: Grip Sense on each grip and a thumb on each stick. Held by the host like buttons (pe_button).
     PE_RPAD_CLICK, PE_LGRIP, PE_RGRIP, PE_LS_TOUCH, PE_RS_TOUCH,
-    PE_INPUTS                               // 82
+    PE_LPG1, PE_LPG2, PE_LPG3, PE_LPG4, PE_RPG1, PE_RPG2, PE_RPG3, PE_RPG4,
+    PE_INPUTS                               // 90
 };
 // Axes: SDL2's order. Sticks -32768…32767 (y down), triggers 0…32767.
 enum { PE_AXIS_LX, PE_AXIS_LY, PE_AXIS_RX, PE_AXIS_RY, PE_AXIS_LT, PE_AXIS_RT, PE_AXES };
@@ -121,6 +122,8 @@ void pe_calibration_set(pe_engine *e, const double bias[3]);
 /* Relative pointer motion, y down. Returns true only while a pointer-picked
  * radial menu consumes it; never posts OS events. Zero motion keeps selection. */
 bool pe_menu_mouse(pe_engine *e, double dx, double dy);
+/// A normalized touch surface selects a mouse-picked menu directly, without moving the game pointer.
+bool pe_menu_absolute(pe_engine *e, double x, double y);
 
 // MARK: Extra devices (joysticks, throttles, pedals, wheels, button boxes, a second controller)
 // A profile can combine up to PE_MAX_DEVICES more devices (slots 1…4) with the controller. Their buttons, hat and

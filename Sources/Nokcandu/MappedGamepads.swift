@@ -34,6 +34,7 @@ final class MappedGamepads {
     }
     /// A controller's motion: gyro in rad/s and acceleration in g, in Nokcandu's axes.
     func publishMotion(_ source: String, gyro: [Float], acceleration: [Float]) {
+        PadDSUBridge.shared.publish(source:source,gyro:gyro,acceleration:acceleration)
         motionSources.insert(source)
         for f in motionListeners.values { f(source, gyro, acceleration) }
     }

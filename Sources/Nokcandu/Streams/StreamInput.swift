@@ -13,8 +13,9 @@ import NokcanduStreamCore
         var lt: UInt8 = 0, rt: UInt8 = 0
         var lx: Int16 = 0, ly: Int16 = 0, rx: Int16 = 0, ry: Int16 = 0
     }
-    let settings: StreamProfile.Controller
-    let usesProfile: Bool
+    let routing: StreamControllerRouting
+    var settings: StreamProfile.Controller { routing.settings }
+    var usesProfile: Bool { settings.profileID != nil }
     private(set) var pads: [Int: Pad] = [:]
     private var numbers: [ObjectIdentifier: Int] = [:]
     private var observers: [NSObjectProtocol] = []
@@ -23,10 +24,13 @@ import NokcanduStreamCore
     private var rumbleTimer: Timer?
     var active = false
 
-    init(settings: StreamProfile.Controller) {
-        self.settings = settings
-        usesProfile = settings.profileID != nil
+    static func routing(for settings: StreamProfile.Controller, profiles: [PadProfiles.Profile]? = nil) -> StreamControllerRouting {
+        StreamControllerRouting(settings: settings, everywhereID: DesktopPad.shared.everywhereID,
+                                profilesEnabled: DesktopPad.shared.enabled,
+                                profiles: profiles ?? PadProfileEdits.shared.profiles(PadProfiles.profiles()))
     }
+    convenience init(settings: StreamProfile.Controller) { self.init(routing: Self.routing(for: settings)) }
+    init(routing: StreamControllerRouting) { self.routing = routing }
 
     /// The controller a profile maps (player one): the first macOS knows, else the first Nokcandu reads itself.
     /// A profile reading the Steam Controller itself has that as player one, and every other controller is free.
@@ -36,8 +40,7 @@ import NokcanduStreamCore
         return (nil, MappedGamepads.shared.sources.sorted().first)
     }
     var profileReadsSteam: Bool {
-        guard let id = settings.profileID, let p = PadProfiles.profiles().first(where: { $0.id == id }) else { return false }
-        return PadProfiles.top(p, all: PadProfiles.profiles(), \.controllerSource) == .steamUSB
+        routing.readsSteam
     }
     var othersAsPlayers: Bool { usesProfile && settings.multipleControllers && settings.sendAs != .profileOnly }
 
@@ -90,7 +93,7 @@ import NokcanduStreamCore
         MappedGamepads.shared.stopListeningMotion(mappedMotionToken); mappedMotionToken = nil
         for c in GCController.controllers() {
             c.extendedGamepad?.valueChangedHandler = nil
-            c.motion?.valueChangedHandler = nil
+            PadMotionHandlers.set(c,handler:nil)
         }
         rumbleTimer?.invalidate(); rumbleTimer = nil
         numbers = [:]; pads = [:]
@@ -110,8 +113,7 @@ import NokcanduStreamCore
         case .profileOnly: return UInt8(LI_CTYPE_UNKNOWN)
         case .automatic:
             // A Nokcandu profile that presents the controller as another one: the host gets that one too.
-            if let id = settings.profileID, let p = PadProfiles.profiles().first(where: { $0.id == id }),
-               let shown = PadProfiles.top(p, all: PadProfiles.profiles(), \.presentAs) {
+            if let shown = routing.presentedController {
                 switch shown { case .xbox: return UInt8(LI_CTYPE_XBOX); case .dualShock4: return UInt8(LI_CTYPE_PS); case .switchPro: return UInt8(LI_CTYPE_NINTENDO) }
             }
             guard let g = c?.extendedGamepad else { return UInt8(LI_CTYPE_XBOX) }
@@ -169,8 +171,8 @@ import NokcanduStreamCore
             ControllerReportDiagnostics.shared.record("\(rateID):buttons", label: "GameController · changed values")
             MainActor.assumeIsolated { self?.read(pad, number: n) }
         }
-        if let m = c.motion {
-            m.valueChangedHandler = { [weak self] motion in
+        if c.motion != nil {
+            PadMotionHandlers.set(c) { [weak self] motion in
                 ControllerReportDiagnostics.shared.record("\(rateID):motion", label: "GameController · motion callbacks")
                 let r = motion.rotationRate, a = motion.hasGravityAndUserAcceleration ? motion.acceleration : motion.acceleration
                 MainActor.assumeIsolated { self?.motion(n, gyro: r, accel: a) }
@@ -191,8 +193,8 @@ import NokcanduStreamCore
                 ControllerReportDiagnostics.shared.record("\(rateID):buttons", label: "GameController · changed values")
                 MainActor.assumeIsolated { self?.read(pad, number: n) }
             }
-            if let m = c.motion {
-                m.valueChangedHandler = { [weak self] motion in
+            if c.motion != nil {
+                PadMotionHandlers.set(c) { [weak self] motion in
                     ControllerReportDiagnostics.shared.record("\(rateID):motion", label: "GameController · motion callbacks")
                     let r = motion.rotationRate, a = motion.acceleration
                     MainActor.assumeIsolated { self?.motion(n, gyro: r, accel: a) }
@@ -476,6 +478,8 @@ enum StreamMouseButtons {
 @MainActor protocol StreamPadRoute: AnyObject {
     /// The Nokcandu profile the stream uses, or nil for the controller as it is.
     var profileID: String? { get }
+    /// Refreshes the shared routing snapshot when Use Everywhere/profile definitions change.
+    @discardableResult func refreshControllerProfile(profiles: [PadProfiles.Profile]) -> Bool
     /// The stream window is the key window of the active app.
     var isFront: Bool { get }
     /// With a profile and Multiple controllers on: only the first controller goes through the profile (player
@@ -488,6 +492,7 @@ enum StreamMouseButtons {
     func key(_ mac: Int, _ down: Bool)
     func mouseButton(_ b: Int, _ down: Bool)
     func mouseMove(_ dx: Int, _ dy: Int)
+    func absoluteMouse(_ point: CGPoint)
     func wheel(_ clicks: Int)
     func text(_ s: String)
 }

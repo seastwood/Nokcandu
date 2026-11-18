@@ -28,7 +28,7 @@ struct UpdatesView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     if !embedded { Text("Updates").font(.title2.bold()) }
-                    Text(cat.map { "Checked \($0.checkedAt.formatted(.relative(presentation: .named)))" } ?? "Not checked yet")
+                    Text((UserDefaults.standard.object(forKey: "lastAppUpdateCheck") as? Date).map { "App checked \($0.formatted(.relative(presentation: .named)))" } ?? "Not checked yet")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -41,10 +41,25 @@ struct UpdatesView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     appSection
-                    engineSection
-                    lavSection
-                    rosettaSection
-                    otherSection
+                    HStack {
+                        Text(model.gamesEnabled ? "Red: Nokcandu · Orange: game components and games" : "Red: Nokcandu update").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        if model.updateCount > 0 { Button("Ignore Current Updates") { model.ignoreCurrentUpdates() } }
+                    }
+                    if !model.updatePreferences.ignored.isEmpty {
+                        HStack {
+                            Text("Ignored versions remain available here. Newer versions notify you again.").font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Restore Ignored Notifications") { model.restoreUpdateNotices() }
+                        }
+                    }
+                    if model.gamesEnabled {
+                        engineSection
+                        lavSection
+                        storeSection
+                        rosettaSection
+                        otherSection
+                    }
                     if !log.isEmpty {
                         Text(log.suffix(10).joined(separator: "\n")).font(.caption.monospaced()).foregroundStyle(.secondary)
                             .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
@@ -61,7 +76,7 @@ struct UpdatesView: View {
         } message: {
             Text(confirmTry.flatMap { g in newestEngine.flatMap { WindowedPresentation.engineUpdateWarning(host: g, games: model.games, target: $0) } } ?? "")
         }
-        .task { if cat == nil { checking = true; await model.checkForUpdates(quiet: true); checking = false } }
+        .task { if UserDefaults.standard.object(forKey: "lastAppUpdateCheck") == nil || (model.gamesEnabled && cat == nil) { checking = true; await model.checkForUpdates(quiet: true); checking = false } }
     }
 
     // MARK: Nokcandu itself
@@ -80,6 +95,7 @@ struct UpdatesView: View {
                         Button("Release Notes") { NSWorkspace.shared.open(r.page) }.buttonStyle(.link)
                         Button("Update & Restart") { updateApp(r) }.buttonStyle(.borderedProminent).disabled(busy != nil)
                     }
+                    UpdateNoticeControl(notice: .app(r))
                     if !r.notes.isEmpty {
                         Text(r.notes).font(.caption).foregroundStyle(.secondary).lineLimit(8).textSelection(.enabled)
                     }
@@ -144,7 +160,7 @@ struct UpdatesView: View {
     }
 
     func hold(_ g: InstalledGame, _ on: Bool) {
-        do { try EngineUpdate.setHeld(g, on); tick += 1; model.say(on ? "\(g.name) will stay on its current engine." : "\(g.name) can try new engines again.") }
+        do { try EngineUpdate.setHeld(g, on); tick += 1; model.recountUpdates(); model.say(on ? "\(g.name) will stay on its current engine." : "\(g.name) can try new engines again.") }
         catch { model.fail(error) }
     }
 
@@ -153,40 +169,46 @@ struct UpdatesView: View {
         let cur = EngineUpdate.current(g)
         let st = EngineUpdate.state(for: g)
         let running: Bool = { if case .launcherRunning = model.runStates[g.id] ?? .notRunning { return true }; return false }()
-        HStack(spacing: 10) {
-            Image(nsImage: g.icon).resizable().frame(width: 26, height: 26)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(g.isSteamHost ? "Steam (all Steam games)" : g.name)
-                if busy == g.id {
-                    // What's happening right now, instead of a version label that changes only at the end.
-                    Text(log.last ?? "Working…").font(.caption).foregroundStyle(.tint).lineLimit(1)
-                } else {
-                Text((cur?.description ?? g.wineVersion ?? "unknown engine") + (st?.status == .trying ? " · trying it — was \(EngineVersion(versionString: st!.previousEngine)?.description ?? st!.previousEngine). Play, then Keep or Roll Back." : ""))
-                    .font(.caption).foregroundStyle(st?.status == .trying ? .orange : .secondary)
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 10) {
+                Image(nsImage: g.icon).resizable().frame(width: 26, height: 26)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(g.isSteamHost ? "Steam (all Steam games)" : g.name)
+                    if busy == g.id {
+                        // What's happening right now, instead of a version label that changes only at the end.
+                        Text(log.last ?? "Working…").font(.caption).foregroundStyle(.tint).lineLimit(1)
+                    } else {
+                        Text((cur?.description ?? g.wineVersion ?? "unknown engine") + (st?.status == .trying ? " · trying it — was \(EngineVersion(versionString: st!.previousEngine)?.description ?? st!.previousEngine). Play, then Keep or Roll Back." : ""))
+                            .font(.caption).foregroundStyle(st?.status == .trying ? .orange : .secondary)
+                    }
+                }
+                Spacer()
+                if busy == g.id { ProgressView().controlSize(.small) }
+                else if EngineUpdate.isHeld(g) {
+                    Label("Staying on this engine", systemImage: "pin.fill").font(.caption).foregroundStyle(.secondary)
+                    Button("Allow Updates") { hold(g, false) }.disabled(busy != nil)
+                } else if st?.status == .trying {
+                    Button("Keep") { keep(g) }.disabled(busy != nil)
+                    Button("Roll Back") { rollBack(g) }.disabled(busy != nil || running)
+                } else if let c = cur, c < newest, failedTest {
+                    Text("Newest didn't pass test").font(.caption).foregroundStyle(.secondary)
+                } else if let c = cur, c < newest, let warning = WindowedPresentation.engineUpdateWarning(host: g, games: model.games, target: newest) {
+                    // Games here use the resizable window, which this engine doesn't support yet: held back by default.
+                    InfoButton(warning)
+                    Text("Kept for the resizable window").font(.caption).foregroundStyle(.secondary)
+                    Button("Try Anyway…") { confirmTry = g }.disabled(busy != nil || running)
+                } else if let c = cur, c < newest {
+                    Button("Try \(newest.description)") { tryEngine(g) }.disabled(busy != nil || running)
+                        .help(running ? "Quit it first." : "Switches this app to the newest engine; you can roll back.")
+                    Button { hold(g, true) } label: { Image(systemName: "pin") }.accessibilityLabel("Keep \(g.name) on its current engine").buttonStyle(.borderless)
+                        .help("Keep \(g.name) on its current engine (for a game that plays well as it is).")
+                } else if cur != nil {
+                    Text("Up to date").font(.caption).foregroundStyle(.secondary)
                 }
             }
-            Spacer()
-            if busy == g.id { ProgressView().controlSize(.small) }
-            else if EngineUpdate.isHeld(g) {
-                Label("Staying on this engine", systemImage: "pin.fill").font(.caption).foregroundStyle(.secondary)
-                Button("Allow Updates") { hold(g, false) }.disabled(busy != nil)
-            } else if st?.status == .trying {
-                Button("Keep") { keep(g) }.disabled(busy != nil)
-                Button("Roll Back") { rollBack(g) }.disabled(busy != nil || running)
-            } else if let c = cur, c < newest, failedTest {
-                Text("Newest didn't pass test").font(.caption).foregroundStyle(.secondary)
-            } else if let c = cur, c < newest, let warning = WindowedPresentation.engineUpdateWarning(host: g, games: model.games, target: newest) {
-                // Games here use the resizable window, which this engine doesn't support yet: held back by default.
-                InfoButton(warning)
-                Text("Kept for the resizable window").font(.caption).foregroundStyle(.secondary)
-                Button("Try Anyway…") { confirmTry = g }.disabled(busy != nil || running)
-            } else if let c = cur, c < newest {
-                Button("Try \(newest.description)") { tryEngine(g) }.disabled(busy != nil || running)
-                    .help(running ? "Quit it first." : "Switches this app to the newest engine; you can roll back.")
-                Button { hold(g, true) } label: { Image(systemName: "pin") }.accessibilityLabel("Keep \(g.name) on its current engine").buttonStyle(.borderless)
-                    .help("Keep \(g.name) on its current engine (for a game that plays well as it is).")
-            } else if cur != nil {
-                Text("Up to date").font(.caption).foregroundStyle(.secondary)
+            if let cur, cur < newest, !EngineUpdate.isHeld(g), st?.status != .trying, !failedTest {
+                UpdateNoticeControl(notice: .engine(g, engine: newest, template: newestTemplate))
+                    .padding(.leading, 36)
             }
         }
     }
@@ -197,7 +219,7 @@ struct UpdatesView: View {
     func prepare() async -> String? {
         guard let cat, let e = newestEngine else { return nil }
         if let id = targetID, RuntimeManager.isCached(id: id) { return id }
-        busy = "download"; defer { busy = nil; tick += 1 }
+        busy = "download"; defer { busy = nil; tick += 1; model.recountUpdates() }
         let l = logger(), t = newestTemplate
         do { return try await RuntimeManager.build(engine: e, template: t, catalog: cat, log: l) }
         catch { model.fail(error); return nil }
@@ -206,7 +228,7 @@ struct UpdatesView: View {
     func tryEngine(_ g: InstalledGame) {
         Task {
             guard let id = await prepare() else { return }
-            busy = g.id; defer { busy = nil; tick += 1 }
+            busy = g.id; defer { busy = nil; tick += 1; model.recountUpdates() }
             let l = logger()
             do {
                 try await EngineUpdate.apply(g, runtimeID: id, log: l)
@@ -222,7 +244,7 @@ struct UpdatesView: View {
 
     func rollBack(_ g: InstalledGame) {
         Task {
-            busy = g.id; defer { busy = nil; tick += 1 }
+            busy = g.id; defer { busy = nil; tick += 1; model.recountUpdates() }
             do { try await EngineUpdate.rollBack(g, log: logger()); model.refresh(); model.say("Rolled back.") }
             catch { model.fail(error) }
         }
@@ -241,15 +263,20 @@ struct UpdatesView: View {
                 }
                 ForEach(withFix) { g in
                     let v = CinematicFix.state(for: g)?.version ?? "installed by hand"
-                    HStack {
-                        Image(nsImage: g.icon).resizable().frame(width: 22, height: 22)
-                        Text(g.isSteamHost ? "Steam (all Steam games)" : g.name)
-                        Text(v).font(.caption).foregroundStyle(.secondary)
-                        Spacer()
-                        if busy == "lav-\(g.id)" { ProgressView().controlSize(.small) }
-                        else if let lav = cat?.lav, v != lav.version {
-                            Button("Update to \(lav.version)") { updateLAV(g, lav) }.disabled(busy != nil)
-                        } else { Text("Up to date").font(.caption).foregroundStyle(.secondary) }
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Image(nsImage: g.icon).resizable().frame(width: 22, height: 22)
+                            Text(g.isSteamHost ? "Steam (all Steam games)" : g.name)
+                            Text(v).font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                            if busy == "lav-\(g.id)" { ProgressView().controlSize(.small) }
+                            else if let lav = cat?.lav, v != lav.version {
+                                Button("Update to \(lav.version)") { updateLAV(g, lav) }.disabled(busy != nil)
+                            } else { Text("Up to date").font(.caption).foregroundStyle(.secondary) }
+                        }
+                        if let lav = cat?.lav, v != lav.version {
+                            UpdateNoticeControl(notice: .cinematic(g, version: lav.version)).padding(.leading, 32)
+                        }
                     }
                 }
             }
@@ -259,9 +286,32 @@ struct UpdatesView: View {
 
     func updateLAV(_ g: InstalledGame, _ r: CinematicFix.Release) {
         Task {
-            busy = "lav-\(g.id)"; defer { busy = nil; tick += 1 }
+            busy = "lav-\(g.id)"; defer { busy = nil; tick += 1; model.recountUpdates() }
             do { try await CinematicFix.install(for: g, release: r, log: logger()); model.say("Cinematic fix updated to \(r.version).") }
             catch { model.fail(error) }
+        }
+    }
+
+    @ViewBuilder var storeSection: some View {
+        let games = model.games.filter { model.storeUpdates[$0.id] != nil }
+        if !games.isEmpty {
+            GroupBox {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(games) { game in
+                        if let update = model.storeUpdates[game.id] {
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text(game.name)
+                                    Text(update.latest).font(.caption).foregroundStyle(.secondary)
+                                    Spacer()
+                                    Button("Update") { model.updateGame(game) }.disabled(model.updating[game.id] != nil || model.isRunning(game))
+                                }
+                                UpdateNoticeControl(notice: .init(kind: .store, target: game.id, version: update.latest))
+                            }
+                        }
+                    }
+                }.padding(6).frame(maxWidth: .infinity, alignment: .leading)
+            } label: { Label("Game updates", systemImage: "bag").font(.headline) }
         }
     }
 
@@ -334,5 +384,19 @@ struct EngineTrialBanner: View {
         }
         .padding(12)
         .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+/// Dismissing a badge never pins an engine, installs a release or removes its Update button.
+struct UpdateNoticeControl: View {
+    @EnvironmentObject var model: AppModel
+    let notice: UpdateNotice
+    var body: some View {
+        let ignored = model.updatePreferences.contains(notice)
+        HStack(spacing: 8) {
+            if ignored { Text("Notification ignored for this version").foregroundStyle(.secondary) }
+            Button(ignored ? "Notify Again" : "Ignore This Version") { model.ignoreUpdate(notice, !ignored) }
+                .buttonStyle(.link)
+        }.font(.caption)
     }
 }

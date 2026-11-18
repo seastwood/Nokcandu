@@ -66,9 +66,15 @@ final class SteamControllerUSB: ObservableObject {
     /// Keep the direct reader alive for the application's lifetime, including while its profile is inactive.
     func applyOwnershipPreference() {
         if manager != nil { stop() }
-        if ControllerOwnershipPreference.enabled { listeners[priorityListenerID] = { _ in } }
+        updateFeatureVisibility()
+    }
+    /// Feature visibility changes the lifetime listener, not the exclusive/shared preference. Preserve
+    /// an ongoing game's or stream's capture rather than tearing it down just to hide the editor.
+    func updateFeatureVisibility() {
+        if AppFeatures.current.ownsControllersInBackground(exclusivePreference: ControllerOwnershipPreference.enabled) { listeners[priorityListenerID] = { _ in } }
         else { listeners[priorityListenerID] = nil }
-        if !listeners.isEmpty { start() }
+        if listeners.isEmpty { if manager != nil { stop() } }
+        else if manager == nil { start() }
     }
     var accessSummary: [String] {
         let counts = Dictionary(grouping: channels.values, by: { channel -> String in

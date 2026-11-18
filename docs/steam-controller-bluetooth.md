@@ -1,5 +1,8 @@
 # Steam Controller over Bluetooth
 
+November 18: opt-in absolute pad regions, recorded/drawn gestures, trigger modes, alternate menus and
+local DSU motion are implemented. See [setup, scope, migration and verification limits](advanced-controller-remapping.md).
+
 The original (2015) Steam Controller, on firmware with Bluetooth LE support, connects to the Mac directly as
 product 0x1105 or 0x1106. Added November 15, 2026; the protocol follows Valve's SDL driver (`src/joystick/hidapi/SDL_hidapi_steam.c` and `steam/controller_structs.h`).
 

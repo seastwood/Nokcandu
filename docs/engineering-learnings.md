@@ -1,5 +1,61 @@
 # Engineering learnings
 
+## Release 0.14.5 acceptance scope (November 18)
+
+The user confirmed feature hiding works and authorized release with the new controller capabilities
+still awaiting physical testing. Keep these options opt-in and disclose their experimental status in the
+release notes; retain the existing default behavior. Gesture recording now explains the initial lift and
+draw/lift steps. The DMG's first-open instructions explain feature selection and optional Windows/Wine
+setup rather than implying every user needs an engine download. [Release notes](../release-notes/v0.14.5.md).
+
+The release preparation's broad local suite encountered process-inspection/helper restrictions and did
+not provide a complete passing result. Three representative failures (native IPX adapter selection,
+recipe override preservation and game display edits) were reproduced against an unchanged 0.14.4
+archive in the same environment. Do not call the broad suite green or classify every other failure from
+that comparison alone. The 127 focused regression tests passed, including local DSU transport/rebind;
+the hosted release workflow retains its full-suite test gate before publishing.
+
+## Advanced remapping needs common cleanup and independent motion consumers (November 18)
+
+Keep trigger arbitration and menu selection in the shared C engine, including Wine helpers; avoid
+desktop-only implementations of otherwise common profile behavior. Append virtual input identifiers,
+keep new profile fields optional, and verify legacy compiled defaults. Timed trigger decisions need
+deadlines even without another axis report. Button-menu choices must consume both edges, cancel
+without selecting on focus loss, and associate pending pulses with the opening controller for release.
+
+Absolute pad positions use surface fractions and explicit Mac/stream coordinate paths; clear the last
+absolute click target when relative or hardware mouse movement takes over. Drawn gestures emit on
+lift, bound path complexity, and discard partial recognition on ownership/focus/configuration changes.
+
+GameController has one motion callback: mapping and DSU must share a dispatcher. Keep packet work
+off the input thread, bind DSU to loopback, expire subscriptions, and wait for listener cancellation before
+rebinding the same port. The real UDP subscription/restart test passed; physical gyro axis/emulator
+acceptance and actual game behavior remain pending. [Scope and Undo](advanced-controller-remapping.md).
+
+## Stream profile precedence must include controller routing (November 18)
+
+An Everywhere override cannot change only DesktopPad's chosen mapping. Resolve one effective snapshot
+for that mapping, player allocation, Steam direct-reader selection and host identity; otherwise raw and
+mapped input can collide or disappear. Re-resolve live without overwriting the stream's saved selection.
+Release old mapped holds before replacing the host controller, and reattach input callbacks when the
+engine takes its in-place profile-update path. Default new precedence options off for legacy compatibility.
+[Behavior and test limits](streams.md#use-everywhere-controller-override-november-18).
+
+## Optional features and independent update notices (November 18)
+
+Feature visibility must not own saved content. Preserve existing installations with an all-enabled default,
+normalize hidden selections, and support the all-hidden state with a route back to settings. Apply service
+policy at entry points as well as navigation: hidden Games must skip discovery/maintenance and Wine
+catalog checks. Keep active-session exit controls and shared profile processing for games/streams, while
+removing desktop remapping and its lifetime controller ownership. Changing visibility must not tear down
+a direct reader still held by an active game or stream.
+
+Separate update availability from notification dismissal. Ignore keys include component, host and target
+version; held engines and current trials are separate decisions. Derive badge priority from unignored,
+visible notices (app red, game components orange), and retain manual install actions. Cache app availability
+independently of the Wine catalog so hiding Games and relaunching cannot suppress Nokcandu updates.
+[Behavior, validation limits and Undo](optional-features.md).
+
 ## Controller ownership and annotation geometry (November 17)
 
 A running profile and a process-local reader lock do not establish exclusive physical-device ownership.

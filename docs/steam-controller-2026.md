@@ -1,5 +1,8 @@
 # Steam Controller (2026)
 
+November 18: opt-in absolute pad regions, recorded/drawn gestures, trigger modes, alternate menus and
+local DSU motion are implemented. See [setup, scope, migration and verification limits](advanced-controller-remapping.md).
+
 Read by the same reader as the original (`SteamControllerUSB`, the profile's "Steam Controller, read directly"
 input), over USB (product 0x1302), Bluetooth (0x1303) or the Steam Controller Puck (0x1304 or 0x1305, one
 controller per HID interface 2–5). Added November 15, 2026, **without the controller to test against**; the

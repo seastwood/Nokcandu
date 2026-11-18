@@ -339,6 +339,7 @@ struct ProfilesTabDetail: View {
                 // Everything about controllers that isn't one profile: in games, on the Mac and in streams.
                 Form {
                     ControllerOwnershipSettings()
+                    PadDSUSettings()
                     PadGyroAndNotesSettings()
                     PadCaptureSettings()
                     PadHeadTrackingSettings()

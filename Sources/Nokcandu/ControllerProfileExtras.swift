@@ -10,7 +10,7 @@ struct PadExtras {
     func title(_ o: PadProfiles.Output, _ family: Controllers.Family?) -> String {
         switch o {
         case .macro(let id): return "Macro: " + (macros.first { $0.0 == id }?.1 ?? "removed")
-        case .menu(let id): return "Radial menu: " + (menus.first { $0.0 == id }?.1 ?? "removed")
+        case .menu(let id): return "Menu: " + (menus.first { $0.0 == id }?.1 ?? "removed")
         default: return o.title(family)
         }
     }
@@ -153,16 +153,22 @@ extension ControllerProfileEditor {
 
     @ViewBuilder var menusInspector: some View {
         Section {
-            Text("Hold a button, point a stick or move the mouse/gyro toward a choice, then let go. Give a button “Radial menu” to open one. The selected stick or mapped mouse movement selects the menu while it is open.")
+            Text("Give a button “On-screen menu” to open one. Radial, grid and horizontal menus select with a stick or mapped mouse movement, then commit on release. Button-shortcut menus wait for a choice button.")
                 .font(.caption).foregroundStyle(.secondary)
-            Button("New Radial Menu") {
+            Button("New Menu") {
                 menusBinding.wrappedValue.append(PadProfiles.RadialMenu(name: "Menu \(menusBinding.wrappedValue.count + 1)", slices: (0..<4).map { _ in .init(title: "", outputs: [.nothing]) }))
             }.disabled(menusBinding.wrappedValue.count >= 8)
-        } header: { InspectorTitle(title: "Radial Menus", subtitle: nil, symbol: "circle.grid.cross") }
+        } header: { InspectorTitle(title: "On-Screen Menus", subtitle: nil, symbol: "circle.grid.cross") }
         ForEach(menusBinding) { $mn in
             Section {
                 TextField("Name", text: $mn.name)
-                Picker("Pick with", selection: $mn.stick) { Text("Left stick").tag(0); Text("Right stick").tag(1); Text("Mouse / gyro direction").tag(2) }
+                Picker("Layout", selection: Binding(get: { mn.layout ?? .radial }, set: { mn.layout = $0 })) {
+                    ForEach(PadProfiles.RadialMenu.Layout.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                if mn.layout == .quick { Text("Open the menu, then press A, B, X, Y, LB, RB, View or Menu for the numbered choice. Steam/Guide cancels. Releasing the opener leaves this menu open.").font(.caption).foregroundStyle(.secondary) }
+                if mn.layout != .quick {
+                    Picker("Pick with", selection: $mn.stick) { Text("Left stick").tag(0); Text("Right stick").tag(1); Text("Mouse / gyro direction").tag(2) }
+                }
                 ForEach(Array(mn.slices.enumerated()), id: \.offset) { i, _ in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
@@ -179,7 +185,7 @@ extension ControllerProfileEditor {
                     Spacer()
                     Button("Delete Menu", role: .destructive) { menusBinding.wrappedValue.removeAll { $0.id == mn.id } }
                 }
-            } footer: { Text("Choices go clockwise from the top. Leave Title blank to use the action’s name, or type your own.").font(.caption).foregroundStyle(.secondary) }
+            } footer: { Text("Radial choices go clockwise from the top; grid choices go left to right, then down. Leave Title blank to use the action’s name, or type your own.").font(.caption).foregroundStyle(.secondary) }
         }
     }
 
