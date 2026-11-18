@@ -81,4 +81,43 @@ final class SteamControllerReportTests: XCTestCase {
         child.controllerSource = .automatic
         XCTAssertEqual(PadProfiles.top(child,all:[p,child],\.controllerSource),.automatic)
     }
+    func testReceiverGapReleasesHeldOutputAndResumesOnNextReport() throws {
+        var stream = SteamControllerStream()
+        var health = SteamControllerCaptureHealth()
+        let held = packet(flags: 1 << 7)
+        XCTAssertNotNil(stream.accept(held, at: 1))
+        XCTAssertTrue(stream.expire(at: 1.31))
+        XCTAssertNil(stream.state, "The hold is released at the existing 0.3-second deadline")
+        XCTAssertFalse(health.missingReply(hasRecentInput: stream.hasRecentInput(at: 1.31)))
+        XCTAssertNotNil(stream.accept(held, at: 1.32), "Resume without acquiring a new mode lease, even with the same counter")
+        XCTAssertEqual(stream.state?.buttons, [.a])
+        XCTAssertFalse(health.missingReply(hasRecentInput: stream.hasRecentInput(at: 1.33)))
+        XCTAssertFalse(health.missingReply(hasRecentInput: stream.hasRecentInput(at: 1.34)),
+                       "Missing feature replies must not interrupt live input")
+        XCTAssertTrue(stream.expire(at: 1.63))
+        XCTAssertTrue(health.missingReply(hasRecentInput: stream.hasRecentInput(at: 1.63)),
+                      "A silent remote must still be reacquired if its disconnect event was missed")
+    }
+    func testCaptureHealthNeedsConsecutiveMissesAndRejectsHeartbeatLiveness() throws {
+        var stream = SteamControllerStream()
+        var health = SteamControllerCaptureHealth()
+        let input = packet()
+        _ = stream.accept(input, at: 1)
+        _ = stream.accept(input, at: 1.2)
+        XCTAssertTrue(stream.hasRecentInput(at: 1.4), "Repeated full input proves liveness")
+        var heartbeat = input; heartbeat[2] = 4
+        XCTAssertNil(stream.accept(heartbeat, at: 1.6))
+        XCTAssertFalse(stream.hasRecentInput(at: 1.6))
+        XCTAssertFalse(stream.hasRecentInput(at: .nan))
+        XCTAssertFalse(stream.hasRecentInput(at: 0))
+        XCTAssertFalse(health.missingReply(hasRecentInput: false))
+        XCTAssertFalse(health.missingReply(hasRecentInput: false))
+        health.reset() // Successful settings check or a newly acquired channel.
+        XCTAssertEqual(health.missedReads, 0)
+        XCTAssertFalse(health.missingReply(hasRecentInput: false))
+        XCTAssertFalse(health.missingReply(hasRecentInput: false))
+        XCTAssertTrue(health.missingReply(hasRecentInput: false))
+        for _ in 0..<100 { XCTAssertFalse(health.missingReply(hasRecentInput: true)) }
+        XCTAssertEqual(health.missedReads, 3, "Count is bounded for a long-lived controller")
+    }
 }

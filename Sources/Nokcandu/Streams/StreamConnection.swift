@@ -195,7 +195,7 @@ final class StreamConnection: @unchecked Sendable {
             let last = StreamLog.shared.text.split(separator: "\n").last.map(String.init) ?? ""
             throw StreamError.host("Couldn't connect to \(host.name)\(last.isEmpty ? "." : ": \(last)")")
         }
-        negotiatedFormat = formats
+        // videoSetup records the selected format. `formats` is only the offered capability mask.
     }
 
     private func videoSetup(_ format: Int32, _ w: Int32, _ h: Int32, _ rate: Int32) -> Int32 {

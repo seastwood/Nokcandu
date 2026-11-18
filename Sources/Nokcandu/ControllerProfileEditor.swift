@@ -201,7 +201,7 @@ struct ControllerProfileEditor: View {
                                   targetTint: { i in switchTarget(resolved[i]).map { colors[$0] } },
                                   changed: { i in changedInLayer(i) },
                                   stickChanged: { s in stickChangedInLayer(s) })
-                    .frame(width: width, height: width * 400 / 560)
+                    .frame(width: width, height: family == .steam2026 ? Steam2026PictureGeometry.height(for: width) : width * 400 / 560)
                     .onReceive(tester.$pressed) { now in
                         assigner.pressedChanged(now, select: { selection = .input($0) }, assign: assignPressed)
                     }

@@ -130,6 +130,7 @@ final class HIDDevices: ObservableObject {
         let d = IOHIDElementGetDevice(el)
         let id = Self.registryID(d)
         guard let e = elements[id]?[UInt32(IOHIDElementGetCookie(el))], let info = connected.first(where: { $0.id == id }), !info.gamepad else { return }
+        ControllerReportDiagnostics.shared.record("hidvalue:\(id)", label: "\(info.name) · HID value changes")
         let raw = IOHIDValueGetIntegerValue(v)
         let ev: Event
         switch e.kind {
@@ -243,7 +244,11 @@ final class DeviceFeed {
         reconcile()
         for (c, slot, d) in gamepadSlots() {
             c.motion?.valueChangedHandler = nil
-            c.extendedGamepad?.valueChangedHandler = { [weak self] pad, _ in MainActor.assumeIsolated { self?.read(pad, slot: slot, id: d.id) } }
+            let rateID = "gc:\(ObjectIdentifier(c)):buttons"
+            c.extendedGamepad?.valueChangedHandler = { [weak self] pad, _ in
+                ControllerReportDiagnostics.shared.record(rateID, label: "GameController · changed values")
+                MainActor.assumeIsolated { self?.read(pad, slot: slot, id: d.id) }
+            }
         }
     }
     private func read(_ g: GCExtendedGamepad, slot: Int32, id: String) {

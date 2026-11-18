@@ -35,3 +35,28 @@ stick takes over only while pushed further.
 
 SDL's naming of View/Menu (it sends Menu as Back), the haptic pulse's side numbering (assumed as the
 original's: left 1, right 0), whether a pulse feels right, and the picture's exact proportions.
+
+## Picture, pad angle and ownership (November 17)
+
+The supplied front-on reference now informs a separate diagram: ABXY mirrors the D-pad, pad surfaces lean
+inward by ±10°, stick callouts sit outward/below with leaders, cardinal captions surround their buttons, and
+gyro sits below the body. All mapping captions have bounded wrapping/truncation and full hover text. Geometry
+checks cover 320–800 point widths; SwiftUI previews at 320 and 560 were visually inspected. Exact hardware
+proportions remain unmeasured. Presentation tilt does not change input calibration.
+
+The first diagram still put the pads too low, crossing the inner shell cutout despite passing canvas and
+caption checks. The user's follow-up corrected this: photo landmarks place pad centers at about 55% of shell
+height (was 68%), sticks at 26% (was 38%), and QAM level with the pads. Pad size is now about 23% of shell width,
+with a shallower, flatter inner opening and fuller lower grips. Upper button/header sizes and positions also
+follow the reference more closely. The renderer and regression tests now share the actual shell path;
+expanded, rotated pad perimeters must stay inside it with clearance. Long-label lanes remain separate.
+
+**Pad angle** is now shared by every behavior, including Scroll wheel (circle) and Existing mappings. Left
+pad defaults to 0° (straight axes). Explicit saved angles remain intact, tap/click zones rotate in every
+behavior, and circular scroll direction/step count remain invariant. Existing touch/right-pad axes now honor
+the angle too; the 2026 physical stick remains independent.
+
+The direct reader now requests exclusive HID access for the app's lifetime when the global Controller
+ownership option is enabled (default On), reports refused access, and releases on quit/opt-out. Physical
+2026/Puck acceptance with native Steam remains pending; other controllers are not made exclusive by this
+setting. [Evidence, migration and Undo](investigations/controller-ownership-and-picture-2026-11-17.md).

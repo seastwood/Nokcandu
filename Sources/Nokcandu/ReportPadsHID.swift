@@ -39,6 +39,7 @@ final class ReportPadsHID {
             guard result == kIOReturnSuccess, count >= 2 else { return }
             let report = Array(UnsafeBufferPointer(start: bytes, count: count))
             let id = UInt64(UInt(bitPattern: ctx))
+            ControllerReportDiagnostics.shared.record("report:\(id)", label: "Report controller · HID reports")
             MainActor.assumeIsolated { ReportPadsHID.shared.report(report, id: id) }
         }, UnsafeMutableRawPointer(bitPattern: UInt(id)))
         // Nothing is sent to a controller macOS's own support or a profile's own device reads: a mode switch

@@ -268,7 +268,7 @@ struct NetworkSteadySetting: View {
             if on && !installed { install() } else { NetworkSteady.enabled = on; enabled = on }
         }))
         .disabled(working)
-        Text("Turns off AWDL — the wireless link AirDrop, AirPlay, Sidecar and Universal Control use — while a game runs, and back on when it stops. It makes Wi-Fi hop channels every few seconds, which shows up as lag spikes online. Needs a small helper, installed once with your password\(installed ? "" : " when you turn this on"). A wired connection avoids the spikes altogether.")
+        Text("Turns off AWDL — the wireless link AirDrop, AirPlay, Sidecar and Universal Control use — while a game or a stream runs, and back on when it stops. It makes Wi-Fi hop channels every few seconds, which shows up as lag spikes online. Needs a small helper, installed once with your password\(installed ? "" : " when you turn this on"). A wired connection avoids the spikes altogether.")
             .font(.caption).foregroundStyle(.secondary)
         if let error { Text(error).font(.caption).foregroundStyle(.orange) }
         if installed {

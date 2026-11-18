@@ -80,7 +80,10 @@ final class DesktopPad: ObservableObject {
     @Published private(set) var activeWhere = ""
     @Published private(set) var trusted = AXIsProcessTrusted()
 
-    @Published var diagnosticsEnabled = false { didSet { lastDiagnosticTick = nil } }
+    @Published var diagnosticsEnabled = false { didSet {
+        lastDiagnosticTick = nil
+        ControllerReportDiagnostics.shared.enabled = diagnosticsEnabled
+    } }
     private(set) var diagnosticTimings: [String: PadTimingStatistics] = [:]
     private var lastDiagnosticTick: Double?
     private(set) var diagnosticCounts: [String: Int] = [:]
@@ -90,6 +93,7 @@ final class DesktopPad: ObservableObject {
     }
 
     func resetDiagnostics() {
+        ControllerReportDiagnostics.shared.reset()
         diagnosticCounts = [:]; diagnosticTimings = [:]
         lastGyroReceipt = nil; lastDiagnosticTick = nil
     }
@@ -538,10 +542,14 @@ final class DesktopPad: ObservableObject {
             guard let gp = c.extendedGamepad else { continue }
             if soloStream, first.gc !== c { continue }
             let sourceID = String(describing: ObjectIdentifier(c))
-            gp.valueChangedHandler = { pad, _ in MainActor.assumeIsolated { DesktopPad.shared.read(pad, source: sourceID) } }
+            gp.valueChangedHandler = { pad, _ in
+                ControllerReportDiagnostics.shared.record("gc:\(sourceID):buttons", label: "GameController · changed values")
+                MainActor.assumeIsolated { DesktopPad.shared.read(pad, source: sourceID) }
+            }
             if let m = c.motion {
                 if m.sensorsRequireManualActivation { m.sensorsActive = true }
                 m.valueChangedHandler = { motion in
+                    ControllerReportDiagnostics.shared.record("gc:\(sourceID):motion", label: "GameController · motion callbacks")
                     let r = motion.rotationRate
                     let a = motion.hasGravityAndUserAcceleration ? motion.gravity : motion.acceleration
                     MainActor.assumeIsolated {
@@ -618,7 +626,8 @@ final class DesktopPad: ObservableObject {
         let touchRequired = steamLeftSettings.gyroWhileTouched == true || steamRightSettings.gyroWhileTouched == true
         let gyroTouch = (steamLeftSettings.gyroWhileTouched == true && state.leftTouch) || (steamRightSettings.gyroWhileTouched == true && state.rightTouch)
         pe_gyro_touch(e, touchRequired, gyroTouch)
-        pe_touch(e,0,state.leftTouch && steamLeftSettings.mode == .existing,(state.leftPad.x+1)/2,(1-state.leftPad.y)/2,now)
+        let touch = steamLeftSettings.normalizedTouch(x: state.leftPad.x, y: state.leftPad.y)
+        pe_touch(e,0,state.leftTouch && steamLeftSettings.mode == .existing,touch.x,touch.y,now)
         steamPadZones(0, down: state.leftTouch, pad: state.leftPad, settings: steamLeftSettings, engine: e, now: now)
         steamPadZones(1, down: state.rightTouch, pad: state.rightPad, settings: steamRightSettings, engine: e, now: now)
         if steamLeftSettings.mode != .existing {

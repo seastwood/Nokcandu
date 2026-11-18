@@ -164,9 +164,14 @@ import NokcanduStreamCore
         numbers[ObjectIdentifier(c)] = n
         if usesProfile && n == 0 { return }                        // player one: the profile sends it
         arrive(n, controller: c)
-        g.valueChangedHandler = { [weak self] pad, _ in MainActor.assumeIsolated { self?.read(pad, number: n) } }
+        let rateID = "gc:\(ObjectIdentifier(c))"
+        g.valueChangedHandler = { [weak self] pad, _ in
+            ControllerReportDiagnostics.shared.record("\(rateID):buttons", label: "GameController · changed values")
+            MainActor.assumeIsolated { self?.read(pad, number: n) }
+        }
         if let m = c.motion {
             m.valueChangedHandler = { [weak self] motion in
+                ControllerReportDiagnostics.shared.record("\(rateID):motion", label: "GameController · motion callbacks")
                 let r = motion.rotationRate, a = motion.hasGravityAndUserAcceleration ? motion.acceleration : motion.acceleration
                 MainActor.assumeIsolated { self?.motion(n, gyro: r, accel: a) }
             }
@@ -181,9 +186,14 @@ import NokcanduStreamCore
         guard active else { return }
         for c in GCController.controllers() {
             guard let g = c.extendedGamepad, let n = numbers[ObjectIdentifier(c)], !(usesProfile && n == 0) else { continue }
-            g.valueChangedHandler = { [weak self] pad, _ in MainActor.assumeIsolated { self?.read(pad, number: n) } }
+            let rateID = "gc:\(ObjectIdentifier(c))"
+            g.valueChangedHandler = { [weak self] pad, _ in
+                ControllerReportDiagnostics.shared.record("\(rateID):buttons", label: "GameController · changed values")
+                MainActor.assumeIsolated { self?.read(pad, number: n) }
+            }
             if let m = c.motion {
                 m.valueChangedHandler = { [weak self] motion in
+                    ControllerReportDiagnostics.shared.record("\(rateID):motion", label: "GameController · motion callbacks")
                     let r = motion.rotationRate, a = motion.acceleration
                     MainActor.assumeIsolated { self?.motion(n, gyro: r, accel: a) }
                 }

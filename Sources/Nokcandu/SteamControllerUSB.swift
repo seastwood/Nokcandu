@@ -11,27 +11,29 @@ final class SteamControllerUSB: ObservableObject {
     @Published private(set) var status = "Not reading Steam Controller" {
         didSet { if status != oldValue { ControllerLog.add("Steam Controller: \(status)") } }
     }
-    /// Settings reads in a row that got no reply. Over the receiver one can go missing now and then (the radio
-    /// is busy); treating one as "the controller changed mode" released the controller for good, so it stopped
-    /// responding while it was still on (November 15, 2026). Only `missedReadsAllowed` in a row count.
-    private var missedReads = 0
-    static let missedReadsAllowed = 3
+    private var captureHealth = SteamControllerCaptureHealth()
     @Published private(set) var feedbackStatus = ""
     private var feedback = SteamControllerHaptics()
     private var feedbackFailed = false
     private var manager: IOHIDManager?
     private var device: IOHIDDevice?
-    private final class Channel {
+    private final class Channel: @unchecked Sendable {
         let device: IOHIDDevice
         let transport: SteamControllerTransport
         let model: SteamControllerModel
+        let access: ControllerDeviceAccess
         let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 64)
-        init(_ device: IOHIDDevice, _ transport: SteamControllerTransport, _ model: SteamControllerModel = .original) { self.device = device; self.transport = transport; self.model = model }
+        init(_ device: IOHIDDevice, _ transport: SteamControllerTransport, _ model: SteamControllerModel = .original, exclusive: Bool) {
+            self.device = device; self.transport = transport; self.model = model
+            access = ControllerDeviceAccess(exclusive: exclusive)
+        }
         deinit { buffer.deallocate() }
     }
     private var channels: [UInt64: Channel] = [:]
     private var active: Channel?
     private let featureQueue = DispatchQueue(label: "Nokcandu.SteamControllerFeatures")
+    private lazy var discovery = SteamControllerDiscovery(queue: featureQueue)
+    private var reportedSlowDiscovery = false
     private var hapticPending = false
     private var session = UUID()
     private var outputGate = SteamControllerOutputGate()
@@ -46,6 +48,9 @@ final class SteamControllerUSB: ObservableObject {
     private var radioFingerprint: String?
     private var ownership: SteamControllerOwnershipLock?
     private var terminationObserver: NSObjectProtocol?
+    private var steamExitObserver: NSObjectProtocol?
+    private let priorityListenerID = UUID()
+    private var exclusiveRequested = false
     private var recoveryURL: URL { NokPaths.support.appendingPathComponent("steam-controller-mode-lease.json") }
     private var latest: SteamControllerReport.State? { stream.state }
     var connected: Bool { device != nil }
@@ -57,6 +62,35 @@ final class SteamControllerUSB: ObservableObject {
     private var captured: Bool { modeLease != nil || active?.model == .steam2026 }
     private var lastKeepAlive: Double = 0
     private var counter2026: UInt32 = 0
+
+    /// Keep the direct reader alive for the application's lifetime, including while its profile is inactive.
+    func applyOwnershipPreference() {
+        if manager != nil { stop() }
+        if ControllerOwnershipPreference.enabled { listeners[priorityListenerID] = { _ in } }
+        else { listeners[priorityListenerID] = nil }
+        if !listeners.isEmpty { start() }
+    }
+    var accessSummary: [String] {
+        let counts = Dictionary(grouping: channels.values, by: { channel -> String in
+            switch channel.access.state {
+            case .exclusive: return "Exclusive access"
+            case .shared: return "Shared access"
+            case .refused: return "Access blocked — another app or macOS owns this interface"
+            case .unopened: return "Waiting to acquire access"
+            case .released: return "Released"
+            }
+        })
+        return counts.keys.sorted().map { "\($0): \(counts[$0]!.count) Steam Controller interface(s)" }
+    }
+    /// A competing mode pauses capture without disabling the saved profile. Retry after its owner exits.
+    func retryCapture() {
+        guard manager != nil else { if !listeners.isEmpty { start() }; return }
+        guard !captured else { return }
+        discovery.cancel(); outputGate.cancel()
+        modeLease = nil; radioFingerprint = nil; device = nil; active = nil
+        session = UUID(); captureResets = []; captureHealth.reset(); lastScan = 0
+        reset(); feedback.reset(); chooseController()
+    }
 
     func listen(_ id: UUID, _ callback: @escaping (SteamControllerReport.State?) -> Void) {
         let existed = listeners[id] != nil
@@ -76,6 +110,8 @@ final class SteamControllerUSB: ObservableObject {
             return
         }
         ownership = lock; captureResets = []; lastModeCheck = 0
+        reportedSlowDiscovery = false
+        exclusiveRequested = ControllerOwnershipPreference.enabled
         let m = IOHIDManagerCreate(kCFAllocatorDefault, 0)
         IOHIDManagerSetDeviceMatchingMultiple(m, ([0x1102, 0x1142].map { product in
             [kIOHIDVendorIDKey:0x28de,kIOHIDProductIDKey:product,kIOHIDDeviceUsagePageKey:0xff00,kIOHIDDeviceUsageKey:1] as [String: Any]
@@ -93,9 +129,25 @@ final class SteamControllerUSB: ObservableObject {
         terminationObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { SteamControllerUSB.shared.stop() }
         }
+        steamExitObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { [weak self] notification in
+            guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                  app.bundleIdentifier == "com.valvesoftware.steam" else { return }
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(750))
+                guard let self, self.manager != nil else { return }
+                ControllerLog.add("Steam Controller: native Steam exited; retrying paused or blocked capture")
+                self.retryCapture()
+            }
+        }
         IOHIDManagerScheduleWithRunLoop(m, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
-        let r = IOHIDManagerOpen(m,0)
-        status = r == kIOReturnSuccess ? "Connect a Steam Controller by USB, its receiver or Puck, or Bluetooth" : "Steam Controller interface could not be opened"
+        let options = exclusiveRequested ? IOOptionBits(kIOHIDOptionsTypeSeizeDevice) : 0
+        let r = IOHIDManagerOpen(m, options)
+        // Keep refused devices visible so their access can be retried after Steam exits.
+        if let devices = IOHIDManagerCopyDevices(m) as? Set<IOHIDDevice> {
+            for device in devices { add(device) }
+        }
+        status = r == kIOReturnSuccess ? "Connect a Steam Controller by USB, its receiver or Puck, or Bluetooth"
+            : "Controller access blocked — quit the competing controller app, then Retry Controller Access"
         let t = Timer(timeInterval: 0.1, repeats: true) { _ in MainActor.assumeIsolated { SteamControllerUSB.shared.expire() } }
         RunLoop.main.add(t, forMode: .common); timer = t
     }
@@ -108,7 +160,7 @@ final class SteamControllerUSB: ObservableObject {
                 : SteamControllerTransport.identify(vendor:number(kIOHIDVendorIDKey), product:product, page:number(kIOHIDPrimaryUsagePageKey), usage:number(kIOHIDPrimaryUsageKey), interface:interface) else { return }
         let id = registryID(d)
         guard channels[id] == nil else { return }
-        let channel = Channel(d,transport,model); channels[id] = channel
+        let channel = Channel(d,transport,model,exclusive: exclusiveRequested); channels[id] = channel
         if model == .steam2026 {
             ControllerLog.add("Steam Controller (2026): \(transport.title) interface found (product \(String(format: "0x%04x", product)), interface \(interface))")
         }
@@ -118,6 +170,8 @@ final class SteamControllerUSB: ObservableObject {
         IOHIDDeviceRegisterInputReportCallback(d,channel.buffer,64,{ ctx,result,_,_,id,bytes,count in
             guard result == kIOReturnSuccess, let ctx else { return }
             let channel = Unmanaged<Channel>.fromOpaque(ctx).takeUnretainedValue()
+            guard channel.access.usable else { return }
+            ControllerReportDiagnostics.shared.record("steam:\(ObjectIdentifier(channel))", label: "Steam Controller · \(channel.transport.title) · HID reports")
             if channel.model == .steam2026 {
                 // Numbered reports; IOKit's buffer may or may not start with the number.
                 guard count > 0 else { return }
@@ -139,22 +193,57 @@ final class SteamControllerUSB: ObservableObject {
         },Unmanaged.passUnretained(channel).toOpaque())
         chooseController()
     }
-    private func chooseController() {
+    private func chooseController(excluding rejected: Set<UInt64> = []) {
         guard device == nil else { return }
         // Cable first at initial selection; never switch away from a live controller.
         // Cable, then receiver, then Bluetooth (the slowest and least steady link).
         func rank(_ t: SteamControllerTransport) -> Int { t == .cable ? 0 : t == .receiver ? 1 : 2 }
-        let candidates = channels.values.filter { $0.model == .original }.sorted { a,b in
+        let candidates = channels.values.filter { !rejected.contains(registryID($0.device)) }.sorted { a,b in
             if a.transport != b.transport { return rank(a.transport) < rank(b.transport) }
             return registryID(a.device) < registryID(b.device)
         }
-        featureQueue.sync {} // finish feedback before starting another feature transaction
-        for channel in candidates {
-            guard acquireMode(channel.device,transport:channel.transport) else { continue }
-            active = channel; device = channel.device; stream.reset(); session = UUID(); outputGate = SteamControllerOutputGate()
-            feedback.reset(); feedbackFailed = false; feedbackStatus = ""
-            status = "\(channel.transport.title) connected; waiting for full controller input"
-            for f in Array(listeners.values) { f(nil) }
+        guard !candidates.isEmpty else { waitingForController(); return }
+        let snapshot = Dictionary(uniqueKeysWithValues: candidates.map { (registryID($0.device), $0) })
+        let token = session, started = ProcessInfo.processInfo.systemUptime
+        // Probe only on the serialized feature worker. No mode is changed by discovery.
+        discovery.scan(candidates.map { registryID($0.device) }, probe: { id in
+            guard let channel = snapshot[id] else { return false }
+            guard channel.access.open(using: { exclusive in
+                IOHIDDeviceOpen(channel.device, exclusive ? IOOptionBits(kIOHIDOptionsTypeSeizeDevice) : 0)
+            }) else { return false }
+            // 2026 controllers need no mode lease; opening the interface lets their own reports select it.
+            guard channel.model == .original else { return false }
+            return Self.readSettings(channel.device, transport: channel.transport) != nil
+        }, completion: { [weak self] id in
+            MainActor.assumeIsolated {
+                guard let self, self.manager != nil, self.device == nil, self.session == token else { return }
+                let elapsed = ProcessInfo.processInfo.systemUptime - started
+                if !self.reportedSlowDiscovery, elapsed > 0.05 {
+                    self.reportedSlowDiscovery = true
+                    ControllerLog.add(String(format: "Steam Controller: discovery probe finished off the main thread in %.0f ms", elapsed * 1000))
+                }
+                guard let id, let channel = snapshot[id], self.channels[id] === channel else {
+                    self.waitingForController(); return
+                }
+                guard self.acquireMode(channel.device, transport: channel.transport) else {
+                    // A responding slot that cannot be safely captured must not hide another controller.
+                    self.chooseController(excluding: rejected.union([id])); return
+                }
+                // Re-read settings/identity and verify a reversible lease before accepting any input.
+                self.active = channel; self.device = channel.device; self.stream.reset()
+                self.session = UUID(); self.outputGate = SteamControllerOutputGate()
+                self.captureHealth.reset()
+                self.feedback.reset(); self.feedbackFailed = false; self.feedbackStatus = ""
+                self.status = "\(channel.transport.title) connected; waiting for full controller input"
+                for f in Array(self.listeners.values) { f(nil) }
+            }
+        })
+    }
+    private func waitingForController() {
+        if exclusiveRequested, channels.values.contains(where: {
+            if case .refused = $0.access.state { return true }; return false
+        }) {
+            status = "Exclusive access blocked — quit the competing controller app, then Retry Controller Access"
             return
         }
         if channels.values.contains(where: { $0.model == .steam2026 }) && !channels.values.contains(where: { $0.model == .original }) {
@@ -169,6 +258,7 @@ final class SteamControllerUSB: ObservableObject {
         let id = registryID(d)
         guard let channel = channels.removeValue(forKey:id) else { return }
         IOHIDDeviceRegisterInputReportCallback(d,channel.buffer,64,nil,nil)
+        channel.access.release { exclusive in IOHIDDeviceClose(d, exclusive ? IOOptionBits(kIOHIDOptionsTypeSeizeDevice) : 0) }
         if active === channel {
             // Removed hardware cannot be restored. Wireless receiver identity is not
             // remote-controller identity: recovery is keyed by the queried remote digest.
@@ -207,6 +297,7 @@ final class SteamControllerUSB: ObservableObject {
         guard bytes.first.map({ [SteamController2026.stateReport, SteamController2026.bluetoothStateReport, SteamController2026.timestampedStateReport].contains($0) }) == true else { return }
         let now = ProcessInfo.processInfo.systemUptime
         if device == nil {
+            discovery.cancel()
             featureQueue.sync {}
             active = channel; device = channel.device; stream.reset(); session = UUID(); outputGate = SteamControllerOutputGate()
             feedback.reset(); feedbackFailed = false; feedbackStatus = ""; counter2026 = 0
@@ -257,12 +348,10 @@ final class SteamControllerUSB: ObservableObject {
             return
         }
         if active?.transport == .receiver {
-            // The USB slot survives wake, and a radio disconnect notification can
-            // be missed. A stale lease must not prevent reacquiring that controller.
-            // Keep its identity-keyed original-mode receipt for the next verified scan.
-            outputGate.cancel(); modeLease = nil; radioFingerprint = nil
-            device = nil; active = nil; session = UUID(); lastScan = 0
-            status = "Wireless input paused — outputs released; waiting for verified capture"
+            // Release stale actions promptly, but retain verified capture through a short radio gap.
+            // Reports resume on this channel immediately. Disconnects and settings checks still revoke
+            // capture, including a remote that stops answering without a disconnect notification.
+            status = "Wireless input paused — outputs released; waiting for input"
         } else {
             // A cable pulled and plugged back in can come back as the same or a new connection without a
             // removal notice. Let go of the silent one so the controller is taken over again; its recovery
@@ -284,19 +373,20 @@ final class SteamControllerUSB: ObservableObject {
                 guard self.session==token,self.modeLease==lease else{return}
                 // A missed reply is not a change, over the cable or the radio, until several come in a row.
                 if current == nil {
-                    self.missedReads += 1
-                    ControllerLog.add("Steam Controller: settings read got no reply (\(self.missedReads) in a row, \(transport.title))")
-                    if self.missedReads < Self.missedReadsAllowed || transport == .cable { return }
-                    // The controller stopped answering: take it over again from scratch, the way a pause in its
-                    // input is handled, rather than giving up on it.
-                    self.missedReads = 0
+                    let reacquire = self.captureHealth.missingReply(hasRecentInput:
+                        self.stream.hasRecentInput(at: ProcessInfo.processInfo.systemUptime,
+                                                   within: transport == .bluetooth ? 1.0 : 0.3))
+                    ControllerLog.add("Steam Controller: settings read got no reply (\(self.captureHealth.missedReads) consecutive, \(transport.title))")
+                    if !reacquire || transport == .cable { return }
+                    // Both input and repeated settings reads are silent: recover a missed radio disconnect.
+                    self.captureHealth.reset()
                     self.outputGate.cancel(); self.modeLease = nil; self.radioFingerprint = nil
                     self.reset(); self.feedback.reset(); self.session = UUID()
                     self.device = nil; self.active = nil; self.lastScan = 0
                     self.status = "Wireless controller stopped answering — taking it over again"
                     return
                 }
-                self.missedReads = 0
+                self.captureHealth.reset()
                 guard current==lease.applied else {
                     // A reset to our measured baseline can happen on wake even if
                     // vendor reports continue. Do not map alongside desktop mode.
@@ -305,14 +395,16 @@ final class SteamControllerUSB: ObservableObject {
                     self.captureResets=self.captureResets.filter{now-$0<10}
                     // Over the cable, a controller that went back to its own mode (plugged back in, woken)
                     // is taken over again; another app's different mode is still left alone over the radio.
-                    if (current==lease.original || transport == .cable),self.captureResets.count<3 {
+                    let exclusive = self.active?.access.state == .exclusive
+                    if (current==lease.original || transport == .cable || exclusive),self.captureResets.count<3 {
                         self.captureResets.append(now)
                         self.device=nil;self.active=nil;self.lastScan=0
-                        self.status = transport == .cable ? "Steam Controller back in its own mode — taking it over again" : "Wireless desktop mode returned — checking capture again"
+                        self.status = exclusive ? "Controller mode changed — restoring Nokcandu's exclusive capture"
+                            : transport == .cable ? "Steam Controller back in its own mode — taking it over again" : "Wireless desktop mode returned — checking capture again"
                     } else {
                         // Unknown/competing modes are preserved, not repeatedly fought.
                         ControllerLog.add("Steam Controller: settings read differs from the applied mode (\(current == lease.original ? "its own mode" : "another mode"), \(self.captureResets.count) recent retakes)")
-                        self.status="Wireless capture changed — outputs released. Turn profiles off and leave this test, then reopen to retry."
+                        self.status="Controller capture changed — outputs released. Use Retry Controller Access after the other app releases it."
                     }
                     return
                 }
@@ -324,19 +416,27 @@ final class SteamControllerUSB: ObservableObject {
         for f in Array(listeners.values) { f(nil) }
     }
     private func stop() {
+        discovery.cancel()
         outputGate.cancel()
+        reset()
         feedback.reset()
         timer?.invalidate(); timer = nil
         for channel in channels.values { IOHIDDeviceRegisterInputReportCallback(channel.device,channel.buffer,64,nil,nil) }
         // Serialize restoration after any already queued transient feedback.
         featureQueue.sync {}
         restoreMode()
+        for channel in channels.values {
+            channel.access.release { exclusive in
+                IOHIDDeviceClose(channel.device, exclusive ? IOOptionBits(kIOHIDOptionsTypeSeizeDevice) : 0)
+            }
+        }
         ownership?.release(); ownership = nil
         if let observer = terminationObserver { NotificationCenter.default.removeObserver(observer) }; terminationObserver = nil
+        if let observer = steamExitObserver { NSWorkspace.shared.notificationCenter.removeObserver(observer) }; steamExitObserver = nil
         device = nil; active = nil; session = UUID(); stream.reset()
         if let m = manager {
             IOHIDManagerUnscheduleFromRunLoop(m,CFRunLoopGetMain(),CFRunLoopMode.commonModes.rawValue)
-            IOHIDManagerClose(m,0)
+            IOHIDManagerClose(m, exclusiveRequested ? IOOptionBits(kIOHIDOptionsTypeSeizeDevice) : 0)
         }
         channels.removeAll()
         manager = nil; status = "Not reading Steam Controller"

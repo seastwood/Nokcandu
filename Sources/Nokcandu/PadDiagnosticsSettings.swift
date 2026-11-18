@@ -20,6 +20,12 @@ struct PadDiagnosticsSettings: View {
                             Text("\(d.displayName) · \(d.ids) · \(d.bluetooth ? "Bluetooth" : "USB/receiver") · \(d.isGamepad ? "Gamepad interface" : "Other HID interface")")
                         }
                         Text("GameController readers: \(GCController.controllers().filter { $0.extendedGamepad != nil }.count)")
+                        ForEach(ControllerReportDiagnostics.shared.snapshot(), id: \.source) { row in
+                            let stats = row.statistics
+                            let rate = stats.rateHz(at: DesktopPad.now()).map { String(format: "%.0f/s", $0) } ?? "Measuring"
+                            Text(String(format: "%@: %@ · %ld callbacks · largest gap %.1f ms", row.label, rate, stats.count, stats.maximumGap * 1000))
+                        }
+                        Text("Report rates use the last 256 callbacks. HID reports include status traffic; Bluetooth may split one state across reports. GameController and generic HID value callbacks describe changes, so move the sticks or gyro while comparing. These are app receipt rates, not measured hardware polling rates or end-to-end latency.")
                         ForEach(pad.diagnosticCounts.keys.sorted(), id: \.self) { key in Text("\(key): \(pad.diagnosticCounts[key] ?? 0)") }
                         ForEach(pad.diagnosticTimings.keys.sorted(), id: \.self) { name in
                             if let timing = pad.diagnosticTimings[name] {

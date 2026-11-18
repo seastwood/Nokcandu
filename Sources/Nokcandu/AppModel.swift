@@ -113,6 +113,7 @@ final class AppModel: ObservableObject {
     private var lastStoreDiscoveryErrors: [String] = []
 
     init() {
+        ControllerOwnershipCoordinator.shared.start()
         SharedSteam.refreshHostScriptsIfNeeded()
         Notifier.shared.start { [weak self] id in self?.selection = id }
         showWhatsNew = !showWelcome && WhatsNew.shouldShow()
@@ -537,7 +538,9 @@ final class AppModel: ObservableObject {
                 return false
             }
             if playing { warnAboutPower() }
-            Task.detached(priority: .utility) { NetworkSteady.setPlaying(playing) }
+            // A stream counts as playing: over Wi-Fi it suffers from AWDL's channel hopping just as an online game does.
+            let streaming = StreamsModel.shared.running != nil
+            Task.detached(priority: .utility) { NetworkSteady.setPlaying(playing || streaming) }
             for (game, session) in states.2 where memoryWarned.insert("\(game.id)#\(session.pid)").inserted {
                 let text = "\(game.name) is using \(MemoryWatch.gigabytes(session.peak)) of this Mac's \(MemoryWatch.gigabytes(MemoryWatch.physicalMemory)) memory. Closing other apps helps; its page has more after you quit."
                 say(text, game: game.id)

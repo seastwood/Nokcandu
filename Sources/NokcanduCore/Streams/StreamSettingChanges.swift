@@ -34,6 +34,7 @@ extension StreamProfile {
         live(window.display != o.window.display, "display")
         live(window.fullScreen != o.window.fullScreen, "full screen")
         live(window.statistics != o.window.statistics, "statistics")
+        live(window.graphs != o.window.graphs, "performance graphs")
         live(controller.profileID != o.controller.profileID, "controller profile")
         live(controller.sendAs != o.controller.sendAs, "emulated controller type")
         live(controller.multipleControllers != o.controller.multipleControllers, "each controller is its own player")

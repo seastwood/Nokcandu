@@ -442,6 +442,8 @@ import NokcanduCore
         }
         window = w
         running = Running(hostID: h.id, profileID: p.id)
+        // Steadier Wi-Fi from the stream's first moment (the library's status pass keeps it, and ends it afterwards).
+        Task.detached(priority: .utility) { NetworkSteady.setPlaying(true) }
         w.begin()
     }
 

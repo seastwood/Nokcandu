@@ -123,7 +123,7 @@ final class StreamVideoDecoder: @unchecked Sendable {
         if session == nil, !makeSession(format) { return DR_NEED_IDR }
         guard let sample = Self.sampleBuffer(block, length: length, format: format) else { return DR_OK }
         let flags: VTDecodeFrameFlags = [._EnableAsynchronousDecompression]
-        let received = unit.receiveTimeUs
+        let decodeStarted = LiGetMicroseconds()
         let status = VTDecompressionSessionDecodeFrame(session!, sampleBuffer: sample, flags: flags, infoFlagsOut: nil) { [weak self] status, _, image, _, _ in
             guard let self else { return }
             guard status == noErr, let image else {
@@ -132,7 +132,7 @@ final class StreamVideoDecoder: @unchecked Sendable {
                 return
             }
             self.decodedOne()
-            self.stats.decoded(receivedUs: received)
+            self.stats.decoded(startedUs: decodeStarted)
             self.show(image)
         }
         if status != noErr {
@@ -178,15 +178,18 @@ final class StreamVideoDecoder: @unchecked Sendable {
 
     private func show(_ image: CVPixelBuffer) {
         let keep = buffered
+        let decodedAt = CACurrentMediaTime()
         // 0: show each frame the moment it's decoded.
-        guard keep > 0 else { enqueue(image); return }
+        guard keep > 0 else { enqueue(image, decodedAt: decodedAt); return }
         // Otherwise hold up to `keep` frames for the display's refreshes; the oldest beyond that are dropped.
         os_unfair_lock_lock(&frameLock)
         pending.append(image)
-        arrivals.append(CACurrentMediaTime())
+        arrivals.append(decodedAt)
         let extra = pending.count - keep
         if extra > 0 { pending.removeFirst(extra); arrivals.removeFirst(extra) }
+        let depth = pending.count
         os_unfair_lock_unlock(&frameLock)
+        stats.telemetry.buffer(depth: depth)
         if extra > 0 { stats.paced(dropped: extra) }
     }
     private var arrivals: [CFTimeInterval] = []
@@ -195,18 +198,20 @@ final class StreamVideoDecoder: @unchecked Sendable {
     func displayRefresh() {
         let keep = buffered
         let now = CACurrentMediaTime(), frameTime = 1 / Double(max(30, fps))
+        stats.telemetry.displayTick(at: now)
         os_unfair_lock_lock(&frameLock)
         var next: CVPixelBuffer?
+        var decodedAt = now
         // Show the oldest frame once the buffer is full, or once it has waited its buffer time (a still desktop
         // sends few frames; don't hold the last one back).
         if !pending.isEmpty, pending.count >= keep || now - (arrivals.first ?? now) > Double(keep) * frameTime * 1.5 {
-            next = pending.removeFirst(); arrivals.removeFirst()
+            next = pending.removeFirst(); decodedAt = arrivals.removeFirst()
         }
         os_unfair_lock_unlock(&frameLock)
-        if let next { enqueue(next) }
+        if let next { enqueue(next, decodedAt: decodedAt) }
     }
 
-    private func enqueue(_ image: CVPixelBuffer) {
+    private func enqueue(_ image: CVPixelBuffer, decodedAt: CFTimeInterval) {
         var desc: CMVideoFormatDescription?
         CMVideoFormatDescriptionCreateForImageBuffer(allocator: nil, imageBuffer: image, formatDescriptionOut: &desc)
         guard let desc else { return }
@@ -223,13 +228,14 @@ final class StreamVideoDecoder: @unchecked Sendable {
         if Thread.isMainThread {
             if layer.status == .failed { layer.flush() }
             layer.enqueue(sample)
+            stats.telemetry.enqueued(waitMs: (CACurrentMediaTime() - decodedAt) * 1000, at: CACurrentMediaTime())
         } else {
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [stats] in
                 if layer.status == .failed { layer.flush() }
                 layer.enqueue(sample)
+                stats.telemetry.enqueued(waitMs: (CACurrentMediaTime() - decodedAt) * 1000, at: CACurrentMediaTime())
             }
         }
-        stats.shown()
     }
 
     // MARK: Format descriptions and the decoder
@@ -416,49 +422,23 @@ final class StreamVideoDecoder: @unchecked Sendable {
     }
 }
 
-/// Frame counts and timing for the statistics overlay.
+/// Transport metadata converted into bounded, testable interval measurements.
 final class StreamVideoStats: @unchecked Sendable {
-    private let lock = NSLock()
-    private var received = 0, decodedCount = 0, shownCount = 0, droppedCount = 0, pacedDrops = 0
-    private var decodeTotalUs: UInt64 = 0
-    private var hostLatencyTotal = 0, hostLatencySamples = 0
-    private var lastShown = CACurrentMediaTime()
-    private var window = (start: CACurrentMediaTime(), received: 0, decoded: 0, shown: 0, dropped: 0, paced: 0, decodeUs: UInt64(0), host: 0, hostN: 0)
-    private(set) var snapshot = Snapshot()
-
-    struct Snapshot {
-        var receivedFPS = 0.0, shownFPS = 0.0
-        var decodeMs = 0.0, hostMs = 0.0
-        var dropped = 0, pacedDrops = 0
-    }
-
-    var recentlyStarved: Bool { lock.lock(); defer { lock.unlock() }; return CACurrentMediaTime() - lastShown > 0.1 }
-
+    let telemetry = StreamTelemetry(at: CACurrentMediaTime())
     func received(_ du: DECODE_UNIT) {
-        lock.lock(); received += 1
-        if du.frameHostProcessingLatency > 0 { hostLatencyTotal += Int(du.frameHostProcessingLatency); hostLatencySamples += 1 }
-        lock.unlock()
-    }
-    func decoded(receivedUs: UInt64) {
         let now = LiGetMicroseconds()
-        lock.lock(); decodedCount += 1; if now > receivedUs { decodeTotalUs += now - receivedUs }; lock.unlock()
+        telemetry.receive(frame: UInt32(bitPattern: du.frameNumber), bytes: Int(du.fullLength),
+                          hostLatencyTenthsMs: du.frameHostProcessingLatency,
+                          assemblyMs: du.enqueueTimeUs >= du.receiveTimeUs ? Double(du.enqueueTimeUs - du.receiveTimeUs) / 1000 : nil,
+                          queueMs: now >= du.enqueueTimeUs ? Double(now - du.enqueueTimeUs) / 1000 : nil,
+                          at: CACurrentMediaTime())
     }
-    func shown() { lock.lock(); shownCount += 1; lastShown = CACurrentMediaTime(); lock.unlock() }
-    func dropped() { lock.lock(); droppedCount += 1; lock.unlock() }
-    func paced(dropped n: Int) { lock.lock(); pacedDrops += n; lock.unlock() }
-
-    /// Rolls the last second into the snapshot.
-    @discardableResult func roll() -> Snapshot {
-        lock.lock(); defer { lock.unlock() }
-        let now = CACurrentMediaTime(), dt = max(0.001, now - window.start)
-        let dDecoded = decodedCount - window.decoded
-        snapshot = Snapshot(receivedFPS: Double(received - window.received) / dt, shownFPS: Double(shownCount - window.shown) / dt,
-                            decodeMs: dDecoded > 0 ? Double(decodeTotalUs - window.decodeUs) / Double(dDecoded) / 1000 : 0,
-                            hostMs: hostLatencySamples > window.hostN ? Double(hostLatencyTotal - window.host) / Double(hostLatencySamples - window.hostN) / 10 : 0,
-                            dropped: droppedCount, pacedDrops: pacedDrops)
-        window = (now, received, decodedCount, shownCount, droppedCount, pacedDrops, decodeTotalUs, hostLatencyTotal, hostLatencySamples)
-        return snapshot
+    func decoded(startedUs: UInt64) {
+        let now = LiGetMicroseconds()
+        if now >= startedUs { telemetry.decoded(milliseconds: Double(now - startedUs) / 1000) }
     }
+    func dropped() { telemetry.dropped() }
+    func paced(dropped n: Int) { telemetry.paced(dropped: n) }
 }
 
 /// The last lines from a stream, for its error message and Diagnostics.

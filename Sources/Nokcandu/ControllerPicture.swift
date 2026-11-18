@@ -38,28 +38,14 @@ struct ControllerPicture: View {
     var steam2026Layout: Bool { family == .steam2026 }
     var psLayout: Bool { family == .playstation }
     /// Xbox and Nintendo: left stick high, d-pad low. PlayStation: d-pad high, both sticks low.
-    var dpadCenter: CGPoint { steam2026Layout ? CGPoint(x: 0.15, y: 0.2) : psLayout ? CGPoint(x: 0.24, y: 0.36) : CGPoint(x: 0.37, y: 0.585) }
+    var dpadCenter: CGPoint { psLayout ? CGPoint(x: 0.24, y: 0.36) : CGPoint(x: 0.37, y: 0.585) }
     var stickPlaces: [CGPoint] {
-        if steam2026Layout { return [CGPoint(x: 0.34, y: 0.32), CGPoint(x: 0.66, y: 0.32)] }
         return steamLayout ? [CGPoint(x:0.37,y:0.66),CGPoint(x:0.75,y:0.33)] : [psLayout ? CGPoint(x: 0.37, y: 0.585) : CGPoint(x: 0.24, y: 0.36), CGPoint(x: 0.63, y: 0.585)]
     }
 
     func place(_ i: I) -> CGPoint {
-        let d = dpadCenter, face = steam2026Layout ? CGPoint(x: 0.81, y: 0.2) : steamLayout ? CGPoint(x:0.63,y:0.67) : CGPoint(x: 0.76, y: 0.36)
-        let dx: CGFloat = steamLayout || steam2026Layout ? 0.048 : 0.058, dy: CGFloat = steamLayout || steam2026Layout ? 0.075 : 0.09
-        if steam2026Layout {
-            switch i {
-            case .back: return CGPoint(x: 0.31, y: 0.08)
-            case .start: return CGPoint(x: 0.69, y: 0.08)
-            case .guide: return CGPoint(x: 0.5, y: 0.19)
-            case .misc: return CGPoint(x: 0.5, y: 0.6)
-            case .paddle2: return CGPoint(x: 0.02, y: 0.52)      // L4
-            case .paddle4: return CGPoint(x: 0.07, y: 0.82)      // L5
-            case .paddle1: return CGPoint(x: 0.98, y: 0.52)      // R4
-            case .paddle3: return CGPoint(x: 0.93, y: 0.82)      // R5
-            default: break
-            }
-        }
+        let d = dpadCenter, face = steamLayout ? CGPoint(x:0.63,y:0.67) : CGPoint(x: 0.76, y: 0.36)
+        let dx: CGFloat = steamLayout ? 0.048 : 0.058, dy: CGFloat = steamLayout ? 0.075 : 0.09
         switch i {
         case .up: return CGPoint(x: d.x, y: d.y - dy)
         case .down: return CGPoint(x: d.x, y: d.y + dy)
@@ -84,10 +70,50 @@ struct ControllerPicture: View {
         default: return CGPoint(x: -1, y: -1)
         }
     }
-    var shown: [I] { steam2026Layout ? [.lt, .rt, .ltfull, .rtfull, .lb, .rb, .up, .down, .left, .right, .y, .a, .x, .b, .back, .start, .guide, .misc, .paddle1, .paddle2, .paddle3, .paddle4]
-        : (steamLayout ? [.lt, .rt, .ltfull, .rtfull, .lb, .rb, .y, .a, .x, .b, .back, .start, .guide, .paddle1, .paddle2] : [.lt, .rt, .ltfull, .rtfull, .lb, .rb, .up, .down, .left, .right, .y, .a, .x, .b, .back, .start, .guide]) }
+    var shown: [I] { steamLayout ? [.lt, .rt, .ltfull, .rtfull, .lb, .rb, .y, .a, .x, .b, .back, .start, .guide, .paddle1, .paddle2] : [.lt, .rt, .ltfull, .rtfull, .lb, .rb, .up, .down, .left, .right, .y, .a, .x, .b, .back, .start, .guide] }
 
     var body: some View {
+        if steam2026Layout { steam2026Diagram } else { legacyDiagram }
+    }
+
+    private var steam2026Diagram: some View {
+        let buttons = Dictionary(uniqueKeysWithValues: Steam2026PictureGeometry.Control.allCases.compactMap { control -> (Steam2026PictureGeometry.Control, Steam2026ControllerDiagram.ButtonState)? in
+            guard let input = I(rawValue: control.rawValue) else { return nil }
+            return (control, .init(binding: label(input), mapped: mapped(input), pressed: pressed.contains(input), changed: changed(input), color: targetTint(input)))
+        })
+        let selected: Steam2026PictureGeometry.Part? = {
+            switch selection {
+            case .input(let i):
+                if i == .ls || i == .rs { return .stick(i == .ls ? 0 : 1) }
+                if i == .touchpad || i == .rpclick { return .trackpad(i == .touchpad ? 0 : 1) }
+                return Steam2026PictureGeometry.Control(rawValue: i.rawValue).map { .button($0) }
+            case .stick(let side): return .stick(side)
+            case .steamPad(let side): return .trackpad(side)
+            case .touchpad: return .trackpad(0)
+            case .gyro: return .gyro
+            default: return nil
+            }
+        }()
+        return Steam2026ControllerDiagram(selected: selected, buttons: buttons, sticks: (0..<2).map { side in
+            let click: I = side == 0 ? .ls : .rs
+            return .init(position: sticks.indices.contains(side) ? sticks[side] : .zero, mapping: stickLabel(side), click: label(click), pressed: pressed.contains(click), changed: stickChanged(side) || changed(click))
+        }, padPositions: [tester.leftSteamPad, tester.rightSteamPad], padClicks: [label(.touchpad), label(.rpclick)],
+           padPressed: [pressed.contains(.touchpad), pressed.contains(.rpclick)], padChanged: [changed(.touchpad), changed(.rpclick)], tint: tint, padFace: { side, diameter in
+            if let pad = steamPad(side) {
+                return AnyView(SteamPadFace(side: side, diameter: diameter, settings: pad, held: pressed, label: label, presentationRotation: Steam2026PictureGeometry.padAngle(side)))
+            }
+            return AnyView(EmptyView())
+        }, select: { part in
+            switch part {
+            case .button(let c): if let i = I(rawValue: c.rawValue) { selection = .input(i) }
+            case .stick(let side): selection = .stick(side)
+            case .trackpad(let side): selection = .steamPad(side)
+            case .gyro: selection = .gyro
+            }
+        })
+    }
+
+    private var legacyDiagram: some View {
         GeometryReader { geo in
             let sw = min(geo.size.width * 0.92, (geo.size.height * 0.74) * Self.aspect)
             let sh = sw / Self.aspect
@@ -96,9 +122,9 @@ struct ControllerPicture: View {
             let k = max(0.62, min(1, sw / 420))
             let at = { (p: CGPoint) in CGPoint(x: x0 + p.x * sw, y: y0 + (steamLayout && p.y >= 0 ? p.y - 0.06 : p.y) * sh) }
             ZStack {
-                (steam2026Layout ? AnyShape(Steam2026Shape()) : AnyShape(ControllerShape()))
+                ControllerShape()
                     .fill(LinearGradient(colors: [Color.primary.opacity(0.16), Color.primary.opacity(0.07)], startPoint: .top, endPoint: .bottom))
-                    .overlay((steam2026Layout ? AnyShape(Steam2026Shape()) : AnyShape(ControllerShape())).stroke(Color.primary.opacity(0.18), lineWidth: 1))
+                    .overlay(ControllerShape().stroke(Color.primary.opacity(0.18), lineWidth: 1))
                     .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
                     .frame(width: sw, height: sh)
                     .position(x: x0 + sw / 2, y: y0 + sh / 2)
@@ -116,12 +142,6 @@ struct ControllerPicture: View {
                         }
                     }.buttonStyle(.plain).accessibilityLabel("Left trackpad settings")
                         .position(at(CGPoint(x:0.25,y:0.33)))
-                } else if steam2026Layout {
-                    DPadWell().fill(Color.primary.opacity(0.08))
-                        .frame(width: sw * 0.15, height: sh * 0.23)
-                        .position(at(dpadCenter))
-                        .accessibilityHidden(true)
-                    ForEach(0..<2, id: \.self) { side in squarePad(side, k, size: sw * 0.21).position(at(CGPoint(x: side == 0 ? 0.3 : 0.7, y: 0.6))) }
                 } else { DPadWell().fill(Color.primary.opacity(0.08))
                     .frame(width: sw * 0.17, height: sh * 0.265)
                     .position(at(dpadCenter))
@@ -134,7 +154,7 @@ struct ControllerPicture: View {
                         .background(Capsule().fill(selection == .gyro ? tint.opacity(0.35) : Color.primary.opacity(0.08)))
                         .overlay(Capsule().stroke(selection == .gyro ? tint : .clear, lineWidth: 2))
                 }
-                .buttonStyle(.plain).position(at(CGPoint(x: 0.5, y: steam2026Layout ? 0.73 : 0.93)))
+                .buttonStyle(.plain).position(at(CGPoint(x: 0.5, y: 0.93)))
                 .accessibilityLabel("Gyro settings")
             }
         }
@@ -151,14 +171,7 @@ struct ControllerPicture: View {
             switch i {
             case .up: "▲"; case .down: "▼"; case .left: "◀"; case .right: "▶"
             case .ltfull, .rtfull: "full"
-            case .guide where steamLayout || steam2026Layout: "Steam"
-            case .misc where steam2026Layout: "QAM"
-            case .back where steam2026Layout: "View"
-            case .start where steam2026Layout: "Menu"
-            case .paddle1 where steam2026Layout: "R4"
-            case .paddle2 where steam2026Layout: "L4"
-            case .paddle3 where steam2026Layout: "R5"
-            case .paddle4 where steam2026Layout: "L5"
+            case .guide where steamLayout: "Steam"
             case .back where steamLayout: "◀"
             case .start where steamLayout: "▶"
             case .paddle1 where steamLayout: "Rear R"
@@ -169,7 +182,7 @@ struct ControllerPicture: View {
         return Button { selection = .input(i) } label: {
             VStack(spacing: 1) {
                 Text(short).font(.system(size: max(9, 11 * k), weight: .semibold)).lineLimit(1)
-                    .frame(minWidth: (steam2026Layout && [.guide, .misc, .back, .start].contains(i) ? 40 : steamLayout && [.guide, .paddle1, .paddle2].contains(i) ? 44 : round ? (steamLayout ? 24 : 28) : 46) * k, minHeight: 28 * k)
+                    .frame(minWidth: (steamLayout && [.guide, .paddle1, .paddle2].contains(i) ? 44 : round ? (steamLayout ? 24 : 28) : 46) * k, minHeight: 28 * k)
                     .background(Capsule().fill(on ? tint : mapped(i) ? tint.opacity(0.35) : Color(nsColor: .controlBackgroundColor)))
                     .overlay(Capsule().stroke(selected ? tint : Color.secondary.opacity(0.35), lineWidth: selected ? 2 : 0.5))
                     .shadow(color: .black.opacity(0.12), radius: 1, y: 0.5)
@@ -188,33 +201,6 @@ struct ControllerPicture: View {
         .buttonStyle(.plain)
         .accessibilityLabel(i.title(family) + (label(i).map { ": \($0)" } ?? ""))
         .help(i.title(family))
-    }
-
-    /// A Steam Controller (2026) square trackpad: its settings, its click, and where the finger is.
-    func squarePad(_ side: Int, _ k: CGFloat, size: CGFloat) -> some View {
-        let p = side == 0 ? tester.leftSteamPad : tester.rightSteamPad
-        let click: I = side == 0 ? .touchpad : .rpclick
-        let selected = selection == .steamPad(side) || selection == .input(click)
-        return Button { selection = .steamPad(side) } label: {
-            ZStack {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 12 * k).fill(pressed.contains(click) ? tint.opacity(0.45) : tint.opacity(0.14))
-                    RoundedRectangle(cornerRadius: 12 * k).stroke(selected ? tint : Color.secondary.opacity(0.35), lineWidth: selected ? 2 : 1)
-                    if let pad = steamPad(side) { SteamPadFace(side: side, diameter: size, settings: pad, held: pressed, label: label).clipShape(RoundedRectangle(cornerRadius: 12 * k)) }
-                    Circle().fill(Color.primary.opacity(0.55)).frame(width: 10, height: 10).offset(x: p.x * size * 0.45, y: -p.y * size * 0.45)
-                }
-                .frame(width: size, height: size)
-                .overlay(alignment: .topTrailing) { if changed(click) { ChangeDot(color: tint) } }
-                .rotationEffect(.degrees(side == 0 ? 3 : -3))        // the real pads turn slightly inward
-                VStack(spacing: 0) {
-                    Text(side == 0 ? "Left trackpad" : "Right trackpad").font(.caption2).lineLimit(1).fixedSize()
-                    if let l = label(click), l != "—" { Text("click: " + l).font(.system(size: 9, weight: .medium)).foregroundStyle(tint.opacity(0.85)).lineLimit(1).fixedSize() }
-                }
-                .offset(y: size / 2 + 12)
-            }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(side == 0 ? "Left trackpad settings" : "Right trackpad settings")
     }
 
     func stick(_ s: Int, _ k: CGFloat = 1) -> some View {
@@ -242,26 +228,6 @@ struct ControllerPicture: View {
     }
 }
 
-/// The Steam Controller (2026)'s outline, from Valve's product photo: a flat top, full-height grips that curve down
-/// and in, and a shallow arch between them under the trackpads.
-struct Steam2026Shape: Shape {
-    func path(in r: CGRect) -> Path {
-        func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: r.minX + x * r.width, y: r.minY + y * r.height) }
-        var path = Path()
-        path.move(to: p(0.1, 0.02))
-        path.addQuadCurve(to: p(0.9, 0.02), control: p(0.5, -0.02))
-        path.addCurve(to: p(1, 0.42), control1: p(0.98, 0.04), control2: p(1, 0.2))
-        path.addCurve(to: p(0.88, 1), control1: p(1, 0.7), control2: p(0.97, 0.98))
-        path.addCurve(to: p(0.76, 0.88), control1: p(0.81, 1.02), control2: p(0.78, 0.96))
-        path.addCurve(to: p(0.24, 0.88), control1: p(0.7, 0.78), control2: p(0.3, 0.78))
-        path.addCurve(to: p(0.12, 1), control1: p(0.22, 0.96), control2: p(0.19, 1.02))
-        path.addCurve(to: p(0, 0.42), control1: p(0.03, 0.98), control2: p(0, 0.7))
-        path.addCurve(to: p(0.1, 0.02), control1: p(0, 0.2), control2: p(0.02, 0.04))
-        path.closeSubpath()
-        return path
-    }
-}
-
 /// The small dot on a control the layer being edited changes.
 struct ChangeDot: View {
     let color: Color
@@ -283,10 +249,11 @@ struct SteamPadFace: View {
     let settings: PadSteamTrackpadSettings
     let held: Set<PadProfiles.Input>
     let label: (PadProfiles.Input) -> String?
+    var presentationRotation: Double = 0
 
     var body: some View {
         let edge = PadSteamPadZones.edgeSize(settings), edgeInput = PadProfiles.Input.padEdge(side)
-        let angle = settings.mode == .existing ? 0 : (settings.rotation ?? 0)
+        let angle = settings.rotation ?? 0
         let directions = PadProfiles.Input.padDirections(side)
         ZStack {
             if edge > 0 {
@@ -298,7 +265,7 @@ struct SteamPadFace: View {
                 Image(systemName: "arrow.clockwise").font(.system(size: max(8, diameter * 0.16), weight: .semibold)).foregroundStyle(Color.accentColor)
             }
             if let layout = settings.zoneLayout, layout != .off {
-                SteamPadZoneLines(layout: layout, diameter: diameter, side: side, held: held, label: label, upright: settings.rotation ?? 0)
+                SteamPadZoneLines(layout: layout, diameter: diameter, side: side, held: held, label: label, upright: (settings.rotation ?? 0) + presentationRotation)
                     .rotationEffect(.degrees(settings.rotation ?? 0))
             }
             if settings.mode == .existing {
@@ -312,9 +279,10 @@ struct SteamPadFace: View {
                                 .foregroundStyle(held.contains(input) ? Color.white : Color.primary.opacity(0.75))
                                 .padding(.horizontal, 2)
                                 .background(Capsule().fill(held.contains(input) ? Color.accentColor : Color.black.opacity(0.35)))
+                                .rotationEffect(.degrees(-angle - presentationRotation))
                                 .offset(x: n == 2 ? -reach : n == 3 ? reach : 0, y: n == 0 ? -reach : n == 1 ? reach : 0)
                         }
-                    }
+                    }.rotationEffect(.degrees(angle))
                 }
             }
             if settings.mode != .existing {
@@ -337,7 +305,7 @@ struct SteamPadFace: View {
                                 .foregroundStyle(held.contains(input) ? Color.white : Color.accentColor)
                                 .padding(.horizontal, 2)
                                 .background(Capsule().fill(held.contains(input) ? Color.accentColor : .clear))
-                                .rotationEffect(.degrees(-angle))          // text stays upright
+                                .rotationEffect(.degrees(-angle - presentationRotation))          // text stays upright
                                 .offset(x: n == 2 ? -reach : n == 3 ? reach : 0, y: n == 0 ? -reach : n == 1 ? reach : 0)
                         }
                     }
@@ -704,7 +672,8 @@ final class PadTester: ObservableObject {
         let touchRequired = steamPadSettings.contains { $0.gyroWhileTouched == true }
         let gyroTouch = (steamPadSettings[0].gyroWhileTouched == true && state.leftTouch) || (steamPadSettings[1].gyroWhileTouched == true && state.rightTouch)
         pe_gyro_touch(e, touchRequired, gyroTouch)
-        pe_touch(e,0,state.leftTouch && steamPadSettings[0].mode == .existing,(state.leftPad.x+1)/2,(1-state.leftPad.y)/2,now)
+        let touch = steamPadSettings[0].normalizedTouch(x: state.leftPad.x, y: state.leftPad.y)
+        pe_touch(e,0,state.leftTouch && steamPadSettings[0].mode == .existing,touch.x,touch.y,now)
         for side in 0..<2 where steamPadSettings[side].mode != .existing {
             let pad = side == 0 ? state.leftPad : state.rightPad
             steamMouse(steamPadMotion[side].touch(down: side == 0 ? state.leftTouch : state.rightTouch,

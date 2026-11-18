@@ -261,6 +261,7 @@ public struct StreamProfile: Codable, Hashable, Identifiable, Sendable {
     public struct Window: Codable, Hashable, Sendable {
         public var fullScreen = true
         public var statistics: Statistics = .off
+        public var graphs = false
         /// The display the stream plays on (Core Graphics display UUID); nil is the one Nokcandu's window is on.
         public var display: String?
         /// Its name when chosen, to show while it isn't connected.
@@ -346,11 +347,12 @@ extension StreamProfile.Input {
     }
 }
 extension StreamProfile.Window {
-    private enum CodingKeys: String, CodingKey { case fullScreen, statistics, display, displayName }
+    private enum CodingKeys: String, CodingKey { case fullScreen, statistics, graphs, display, displayName }
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         fullScreen = try c.decodeIfPresent(Bool.self, forKey: .fullScreen) ?? true
         statistics = (try? c.decodeIfPresent(Statistics.self, forKey: .statistics)) ?? .off
+        graphs = (try? c.decodeIfPresent(Bool.self, forKey: .graphs)) ?? false
         display = try c.decodeIfPresent(String.self, forKey: .display)
         displayName = try c.decodeIfPresent(String.self, forKey: .displayName)
     }

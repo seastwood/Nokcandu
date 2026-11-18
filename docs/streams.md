@@ -1,5 +1,22 @@
 # Streams
 
+## November 17: stalls, session protection and independent graphs
+
+The stream now owns latency-critical activity protection from connection startup through finish/cancel/error,
+independent of a controller/profile. Previously only controller mapping provided this protection. This addresses
+a confirmed source gap, but the user installed it and still saw the freezes. Subsequent source/log correlation
+found synchronous empty Steam receiver probes blocking the UI thread every two seconds; read-only discovery
+now runs on the serial feature worker with stale-result cancellation and unchanged safe-capture checks.
+The user installed the later fix and confirmed the reported streaming freeze is gone. Wired freezes with AWDL off mean AWDL alone does not
+explain this report. Buffer=2 was also found
+by the user and affects responsiveness; saved buffering/pacing is preserved.
+
+Detailed text now includes payload/peak bitrate, queue occupancy, host/decode extrema, pipeline waits, loss
+estimates and frame/display gaps. **Performance graphs** is a separate live toggle, independent of Off/Basic/
+Detailed text. The compact translucent panel can show either or both; graphs retain 120 interval samples.
+Decoder timing starts at the decode call, fps counts actual layer enqueue, and unknown data stays N/A.
+See [comparison, interpretation limits, tests, migration and Undo](investigations/stream-stalls-and-statistics-2026-11-17.md).
+
 Streams plays games running on another computer. It is a GameStream client: the host runs [Sunshine](https://github.com/LizardByte/Sunshine) (or NVIDIA GameStream), and Nokcandu pairs with it, starts an app on it, and shows its video and sound while sending this Mac's keyboard, mouse and controllers back. The streaming side is ported from [VoidLink](https://github.com/The-Fried-Fish/VoidLink-previously-moonlight-zwm) (Integration branch), a Moonlight fork, and its streaming core.
 
 Status as of November 13, 2026: **streams from a Sunshine PC with picture, sound, mouse and clicks.** See [What is verified](#what-is-verified) and [Fixes found with a real host](#fixes-found-with-a-real-host).

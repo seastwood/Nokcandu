@@ -6,6 +6,7 @@ import GameController
 import NokcanduCore
 import NokcanduStreamCore
 import SwiftUI
+import Charts
 
 /// What the overlay shows.
 @MainActor final class StreamWindowState: ObservableObject {
@@ -14,7 +15,9 @@ import SwiftUI
     @Published var error: String?
     @Published var poorConnection = false
     @Published var statistics: StreamProfile.Window.Statistics = .off
+    @Published var graphs = false
     @Published var statsText = ""
+    @Published var statsHistory = StreamTelemetryHistory()
     @Published var captured = false
     @Published var hint: String?
 }
@@ -32,6 +35,7 @@ import SwiftUI
     private let streamView: StreamView
     private var statsTimer: Timer?
     private var displayLink: CADisplayLink?
+    private let sessionActivity = StreamSessionActivity()
     private var ended = false
     /// Keeps this controller alive while its window still shows an error: StreamsModel lets go of it as soon as the
     /// stream ends, and the overlay's Close button (and the window's delegate) need it until the window closes.
@@ -53,8 +57,9 @@ import SwiftUI
             || next.input.commandAsWindowsKey != old.input.commandAsWindowsKey { applyKeyboardLayout() }
         if next.window.statistics != old.window.statistics {
             state.statistics = next.window.statistics
-            if next.window.statistics == .off { state.statsText = "" } else { updateStats() }
+            renderStats()
         }
+        state.graphs = next.window.graphs
         if next.window.display != old.window.display, let target = StreamDisplays.screen(for: next.window.display) { move(to: target) }
         else if next.window.fullScreen != old.window.fullScreen { setFullScreen(next.window.fullScreen) }
         if next.input.mouse != old.input.mouse {
@@ -121,6 +126,7 @@ import SwiftUI
         w.acceptsMouseMovedEvents = true
         super.init(window: w)
         state.statistics = profile.window.statistics
+        state.graphs = profile.window.graphs
         w.delegate = self
         streamView.controller = self
         streamView.videoLayer = connection.video.layer
@@ -140,6 +146,7 @@ import SwiftUI
     // MARK: Starting and ending
 
     func begin() {
+        sessionActivity.start()
         if let target = StreamDisplays.screen(for: profile.window.display) { place(on: target) }
         showWindow(nil)
         window?.makeFirstResponder(streamView)
@@ -197,6 +204,7 @@ import SwiftUI
     private func finish(error: String?) {
         guard !ended else { return }
         ended = true
+        sessionActivity.stop()
         statsTimer?.invalidate(); statsTimer = nil
         if let m = eventMonitor { NSEvent.removeMonitor(m); eventMonitor = nil }
         if let m = pttMonitor { NSEvent.removeMonitor(m); pttMonitor = nil }
@@ -231,7 +239,9 @@ import SwiftUI
         let link = streamView.displayLink(target: self, selector: #selector(refresh))
         link.add(to: .main, forMode: .common)
         displayLink = link
-        statsTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.updateStats() } }
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.updateStats() } }
+        RunLoop.main.add(timer, forMode: .common)
+        statsTimer = timer
         if profile.input.mouse == .capture, window?.isKeyWindow == true { captureMouse() }
         if profile.input.clipboard { sendClipboard(auto: true) }
         state.hint = profile.input.mouse == .capture ? "Press ⌃⌥⇧Z to free the pointer, ⌃⌥⇧Q to end the stream." : "Press ⌃⌥⇧Q to end the stream."
@@ -257,24 +267,38 @@ import SwiftUI
     @objc private func refresh() { connection.video.displayRefresh() }
 
     private var statsTicks = 0
+    private var latestStats = StreamTelemetry.Sample()
     private func updateStats() {
-        let v = connection.video.stats.roll()
+        var rtt: UInt32 = 0, variation: UInt32 = 0
+        let hasNetwork = LiGetEstimatedRttInfo(&rtt, &variation)
+        let v = connection.video.stats.telemetry.roll(at: CACurrentMediaTime(),
+            networkMs: hasNetwork ? Double(rtt) : nil, variationMs: hasNetwork ? Double(variation) : nil)
+        latestStats = v
+        state.statsHistory.append(v)
         statsTicks += 1
         if statsTicks % 5 == 0 {
-            var rtt: UInt32 = 0, variance: UInt32 = 0
-            _ = LiGetEstimatedRttInfo(&rtt, &variance)
-            StreamLog.shared.add(String(format: "Video stats: received %.0f fps, shown %.0f fps, decode %.1f ms, host %.1f ms, network %d ms (±%d); dropped %d decode, %d pacing; display %d Hz",
-                                        v.receivedFPS, v.shownFPS, v.decodeMs, v.hostMs, rtt, variance, v.dropped, v.pacedDrops, window?.screen?.maximumFramesPerSecond ?? 0))
+            StreamLog.shared.add(String(format: "Video stats: received %.0f fps, enqueued %.0f fps, decode avg/max %@/%@ ms, host %@ ms, RTT %@ ms (variation %@); %.1f Mbps; drops %d network, %d decode, %d pacing; max arrival/display/enqueue gaps %@/%@/%@ ms; presentation wait avg/max %@/%@ ms; sample %.2f s; stream activity active",
+                v.receivedFPS, v.shownFPS, Self.ms(v.decodeMs), Self.ms(v.decodeMaxMs), Self.ms(v.hostMs), Self.ms(v.networkMs), Self.ms(v.networkVariationMs),
+                v.bitrateMbps, v.networkDropped, v.dropped, v.pacedDrops, Self.ms(v.arrivalGapMaxMs), Self.ms(v.displayGapMaxMs), Self.ms(v.enqueueGapMaxMs), Self.ms(v.presentationMs), Self.ms(v.presentationMaxMs), v.duration))
         }
-        guard state.statistics != .off else { return }
-        var rtt: UInt32 = 0, variance: UInt32 = 0
-        _ = LiGetEstimatedRttInfo(&rtt, &variance)
-        let video = connection.video
-        var lines = [String(format: "%d×%d  %@  %.0f fps", video.width, video.height, StreamConnection.formatName(connection.negotiatedFormat), v.shownFPS)]
-        lines.append(String(format: "Network %d ms (±%d)  Decode %.1f ms", rtt, variance, v.decodeMs))
+        renderStats()
+    }
+    private static func ms(_ value: Double?) -> String { value.map { String(format: "%.2f", $0) } ?? "N/A" }
+    private func renderStats() {
+        guard state.statistics != .off else { state.statsText = ""; return }
+        let v = latestStats, video = connection.video
+        var lines = [String(format: "%d×%d  %@ (%@ range)  %.1f fps enqueued", video.width, video.height,
+            StreamConnection.formatName(connection.negotiatedFormat), startProfile.video.fullRange ? "full" : "limited", v.shownFPS)]
+        lines.append("Network RTT \(Self.ms(v.networkMs)) ms (variation \(Self.ms(v.networkVariationMs)))  Decode \(Self.ms(v.decodeMs)) ms")
         if state.statistics == .detailed {
-            lines.append(String(format: "Received %.0f fps  Host %.1f ms  Audio %.0f ms", v.receivedFPS, v.hostMs, connection.audio.queuedMs))
-            lines.append("Frames dropped: \(v.dropped) decode, \(v.pacedDrops) pacing")
+            lines.append(String(format: "Video payload %.1f Mbps · peak %.1f · buffered %.1f frames", v.bitrateMbps, v.peakBitrateMbps, v.bufferedFrames))
+            lines.append("Host min/avg/max \(Self.ms(v.hostMinMs))/\(Self.ms(v.hostMs))/\(Self.ms(v.hostMaxMs)) ms")
+            lines.append("Decode min/avg/max \(Self.ms(v.decodeMinMs))/\(Self.ms(v.decodeMs))/\(Self.ms(v.decodeMaxMs)) ms")
+            lines.append("Renderer AVSampleBuffer · \(profile.video.pacing.title) · display \(window?.screen?.maximumFramesPerSecond ?? 0) Hz")
+            lines.append(String(format: "Received/decoded %.1f/%.1f fps · core queue %d frames · audio %.0f ms", v.receivedFPS, v.decodedFPS, LiGetPendingVideoFrames(), connection.audio.queuedMs))
+            lines.append("Frame assembly \(Self.ms(v.assemblyMs)) · decoder queue \(Self.ms(v.queueMs)) · presentation wait \(Self.ms(v.presentationMs)) ms")
+            lines.append("Drops since start: network/pacing \(Self.ms(v.networkDropPercent))%/\(Self.ms(v.pacingDropPercent))% (\(v.networkDropped)/\(v.pacedDrops)) · decode \(v.dropped)")
+            lines.append("Max arrival/display/enqueue gap \(Self.ms(v.arrivalGapMaxMs))/\(Self.ms(v.displayGapMaxMs))/\(Self.ms(v.enqueueGapMaxMs)) ms")
         }
         state.statsText = lines.joined(separator: "\n")
     }
@@ -580,7 +604,7 @@ import SwiftUI
         case "s":
             let all = StreamProfile.Window.Statistics.allCases
             state.statistics = all[(all.firstIndex(of: state.statistics)! + 1) % all.count]
-            if state.statistics == .off { state.statsText = "" } else { updateStats() }
+            renderStats()
         case "x": setFullScreen(!(window?.styleMask.contains(.fullScreen) ?? false))
         case "d": window?.miniaturize(nil)
         case "m": toggleMicMute()
@@ -745,9 +769,14 @@ struct StreamOverlay: View {
             }
             VStack {
                 HStack(alignment: .top) {
-                    if !state.statsText.isEmpty {
-                        Text(state.statsText).font(.system(size: 11, design: .monospaced)).foregroundStyle(.white)
-                            .padding(8).background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 6))
+                    if state.connected && (!state.statsText.isEmpty || state.graphs) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            if !state.statsText.isEmpty {
+                                Text(state.statsText).font(.system(size: 9, design: .monospaced)).lineSpacing(0).foregroundStyle(.white)
+                            }
+                            if state.graphs { StreamStatsGraphs(samples: state.statsHistory.samples) }
+                        }
+                        .padding(5).background(.black.opacity(0.32), in: RoundedRectangle(cornerRadius: 4))
                     }
                     Spacer()
                     if state.poorConnection {
@@ -766,6 +795,45 @@ struct StreamOverlay: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(.easeInOut(duration: 0.2), value: state.hint)
+    }
+}
+
+/// Two minutes of one-second aggregates, independent of per-frame rendering and input.
+private struct StreamStatsGraphs: View {
+    let samples: [StreamTelemetry.Sample]
+    private var domain: ClosedRange<Double> {
+        let end = samples.last?.time ?? 120
+        return (end - 119)...end
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Network RTT and RTT variation · ms").font(.system(size: 9))
+            Chart(samples) { s in
+                if let y = s.networkMs { LineMark(x: .value("Time", s.time), y: .value("ms", y)).foregroundStyle(by: .value("Signal", "RTT")) }
+                if let y = s.networkVariationMs { LineMark(x: .value("Time", s.time), y: .value("ms", y)).foregroundStyle(by: .value("Signal", "RTT variation")) }
+            }
+            .chartXScale(domain: domain).chartYScale(domain: .automatic(includesZero: true))
+            .chartXAxis(.hidden).frame(height: 50)
+            Text("Decode and presentation wait · ms").font(.system(size: 9))
+            Chart(samples) { s in
+                if let y = s.decodeMs { LineMark(x: .value("Time", s.time), y: .value("ms", y)).foregroundStyle(by: .value("Signal", "Decode avg")) }
+                if let y = s.decodeMaxMs { LineMark(x: .value("Time", s.time), y: .value("ms", y)).foregroundStyle(by: .value("Signal", "Decode max")) }
+                if let y = s.presentationMs { LineMark(x: .value("Time", s.time), y: .value("ms", y)).foregroundStyle(by: .value("Signal", "Presentation wait")) }
+            }
+            .chartXScale(domain: domain).chartYScale(domain: .automatic(includesZero: true))
+            .chartXAxis(.hidden).frame(height: 50)
+            Text("Largest arrival / display / enqueue gap · ms").font(.system(size: 9))
+            Chart(samples) { s in
+                if let y = s.arrivalGapMaxMs { LineMark(x: .value("Time", s.time), y: .value("ms", y)).foregroundStyle(by: .value("Signal", "Frame arrival")) }
+                if let y = s.displayGapMaxMs { LineMark(x: .value("Time", s.time), y: .value("ms", y)).foregroundStyle(by: .value("Signal", "Display callback")) }
+                if let y = s.enqueueGapMaxMs { LineMark(x: .value("Time", s.time), y: .value("ms", y)).foregroundStyle(by: .value("Signal", "Layer enqueue")) }
+            }
+            .chartXScale(domain: domain).chartYScale(domain: .automatic(includesZero: true))
+            .chartXAxis(.hidden).frame(height: 50)
+            Text("Last 120 seconds · one-second samples · missing data stays N/A. RTT variation is a transport estimate; frame gaps also grow on a still desktop. Network drops are inferred from frame-number gaps.")
+                .font(.system(size: 8)).foregroundStyle(.secondary)
+        }
+        .frame(width: 340).font(.system(size: 9)).foregroundStyle(.white).environment(\.colorScheme, .dark)
     }
 }
 

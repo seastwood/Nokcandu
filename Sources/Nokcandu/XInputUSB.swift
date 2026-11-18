@@ -128,6 +128,7 @@ final class XInputUSB: @unchecked Sendable {
             do { try inPipe.__sendIORequest(with: data, bytesTransferred: &n, completionTimeout: 0) }
             catch { break }                              // unplugged
             let bytes = Array(UnsafeRawBufferPointer(start: data.bytes, count: n))
+            ControllerReportDiagnostics.shared.record(source, label: "\(product) · USB reports")
             if gip, let ack = GIPController.acknowledge(bytes) { send(ack) }
             guard let s = gip ? gipDecoder.decode(bytes, last: last.map { ($0.0, $0.1) }) : XInputController.decode(bytes) else { continue }
             if let last, last.0 == s.buttons, last.1 == s.axes { continue }
@@ -159,6 +160,7 @@ final class XInputUSB: @unchecked Sendable {
             var n = 0
             do { try inPipe.__sendIORequest(with: data, bytesTransferred: &n, completionTimeout: 0) }
             catch { break }                              // receiver unplugged
+            ControllerReportDiagnostics.shared.record(source, label: "Xbox 360 receiver · USB reports")
             switch XInputController.Wireless.decode(Array(UnsafeRawBufferPointer(start: data.bytes, count: n))) {
             case .connected(true)?:
                 guard !connected else { continue }

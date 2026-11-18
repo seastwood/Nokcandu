@@ -57,6 +57,7 @@ final class GameCubeAdapterHID {
             guard result == kIOReturnSuccess, count >= 37 else { return }
             let report = Array(UnsafeBufferPointer(start: bytes, count: count))
             let id = UInt64(UInt(bitPattern: ctx))
+            ControllerReportDiagnostics.shared.record("gamecube:\(id)", label: "GameCube adapter · HID reports")
             MainActor.assumeIsolated { GameCubeAdapterHID.shared.report(report, id: id) }
         }, UnsafeMutableRawPointer(bitPattern: UInt(id)))
         var start = GameCubeAdapter.start

@@ -338,6 +338,7 @@ struct ProfilesTabDetail: View {
             } else if sel == "settings" {
                 // Everything about controllers that isn't one profile: in games, on the Mac and in streams.
                 Form {
+                    ControllerOwnershipSettings()
                     PadGyroAndNotesSettings()
                     PadCaptureSettings()
                     PadHeadTrackingSettings()

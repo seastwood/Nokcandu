@@ -91,6 +91,19 @@ public struct PadSteamTrackpadSettings: Codable, Hashable, Sendable {
     /// The pad's own directions unless you choose an angle. Valve's ±15° made a straight up-and-down swipe
     /// come out partly sideways for at least one player, which felt like the cursor hooking.
     public static func defaultRotation(side: Int) -> Double { 0 }
+    /// Pad coordinates (y up), rotated for existing touch mappings and stick delivery too.
+    /// Returns unscaled coordinates; callers clamp only at the output boundary.
+    public func rotatedPosition(x: Double, y: Double) -> (x: Double, y: Double) {
+        guard x.isFinite, y.isFinite else { return (0, 0) }
+        guard let degrees = rotation, degrees.isFinite, degrees != 0 else { return (x, y) }
+        let r = min(45, max(-45, degrees)) * Double.pi / 180
+        return (cos(r) * x - sin(r) * y, sin(r) * x + cos(r) * y)
+    }
+    /// Existing touch mappings take normalized screen coordinates (y down).
+    public func normalizedTouch(x: Float, y: Float) -> (x: Float, y: Float) {
+        let p = rotatedPosition(x: Double(x), y: Double(y))
+        return (Float((max(-1, min(1, p.x)) + 1) / 2), Float((1 - max(-1, min(1, p.y))) / 2))
+    }
     /// Valve's angle for this pad, offered in the slider's explanation.
     public static func valveRotation(side: Int) -> Double { side == 0 ? -15 : 15 }
     public init(mode: Mode = .existing) { self.mode = mode }
@@ -668,6 +681,8 @@ public struct PadSteamDial {
     }
     public mutating func update(down: Bool, x: Double, y: Double, settings: PadSteamTrackpadSettings) -> Int {
         guard down, x.isFinite, y.isFinite, (x * x + y * y).squareRoot() >= 0.3 else { last = nil; turned = 0; return 0 }
+        // A constant pad rotation cancels in successive angle differences. Keep raw angles
+        // so changing the setting mid-touch cannot manufacture a scroll step.
         let angle = atan2(y, x) * 180 / Double.pi            // counter-clockwise positive (y up)
         defer { last = angle }
         guard let previous = last else { return 0 }

@@ -1,5 +1,30 @@
 # Controller capability and validation matrix
 
+November 17 ownership update: Controls → Controller Settings now offers exclusive **Steam Controller**
+access, on by default when no preference is saved. The direct reader requests IOHID seizure for original
+and 2026 Steam Controllers across its supported transports, stays alive while Nokcandu runs (including with
+mappings off), reports refused access, and releases/restores on quit or opt-out. Native Steam exit retries
+paused capture. Hardware coexistence/shutdown acceptance remains pending. Other controller paths remain
+shared; this supersedes earlier blanket statements that no device-seizure path exists, without certifying
+universal suppression or native virtual-controller output. [Implementation, checks and Undo](investigations/controller-ownership-and-picture-2026-11-17.md).
+
+The 2026 picture now reserves non-overlapping callout lanes, mirrors ABXY/D-pad positions, leans the pad
+surfaces inward and places gyro below the body. **Pad angle** is available in every Steam pad behavior,
+including circular scrolling and Existing mappings; its left-pad default is 0° and explicit values survive.
+
+Original receiver follow-up: empty-slot discovery now uses a single serial background probe instead of
+blocking the main thread with repeated HID timeouts while the remote is off. Mode/identity/lease checks
+still gate capture and input; stale results are cancelled on stop. Concurrency regressions pass. The user
+installed the candidate and confirmed the reported no-controller streaming freeze is fixed. See the
+[stream investigation](investigations/stream-stalls-and-statistics-2026-11-17.md#follow-up-activity-protection-did-not-stop-the-freezes).
+
+November 17, 2026 follow-up: [receiver stalls and report-rate audit](investigations/controller-receiver-stalls-and-rates-2026-11-17.md).
+The original receiver now retains verified capture through short input gaps while releasing stale holds;
+repeated missing feature replies alone no longer interrupt live input. Physical improvement is pending.
+Opt-in diagnostics show per-reader arrival rates and gaps, with raw reports distinguished from changed-value
+callbacks. This does not certify a controller's maximum hardware polling rate. Later findings below supersede
+the initial November 10 matrix where noted.
+
 November 10, 2026. A channel exposed by an API is not verified game support. Update a row only with observed hardware/connection and target evidence. Source research and architecture are in the [investigation](investigations/controller-overhaul-2026-11-10.md).
 
 | Device | Connection | Current path / evidence | Remaining verification |
@@ -23,7 +48,7 @@ November 10, 2026. A channel exposed by an API is not verified game support. Upd
 | Fixed-anchor mapped mouse to native app | Implemented opt-in process routing; target acceptance pending |
 | Fixed-anchor mapped mouse to Wine game | Implemented; Overwatch/BF1942 before/after acceptance pending |
 | Fixed-anchor mapped mouse to Moonlight/VoidLink/other streaming client | Selectable direct target; actual acceptance and duplicate-input checks pending |
-| macOS physical-device suppression / physical mouse seizure | Unavailable in this implementation; not represented as supported |
+| macOS physical-device suppression / physical mouse seizure | Steam Controller direct-reader exclusive HID access implemented November 17, physical acceptance pending; other controller paths remain shared and physical mouse seizure is unavailable |
 | New Xbox-/DS4-/Nintendo-like virtual controller | No backend. Tested November 13, 2026 (macOS 27.2): CoreHID `HIDVirtualDevice(properties:)` returns nil without the `com.apple.developer.hid.virtual.device` entitlement, and an ad-hoc/self-signed binary claiming it is killed at launch (exit 137, restricted entitlement without a provisioning profile). `IOHIDUserDevice` isn't in the public SDK. A system-wide virtual controller needs an Apple-issued profile (paid Developer Program, Developer ID signing); inside Wine, the presented controller is Nokcandu's own and could carry another identity without it |
 
 The virtual-device candidate matrix remains **not run** for native monitor/game, Nokcandu Wine title and external streaming client. CoreHID SDK presence on newer macOS, or a logical layout preset, does not satisfy the target-recognition gate. No unsupported identity is offered in the UI. No controller firmware, pairing, Steam device ownership or system entitlements were modified.
@@ -73,7 +98,7 @@ Added November 13, 2026. The same **Emulated controller** choice applies to Mac 
 
 **Not available yet**: macOS refuses `HIDVirtualDevice` without the `com.apple.developer.hid.virtual.device` entitlement and kills an app that claims it without an Apple provisioning profile granting it (tested: exit 137). So the app checks its own signature (`MacVirtualControllers.entitled`) and, without the entitlement, never calls CoreHID and shows why in the profile editor. To enable it: an Apple Developer Program membership, the entitlement granted by Apple in a Developer ID provisioning profile, then `NOKCANDU_PROVISIONING_PROFILE=/path/to/profile.provisionprofile NOKCANDU_HARDENED=1 ./build-app.sh` with a Developer ID signing identity (`build-app.sh` embeds the profile and adds the entitlement only when the profile grants it, refusing otherwise).
 
-**Unverified until then**: whether macOS's GameController framework and SDL games treat each virtual device as that controller (the Xbox descriptor follows the Bluetooth report as Linux documents it; the DS4 and Pro reports are the ones verified in Wine), input latency, and double input: the real controller stays visible to Mac games (macOS has no way for an app to hide it), so games that read every controller may see both.
+**Unverified until then**: whether macOS's GameController framework and SDL games treat each virtual device as that controller (the Xbox descriptor follows the Bluetooth report as Linux documents it; the DS4 and Pro reports are the ones verified in Wine), input latency, and double input: shared real-controller paths remain visible to Mac games, so games that read every controller may see both. The November 17 Steam direct-reader exclusive access is a separate limited suppression path with physical acceptance pending; it does not replace other GameController-backed readers.
 
 ### Turning it on with an Apple Developer account
 

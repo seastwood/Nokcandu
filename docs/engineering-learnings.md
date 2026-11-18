@@ -1,5 +1,63 @@
 # Engineering learnings
 
+## Controller ownership and annotation geometry (November 17)
+
+A running profile and a process-local reader lock do not establish exclusive physical-device ownership.
+Track actual IOHID open results; a refused exclusive open must stay blocked rather than silently falling
+back to shared. Keep status locks separate from blocking opens, pair release with the acquired option,
+and retain a reader independently of active mappings when application-lifetime ownership is requested.
+Steam Controller direct-reader exclusivity is implemented; native Steam shutdown/coexistence needs physical
+acceptance. GameController-backed devices remain shared, so do not advertise universal suppression.
+
+Draw physical controls independently of mapping captions. Reserve bounded annotation lanes and test them
+against every control/other caption at several sizes; wrap/truncate long names with a full tooltip. Physical
+pad tilt is separate from the user's input angle. Expose that input angle for every behavior, preserve
+explicit values, and apply it to Existing mappings as well as newer movement/zone modes. Circular scrolling
+is invariant under constant rotation, but its directional zones are not. Left-pad default remains 0°.
+[Scope, validation, migration and Undo](investigations/controller-ownership-and-picture-2026-11-17.md).
+
+The first 2026 picture passed canvas/caption tests but still let pads cross the shell cutout. Photo-based
+control positions must be checked against the actual silhouette, not just its bounding rectangle. The
+renderer and containment tests now share one shell path and check an expanded rotated-pad perimeter,
+including clearance below the sticks and above the inner cutout. Raising only the cutout would conceal the
+incorrect control positions: the follow-up also moves the pads, sticks and QAM to the reference landmarks.
+
+## Empty receiver probes must not run on the video/input thread (November 17 follow-up)
+
+The user installed session-activity protection and still saw no-controller stream freezes. The new logs show
+roughly half-second display gaps with low RTT, 3–4 ms average decode and no recorded drops. The receiver
+remains present with four vendor channels after the remote disconnects; `chooseController()` was probing them
+synchronously on main every two seconds. Move read-only liveness discovery onto the serial feature worker,
+bound pending scans and cancel generations, then revalidate channel/session plus the existing identity/mode
+lease before publishing input. A failed safe capture must not starve another candidate. Simulated blocked
+probes now prove main-queue progress; the user installed the fix and confirmed the reported freeze is gone.
+The earlier App Nap hypothesis alone
+failed the user's test. An initially considered display-rate change was removed to isolate discovery.
+[Evidence, scope, tests and Undo](investigations/stream-stalls-and-statistics-2026-11-17.md#follow-up-activity-protection-did-not-stop-the-freezes).
+
+## Streaming needs its own activity lifetime (November 17, 2026)
+
+A stream stalled over wired and wireless connections while VoidLink Extreme did not; attaching a controller
+appeared to help. The source had a latency-critical activity for active controller mapping but none for the
+stream itself. Give the session its own activity from startup through all finish paths, independent of hardware
+and UI, and release it on failure/cancel/stop/destruction. This closes a confirmed source gap; its effect on
+the reported freeze remains a hardware hypothesis. The user's buffer=2 separately explains some latency.
+Upstream also tracks bytes, frame-sequence gaps and host extrema. Distinguish decoder-only work, assembly,
+queueing and actual layer enqueue, preserve unavailable values, and graph bounded interval samples. Keep
+graph visibility independent of text statistics and never reset sampling merely to redraw an overlay.
+[Comparison, metrics, tests, scope and Undo](investigations/stream-stalls-and-statistics-2026-11-17.md).
+
+## Input silence and ownership are separate (November 17, 2026)
+
+The original Steam Controller reader discarded verified receiver capture after a 0.3-second input gap,
+and after three missed settings replies even with fresh input. Both paths can extend an interruption with
+unnecessary scans and feature transactions. Release stale held actions promptly while retaining the channel;
+revoke on an actual mode mismatch/disconnect, or reacquire when both input and repeated feature replies are
+silent. Reset health on successful reads/new capture. Simulated recovery tests pass; physical improvement is
+pending. Controller receipt is event-driven, separate from the mapping timer: opt-in per-reader cadence
+statistics now expose arrival rates/gaps without claiming hardware polling rates. See
+[scope, audit, tests, migration and Undo](investigations/controller-receiver-stalls-and-rates-2026-11-17.md).
+
 Last reviewed: October 30, 2026. These findings come from Nokcandu development and troubleshooting on an Apple Silicon MacBook Air M4. A successful local test is evidence for that tested setup, not a promise that every game or launcher works.
 
 Detailed implementation notes live in [compatibility-fixes.md](compatibility-fixes.md). Dated investigations retain the failed trials and configuration snapshots; this document summarizes the current conclusions.

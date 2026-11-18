@@ -24,3 +24,15 @@ Input arrives as 20-byte report-3 segments with the report number in front; sett
 packets carry only changed chunks plus empty keep-alive packets (type 4, no chunks). Reports can stall for a
 moment, so Bluetooth waits 1 s before letting go of held input and doesn't take the controller over again for
 it. Not yet compared with the cable: how the pads and gyro feel in use.
+
+## Ownership and pad angles (November 17)
+
+The shared Steam direct reader now requests exclusive HID access by default and stays active while Nokcandu
+runs, even without active mappings. Controller ownership settings show blocked access and offer retry;
+quitting or switching exclusive access off releases it. A shared active profile can retain its normal reader
+with the option off. Native Steam coexistence and controller shutdown recovery remain hardware acceptance
+items. No pairing or firmware changes are made.
+
+Pad angle is available for every behavior, including circular scrolling and Existing mappings. Left defaults
+to 0°, explicit saved angles remain, and tap/click zones rotate independently of circular scrolling.
+[Implementation, tests, migration and Undo](investigations/controller-ownership-and-picture-2026-11-17.md).

@@ -63,6 +63,7 @@ final class Switch2USB {
             guard result == kIOReturnSuccess, let ctx, count >= 64 else { return }
             let report = Array(UnsafeBufferPointer(start: bytes, count: count))
             let id = UInt64(UInt(bitPattern: ctx))
+            ControllerReportDiagnostics.shared.record("switch2:\(id)", label: "Switch 2 · HID reports")
             MainActor.assumeIsolated { Switch2USB.shared.report(report, id: id) }
         }, UnsafeMutableRawPointer(bitPattern: UInt(id)))
         ControllerLog.add("Controller: \(name) found by USB (\(String(format: "%04X", product))); starting it")

@@ -38,6 +38,12 @@ public struct SteamControllerReport {
         /// pushed further wins).
         public func mappingAxes(left: PadSteamTrackpadSettings, right: PadSteamTrackpadSettings) -> [Int: Int] {
             var result = mappingAxes(rightTrackpadAsStick: right.mode == .existing)
+            if right.mode == .existing, rightTouch {
+                let p = right.rotatedPosition(x: Double(rightPad.x), y: Double(rightPad.y))
+                if kind == .original || rightPad.x * rightPad.x + rightPad.y * rightPad.y > rightStick.x * rightStick.x + rightStick.y * rightStick.y {
+                    result[2] = Self.axis(Float(p.x)); result[3] = Self.axis(Float(-p.y))
+                }
+            }
             if right.mode == .stick {
                 let v = rightTouch ? PadSteamPadStick.vector(x: Double(rightPad.x), y: Double(rightPad.y), settings: right) : (x: 0, y: 0)
                 // The 2026 controller's right stick is real: the pad takes over only while pushed further.
@@ -118,6 +124,11 @@ public struct SteamControllerStream {
     public private(set) var state: SteamControllerReport.State?
     private var received: Double?
     public init() {}
+    /// Only full input reports prove liveness; status traffic must not keep stale holds alive.
+    public func hasRecentInput(at time: Double, within timeout: Double = 0.3) -> Bool {
+        guard let received else { return false }
+        return time.isFinite && time >= received && time - received <= timeout
+    }
     public mutating func accept(_ bytes: [UInt8], at time: Double) -> SteamControllerReport.State? {
         guard time.isFinite, SteamControllerReport.isInputReport(bytes) else { return nil }
         if let received, time < received { reset() }
@@ -149,4 +160,16 @@ public struct SteamControllerStream {
     public mutating func reset() {
         decoder = SteamControllerReport(); bleAssembler.reset(); bleDecoder = SteamControllerBLE.Decoder(); state = nil; received = nil
     }
+}
+
+/// Feature replies can go missing while input continues. Reacquire only when both paths are silent.
+/// An actual settings mismatch is handled separately and always revokes capture.
+public struct SteamControllerCaptureHealth {
+    public private(set) var missedReads = 0
+    public init() {}
+    public mutating func missingReply(hasRecentInput: Bool) -> Bool {
+        missedReads = min(missedReads + 1, 3)
+        return missedReads >= 3 && !hasRecentInput
+    }
+    public mutating func reset() { missedReads = 0 }
 }
