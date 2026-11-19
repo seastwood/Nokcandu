@@ -14,7 +14,7 @@
     <td align="center"><em>Steam Controller 2026 profile</em></td>
   </tr>
   <tr>
-    <td><a href="docs/gallery/game-controls.jpg"><img src="docs/gallery/game-controls.jpg" alt="A Windows game's Controls page: raw mouse, keyboard remapping and what the game receives from each controller"></a></td>
+    <td><a href="docs/games.png"><img src="docs/games.png" alt="The Games tab: the library and a game's Controls page"></a></td>
     <td><a href="docs/gallery/streams.jpg"><img src="docs/gallery/streams.jpg" alt="A stream profile: picture, codec, frame pacing and controller settings"></a></td>
   </tr>
   <tr>
