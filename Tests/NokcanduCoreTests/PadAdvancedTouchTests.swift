@@ -10,6 +10,15 @@ final class PadAdvancedTouchTests:XCTestCase {
         region.width = -.infinity;XCTAssertNil(region.point(x:0,y:0))
         region.width = 0;XCTAssertNil(region.point(x:0,y:0))
     }
+    func testRegionOverFullSizeLetsARoundPadReachTheCorners() throws {
+        var region = PadMouseRegion();region.width = 1.5;region.height = 1.5
+        // A round pad's corner touch (about 0.16 in from each edge) reaches the screen corner.
+        let corner = try XCTUnwrap(region.point(x:0.16,y:0.16))
+        XCTAssertEqual(corner.x,0,accuracy:0.001);XCTAssertEqual(corner.y,0,accuracy:0.001)
+        let center = try XCTUnwrap(region.point(x:0.5,y:0.5))
+        XCTAssertEqual(center.x,0.5,accuracy:0.001);XCTAssertEqual(center.y,0.5,accuracy:0.001)
+        XCTAssertEqual(region.point(x:1,y:1),CGPoint(x:1,y:1))
+    }
     func testGestureFiresOnlyOnLiftAndUsesOrderedDirections() {
         var r = PadGestureRecognizer()
         XCTAssertNil(r.update(down:true,x:0.5,y:0.8));XCTAssertNil(r.update(down:true,x:0.5,y:0.3))

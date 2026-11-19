@@ -121,17 +121,17 @@ struct LibraryView: View {
 
     @ViewBuilder var gamesList: some View {
         List(selection: $model.selection) {
-            if !model.favoriteGames.filter(model.matchesLibrary).isEmpty {
+            if !model.favoriteEntries.filter(model.matchesLibrary).isEmpty {
                 Section("Favorites") {
-                    ForEach(model.favoriteGames.filter(model.matchesLibrary)) { g in row(g) }
+                    ForEach(model.favoriteEntries.filter(model.matchesLibrary)) { e in entryRow(e) }
                 }
             }
             ForEach(model.libraryCategories) { c in
                 // While searching or filtering, a category with nothing to show steps aside.
-                if !filtering || c.games.contains(where: model.matchesLibrary) {
+                if !filtering || c.entries.contains(where: model.matchesLibrary) {
                     Section(isExpanded: expanded("category:" + c.name)) {
-                        ForEach(c.games.filter(model.matchesLibrary)) { g in row(g) }
-                        if c.games.isEmpty {
+                        ForEach(c.entries.filter(model.matchesLibrary)) { e in entryRow(e) }
+                        if c.entries.isEmpty {
                             Text("Right-click anything in the library to put it here.")
                                 .font(.caption).foregroundStyle(.secondary).selectionDisabled()
                         }
@@ -144,31 +144,15 @@ struct LibraryView: View {
                 }
             }
             Section(isExpanded: expanded("games")) {
-                ForEach(model.sortedGames.filter(model.matchesLibrary)) { g in row(g) }
-                    .onMove { model.moveGames(from: $0, to: $1) }
+                ForEach(model.gameEntries.filter(model.matchesLibrary)) { e in entryRow(e) }
+                    .onMove { model.moveEntries(from: $0, to: $1) }
                     .moveDisabled(filtering)
             } header: {
                 Text("Games").dropDestination(for: String.self) { items, _ in model.dropOnSection(items, category: nil) }
             }
-            if !model.offlineApps.isEmpty {
-                Section("Drive not connected") {
-                    ForEach(model.offlineApps.indices, id: \.self) { i in
-                        let o = model.offlineApps[i]
-                        HStack(spacing: 10) {
-                            Image(systemName: "externaldrive.badge.xmark").font(.title2).foregroundStyle(.orange).frame(width: 32, height: 32)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(o.name).font(.headline).foregroundStyle(.secondary)
-                                Text("Connect \(o.drive) to play").font(.caption).foregroundStyle(.orange)
-                            }
-                        }
-                        .padding(.vertical, 2)
-                        .selectionDisabled()
-                    }
-                }
-            }
-            if !model.launcherApps.filter(model.matchesLibrary).isEmpty {
+            if !model.launcherEntries.filter(model.matchesLibrary).isEmpty {
                 Section(isExpanded: expanded("launchers")) {
-                    ForEach(model.launcherApps.filter(model.matchesLibrary)) { g in row(g) }
+                    ForEach(model.launcherEntries.filter(model.matchesLibrary)) { e in entryRow(e) }
                 } header: {
                     Text("Launchers").dropDestination(for: String.self) { items, _ in model.dropOnSection(items, category: nil) }
                 }
@@ -356,6 +340,12 @@ struct LibraryView: View {
 
 extension LibraryView {
     var filtering: Bool { !model.librarySearch.isEmpty || model.libraryFilter != .all }
+    @ViewBuilder func entryRow(_ e: AppModel.LibraryEntry) -> some View {
+        switch e {
+        case .game(let g): row(g)
+        case .offline(let o): OfflineGameRow(game: o)
+        }
+    }
     func row(_ g: InstalledGame) -> some View {
         GameRow(game: g, state: model.runStates[g.id] ?? .notRunning)
             .tag(g.id)
@@ -717,3 +707,29 @@ struct CategoryMenu: View {
     }
 }
 
+
+/// A game whose app is on a drive that isn't connected, shown in its usual place until the drive is back.
+struct OfflineGameRow: View {
+    let game: LibraryOrganizer.OfflineGame
+    var body: some View {
+        HStack(spacing: 10) {
+            Group {
+                if let icon = NSImage(contentsOf: LibraryOrganizer.cachedIcon(key: game.key)) {
+                    Image(nsImage: icon).resizable().frame(width: 32, height: 32).opacity(0.45)
+                        .overlay(alignment: .bottomTrailing) {
+                            Image(systemName: "externaldrive.badge.xmark").font(.caption).foregroundStyle(.orange).offset(x: 3, y: 3)
+                        }
+                } else {
+                    Image(systemName: "externaldrive.badge.xmark").font(.title2).foregroundStyle(.orange).frame(width: 32, height: 32)
+                }
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(game.name).font(.headline).foregroundStyle(.secondary).lineLimit(1)
+                Text("Connect \(game.drive) to play").font(.caption).foregroundStyle(.orange).lineLimit(1)
+            }
+        }
+        .padding(.vertical, 2)
+        .selectionDisabled()
+        .help("\(game.name) is on \(game.drive), which isn't connected.")
+    }
+}

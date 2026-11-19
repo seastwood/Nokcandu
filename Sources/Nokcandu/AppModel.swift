@@ -12,7 +12,17 @@ final class AppModel: ObservableObject {
     @Published var sortedGames: [InstalledGame] = []
     @Published var launcherApps: [InstalledGame] = []
     /// Your own categories with their items (games, launchers or anything else installed).
-    struct LibraryCategory: Identifiable { var name: String; var games: [InstalledGame]; var id: String { name } }
+    struct LibraryCategory: Identifiable { var name: String; var games: [InstalledGame]; var entries: [LibraryEntry] = []; var id: String { name } }
+    /// A sidebar row: an installed game, or one whose app is on a drive that isn't connected (kept in its usual place).
+    enum LibraryEntry: Identifiable, Hashable {
+        case game(InstalledGame), offline(LibraryOrganizer.OfflineGame)
+        var id: String { switch self { case .game(let g): return g.id; case .offline(let o): return o.id } }
+        var name: String { switch self { case .game(let g): return g.name; case .offline(let o): return o.name } }
+        var key: String { switch self { case .game(let g): return LibraryOrganizer.key(g); case .offline(let o): return o.key } }
+    }
+    @Published var favoriteEntries: [LibraryEntry] = []
+    @Published var gameEntries: [LibraryEntry] = []
+    @Published var launcherEntries: [LibraryEntry] = []
     @Published var libraryCategories: [LibraryCategory] = []
     @Published var collapsedSections: Set<String> = LibraryOrganizer.collapsedSections
     /// The category being named: a new one (optionally for a game) or a rename.
@@ -253,6 +263,9 @@ final class AppModel: ObservableObject {
             if automatic { libraryRevision += 1 }
             libraryExtras = scanned.1
             if gameDrives != scanned.1.drives { gameDrives = scanned.1.drives }
+            LibraryOrganizer.remember(scanned.0)
+            let iconGames = scanned.0
+            Task.detached(priority: .background) { AppModel.cacheIcons(iconGames) }
             games = scanned.0
             let firstLoad = !libraryLoaded
             // Windows games that can't run until Rosetta or the engine is back (a reinstalled macOS, a removed
@@ -938,6 +951,22 @@ final class AppModel: ObservableObject {
         launcherApps = launchers.filter { category($0) == nil }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         collapsedSections = LibraryOrganizer.collapsedSections
         offlineApps = libraryExtras.offline
+        // Games whose app is on an unplugged drive stay where they'd be, in every section.
+        let ghosts = LibraryOrganizer.offlineGames(libraryExtras.offline)
+        func ghostCategory(_ o: LibraryOrganizer.OfflineGame) -> String? { keys.contains(o.key) && !o.launcher ? nil : placed[o.key] }
+        func merge(_ gs: [InstalledGame], _ os: [LibraryOrganizer.OfflineGame]) -> [LibraryEntry] {
+            LibraryOrganizer.ordered(gs.map { LibraryEntry.game($0) } + os.map { LibraryEntry.offline($0) }, name: { $0.name }, key: { $0.key }, played: { e in
+                switch e { case .game(let g): return LibraryOrganizer.lastPlayed(g); case .offline(let o): return LibraryOrganizer.lastPlayed(key: o.key) }
+            })
+        }
+        favoriteEntries = merge(favoriteGames, ghosts.filter { !$0.launcher && keys.contains($0.key) })
+        for i in libraryCategories.indices {
+            let name = libraryCategories[i].name
+            libraryCategories[i].entries = merge(libraryCategories[i].games, ghosts.filter { ghostCategory($0) == name })
+        }
+        gameEntries = merge(sortedGames, ghosts.filter { !$0.launcher && ghostCategory($0) == nil && !keys.contains($0.key) })
+        launcherEntries = (launcherApps.map { LibraryEntry.game($0) } + ghosts.filter { $0.launcher && ghostCategory($0) == nil }.map { LibraryEntry.offline($0) })
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         refreshDrives()
         subtitles = LibraryOrganizer.subtitles(for: games)
         sortMode = LibraryOrganizer.sort
@@ -987,6 +1016,47 @@ final class AppModel: ObservableObject {
         games.filter(isRunning).sorted { a, b in
             let (x, y) = (LibraryOrganizer.isLauncher(a), LibraryOrganizer.isLauncher(b))
             return x != y ? x : a.name.localizedStandardCompare(b.name) == .orderedAscending
+        }
+    }
+    /// Keeps a small copy of each game's icon, so a game on an unplugged drive still shows it.
+    /// One file per game, rewritten only when the app changed.
+    nonisolated static func cacheIcons(_ games: [InstalledGame]) {
+        let fm = FileManager.default
+        for g in games {
+            let url = LibraryOrganizer.cachedIcon(key: LibraryOrganizer.key(g))
+            let appDate = (try? g.appURL.resolvingSymlinksInPath().resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            if let cached = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate, cached >= appDate { continue }
+            let image = g.icon
+            guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 64, pixelsHigh: 64, bitsPerSample: 8, samplesPerPixel: 4,
+                                             hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+                  let context = NSGraphicsContext(bitmapImageRep: rep) else { continue }
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = context
+            image.draw(in: NSRect(x: 0, y: 0, width: 64, height: 64))
+            NSGraphicsContext.restoreGraphicsState()
+            guard let png = rep.representation(using: .png, properties: [:]) else { continue }
+            try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? png.write(to: url, options: .atomic)
+        }
+    }
+    /// Reorders the Games section (games on unplugged drives keep their places in the saved order too).
+    func moveEntries(from: IndexSet, to: Int) {
+        var list = gameEntries
+        list.move(fromOffsets: from, toOffset: to)
+        LibraryOrganizer.setOrder(keys: list.map(\.key))
+        reorganize()
+    }
+    func matchesLibrary(_ e: LibraryEntry) -> Bool {
+        switch e {
+        case .game(let g): return matchesLibrary(g)
+        case .offline(let o):
+            let q = librarySearch.trimmingCharacters(in: .whitespaces)
+            if !q.isEmpty, !o.name.localizedCaseInsensitiveContains(q) { return false }
+            switch libraryFilter {
+            case .all: return true
+            case .drive(let d): return o.drive == d
+            default: return false
+            }
         }
     }
     func moveGames(from: IndexSet, to: Int) {

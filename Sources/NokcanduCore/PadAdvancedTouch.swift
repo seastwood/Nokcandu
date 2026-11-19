@@ -12,8 +12,14 @@ public struct PadMouseRegion: Codable, Hashable, Sendable {
     public func point(x px: Double, y py: Double) -> CGPoint? {
         guard [x,y,width,height,px,py].allSatisfy(\.isFinite), width > 0, height > 0 else { return nil }
         let left = max(0, min(0.99, x)), top = max(0, min(0.99, y))
-        return CGPoint(x: left + max(0,min(1,px)) * min(width,1-left),
-                       y: top + max(0,min(1,py)) * min(height,1-top))
+        // Up to 100%: that part of the surface, as before. Over 100% (up to 200%): stretched past it around the
+        // region's center, so a round pad (the original Steam Controller's) reaches the corners; points beyond
+        // the surface stop at its edge.
+        func axis(_ start: Double, _ size: Double, _ p: Double) -> Double {
+            let fitted = min(size, 1 - start), span = size > 1 ? min(size, 2) : fitted
+            return max(0, min(1, start + fitted / 2 + (max(0, min(1, p)) - 0.5) * span))
+        }
+        return CGPoint(x: axis(left, width, px), y: axis(top, height, py))
     }
     public func point(x: Double, y: Double, in bounds: CGRect) -> CGPoint? {
         guard bounds.width > 1, bounds.height > 1, let p = point(x:x,y:y) else { return nil }

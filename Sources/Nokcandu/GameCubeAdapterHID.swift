@@ -45,7 +45,7 @@ final class GameCubeAdapterHID {
         IOHIDManagerOpen(m, 0)
         manager = m
     }
-    private static func id(_ d: IOHIDDevice) -> UInt64 { var v: UInt64 = 0; IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(d), &v); return v }
+    private static func id(_ d: IOHIDDevice) -> UInt64 { HIDRegistryID.of(d) }
 
     private func added(_ d: IOHIDDevice) {
         let id = Self.id(d)

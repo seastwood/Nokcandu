@@ -73,9 +73,7 @@ final class HIDDevices: ObservableObject {
     }
 
     private static func registryID(_ d: IOHIDDevice) -> UInt64 {
-        var id: UInt64 = 0
-        IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(d), &id)
-        return id
+        HIDRegistryID.of(d)
     }
     private static func int(_ d: IOHIDDevice, _ key: String) -> Int { (IOHIDDeviceGetProperty(d, key as CFString) as? NSNumber)?.intValue ?? 0 }
 
@@ -108,6 +106,7 @@ final class HIDDevices: ObservableObject {
         return IOHIDDeviceSetReport(d, kIOHIDReportTypeFeature, CFIndex(reportID), &b, b.count) == kIOReturnSuccess
     }
     private func removed(_ d: IOHIDDevice) {
+        defer { HIDRegistryID.forget(d) }
         let id = Self.registryID(d)
         elements[id] = nil; refs[id] = nil; hats[id] = nil
         connected.removeAll { $0.id == id }

@@ -421,7 +421,11 @@ struct GameDetailView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
-                    .disabled(running && !game.isSteamHost)
+                    .disabled((running && !game.isSteamHost) || (!running && model.missingDrive[game.id] != nil))
+                    .help(model.missingDrive[game.id].map { "Connect \($0) to play" } ?? "")
+                    if let drive = model.missingDrive[game.id], !running {
+                        Label("Connect \(drive) to play", systemImage: "externaldrive.badge.xmark").foregroundStyle(.orange)
+                    }
                     if game.isSteamHost {
                         Button("Steam Library…") { model.showSteamLibrary = true }
                         if running { Button("Quit Steam…", role: .destructive) { model.requestQuit(game) }.controlSize(.large) }
@@ -701,7 +705,10 @@ struct NativeGameDetail: View {
                         }
                         HStack {
                             Button { model.play(game) } label: { Label(running ? "Running" : "Play", systemImage: "play.fill").frame(minWidth: 90) }
-                                .buttonStyle(.borderedProminent).controlSize(.large).disabled(running)
+                                .buttonStyle(.borderedProminent).controlSize(.large).disabled(running || model.missingDrive[game.id] != nil)
+                            if let drive = model.missingDrive[game.id], !running {
+                                Label("Connect \(drive) to play", systemImage: "externaldrive.badge.xmark").foregroundStyle(.orange)
+                            }
                             if running { Button("Quit…", role: .destructive) { model.requestQuit(game) }.controlSize(.large) }
                             Button("Show in Finder") { model.reveal(game.appURL) }
                         }

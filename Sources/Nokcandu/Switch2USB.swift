@@ -42,7 +42,7 @@ final class Switch2USB {
         manager = m
     }
 
-    private static func id(_ d: IOHIDDevice) -> UInt64 { var v: UInt64 = 0; IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(d), &v); return v }
+    private static func id(_ d: IOHIDDevice) -> UInt64 { HIDRegistryID.of(d) }
     private static func number(_ d: IOHIDDevice, _ key: String) -> Int { (IOHIDDeviceGetProperty(d, key as CFString) as? NSNumber)?.intValue ?? 0 }
 
     private func added(_ d: IOHIDDevice) {

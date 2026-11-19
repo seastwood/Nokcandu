@@ -147,7 +147,11 @@ final class SteamControllerUSB: ObservableObject {
         }
         IOHIDManagerScheduleWithRunLoop(m, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
         let options = exclusiveRequested ? IOOptionBits(kIOHIDOptionsTypeSeizeDevice) : 0
+        let openStarted = ProcessInfo.processInfo.systemUptime
         let r = IOHIDManagerOpen(m, options)
+        // Measured, not guessed: if this ever stalls the window, the controller log says how long.
+        let openTook = ProcessInfo.processInfo.systemUptime - openStarted
+        if openTook > 0.05 { ControllerLog.add(String(format: "Steam Controller: taking control took %.0f ms on the main thread", openTook * 1000)) }
         // Keep refused devices visible so their access can be retried after Steam exits.
         if let devices = IOHIDManagerCopyDevices(m) as? Set<IOHIDDevice> {
             for device in devices { add(device) }
@@ -209,7 +213,7 @@ final class SteamControllerUSB: ObservableObject {
             return registryID(a.device) < registryID(b.device)
         }
         guard !candidates.isEmpty else { waitingForController(); return }
-        let snapshot = Dictionary(uniqueKeysWithValues: candidates.map { (registryID($0.device), $0) })
+        let snapshot = Dictionary(candidates.map { (registryID($0.device), $0) }, uniquingKeysWith: { first, _ in first })
         let token = session, started = ProcessInfo.processInfo.systemUptime
         // Probe only on the serialized feature worker. No mode is changed by discovery.
         discovery.scan(candidates.map { registryID($0.device) }, probe: { id in
@@ -262,7 +266,8 @@ final class SteamControllerUSB: ObservableObject {
     }
     private func removeDevice(_ d: IOHIDDevice) {
         let id = registryID(d)
-        guard let channel = channels.removeValue(forKey:id) else { return }
+        defer { HIDRegistryID.forget(d) }
+        guard let channel = channels.removeValue(forKey:id) ?? channels.first(where: { CFEqual($0.value.device, d) }).flatMap({ channels.removeValue(forKey: $0.key) }) else { return }
         IOHIDDeviceRegisterInputReportCallback(d,channel.buffer,64,nil,nil)
         channel.access.release { exclusive in IOHIDDeviceClose(d, exclusive ? IOOptionBits(kIOHIDOptionsTypeSeizeDevice) : 0) }
         if active === channel {
@@ -562,9 +567,7 @@ final class SteamControllerUSB: ObservableObject {
     }
 
     private func registryID(_ device: IOHIDDevice) -> UInt64 {
-        var value: UInt64 = 0
-        IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(device), &value)
-        return value
+        HIDRegistryID.of(device)
     }
     nonisolated private static func send(_ data: [UInt8], to device: IOHIDDevice, transport: SteamControllerTransport, gate: SteamControllerOutputGate? = nil) -> Bool {
         if transport == .bluetooth {

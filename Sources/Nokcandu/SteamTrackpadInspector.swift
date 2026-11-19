@@ -45,6 +45,7 @@ extension ControllerProfileEditor {
                 Text("Trackball mouse").tag(PadSteamTrackpadSettings.Mode.trackball)
                 Text(side == 0 ? "Four directions (W A S D…)" : "Four directions (arrows…)").tag(PadSteamTrackpadSettings.Mode.directions)
                 Text(side == 0 ? "Analog stick (left stick)" : "Analog stick (right stick)").tag(PadSteamTrackpadSettings.Mode.stick)
+                Text(side == 0 ? "Mouse-like stick (left stick)" : "Mouse-like stick (right stick)").tag(PadSteamTrackpadSettings.Mode.velocityStick)
                 Text("Scroll wheel (circle)").tag(PadSteamTrackpadSettings.Mode.dial)
                 Text("Absolute mouse region").tag(PadSteamTrackpadSettings.Mode.absolute)
                 Text("Drawn gestures").tag(PadSteamTrackpadSettings.Mode.gestures)
@@ -74,6 +75,16 @@ extension ControllerProfileEditor {
             if settings.wrappedValue.mode == .stick {
                 slider("Centre dead zone", Binding(get: { PadSteamPadStick.deadzone(settings.wrappedValue) }, set: { settings.wrappedValue.deadzone = $0 }), 0...0.6, "%.0f%%", scale: 100, info: "How far from the middle the stick starts to move. It reaches full push just inside the rim.")
                 Text(side == 0 ? "Works as the left stick, alongside the joystick: whichever is pushed further counts. Games see a real analog stick, so you can walk slowly and run." : "Works as the right stick with the dead zone and angle above.").font(.caption).foregroundStyle(.secondary)
+            }
+            if settings.wrappedValue.mode == .velocityStick {
+                slider("Full tilt at", Binding(get: { PadVelocityStick.fullSpeed(settings.wrappedValue) }, set: { settings.wrappedValue.velocityFullSpeed = $0 }), 0.2...6, "%.1f /s", info: "How fast your finger moves, in pad widths a second, to push the stick all the way. Lower is more sensitive.")
+                Toggle("Invert up and down", isOn: settings.invertY)
+                Toggle("Keep moving after a flick (inertia)", isOn: Binding(get: { settings.wrappedValue.velocityInertia == true }, set: { settings.wrappedValue.velocityInertia = $0 ? true : nil }))
+                    .help("After a flick and lift, the stick stays tilted and eases back to centre. Touch the pad again to stop at once.")
+                if settings.wrappedValue.velocityInertia == true {
+                    slider("Momentum half-life", settings.halfLife, 0.02...0.6, "%.2f s", info: "After a flick and lift, the stick's tilt halves over this time.")
+                }
+                Text(side == 0 ? "Moves the left stick like a mouse: the faster your finger moves, the further the stick tilts, and it returns to centre when your finger stops. Where you touch doesn't matter. The joystick still works; whichever is pushed further counts." : "Moves the right stick like a mouse: the faster your finger moves, the further the stick tilts, and it returns to centre when your finger stops. Where you touch doesn't matter, so games that only read a stick can be aimed like with a mouse.").font(.caption).foregroundStyle(.secondary)
             }
             if settings.wrappedValue.mode == .directions {
                 slider("Centre dead zone", Binding(get: { PadSteamPadZones.deadzone(settings.wrappedValue) }, set: { settings.wrappedValue.deadzone = $0 }), 0.05...0.8, "%.0f%%", scale: 100, info: "How far from the middle of the pad a direction starts. Between two directions, both are held.")

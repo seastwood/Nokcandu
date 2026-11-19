@@ -556,7 +556,7 @@ struct ControllerProfileEditor: View {
     func stickLabel(_ s: Int) -> String? {
         if inputSource == .steamUSB && s == 1 && family != .steam2026 {
             let mode = steamTrackpadBinding(1).wrappedValue.mode
-            if mode == .absolute { return "Mouse region" }; if mode == .gestures { return "Gestures" }; if mode != .existing { return mode == .trackball ? "Trackball" : mode == .directions ? "Directions" : mode == .stick ? "Stick" : mode == .dial ? "Scroll wheel" : "Trackpad mouse" }
+            if mode == .absolute { return "Mouse region" }; if mode == .gestures { return "Gestures" }; if mode != .existing { return mode == .trackball ? "Trackball" : mode == .directions ? "Directions" : mode == .stick ? "Stick" : mode == .velocityStick ? "Mouse-like stick" : mode == .dial ? "Scroll wheel" : "Trackpad mouse" }
         }
         let st = layerStick(s) ?? baseStick(s)
         switch st.mode {

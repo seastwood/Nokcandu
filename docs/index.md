@@ -4,6 +4,7 @@ The project README introduces the app. This folder keeps the implementation know
 
 | Document | What belongs there |
 | --- | --- |
+| [Engineering learnings](engineering-learnings.md) | Includes 0.14.6: unplugged HID registry IDs, games on unplugged drives kept in place, Mouse-like stick, absolute regions over 100%. |
 | [Advanced controller remapping](advanced-controller-remapping.md) | Absolute pad regions, drawn gestures, trigger arbitration, alternate menus, local DSU motion, compatibility and acceptance limits. |
 | [sc-controller remapping comparison](investigations/sc-controller-comparison-2026-11-18.md) | Verified feature candidates, Nokcandu overlap, recommended priorities and platform limits. |
 | [Optional features and update notifications](optional-features.md) | Welcome/General feature choices, preserved data and running sessions, feature-scoped services, version ignores, badge priority and Undo. |

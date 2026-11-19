@@ -2,12 +2,13 @@ import Foundation
 
 public struct PadSteamTrackpadSettings: Codable, Hashable, Sendable {
     public enum Mode: String, Codable, CaseIterable, Sendable {
-        case existing, mouse, trackball, directions, stick, dial, absolute, gestures
+        case existing, mouse, trackball, directions, stick, velocityStick, dial, absolute, gestures
         /// The pad moves the pointer itself (rather than acting as mappings or directions).
         public var movesPointer: Bool { self == .mouse || self == .trackball }
         public var title: String { switch self {
         case .directions: "Four directions"
         case .stick: "Analog stick"
+        case .velocityStick: "Mouse-like stick"
         case .absolute: "Absolute mouse region"
         case .gestures: "Drawn gestures"
         case .dial: "Scroll wheel (circle)"
@@ -17,6 +18,10 @@ public struct PadSteamTrackpadSettings: Codable, Hashable, Sendable {
         } }
     }
     public var region: PadMouseRegion?
+    /// Mouse-like stick: finger speed (pad widths a second) for full tilt, and whether a flick keeps going
+    /// after the finger lifts (eased off by `halfLife`).
+    public var velocityFullSpeed: Double?
+    public var velocityInertia: Bool?
     public var gesturePatterns: [String]?
     public var gestureTolerance: Double?
     public var gestureStroke: Double?

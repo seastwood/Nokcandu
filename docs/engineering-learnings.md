@@ -946,3 +946,44 @@ Bluetooth Nokcandu waits 1 s and then only lets go of held input. See docs/steam
 A reinstall can bring a new certificate, a new host id and new app ids. The pinned certificate then fails as
 "changed since you paired" (offer Pair, not just Offline); pairing again must replace the saved host
 (`merge(placeholder:)`) so profiles carry over; a profile's app is found again by name.
+
+## Unplugged HID devices lose their registry ID (November 18, 2026)
+
+After a device is removed, `IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(d))` can return 0, most visibly
+when several devices leave at once from a USB hub. Removal handlers that recomputed the ID missed the device, so held
+buttons/sticks stayed pressed until restart, and several departed Steam receiver interfaces all keyed as 0, trapping
+in `Dictionary(uniqueKeysWithValues:)` (`SteamControllerUSB.chooseController`). Every HID reader now uses
+`HIDRegistryID.of(_:)`, which returns the live ID while the device exists and the remembered one after; the Steam
+reader also falls back to matching the device object and tolerates duplicate keys. Needs a hub unplug/replug test
+with a profile active (held input must release; no crash).
+
+## Games on an unplugged drive stay in place (November 18, 2026)
+
+Games that run inside Steam, Battle.net, EA or Ubisoft were shown as playable when that launcher's own app was on
+the unplugged drive: `GameMover.offlineDrive` only looked at the game's files, which it couldn't read without the
+launcher. It now checks the host app (or its link in the games folder) first. Game apps that are entirely on an
+unplugged drive were listed in a separate "Drive not connected" section at the bottom; they now stay in their usual
+section and position (Favorites, categories, Games or Launchers) as a greyed row. `LibraryOrganizer.remember` keeps
+each scanned app's key and launcher flag by name, so order, favorite and category survive unplugging. A game that
+has never been scanned with this build is matched to its saved key by name (`local.nokcandu.<name slug>-<4 hex>`), so it
+keeps its place immediately. Each scanned game's icon is cached once (64 px PNG, one per game, in Application
+Support/Nokcandu/Icons, rewritten only when the app changes) and shown greyed while its drive is unplugged; a game
+never seen by this build shows the drive symbol until its drive is next connected.
+
+## Absolute pad regions over 100% (November 18, 2026)
+
+The original Steam Controller's pads are round, so an absolute region of 100% could not reach the screen corners.
+Width and height now go to 200%: up to 100% they mean the same part of the surface as before; above it the pad is
+stretched around the region's center and points past the surface stop at its edge (about 140% reaches the corners).
+Existing settings are unchanged. Play is also disabled, with "Connect <drive> to play", for a game on an unplugged drive.
+
+## Mouse-like stick pad mode (November 18, 2026)
+
+A Steam Controller trackpad can drive its side's stick by finger speed instead of position (`PadVelocityStick`,
+mode `velocityStick`): speed in pad widths a second over "Full tilt at" (default 1.5) sets the tilt, in the direction
+of movement, and the stick returns to centre when the finger stops. Where the finger lands never moves the stick.
+The speed reading is a 20 ms exponential average of report-to-report change (no added delay beyond that); the 4 ms
+DesktopPad timer re-sends the axes between reports so a resting finger or a coast is reflected without new input.
+Optional inertia keeps a flick going after lift, halving over the pad's momentum half-life; touching stops it. The
+left pad shares the left stick with the joystick and the 2026 controller's real right stick still wins when pushed
+further. Applies wherever the profile's axes go (Wine games, streams, Mac). Needs hands-on tuning with a real pad.

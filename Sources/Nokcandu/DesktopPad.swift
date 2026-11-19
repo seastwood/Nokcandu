@@ -214,6 +214,19 @@ final class DesktopPad: ObservableObject {
     private var steamLeftMotion = PadSteamTrackpad()
     private var steamZones = [PadSteamPadZones(), PadSteamPadZones()]
     private var steamTaps = [PadSteamTap(), PadSteamTap()]
+    /// Mouse-like stick pads, and the last report's buttons and axes so the 4 ms timer can update the stick
+    /// between reports (a resting finger or a coasting flick).
+    private var steamVelocity = [PadVelocityStick(), PadVelocityStick()]
+    private var lastSteamReport: (state: SteamControllerReport.State, buttons: Set<Int>, axes: [Int: Int])?
+    private func steamAxes(_ base: [Int: Int], state: SteamControllerReport.State) -> [Int: Int] {
+        var axes = base
+        for side in 0..<2 where (side == 0 ? steamLeftSettings : steamRightSettings).mode == .velocityStick {
+            let settings = side == 0 ? steamLeftSettings : steamRightSettings
+            PadVelocityStick.apply(steamVelocity[side].vector(settings), side: side, to: &axes, state: state)
+        }
+        return axes
+    }
+    private func resetVelocity() { steamVelocity = [PadVelocityStick(), PadVelocityStick()]; lastSteamReport = nil }
     private var steamDials = [PadSteamDial(), PadSteamDial()]
     private var absolutePointer:CGPoint?
     private var gestures = [PadGestureRecognizer(),PadGestureRecognizer()]
@@ -286,7 +299,7 @@ final class DesktopPad: ObservableObject {
         frontCache = (front?.processIdentifier ?? 0, Self.now())
         let nextPID = front?.processIdentifier ?? 0
         let focusChanged = runtimePID != nextPID
-        if focusChanged { resetAdvancedTouch(); steamRightMotion.reset(); steamLeftMotion.reset(); steamZones[0].reset(); steamZones[1].reset(); steamTaps = [PadSteamTap(), PadSteamTap()]; steamTapInputs = [nil, nil]; steamZoneClicks = [PadSteamZoneRouter(), PadSteamZoneRouter()] }
+        if focusChanged { resetVelocity(); resetAdvancedTouch(); steamRightMotion.reset(); steamLeftMotion.reset(); steamZones[0].reset(); steamZones[1].reset(); steamTaps = [PadSteamTap(), PadSteamTap()]; steamTapInputs = [nil, nil]; steamZoneClicks = [PadSteamZoneRouter(), PadSteamZoneRouter()] }
         if focusChanged, let e = engine { pe_release_outputs(e, Self.now()) }
         runtimePID = nextPID
         let id = front?.bundleIdentifier ?? ""
@@ -333,7 +346,7 @@ final class DesktopPad: ObservableObject {
         let sourceChanged = nextSteamSource != steamSource
         let padLayers: [String?] = chosen.map { p in PadProfiles.merged(p, all: all).layers.enumerated().map { $0.offset == 0 ? nil : $0.element.name } } ?? [nil]
         let nextPads = padLayers.map { layer in (0..<2).map { side in chosen.map { PadProfiles.steamTrackpad(side, profile: $0, all: all, layer: layer) } ?? PadSteamTrackpadSettings() } }
-        if sourceChanged || nextPads != steamPads || force { resetAdvancedTouch(); steamRightMotion.reset(); steamLeftMotion.reset() }
+        if sourceChanged || nextPads != steamPads || force { resetVelocity(); resetAdvancedTouch(); steamRightMotion.reset(); steamLeftMotion.reset() }
         steamPads = nextPads.isEmpty ? [[PadSteamTrackpadSettings(), PadSteamTrackpadSettings()]] : nextPads
         steamSource = nextSteamSource
         // A profile reading the controller itself feeds the Windows game in front (its Wine driver drops the raw one).
@@ -464,6 +477,13 @@ final class DesktopPad: ObservableObject {
             steamPadMouse(motion, side: 1)
             let left = steamLeftMotion.tick(at: Self.now(), settings: steamLeftSettings)
             steamPadMouse(left, side: 0)
+            var velocityChanged = false
+            for side in 0..<2 where (side == 0 ? steamLeftSettings : steamRightSettings).mode == .velocityStick {
+                if steamVelocity[side].tick(at: Self.now(), settings: side == 0 ? steamLeftSettings : steamRightSettings) { velocityChanged = true }
+            }
+            if velocityChanged, let last = lastSteamReport {
+                consume(sourceState.update(source: "steam-usb", buttons: last.buttons, axes: steamAxes(last.axes, state: last.state)))
+            }
         }
     }
 
@@ -671,6 +691,7 @@ final class DesktopPad: ObservableObject {
         guard gestureRecorder == nil else { return }
         guard runtimePID == frontPID else { evaluate(); return }
         guard let state else {
+            resetVelocity()
             resetAdvancedTouch()
             steamRightMotion.reset()
             steamLeftMotion.reset()
@@ -700,7 +721,14 @@ final class DesktopPad: ObservableObject {
             let motion = steamLeftMotion.touch(down: state.leftTouch, x: Double(state.leftPad.x+1)/2, y: Double(1-state.leftPad.y)/2, at: now, settings: steamLeftSettings)
             steamPadMouse(motion, side: 0)
         }
-        let axes = state.mappingAxes(left: steamLeftSettings, right: steamRightSettings)
+        for side in 0..<2 {
+            let settings = side == 0 ? steamLeftSettings : steamRightSettings
+            guard settings.mode == .velocityStick else { continue }
+            let pad = side == 0 ? state.leftPad : state.rightPad
+            steamVelocity[side].touch(down: side == 0 ? state.leftTouch : state.rightTouch, x: Double(pad.x), y: Double(pad.y), at: now, settings: settings)
+        }
+        let baseAxes = state.mappingAxes(left: steamLeftSettings, right: steamRightSettings)
+        let axes = steamAxes(baseAxes, state: state)
         var buttons = state.buttons
         for side in 0..<2 {
             let settings = side == 0 ? steamLeftSettings : steamRightSettings
@@ -736,7 +764,9 @@ final class DesktopPad: ObservableObject {
             }
             steamPadMouse(motion, side: 1)
         }
-        consume(sourceState.update(source: "steam-usb", buttons: Set(buttons.map { Int(pe_input_named($0.rawValue)) }), axes: axes))
+        let held = Set(buttons.map { Int(pe_input_named($0.rawValue)) })
+        lastSteamReport = (state, held, baseAxes)
+        consume(sourceState.update(source: "steam-usb", buttons: held, axes: axes))
         pe_gyro(e,state.gyro[0],state.gyro[1],state.gyro[2],now)
         pe_accel(e,state.acceleration[0],state.acceleration[1],state.acceleration[2],now)
     }

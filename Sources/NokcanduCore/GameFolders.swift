@@ -205,12 +205,26 @@ public enum GameMover {
         if let ext = externalFiles(g), !FileManager.default.fileExists(atPath: ext.path) {
             return ext.path.hasPrefix("/Volumes/") && ext.pathComponents.count > 2 ? ext.pathComponents[2] : "its drive"
         }
+        // A game that runs inside Steam, Battle.net, EA or Ubisoft can't start while that app's drive is unplugged.
+        if g.usesSharedSteam, let drive = offlineHost(NokPaths.gameAppsFolder.appendingPathComponent(SharedSteam.appName).path) { return drive }
+        if let host = g.battleNet?.hostApp ?? g.hosted?.hostApp, let drive = offlineHost(host) { return drive }
         if g.usesSharedSteam, let id = g.custom?.steamAppID { return SharedSteam.offlineDrive(appID: id) }
         if g.battleNet != nil || g.hosted != nil, let folder = LauncherInstallation.location(for: g)?.folder,
            LauncherInstallation.presence(at: folder) == .offline {
             return Storage.driveName(folder)
         }
         return nil
+    }
+
+    /// The drive name when an app (or the link to it in the games folder) is on a drive that isn't connected.
+    static func offlineHost(_ path: String) -> String? {
+        let fm = FileManager.default
+        var target = URL(fileURLWithPath: path)
+        if let dest = try? fm.destinationOfSymbolicLink(atPath: path) {
+            target = URL(fileURLWithPath: dest, relativeTo: target.deletingLastPathComponent()).standardizedFileURL
+        }
+        guard LauncherInstallation.presence(at: target) == .offline else { return nil }
+        return Storage.driveName(target)
     }
 
     public static func filesBlocker(_ g: InstalledGame) -> String? {
@@ -461,6 +475,59 @@ public enum LibraryOrganizer {
         var categoryOf: [String: String]? = nil
         /// Sidebar sections you collapsed.
         var collapsed: [String]? = nil
+        /// What each game app was the last time it was seen, by name, so a game whose app is on an unplugged
+        /// drive keeps its place, favorite and category in the sidebar.
+        var known: [String: KnownApp]? = nil
+    }
+    struct KnownApp: Codable, Equatable { var key: String; var launcher: Bool }
+
+    /// A game whose app is on a drive that isn't connected: listed where it normally is, but can't be opened.
+    public struct OfflineGame: Hashable, Identifiable, Sendable {
+        public var name: String, drive: String, key: String, launcher: Bool
+        public var id: String { "offline:" + name }
+    }
+    /// Remembers the games just scanned (only writes when something changed).
+    public static func remember(_ games: [InstalledGame]) {
+        var v = load(); var known = v.known ?? [:]
+        for g in games {
+            let entry = KnownApp(key: key(g), launcher: isLauncher(g))
+            for name in Set([g.name, g.appURL.deletingPathExtension().lastPathComponent]) { known[name] = entry }
+        }
+        guard known != (v.known ?? [:]) else { return }
+        v.known = known; save(v)
+    }
+    public static func offlineGames(_ offline: [(name: String, drive: String)]) -> [OfflineGame] {
+        let v = load(), known = v.known ?? [:]
+        // Keys this library has used (order, favorites, play dates, categories): a game seen before this
+        // record existed is matched by the name its app identifier was made from.
+        let used = Set(v.order + v.favorites + Array(v.played.keys) + Array((v.categoryOf ?? [:]).keys))
+        let launcherNames = Set(["Steam", "Battle.net"] + PCLauncher.allCases.map(\.title))
+        return offline.map { o in
+            if let k = known[o.name] { return OfflineGame(name: o.name, drive: o.drive, key: k.key, launcher: k.launcher) }
+            return OfflineGame(name: o.name, drive: o.drive, key: guessKey(o.name, used: used, order: v.order), launcher: launcherNames.contains(o.name))
+        }
+    }
+    static func guessKey(_ name: String, used: Set<String>, order: [String] = []) -> String {
+        let app = name + ".app"
+        if used.contains(app) { return app }
+        let slug = CustomGames.slug(name), full = GameApp.bundleID(name)
+        if used.contains(full) { return full }
+        // Nokcandu-made apps are "local.nokcandu.<name slug>-<4 hex digits>".
+        func base(_ key: String) -> String {
+            var rest = String(key.dropFirst("local.nokcandu.".count)).lowercased()
+            if let dash = rest.lastIndex(of: "-"), rest.distance(from: dash, to: rest.endIndex) == 5,
+               rest[rest.index(after: dash)...].allSatisfy(\.isHexDigit) { rest = String(rest[..<dash]) }
+            return rest
+        }
+        let matches = used.filter { $0.hasPrefix("local.nokcandu.") && base($0) == slug }
+        if matches.count == 1 { return matches.first! }
+        // Several apps from the same name: the one placed in the sidebar order.
+        return order.first(where: matches.contains) ?? app
+    }
+    /// Where a game's sidebar icon is kept, so it still shows while the game's drive is unplugged.
+    public static func cachedIcon(key: String) -> URL {
+        NokPaths.support.appendingPathComponent("Icons", isDirectory: true)
+            .appendingPathComponent(key.replacingOccurrences(of: "/", with: "_") + ".png")
     }
     static var file: URL { NokPaths.support.appendingPathComponent("library-order.json") }
     static func load() -> Saved {
@@ -612,22 +679,26 @@ public enum LibraryOrganizer {
 
     /// Games in sidebar order.
     public static func sorted(_ games: [InstalledGame]) -> [InstalledGame] {
+        ordered(games, name: { $0.name }, key: { key($0) }, played: { lastPlayed($0) })
+    }
+    /// Anything in sidebar order (games, and games whose drive is unplugged, in the same list).
+    public static func ordered<T>(_ items: [T], name: (T) -> String, key: (T) -> String, played: (T) -> Date?) -> [T] {
         let v = load()
-        let byName: (InstalledGame, InstalledGame) -> Bool = { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        let names = items.map(name), keys = items.map(key)
+        let byName: (Int, Int) -> Bool = { names[$0].localizedStandardCompare(names[$1]) == .orderedAscending }
+        let indices = Array(items.indices)
+        let sortedIndices: [Int]
         switch v.sort {
         case .name:
-            return games.sorted(by: byName)
+            sortedIndices = indices.sorted(by: byName)
         case .recent:
-            let dates = Dictionary(games.map { ($0.id, lastPlayed($0) ?? .distantPast) }, uniquingKeysWith: { a, _ in a })
-            return games.sorted { a, b in
-                let (x, y) = (dates[a.id]!, dates[b.id]!)
-                return x != y ? x > y : byName(a, b)
-            }
+            let dates = items.map { played($0) ?? .distantPast }
+            sortedIndices = indices.sorted { a, b in dates[a] != dates[b] ? dates[a] > dates[b] : byName(a, b) }
         case .custom:
             let pos = Dictionary(v.order.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
             // Games not placed yet go after the placed ones, by name.
-            return games.sorted { a, b in
-                switch (pos[key(a)], pos[key(b)]) {
+            sortedIndices = indices.sorted { a, b in
+                switch (pos[keys[a]], pos[keys[b]]) {
                 case let (x?, y?): return x < y
                 case (_?, nil): return true
                 case (nil, _?): return false
@@ -635,12 +706,14 @@ public enum LibraryOrganizer {
                 }
             }
         }
+        return sortedIndices.map { items[$0] }
     }
+    public static func lastPlayed(key: String) -> Date? { load().played[key] }
 
     /// Saves a new custom order (switching to "My Order"). `visible` is the list as shown, after the move.
-    public static func setOrder(_ visible: [InstalledGame]) {
+    public static func setOrder(_ visible: [InstalledGame]) { setOrder(keys: visible.map(key)) }
+    public static func setOrder(keys: [String]) {
         var v = load()
-        let keys = visible.map(key)
         v.order = keys + v.order.filter { !keys.contains($0) }
         v.sort = .custom
         save(v)
