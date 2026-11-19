@@ -6,16 +6,16 @@
 
 <table>
   <tr>
-    <td width="50%"><a href="docs/gallery/steam-controller-profile.jpg"><img width="100%" src="docs/gallery/steam-controller-profile.jpg" alt="A Steam Controller profile: the controller picture with every mapping, and the right trackpad set to Mouse-like stick"></a></td>
-    <td width="50%"><a href="docs/SteamController2026.png"><img width="100%" src="docs/SteamController2026.png" alt="A Steam Controller 2026 profile"></a></td>
+    <td width="50%"><a href="docs/gallery/steam-controller-profile.png"><img width="100%" src="docs/gallery/steam-controller-profile.png" alt="A Steam Controller profile: the controller picture with every mapping, and the right trackpad set to Mouse-like stick"></a></td>
+    <td width="50%"><a href="docs/gallery/steam-controller-2026-profile.png"><img width="100%" src="docs/gallery/steam-controller-2026-profile.png" alt="A Steam Controller 2026 profile"></a></td>
   </tr>
   <tr>
     <td align="center"><em>Steam Controller profile</em></td>
     <td align="center"><em>Steam Controller 2026 profile</em></td>
   </tr>
   <tr>
-    <td width="50%"><a href="docs/games.png"><img width="100%" src="docs/games.png" alt="The Games tab: the library and a game's Controls page"></a></td>
-    <td width="50%"><a href="docs/gallery/streams.jpg"><img width="100%" src="docs/gallery/streams.jpg" alt="A stream profile: picture, codec, frame pacing and controller settings"></a></td>
+    <td width="50%"><a href="docs/gallery/windows-game.png"><img width="100%" src="docs/gallery/windows-game.png" alt="The Games tab: the library and a game's Controls page"></a></td>
+    <td width="50%"><a href="docs/gallery/streams.png"><img width="100%" src="docs/gallery/streams.png" alt="A stream profile: picture, codec, frame pacing and controller settings"></a></td>
   </tr>
   <tr>
     <td align="center"><em>A Windows game's controls</em></td>
