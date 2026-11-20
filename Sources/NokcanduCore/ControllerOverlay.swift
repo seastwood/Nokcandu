@@ -61,6 +61,10 @@ public struct ControllerOverlaySettings: Codable, Equatable, Sendable {
     public var positionY: Double = 0.15
     /// The screen it's placed on (its name); nil or not connected: the main screen.
     public var screen: String?
+    /// Draw nothing while no controller is connected.
+    public var hideWithoutController = true
+    /// Holding Back and Start (View and Menu, Share and Options, − and +) for a second recentres the gyro.
+    public static let recenterHold = 1.0
 
     public static let sizes: ClosedRange<Double> = 120...900
     public init() {}
@@ -83,6 +87,7 @@ public struct ControllerOverlaySettings: Codable, Equatable, Sendable {
         positionX = (try? c.decode(Double.self, forKey: .positionX)) ?? base.positionX
         positionY = (try? c.decode(Double.self, forKey: .positionY)) ?? base.positionY
         screen = try? c.decodeIfPresent(String.self, forKey: .screen)
+        hideWithoutController = (try? c.decode(Bool.self, forKey: .hideWithoutController)) ?? base.hideWithoutController
         // The first colours (November 19) were too dark to read on a dark screen.
         if bodyColor == "#2B2D31" && buttonColor == "#4A4D55" { bodyColor = base.bodyColor; buttonColor = base.buttonColor }
         clamp()

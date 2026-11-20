@@ -311,6 +311,7 @@ import Charts
     private func holdTopRefreshRate(_ link: CADisplayLink) {
         let top = Float(window?.screen?.maximumFramesPerSecond ?? 60)
         link.preferredFrameRateRange = CAFrameRateRange(minimum: top, maximum: top, preferred: top)
+        connection.video.metalRenderer?.setRefreshRate(top)
         StreamLog.shared.add("Window: asking the display to stay at \(Int(top)) Hz")
     }
 
@@ -325,6 +326,7 @@ import Charts
             self.flash("Metal couldn't show this stream (\(why)). Using the display layer.")
         }
         if streamView.videoLayer !== r.layer { streamView.videoLayer = r.layer }
+        if let hz = window?.screen?.maximumFramesPerSecond { connection.video.metalRenderer?.setRefreshRate(Float(hz)) }
         if let problem = r.problem { flash("Metal isn't available on this Mac (\(problem)). Using the display layer.") }
     }
 

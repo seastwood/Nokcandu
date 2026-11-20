@@ -119,8 +119,10 @@ public final class StreamMetalRenderer: @unchecked Sendable {
     /// With V-sync on, frames presented as they're decoded queued in the layer for refreshes and reached the screen
     /// two or three refreshes late (~70 ms at 60 Hz, November 19), and letting only one through at a time halved the
     /// frame rate (~43 ms, 30 fps). Moonlight's answer: a CAMetalDisplayLink with a frame latency of one, which hands
-    /// over a drawable just before each refresh; the newest decoded frame is drawn into it, waiting at most half a
-    /// refresh for one. It runs on its own thread so the main thread (input) is never held up.
+    /// over a drawable just before each refresh; the newest decoded frame is drawn into it. It waits for a frame
+    /// until just before the drawable is due (drawing takes about a millisecond): waiting only half that time sent a
+    /// frame arriving in the second half on to the next refresh, a whole refresh later (about 40 ms in all at 60 Hz,
+    /// November 20). It runs on its own thread so the main thread (input) is never held up.
     private var link: CAMetalDisplayLink?
     private var linkThread: Thread?
     private let frameReady = NSCondition()
@@ -141,6 +143,7 @@ public final class StreamMetalRenderer: @unchecked Sendable {
         guard !running else { return }
         let l = CAMetalDisplayLink(metalLayer: layer)
         l.preferredFrameLatency = 1
+        if let hz = refreshRate { l.preferredFrameRateRange = CAFrameRateRange(minimum: hz, maximum: hz, preferred: hz) }
         l.delegate = linkDelegate
         os_unfair_lock_lock(&lock); link = l; os_unfair_lock_unlock(&lock)
         let t = Thread { [weak l] in
@@ -170,7 +173,7 @@ public final class StreamMetalRenderer: @unchecked Sendable {
 
     /// The link's thread, just before a refresh: draw the newest frame into its drawable.
     fileprivate func linkUpdate(_ update: CAMetalDisplayLink.Update) {
-        let budget = (update.targetTimestamp - CACurrentMediaTime()) / 2
+        let budget = update.targetTimestamp - CACurrentMediaTime() - Self.drawMargin
         var f: Frame?
         frameReady.lock()
         os_unfair_lock_lock(&lock); f = pending; pending = nil; os_unfair_lock_unlock(&lock)
@@ -181,6 +184,18 @@ public final class StreamMetalRenderer: @unchecked Sendable {
         frameReady.unlock()
         guard let f else { return }
         renderQueue.sync { autoreleasepool { draw(f, into: update.drawable) } }
+    }
+
+    /// How long before the drawable is due a frame must be in hand to be drawn in time.
+    static let drawMargin = 0.0025
+
+    /// The screen's top refresh rate: V-sync on asks for it (a ProMotion or other variable-rate screen otherwise
+    /// may run slower).
+    private var refreshRate: Float?
+    public func setRefreshRate(_ hz: Float) {
+        guard hz > 0 else { return }
+        os_unfair_lock_lock(&lock); refreshRate = hz; let l = link; os_unfair_lock_unlock(&lock)
+        l?.preferredFrameRateRange = CAFrameRateRange(minimum: hz, maximum: hz, preferred: hz)
     }
 
     /// Main thread: the layer's size in points and the screen's scale.

@@ -40,6 +40,8 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
     private var shownInput: ControllerOverlayInput?
     private var shownOrientation: simd_quatf?
     private var drawPending = false, lastDraw = 0.0
+    /// When Back and Start started being held together (recentring after a second).
+    private var comboSince: Double?, comboDone = false
     private var panel: NSPanel?, window: NSWindow?
     private var host: OverlayHostView?
     private var model: OverlayControllerModel?
@@ -279,8 +281,24 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
             active = key; motion.reset()
             if showing != name { showing = name }
             if settings.model == .automatic { useModel(kind) }
+            shownInput = nil; scheduleDraw()
         }
+        if active == key { watchRecenterCombo(input) }
         if changed && active == key { scheduleDraw() }
+    }
+
+    /// Back and Start held together for a second: the way the controller is held becomes the rest position.
+    private func watchRecenterCombo(_ input: ControllerOverlayInput) {
+        guard input.buttons.isSuperset(of: [.back, .start]) else { comboSince = nil; comboDone = false; return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if comboSince == nil { comboSince = now }
+        guard !comboDone, let since = comboSince else { return }
+        if now - since >= ControllerOverlaySettings.recenterHold { comboDone = true; recenter(); return }
+        // Reports stop while nothing changes: look again when the second is up.
+        DispatchQueue.main.asyncAfter(deadline: .now() + ControllerOverlaySettings.recenterHold - (now - since) + 0.01) { [weak self] in
+            guard let self, let key = self.active, let i = self.sources[key]?.input else { return }
+            self.watchRecenterCombo(i)
+        }
     }
 
     private func gone(_ key: String) {
@@ -331,6 +349,8 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
         SCNTransaction.begin()
         SCNTransaction.disableActions = true
         if inputChanged { model.show(input); shownInput = input }
+        let hidden = settings.hideWithoutController && sources.isEmpty
+        if model.root.isHidden != hidden { model.root.isHidden = hidden }
         if turned { model.root.simdOrientation = q; shownOrientation = q }
         SCNTransaction.commit()
     }
@@ -485,6 +505,7 @@ struct ControllerOverlaySettingsView: View {
                     ForEach(ControllerOverlaySettings.Background.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
                 if overlay.settings.background == .color { ColorPicker("Background colour", selection: color(\.backgroundColor), supportsOpacity: false) }
+                Toggle("Hide when no controller is connected", isOn: $overlay.settings.hideWithoutController)
                 Toggle("Turn with the gyro", isOn: $overlay.settings.gyro)
                 if overlay.settings.gyro {
                     LabeledContent("Movement shown") {
@@ -495,7 +516,7 @@ struct ControllerOverlaySettingsView: View {
                     }
                     HStack {
                         Button("Recentre") { overlay.recenter() }
-                        Text("The way you hold the controller now becomes its rest position. Turning drifts back to the front by itself.")
+                        Text("Or hold Back and Start together for a second (View and Menu, Share and Options, − and +). The way you hold the controller then becomes its rest position. Turning drifts back to the front by itself.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }

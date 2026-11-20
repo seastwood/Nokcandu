@@ -89,6 +89,7 @@ final class ControllerOverlayTests: XCTestCase {
         XCTAssertEqual(first.model, .automatic, "the first version's only choice becomes the controller in use")
         XCTAssertEqual(try JSONDecoder().decode(ControllerOverlaySettings.self, from: Data("{}".utf8)), ControllerOverlaySettings())
         XCTAssertEqual(ControllerOverlaySettings().mode, .off)
+        XCTAssertTrue(s.hideWithoutController, "hidden without a controller unless turned off")
     }
 
     func testColours() {
