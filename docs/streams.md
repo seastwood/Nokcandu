@@ -1,5 +1,22 @@
 # Streams
 
+November 19: changes from a review of Moonlight PC 6.2.0: upstream loss-recovery fixes in the core, keypad Enter
+told apart from Return, HDR metadata on every HDR frame (and 10-bit full range), full-range colour on for new profiles,
+DualSense adaptive triggers, the real client ID for Sunshine-family hosts, and ⌃⌥⇧K for the Mac's shortcuts. See
+[the review](investigations/moonlight-qt-6.2.0-review-2026-11-19.md); none is verified with a host yet.
+Also November 19 (evening): **recommended picture settings** (`StreamProfile.applyRecommendedPicture`): 2560×1600,
+60 fps, automatic bitrate (kept for remote profiles), HEVC (Automatic if the host reports no HEVC), no HDR/4:4:4, Metal
+with V-sync off, lowest-latency pacing, full range, full screen, statistics and graphs off. New profiles start with them;
+a profile that differs shows **Use Recommended Settings** (Display, sound, controllers and the app are untouched).
+Resolution → "This Mac's display" now asks for the panel's own pixels (`StreamDisplays.nativePixels`, the native display mode) instead of the scaled backing size, which had asked for 2940×1848 on a 2560×1664 13-inch MacBook Air; below the notch that gives 2560×1608. On a display with a notch the menu also lists the whole panel's sizes (2560×1664, and 1920×1248 beside 1200p) as plain resolutions: full screen with a size of the panel's shape covers the screen beside the camera too (a borderless window, menu bar and Dock hidden; the green button does the same), which measured higher latency than macOS's full screen (~13.7 vs ~5.7 ms). The recommended frame rate follows the display (60 on a 60 Hz panel). The custom size fields apply on Return or leaving the field (limiting each keystroke turned the number into 320 or 200). Statistics gained "FPS and latency" (just `90/7.8`); the former "Frame rate and latency" is now "Standard". Whole-stream figures leave out the first 3 seconds (`StreamTelemetry.settleSeconds`).
+Statistics show whole-stream averages and the 99th percentile; this Mac's total is coloured (green < 12 ms, yellow < 20,
+orange). Starting a stream that would resume an app started with other start-time settings asks to restart it
+(`StreamLaunchMemory`). V-sync on uses a `CAMetalDisplayLink` (frame latency 1, own thread): the user saw 60 fps and about 40 ms on a 60 Hz panel (was ~70 ms); about one refresh above V-sync off is the floor, so ~20–25 ms is still to be found.
+
+Also November 19: a **Metal renderer** (Video → Renderer, "Metal (CAMetalLayer)") with a **V-sync** switch, falling back
+to the display layer by itself, and **decode → screen** latency in the statistics (measured with Metal, estimated with the
+display layer). See [Metal renderer and latency](investigations/metal-renderer-2026-11-19.md).
+
 November 18: mapped streams now support the shared trigger/menu additions and direct Steam pad
 regions/gestures. Absolute regions address the streamed display using Moonlight absolute coordinates.
 See [advanced remapping and pending hardware acceptance](advanced-controller-remapping.md).
@@ -33,7 +50,7 @@ VoidLink and moonlight-common-c are GPL-3.0. To port them, Nokcandu was relicens
 
 | Part | Where | What |
 | --- | --- | --- |
-| Streaming core | `Sources/NokcanduStreamCore/moonlight/` | VoidLink's moonlight-common-c fork (`voidlink-c` at `beed312`), with ENet and nanors. Built with `USE_MBEDTLS`; one change, marked `Nokcandu:` in `PlatformCrypto.c` (see below). |
+| Streaming core | `Sources/NokcanduStreamCore/moonlight/` | VoidLink's moonlight-common-c fork (`voidlink-c` at `beed312`), with ENet and nanors. Built with `USE_MBEDTLS`; one change, marked `Nokcandu:` in `PlatformCrypto.c` (see below). Upstream moonlight-common-c `d85371c`, `be43885`, `62e0663`, `874ac95` and `f900dd4` applied on November 19, 2026 (see the Moonlight PC 6.2.0 review). |
 | Pairing and requests | `Sources/NokcanduStreamCore/nk/nk_crypto.c`, `nk_http.c` | RSA identity and self-signed certificate, SHA-256 signatures, AES-128-ECB, and a small HTTP/HTTPS GET client that presents the client certificate and pins the host's. |
 | AV1 | `Sources/NokcanduStreamCore/nk/nk_video.c` | Reads the AV1 sequence header and builds the `av1C` box VideoToolbox needs (VoidLink uses FFmpeg's bitstream parser for this on iOS). Also the core's log callback, which is variadic and so can't be written in Swift. |
 | Opus | `Sources/NokcanduOpus/` (1.5.2, portable C only) and `nk/nk_audio.c` | Multistream decoding for stereo, 5.1 and 7.1. |
@@ -52,7 +69,7 @@ URLSession and Network.framework need a `SecIdentity` for a client certificate, 
 1. **Pairing** (`StreamClient.pair`, VoidLink's `PairManager`): the Mac shows a four-digit PIN to type on the host's Sunshine web page. Five steps: send our certificate with a salt (the host answers once the PIN is typed, up to two minutes); exchange encrypted challenges with a key from SHA-256(salt + PIN) (SHA-1 for hosts older than GameStream 7); check the host's signature and that its hash proves it knows the PIN; send our signed secret; confirm over HTTPS. A wrong PIN is caught before our secret is sent.
 2. **Launch**: `/launch` (or `/resume` when the app is already running) with resolution, frame rate, the remote-input key, HDR, audio layout and controller mask. Another app already running is quit first.
 3. **Connect**: `LiStartConnection` with the stream configuration. Codecs offered: H.264 always; HEVC when the Mac decodes it in hardware and the host encodes it; AV1 likewise (M3 and later); 10-bit with HDR on; 4:4:4 when chosen. A chosen codec removes the fallbacks.
-4. **Video**: Annex B NAL units become length-prefixed samples; parameter sets on key frames make the format description; a hardware `VTDecompressionSession` decodes; frames go to an `AVSampleBufferDisplayLayer`. Pacing: *Lowest latency* shows each frame at once; *Balanced* shows the newest on the next display refresh (`NSView.displayLink`); *Smoothest* keeps one in reserve. A decode error asks the host for a key frame.
+4. **Video**: Annex B NAL units become length-prefixed samples; parameter sets on key frames make the format description; a hardware `VTDecompressionSession` decodes; frames go to an `AVSampleBufferDisplayLayer`, or with Renderer → Metal to `StreamMetalRenderer` (a `CAMetalLayer`, optionally without V-sync). Pacing: *Lowest latency* shows each frame at once; *Balanced* shows the newest on the next display refresh (`NSView.displayLink`); *Smoothest* keeps one in reserve. A decode error asks the host for a key frame.
 5. **Audio**: Opus packets decode into a ring buffer that an `AVAudioSourceNode` drains, with at most 60 ms kept so sound stays in step.
 6. **Input**: keys as Windows virtual keys (`0x8000 | vk`, as VoidLink does), ⌘ as the Windows key unless turned off; captured mouse movement (pointer frozen with `CGAssociateMouseAndMouseCursorPosition`, mouse coalescing off for every report) or absolute pointer position; high-resolution scrolling (120 per notch).
 7. **Controllers**:
@@ -82,7 +99,7 @@ of mid-stream profile switching, release of real held keys and multiple-player r
 The running signed app has not yet been rebuilt for this addition. Undo: turn the toggle off; an older
 build ignores the new JSON field and uses its original selected profile. No profile/game migration needed.
 
-Shortcuts during a stream: ⌃⌥⇧Q ends it, ⌃⌥⇧Z frees or captures the pointer, ⌃⌥⇧X switches full screen, ⌃⌥⇧S cycles the statistics, ⌃⌥⇧D minimises.
+Holding Esc for 5 seconds frees a captured pointer (Esc still reaches the host meanwhile; November 19). The start-of-stream hint lists the ways out for 15 seconds; a bar shows from the first second of holding Esc. Shortcuts during a stream: ⌃⌥⇧Q ends it, ⌃⌥⇧Z frees or captures the pointer, ⌃⌥⇧X switches full screen, ⌃⌥⇧S cycles the statistics, ⌃⌥⇧D minimises, ⌃⌥⇧K sends the Mac's shortcuts to the host or keeps them on the Mac (for that stream; the saved setting is unchanged).
 
 ## What is verified
 
@@ -136,10 +153,11 @@ With "Share the clipboard" on (Keyboard and Mouse, on by default), the Mac's cli
 
 ## Not ported yet
 
-From VoidLink, still to do: Apple's low-latency frame interpolation and super resolution (macOS 26, `VTLowLatencyFrameInterpolation`; the profile settings exist but are hidden), sending the microphone (VoidLink's Sunshine build), DualSense haptics and adaptive triggers, trigger rumble, VoidLink-host extras (bitrate changes during a stream, Mac trackpad gestures). Left out on purpose: iOS-only features (on-screen controls, touch modes, Apple Pencil, rotation).
+From VoidLink, still to do: Apple's low-latency frame interpolation and super resolution (macOS 26, `VTLowLatencyFrameInterpolation`; the profile settings exist but are hidden), sending the microphone (VoidLink's Sunshine build), DualSense haptics (adaptive triggers were added November 19, 2026), trigger rumble, VoidLink-host extras (bitrate changes during a stream, Mac trackpad gestures). Left out on purpose: iOS-only features (on-screen controls, touch modes, Apple Pencil, rotation).
 
 ## Troubleshooting
 
+- **Stutter every few seconds over Wi-Fi**: macOS Location Services scans Wi-Fi networks in the background, which can cause periodic lag (a known issue listed by Moonlight PC 6.2.0). Try turning Location Services off while streaming (System Settings → Privacy & Security → Location Services), or stream over Ethernet. AWDL (AirDrop, Handoff) can cause similar spikes.
 - **"Couldn't reach the host"**: check the address and that Sunshine is running; it listens on TCP 47984, 47989 and 48010 and UDP 47998–48000. Over the internet those must be forwarded, or use a VPN address.
 - **"The host's certificate has changed"**: the host was reinstalled or its certificate was reset. Remove it and pair again.
 - **Black picture with sound**: the Mac may not decode the codec. Choose H.264 in the stream's Picture settings; check the log lines starting "Video:".

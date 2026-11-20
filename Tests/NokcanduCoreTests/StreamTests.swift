@@ -188,6 +188,261 @@ final class StreamProtocolTests: XCTestCase {
         let letters = (0..<0x80).compactMap { StreamKeys.windowsKey($0) }.filter { (0x30...0x5A).contains($0) }
         XCTAssertEqual(Set(letters).count, 36)
     }
+
+    /// Return and keypad Enter share 0x0D; only keypad Enter (and the other 0xE0 keys) are extended.
+    func testExtendedKeys() {
+        func ext(_ mac: Int) -> Bool { StreamKeys.isExtended(mac: mac, windows: StreamKeys.windowsKey(mac)!) }
+        XCTAssertFalse(ext(0x24), "Return")
+        XCTAssertTrue(ext(0x4C), "keypad Enter")
+        for mac in [0x73, 0x77, 0x74, 0x79, 0x7B, 0x7C, 0x7D, 0x7E, 0x75, 0x72, 0x4B, 0x3E, 0x3D, 0x37, 0x36] {
+            XCTAssertTrue(ext(mac), String(format: "Mac key 0x%02X", mac))
+        }
+        for mac in [0x00, 0x33, 0x38, 0x3C, 0x3B, 0x3A, 0x52, 0x45, 0x7A, 0x48] {
+            XCTAssertFalse(ext(mac), String(format: "Mac key 0x%02X", mac))
+        }
+        XCTAssertEqual(Int(MODIFIER_EXTENDED), 0x10)
+    }
+}
+
+final class StreamRendererTests: XCTestCase {
+    private func apply(_ p: StreamColorConversion.Params, _ y: Float, _ u: Float, _ v: Float) -> [Float] {
+        let yuv = [y - p.offsets[0], u - p.offsets[1], v - p.offsets[2]]
+        return p.rows.map { r in r[0] * yuv[0] + r[1] * yuv[1] + r[2] * yuv[2] }
+    }
+
+    /// Limited-range 8-bit: Y 16 is black, 235 white; neutral chroma is 128.
+    func testLimitedRangeBlackAndWhite() {
+        let p = StreamColorConversion.params(.bt709, fullRange: false, bits: 8)
+        for (c, e) in zip(apply(p, 16 / 255, 128 / 255, 128 / 255), [Float](repeating: 0, count: 3)) { XCTAssertEqual(c, e, accuracy: 0.002) }
+        for c in apply(p, 235 / 255, 128 / 255, 128 / 255) { XCTAssertEqual(c, 1, accuracy: 0.002) }
+    }
+
+    func testFullRangeAndTenBit() {
+        let full = StreamColorConversion.params(.bt709, fullRange: true, bits: 8)
+        for c in apply(full, 1, 128 / 255, 128 / 255) { XCTAssertEqual(c, 1, accuracy: 0.002) }
+        let ten = StreamColorConversion.params(.bt2020, fullRange: false, bits: 10)
+        for c in apply(ten, 940 / 1023, 512 / 1023, 512 / 1023) { XCTAssertEqual(c, 1, accuracy: 0.002) }
+        // BT.709 pure red: Cr at maximum gives R above G and B.
+        let red = apply(full, 0.2126, 0.5 - 0.1146, 1)
+        XCTAssertGreaterThan(red[0], 0.9); XCTAssertLessThan(red[1], 0.1); XCTAssertLessThan(red[2], 0.1)
+    }
+
+    func testMatrixAndChromaSiting() {
+        XCTAssertEqual(StreamColorConversion.matrix("ITU_R_601_4", tenBit: false), .bt601)
+        XCTAssertEqual(StreamColorConversion.matrix(nil, tenBit: false), .bt709)
+        XCTAssertEqual(StreamColorConversion.matrix(nil, tenBit: true), .bt2020)
+        let left = StreamColorConversion.chromaOffset(nil, subsampled: true)
+        XCTAssertEqual(left.x, 0.5); XCTAssertEqual(left.y, 0)
+        let none = StreamColorConversion.chromaOffset("TopLeft", subsampled: false)
+        XCTAssertEqual(none.x, 0, "4:4:4 has no offset"); XCTAssertEqual(none.y, 0)
+    }
+
+    /// 16:9 in a 16:10 drawable: full width, bars above and below.
+    func testFitKeepsShape() {
+        let r = StreamColorConversion.fit(width: 1920, height: 1080, in: 2880, 1800)
+        XCTAssertEqual(r.w, 2, accuracy: 0.0001)
+        XCTAssertEqual(r.h, Float(1620.0 / 1800 * 2), accuracy: 0.0001)
+        XCTAssertEqual(r.y, -r.h / 2, accuracy: 0.0001)
+    }
+
+    func testScreenLatencyIsReported() {
+        let t = StreamTelemetry(at: 0)
+        t.onScreen(decodeToScreenMs: 4, receiveToScreenMs: 10, measured: true)
+        t.onScreen(decodeToScreenMs: 6, receiveToScreenMs: 12, measured: true)
+        let s = t.roll(at: 1)
+        XCTAssertEqual(s.screenMs, 5); XCTAssertEqual(s.screenMaxMs, 6); XCTAssertEqual(s.clientMs, 11)
+        XCTAssertTrue(s.screenMeasured)
+        XCTAssertNil(t.roll(at: 2).screenMs, "each interval starts empty")
+    }
+
+    /// Whole-stream figures survive each one-second roll; the 99% figure comes from fixed 0.25 ms bins.
+    func testWholeStreamAverages() {
+        let t = StreamTelemetry(at: 0)
+        for i in 0..<100 { t.onScreen(decodeToScreenMs: 5, receiveToScreenMs: i == 99 ? 40 : 8, measured: true); t.enqueued(waitMs: 0.5, at: 0.5) }
+        _ = t.roll(at: 1, networkMs: 2)
+        for _ in 0..<100 { t.onScreen(decodeToScreenMs: 7, receiveToScreenMs: 10, measured: true); t.enqueued(waitMs: 0.5, at: 1.5) }
+        let s = t.roll(at: 2, networkMs: 4)
+        XCTAssertEqual(s.whole.seconds, 2)
+        XCTAssertEqual(s.whole.shownFPS, 100)
+        XCTAssertEqual(s.whole.screenMs, 6)
+        XCTAssertEqual(s.whole.clientMs!, (99 * 8 + 40 + 100 * 10) / 200.0, accuracy: 0.001)
+        XCTAssertEqual(s.whole.networkMs, 3)
+        XCTAssertEqual(s.whole.clientP99Ms, 10.25, "99% of frames under 10.25 ms; the single 40 ms frame is the last 1%")
+        XCTAssertEqual(s.screenMs, 7, "the interval figure is still the last second only")
+    }
+
+    /// The first seconds of a stream (the host's encoder and the decoder settling) stay out of the whole-stream figures.
+    func testStreamStartIsLeftOutOfWholeStreamFigures() {
+        let t = StreamTelemetry(at: 100)
+        t.onScreen(decodeToScreenMs: 50, receiveToScreenMs: 90, measured: true, at: 101)
+        t.onScreen(decodeToScreenMs: 5, receiveToScreenMs: 8, measured: true, at: 100 + StreamTelemetry.settleSeconds)
+        let s = t.roll(at: 104)
+        XCTAssertEqual(s.whole.clientMs, 8); XCTAssertEqual(s.whole.clientP99Ms, 8.25)
+        XCTAssertEqual(s.screenMs, 27.5, "the one-second figure still counts every frame")
+    }
+
+    func testRendererSettingDefaultsAndLiveChange() throws {
+        let old = try JSONDecoder().decode(StreamProfile.Video.self, from: Data("{}".utf8))
+        XCTAssertEqual(old.renderer, .displayLayer)
+        XCTAssertTrue(old.vsync)
+        var v = StreamProfile.Video(); v.renderer = .metal; v.vsync = false
+        let back = try JSONDecoder().decode(StreamProfile.Video.self, from: JSONEncoder().encode(v))
+        XCTAssertEqual(back.renderer, .metal); XCTAssertFalse(back.vsync)
+        let a = StreamProfile(id: "p", hostID: "h", name: "Home")
+        var b = a
+        b.video.renderer = .metal; b.video.vsync = false
+        let c = b.settingChanges(from: a)
+        XCTAssertTrue(c.live.isSuperset(of: ["renderer", "v-sync"]))
+        XCTAssertTrue(c.nextStream.isEmpty)
+    }
+}
+
+final class StreamLaunchMemoryTests: XCTestCase {
+    func testDifferencesAndMemory() throws {
+        var p = StreamProfile(id: "p", hostID: "h", name: "Home")
+        let first = StreamLaunchSignature(p)
+        p.video.fullRange.toggle(); p.video.fps = 90; p.video.pacing = .smoothest; p.video.renderer = .metal
+        XCTAssertEqual(StreamLaunchSignature(p).differences(from: first), ["frame rate", "full-range colour"],
+                       "pacing and renderer are this Mac's: they don't need the app restarted")
+        let d = try XCTUnwrap(UserDefaults(suiteName: "nokcandu-launch-\(UUID().uuidString)"))
+        XCTAssertNil(StreamLaunchMemory.last("h", defaults: d))
+        StreamLaunchMemory.record("h", .init(appID: 7, signature: first), defaults: d)
+        XCTAssertEqual(StreamLaunchMemory.last("h", defaults: d), .init(appID: 7, signature: first))
+        StreamLaunchMemory.forget("h", defaults: d)
+        XCTAssertNil(StreamLaunchMemory.last("h", defaults: d))
+    }
+}
+
+final class StreamRecommendedTests: XCTestCase {
+    func testRecommendedPicture() {
+        var p = StreamProfile(id: "p", hostID: "h", name: "Home")
+        XCTAssertFalse(p.usesRecommendedPicture())
+        p.audio.volume = 0.5; p.window.display = "screen-uuid"
+        p.applyRecommendedPicture()
+        XCTAssertTrue(p.usesRecommendedPicture())
+        XCTAssertEqual(p.video.width, 2560); XCTAssertEqual(p.video.height, 1600); XCTAssertEqual(p.video.fps, 60)
+        XCTAssertEqual(p.video.codec, .hevc); XCTAssertEqual(p.video.renderer, .metal); XCTAssertFalse(p.video.vsync)
+        XCTAssertEqual(p.video.pacing, .lowestLatency); XCTAssertTrue(p.video.fullRange); XCTAssertNil(p.video.bitrateKbps)
+        XCTAssertEqual(p.audio.volume, 0.5, "sound is left alone"); XCTAssertEqual(p.window.display, "screen-uuid", "so is the display")
+        p.video.vsync = true
+        XCTAssertFalse(p.usesRecommendedPicture())
+        // A host that reports codecs but no HEVC gets Automatic; a remote profile keeps its bitrate.
+        var away = StreamProfile(id: "a", hostID: "h", name: "Away"); away.route = .remote; away.video.bitrateKbps = 20000
+        away.applyRecommendedPicture(hostCodecModes: 0x1)
+        XCTAssertEqual(away.video.codec, .automatic); XCTAssertEqual(away.video.bitrateKbps, 20000)
+        XCTAssertTrue(away.usesRecommendedPicture(hostCodecModes: 0x1))
+    }
+
+    func testRecommendedFrameRateFollowsTheDisplay() {
+        XCTAssertEqual(StreamProfile.recommendedFPS(nil), 60)
+        XCTAssertEqual(StreamProfile.recommendedFPS(60), 60)
+        XCTAssertEqual(StreamProfile.recommendedFPS(120), 120)
+        XCTAssertEqual(StreamProfile.recommendedFPS(100), 90)
+        XCTAssertEqual(StreamProfile.recommendedFPS(144), 144)
+        XCTAssertEqual(StreamProfile.recommendedFPS(30), 60, "never below 60")
+        var p = StreamProfile(id: "p", hostID: "h", name: "Home")
+        p.applyRecommendedPicture(displayFPS: 120)
+        XCTAssertEqual(p.video.fps, 120)
+        XCTAssertTrue(p.usesRecommendedPicture(displayFPS: 120)); XCTAssertFalse(p.usesRecommendedPicture(displayFPS: 60))
+    }
+}
+
+final class StreamClientIDTests: XCTestCase {
+    func testClientIDIsStableAndOnlyForSunshine() throws {
+        let id = try StreamIdentity.generate()
+        XCTAssertEqual(id.clientID.count, 16)
+        XCTAssertTrue(id.clientID.allSatisfy { $0.isHexDigit })
+        XCTAssertEqual(id.clientID, StreamIdentity(certificatePEM: id.certificatePEM, keyPEM: id.keyPEM).clientID)
+        XCTAssertNotEqual(id.clientID, StreamIdentity.uniqueID)
+        XCTAssertEqual(StreamClient(address: "192.168.1.2", identity: id).uniqueIDSent, StreamIdentity.uniqueID, "unknown host: the shared ID")
+        XCTAssertEqual(StreamClient(address: "192.168.1.2", identity: id, sunshine: true).uniqueIDSent, id.clientID)
+        var info = StreamServerInfo(); info.appVersion = "7.1.431.-1"
+        XCTAssertTrue(info.isSunshine)
+        info.appVersion = "7.1.431.0"
+        XCTAssertFalse(info.isSunshine, "NVIDIA GameStream")
+    }
+}
+
+final class StreamHDRMetadataTests: XCTestCase {
+    /// BT.2020 primaries, D65, 1000 nits / 0.005 nits, MaxCLL 1000, MaxFALL 400: big-endian, primaries G, B, R.
+    func testMasteringDisplayAndContentLightLevel() {
+        let md = StreamHDRMetadata(primaries: [(35400, 14600), (8500, 39850), (6550, 2300)], whitePoint: (15635, 16450),
+                                   maxDisplayLuminance: 1000, minDisplayLuminance: 50,
+                                   maxContentLightLevel: 1000, maxFrameAverageLightLevel: 400)
+        XCTAssertEqual(md.masteringDisplayColorVolume.map([UInt8].init), [
+            0x21, 0x34, 0x9B, 0xAA,   // green 8500, 39850
+            0x19, 0x96, 0x08, 0xFC,   // blue 6550, 2300
+            0x8A, 0x48, 0x39, 0x08,   // red 35400, 14600
+            0x3D, 0x13, 0x40, 0x42,   // white 15635, 16450
+            0x00, 0x98, 0x96, 0x80,   // 1000 nits = 10,000,000
+            0x00, 0x00, 0x00, 0x32,   // 50 / 10,000 nit
+        ])
+        XCTAssertEqual(md.contentLightLevelInfo.map([UInt8].init), [0x03, 0xE8, 0x01, 0x90])
+    }
+
+    /// The core's struct, whose primaries Swift reads from its bytes.
+    func testFromCoreStruct() {
+        var m = SS_HDR_METADATA()
+        let primaries: [UInt16] = [35400, 14600, 8500, 39850, 6550, 2300]
+        withUnsafeMutableBytes(of: &m) { raw in for (i, v) in primaries.enumerated() { raw.storeBytes(of: v, toByteOffset: i * 2, as: UInt16.self) } }
+        XCTAssertEqual(MemoryLayout<SS_HDR_METADATA>.offset(of: \SS_HDR_METADATA.whitePoint), 12)
+        m.whitePoint.x = 15635; m.whitePoint.y = 16450
+        m.maxDisplayLuminance = 1000; m.minDisplayLuminance = 50
+        m.maxContentLightLevel = 1000; m.maxFrameAverageLightLevel = 400
+        let direct = StreamHDRMetadata(primaries: [(35400, 14600), (8500, 39850), (6550, 2300)], whitePoint: (15635, 16450),
+                                       maxDisplayLuminance: 1000, minDisplayLuminance: 50, maxContentLightLevel: 1000, maxFrameAverageLightLevel: 400)
+        XCTAssertEqual(StreamHDRMetadata(m), direct)
+    }
+
+    func testMissingPartsAreLeftOut() {
+        let none = StreamHDRMetadata(primaries: [(0, 0), (0, 0), (0, 0)], whitePoint: (0, 0), maxDisplayLuminance: 0, minDisplayLuminance: 0,
+                                     maxContentLightLevel: 0, maxFrameAverageLightLevel: 0)
+        XCTAssertTrue(none.isEmpty)
+        let noCLL = StreamHDRMetadata(primaries: [(35400, 14600), (8500, 39850), (6550, 2300)], whitePoint: (15635, 16450),
+                                      maxDisplayLuminance: 1000, minDisplayLuminance: 50, maxContentLightLevel: 1000, maxFrameAverageLightLevel: 0)
+        XCTAssertNotNil(noCLL.masteringDisplayColorVolume)
+        XCTAssertNil(noCLL.contentLightLevelInfo)
+    }
+}
+
+final class StreamAdaptiveTriggerTests: XCTestCase {
+    private func payload(_ b: [UInt8]) -> [UInt8] { b + Array(repeating: 0, count: 10 - b.count) }
+
+    func testOff() {
+        XCTAssertEqual(StreamAdaptiveTrigger.decode(type: 0x05, payload: payload([])), .off)
+        XCTAssertNil(StreamAdaptiveTrigger.decode(type: 0x05, payload: [0, 0]), "short payload")
+    }
+
+    /// Feedback from zone 3 at strength 5: zones 3…9 active, each storing strength − 1 = 4 in 3 bits.
+    func testFeedbackZones() {
+        var active = 0, force = 0
+        for z in 3..<10 { active |= 1 << z; force |= 4 << (3 * z) }
+        let p = payload([UInt8(active & 0xFF), UInt8(active >> 8), UInt8(force & 0xFF), UInt8((force >> 8) & 0xFF), UInt8((force >> 16) & 0xFF), UInt8((force >> 24) & 0xFF)])
+        XCTAssertEqual(StreamAdaptiveTrigger.decode(type: 0x21, payload: p), .feedback([0, 0, 0, 0.625, 0.625, 0.625, 0.625, 0.625, 0.625, 0.625]))
+    }
+
+    /// Weapon from zone 2 to 6, strength 8 (stored 7).
+    func testWeapon() {
+        let zones = (1 << 2) | (1 << 6)
+        XCTAssertEqual(StreamAdaptiveTrigger.decode(type: 0x25, payload: payload([UInt8(zones), 0, 7])),
+                       .weapon(start: 2.0 / 9, end: 6.0 / 9, strength: 1))
+        XCTAssertEqual(StreamAdaptiveTrigger.decode(type: 0x25, payload: payload([0x04, 0, 7])), .off, "a single zone isn't a range")
+    }
+
+    /// Vibration from zone 8, amplitude 1 (stored 0), 40 Hz in byte 8.
+    func testVibration() {
+        let active = (1 << 8) | (1 << 9)
+        let p = payload([UInt8(active & 0xFF), UInt8(active >> 8), 0, 0, 0, 0, 0, 0, 40])
+        XCTAssertEqual(StreamAdaptiveTrigger.decode(type: 0x26, payload: p),
+                       .vibration([0, 0, 0, 0, 0, 0, 0, 0, 0.125, 0.125], frequency: 40.0 / 255))
+    }
+
+    func testSimpleEffectsAndUnknown() {
+        XCTAssertEqual(StreamAdaptiveTrigger.decode(type: 0x01, payload: payload([51, 255])), .feedbackFrom(start: 0.2, strength: 1))
+        XCTAssertEqual(StreamAdaptiveTrigger.decode(type: 0x02, payload: payload([0, 255, 255])), .weapon(start: 0, end: 1, strength: 1))
+        XCTAssertEqual(StreamAdaptiveTrigger.decode(type: 0x06, payload: payload([255, 255, 0])), .vibrationFrom(start: 0, amplitude: 1, frequency: 1))
+        XCTAssertNil(StreamAdaptiveTrigger.decode(type: 0x23, payload: payload([1, 2, 3])), "galloping has no equivalent")
+    }
 }
 
 final class StreamAV1Tests: XCTestCase {

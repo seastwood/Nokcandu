@@ -15,6 +15,7 @@ import NokcanduStreamCore
     func streamTriggerRumble(controller: Int, left: UInt16, right: UInt16)
     func streamMotionRequested(controller: Int, type: UInt8, rateHz: UInt16)
     func streamLight(controller: Int, r: UInt8, g: UInt8, b: UInt8)
+    func streamAdaptiveTriggers(controller: Int, flags: UInt8, typeLeft: UInt8, typeRight: UInt8, left: [UInt8], right: [UInt8])
     func streamHDR(_ on: Bool)
 }
 
@@ -32,6 +33,9 @@ final class StreamConnection: @unchecked Sendable {
     private(set) var negotiatedFormat: Int32 = 0
     private var stopping = false
     private(set) var started = false
+
+    /// Quit and start the app again if it's already running, so it takes this profile's settings (set before `start`).
+    var restartRunningApp = false
 
     init(host: StreamHost, profile: StreamProfile, address: String) {
         self.host = host; self.profile = profile; self.address = address
@@ -87,7 +91,8 @@ final class StreamConnection: @unchecked Sendable {
         StreamLog.shared.clear()
         let cert = host.serverCertificate.flatMap { Data(base64Encoded: $0) }
         guard cert != nil else { throw StreamError.notPaired }
-        let client = StreamClient(address: address, httpPort: host.httpPort, httpsPort: host.httpsPort, identity: identity, serverCertificate: cert)
+        let client = StreamClient(address: address, httpPort: host.httpPort, httpsPort: host.httpsPort, identity: identity, serverCertificate: cert,
+                                  sunshine: host.capabilities.isSunshine)
         report("Asking \(host.name)…")
         let info = try client.serverInfo(timeout: 8)
         if info.certificateRejected { throw StreamError.pairing("\(host.name) no longer accepts this Mac. Pair with it again (its pairings may have been reset).") }
@@ -104,9 +109,11 @@ final class StreamConnection: @unchecked Sendable {
         var riKey = (try? StreamClient.randomData(16)) ?? Data(count: 16)
         if riKey.count != 16 { riKey = Data(count: 16) }
         let riKeyID = Int32.random(in: 0...Int32.max)
-        let resume = info.currentGame != 0 && info.currentGame == appID
-        if info.currentGame != 0 && info.currentGame != appID {
-            report("Quitting the app already running on \(host.name)…")
+        // Restart (quit, then start fresh) when asked: resuming keeps the settings the app started with.
+        let restart = restartRunningApp && info.currentGame != 0 && info.currentGame == appID
+        let resume = info.currentGame != 0 && info.currentGame == appID && !restart
+        if info.currentGame != 0 && (info.currentGame != appID || restart) {
+            report(restart ? "Restarting \(profile.appName ?? "the app") with this profile's settings…" : "Quitting the app already running on \(host.name)…")
             try client.quit()
         }
         report(resume ? "Resuming \(profile.appName ?? "the app")…" : "Starting \(profile.appName ?? "the app")…")
@@ -116,6 +123,7 @@ final class StreamConnection: @unchecked Sendable {
                                               surroundAudioInfo: Int(Self.surroundInfo(Self.audioConfiguration(profile.audio.channels))),
                                               gamepadMask: gamepadMask, multiController: profile.controller.multipleControllers, resume: resume),
                                        isSunshine: host.capabilities.isSunshine || info.appVersion.split(separator: ".").last?.hasPrefix("-") == true)
+        if !resume { StreamLaunchMemory.record(host.id, .init(appID: appID, signature: StreamLaunchSignature(profile))) }
 
         var server = SERVER_INFORMATION()
         LiInitializeServerInformation(&server)
@@ -174,6 +182,15 @@ final class StreamConnection: @unchecked Sendable {
         cl.rumbleTriggers = { n, l, r in DispatchQueue.main.async { StreamConnection.current?.delegate?.streamTriggerRumble(controller: Int(n), left: l, right: r) } }
         cl.setMotionEventState = { n, type, rate in DispatchQueue.main.async { StreamConnection.current?.delegate?.streamMotionRequested(controller: Int(n), type: type, rateHz: rate) } }
         cl.setControllerLED = { n, r, g, b in DispatchQueue.main.async { StreamConnection.current?.delegate?.streamLight(controller: Int(n), r: r, g: g, b: b) } }
+        cl.setAdaptiveTriggers = { n, flags, typeLeft, typeRight, left, right in
+            // The core's buffers are only valid during the call: copy them first.
+            let size = Int(DS_EFFECT_PAYLOAD_SIZE)
+            let l = left.map { Array(UnsafeBufferPointer(start: $0, count: size)) } ?? []
+            let r = right.map { Array(UnsafeBufferPointer(start: $0, count: size)) } ?? []
+            DispatchQueue.main.async {
+                StreamConnection.current?.delegate?.streamAdaptiveTriggers(controller: Int(n), flags: flags, typeLeft: typeLeft, typeRight: typeRight, left: l, right: r)
+            }
+        }
         cl.setHdrMode = { on in DispatchQueue.main.async { StreamConnection.current?.delegate?.streamHDR(on) } }
 
         report("Connecting…")
@@ -255,8 +272,10 @@ final class StreamConnection: @unchecked Sendable {
     func stopAndQuit(identity: StreamIdentity) {
         stop()
         let cert = host.serverCertificate.flatMap { Data(base64Encoded: $0) }
-        let client = StreamClient(address: address, httpPort: host.httpPort, httpsPort: host.httpsPort, identity: identity, serverCertificate: cert)
+        let client = StreamClient(address: address, httpPort: host.httpPort, httpsPort: host.httpsPort, identity: identity, serverCertificate: cert,
+                                  sunshine: host.capabilities.isSunshine)
         try? client.quit()
+        StreamLaunchMemory.forget(host.id)
     }
 }
 

@@ -28,6 +28,8 @@ public struct StreamServerInfo: Equatable, Sendable {
     public init() {}
 
     public var busy: Bool { state.hasSuffix("_SERVER_BUSY") }
+    /// Sunshine and its forks (Apollo, …) end their version with a negative fourth part, such as 7.1.431.-1.
+    public var isSunshine: Bool { appVersion.split(separator: ".").last?.hasPrefix("-") ?? false }
     public var majorVersion: Int { Int(appVersion.split(separator: ".").first ?? "") ?? 0 }
 
     public init(xml: StreamXML) {
@@ -102,8 +104,16 @@ public struct StreamXML: Sendable {
 public struct StreamIdentity: Sendable {
     public let certificatePEM: String
     public let keyPEM: String
-    /// Moonlight clients all send this ID; hosts tell clients apart by certificate.
+    /// The ID every client sends to NVIDIA GameStream, which keeps one session for all of them; hosts tell
+    /// clients apart by certificate.
     public static let uniqueID = "0123456789ABCDEF"
+
+    /// This Mac's own ID for Sunshine-family hosts, which can manage sessions per client with it (Moonlight PC
+    /// 6.1.0 and later send their real ID to every host that isn't NVIDIA's). Derived from the certificate, so it
+    /// is stable, needs no file of its own, and changes only if the identity is made again.
+    public var clientID: String {
+        SHA256.hash(data: Data(certificatePEM.utf8)).prefix(8).map { String(format: "%02X", $0) }.joined()
+    }
 
     public static var folder: URL { NokPaths.support.appendingPathComponent("Streams", isDirectory: true) }
 
@@ -169,9 +179,14 @@ public final class StreamClient: @unchecked Sendable {
     /// The host's certificate (DER) once paired: HTTPS requests require exactly it.
     public var serverCertificate: Data?
     public var deviceName = Host.current().localizedName ?? "Mac"
+    /// Send `identity.clientID` instead of the shared placeholder: for Sunshine-family hosts (from the saved host,
+    /// or set by `serverInfo`). NVIDIA GameStream keeps the placeholder.
+    public var sendsClientID: Bool
     private let cancelFlag = UnsafeMutablePointer<Int32>.allocate(capacity: 1)
 
-    public init(address: String, httpPort: UInt16 = 47989, httpsPort: UInt16 = 47984, identity: StreamIdentity, serverCertificate: Data? = nil) {
+    public init(address: String, httpPort: UInt16 = 47989, httpsPort: UInt16 = 47984, identity: StreamIdentity, serverCertificate: Data? = nil,
+                sunshine: Bool = false) {
+        sendsClientID = sunshine
         let parts = StreamAddress.split(address)
         host = parts.host
         self.httpPort = parts.port ?? httpPort
@@ -248,7 +263,8 @@ public final class StreamClient: @unchecked Sendable {
         return x
     }
 
-    private var q: String { "uniqueid=\(StreamIdentity.uniqueID)&uuid=\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())" }
+    var uniqueIDSent: String { sendsClientID ? identity.clientID : StreamIdentity.uniqueID }
+    private var q: String { "uniqueid=\(uniqueIDSent)&uuid=\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())" }
 
     /// Over HTTPS when paired (which also confirms the pairing), else plain HTTP. A failed HTTPS check never
     /// counts as "unpaired" by itself: only the host refusing our certificate (401) is reported, as
@@ -259,6 +275,7 @@ public final class StreamClient: @unchecked Sendable {
             do {
                 var info = StreamServerInfo(xml: try xml("/serverinfo?\(q)", https: true, timeout: timeout))
                 info.pairStatusKnown = true
+                sendsClientID = info.isSunshine
                 return info
             } catch StreamError.http(401, _) {
                 rejected = true
@@ -270,6 +287,7 @@ public final class StreamClient: @unchecked Sendable {
         info.pairStatusKnown = false
         info.certificateRejected = rejected
         if info.httpsPort > 0 { httpsPort = info.httpsPort }
+        sendsClientID = info.isSunshine
         return info
     }
 

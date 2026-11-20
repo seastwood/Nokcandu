@@ -31,6 +31,8 @@ extension StreamProfile {
         // What this Mac does with the stream.
         live(video.pacing != o.video.pacing, "frame pacing")
         live(video.frameBuffer != o.video.frameBuffer, "frames to buffer")
+        live(video.renderer != o.video.renderer, "renderer")
+        live(video.vsync != o.video.vsync, "v-sync")
         live(window.display != o.window.display, "display")
         live(window.fullScreen != o.window.fullScreen, "full screen")
         live(window.statistics != o.window.statistics, "statistics")

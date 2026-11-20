@@ -17,6 +17,17 @@ import NokcanduCore
     @Published private(set) var running: Running?
     @Published var lastError: String?
     @Published private(set) var art: [String: NSImage] = [:]
+    /// The last Wake Up per host, shown next to the button until the host answers or a while after.
+    @Published private(set) var waking: [String: Wake] = [:]
+
+    struct Wake: Equatable {
+        var at: Date
+        /// Packets sent, and to where (the broadcast address and the host's known addresses).
+        var sent = 0
+        var targets: [String] = []
+        var failure: String?
+        var finished = false
+    }
 
     struct HostStatus: Equatable {
         var online = false
@@ -58,6 +69,7 @@ import NokcanduCore
 
     private init() {
         StreamClient.log = { StreamLog.shared.add($0) }
+        StreamMetalRenderer.log = { StreamLog.shared.add($0) }
         selectedHost = library.hosts.first?.id
         selectedProfile = selectedHost.flatMap { library.profiles(for: $0).first?.id }
     }
@@ -93,6 +105,8 @@ import NokcanduCore
     func addProfile(to hostID: String, copying source: StreamProfile? = nil) {
         var p = source ?? StreamProfile(hostID: hostID, name: "Stream")
         p.id = UUID().uuidString; p.hostID = hostID
+        // A new profile starts with the recommended picture (a copy keeps its source's).
+        if source == nil { p.applyRecommendedPicture(hostCodecModes: host(hostID)?.capabilities.codecModes ?? 0, displayFPS: NSScreen.main?.maximumFramesPerSecond) }
         let names = Set(library.profiles(for: hostID).map(\.name))
         if source != nil { p.name = source!.name + " copy" }
         else if library.profiles(for: hostID).isEmpty { p.name = "Home" }
@@ -121,7 +135,8 @@ import NokcanduCore
     func removeHost(_ id: String) {
         if let h = host(id), let identity, let address = status[id]?.address ?? h.candidates().first {
             let client = StreamClient(address: address, httpPort: h.httpPort, httpsPort: h.httpsPort, identity: identity,
-                                      serverCertificate: h.serverCertificate.flatMap { Data(base64Encoded: $0) })
+                                      serverCertificate: h.serverCertificate.flatMap { Data(base64Encoded: $0) },
+                                  sunshine: h.capabilities.isSunshine)
             DispatchQueue.global().async { client.unpair() }
         }
         update { $0.removeHost(id) }
@@ -165,7 +180,8 @@ import NokcanduCore
             var lastError: String?, certificateChanged = false
             var recovered: Data?
             for a in candidates {
-                let client = StreamClient(address: a, httpPort: h.httpPort, httpsPort: h.httpsPort, identity: identity, serverCertificate: cert)
+                let client = StreamClient(address: a, httpPort: h.httpPort, httpsPort: h.httpsPort, identity: identity, serverCertificate: cert,
+                                          sunshine: h.capabilities.isSunshine)
                 do {
                     let info = try client.serverInfo(timeout: 3)
                     var apps = fetchApps && info.pairStatusKnown ? try? client.apps() : nil
@@ -221,7 +237,8 @@ import NokcanduCore
         guard h.isPaired, let identity, let address = status[h.id]?.address, status[h.id]?.online == true else { return nil }
         art[key] = NSImage()       // asked for; a real image replaces it
         let client = StreamClient(address: address, httpPort: h.httpPort, httpsPort: h.httpsPort, identity: identity,
-                                  serverCertificate: h.serverCertificate.flatMap { Data(base64Encoded: $0) })
+                                  serverCertificate: h.serverCertificate.flatMap { Data(base64Encoded: $0) },
+                                  sunshine: h.capabilities.isSunshine)
         DispatchQueue.global(qos: .utility).async {
             guard let data = try? client.appArt(app), let image = NSImage(data: data) else { return }
             DispatchQueue.main.async { MainActor.assumeIsolated { StreamsModel.shared.art[key] = image } }
@@ -386,15 +403,30 @@ import NokcanduCore
     // MARK: Wake-on-LAN
 
     func wake(_ h: StreamHost) {
+        let id = h.id
         guard let mac = h.macAddress else { return }
         let bytes = mac.split(whereSeparator: { $0 == ":" || $0 == "-" }).compactMap { UInt8($0, radix: 16) }
-        guard bytes.count == 6 else { return }
+        guard bytes.count == 6 else {
+            waking[id] = Wake(at: Date(), failure: "the saved MAC address (\(mac)) isn't valid")
+            return
+        }
         var packet = [UInt8](repeating: 0xFF, count: 6)
         for _ in 0..<16 { packet += bytes }
         let targets = ["255.255.255.255"] + h.candidates().map { StreamAddress.split($0).host }
+        waking[id] = Wake(at: Date())
+        let name = h.name
         DispatchQueue.global().async {
+            var sent = 0, lastError: Int32 = 0
+            var reached = Set<String>()
+            defer {
+                let w = Wake(at: Date(), sent: sent, targets: reached.sorted(),
+                             failure: sent == 0 ? (lastError != 0 ? String(cString: strerror(lastError)) : "no address to send to") : nil)
+                StreamLog.shared.add(sent > 0 ? "Wake Up: sent \(sent) magic packets for \(name) (\(mac)) to \(w.targets.joined(separator: ", "))"
+                                              : "Wake Up: couldn't send the magic packet for \(name): \(w.failure ?? "")")
+                DispatchQueue.main.async { MainActor.assumeIsolated { StreamsModel.shared.wakeSent(id, w) } }
+            }
             let fd = socket(AF_INET, SOCK_DGRAM, 0)
-            guard fd >= 0 else { return }
+            guard fd >= 0 else { lastError = errno; return }
             defer { close(fd) }
             var on: Int32 = 1
             setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &on, socklen_t(MemoryLayout<Int32>.size))
@@ -404,13 +436,36 @@ import NokcanduCore
                     var addr = sockaddr_in()
                     addr.sin_family = sa_family_t(AF_INET); addr.sin_port = port.bigEndian
                     guard inet_pton(AF_INET, target, &addr.sin_addr) == 1 else { continue }
-                    _ = withUnsafePointer(to: &addr) { p in
+                    let n = withUnsafePointer(to: &addr) { p in
                         p.withMemoryRebound(to: sockaddr.self, capacity: 1) { sendto(fd, packet, packet.count, 0, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
                     }
+                    if n == packet.count { sent += 1; reached.insert(target) } else { lastError = errno }
                 }
             }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in self?.refresh() }
+    }
+
+    /// The packets went out: check the host every 3 seconds for up to 2 minutes, until it answers.
+    private func wakeSent(_ id: String, _ w: Wake) {
+        waking[id] = w
+        guard w.failure == nil else { return }
+        let started = w.at
+        func poll(_ n: Int) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                guard let self, self.waking[id]?.at == started else { return }
+                if self.status[id]?.online == true || n >= 40 {
+                    self.waking[id]?.finished = true
+                    if self.status[id]?.online == true {
+                        // Leave "is awake" up for a moment, then clear it.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in if self?.waking[id]?.at == started { self?.waking[id] = nil } }
+                    }
+                    return
+                }
+                self.refresh()
+                poll(n + 1)
+            }
+        }
+        poll(0)
     }
 
     // MARK: Streaming
@@ -437,7 +492,27 @@ import NokcanduCore
         else if let a = status[h.id]?.address, status[h.id]?.online == true, p.route == .automatic || (p.route == .local) == StreamAddress.isPrivate(a) { address = a }
         else if let a = h.candidates(p.route).first { address = a }
         else { lastError = "\(h.name) has no address to stream from. Connect to it again."; return }
+        // The app is still running from an earlier stream with other start-time settings: resuming would keep those.
+        var restart = false
+        if let game = status[h.id]?.currentGame, game != 0, game == p.appID, let last = StreamLaunchMemory.last(h.id), last.appID == game {
+            let changed = StreamLaunchSignature(p).differences(from: last.signature)
+            if !changed.isEmpty {
+                let app = p.appName ?? "The app"
+                let alert = NSAlert()
+                alert.messageText = "\(app) is still running on \(h.name) with the settings it started with"
+                alert.informativeText = "These settings are set when an app starts, so resuming keeps the old ones: \(changed.joined(separator: ", ")). Restart \(app) to use this profile's settings. Restarting quits it on the host first; a game loses anything unsaved."
+                alert.addButton(withTitle: "Restart with These Settings")
+                alert.addButton(withTitle: "Resume as It Is")
+                alert.addButton(withTitle: "Cancel")
+                switch alert.runModal() {
+                case .alertFirstButtonReturn: restart = true
+                case .alertSecondButtonReturn: break
+                default: return
+                }
+            }
+        }
         let w = StreamWindowController(host: h, profile: p, address: address, identity: identity)
+        w.connection.restartRunningApp = restart
         w.onEnd = { [weak self] error in
             self?.running = nil
             self?.window = nil
@@ -503,7 +578,9 @@ import NokcanduCore
     func quitApp(on h: StreamHost) {
         guard let identity = try? loadIdentity(), let address = status[h.id]?.address else { return }
         let client = StreamClient(address: address, httpPort: h.httpPort, httpsPort: h.httpsPort, identity: identity,
-                                  serverCertificate: h.serverCertificate.flatMap { Data(base64Encoded: $0) })
+                                  serverCertificate: h.serverCertificate.flatMap { Data(base64Encoded: $0) },
+                                  sunshine: h.capabilities.isSunshine)
+        StreamLaunchMemory.forget(h.id)
         DispatchQueue.global().async {
             do { try client.quit() } catch {
                 let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription

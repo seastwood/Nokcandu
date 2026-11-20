@@ -187,7 +187,7 @@ struct StreamHostSummary: View {
                 HStack {
                     if host.isPaired { Button("Add Stream Profile") { m.addProfile(to: host.id) }.buttonStyle(.borderedProminent) }
                     else { Button("Pair…") { m.pairAgain(host) }.buttonStyle(.borderedProminent) }
-                    if host.macAddress != nil, s?.online != true { Button("Wake Up") { m.wake(host) } }
+                    if host.macAddress != nil, s?.online != true || m.waking[host.id] != nil { WakeUpButton(host: host) }
                     if (s?.currentGame ?? 0) != 0 { Button("Quit App on Host", role: .destructive) { m.quitApp(on: host) } }
                     Spacer()
                     Button("Remove Host…", role: .destructive) { confirmRemove = true }
@@ -293,7 +293,7 @@ struct StreamProfileEditor: View {
                     } else if (status?.currentGame ?? 0) != 0 {
                         Button("Quit App on Host", role: .destructive) { m.quitApp(on: host) }.controlSize(.large)
                     }
-                    if status?.online != true, host.macAddress != nil { Button("Wake Up") { m.wake(host) }.controlSize(.large) }
+                    if host.macAddress != nil, status?.online != true || m.waking[host.id] != nil { WakeUpButton(host: host).controlSize(.large) }
                     if !host.isPaired || status?.needsPairing == true { Button("Pair…") { m.pairAgain(host) }.controlSize(.large) }
                 }
                 if running {
@@ -359,15 +359,31 @@ struct StreamProfileEditor: View {
 
     private var videoSection: some View {
         SettingsSection(title: "Picture") {
-            SettingRow(title: "Resolution", info: "\"This Mac's display\" asks the host for exactly the pixels of the display the stream plays on (see Display). Sunshine with a virtual display matches it; otherwise the host scales.") {
+            let modes = StreamsModel.shared.host(profile.hostID)?.capabilities.codecModes ?? 0
+            let displayFPS = (StreamDisplays.screen(for: profile.window.display) ?? NSScreen.main)?.maximumFramesPerSecond
+            if !profile.usesRecommendedPicture(hostCodecModes: modes, displayFPS: displayFPS) {
+                SettingRow(title: "Recommended settings", info: "The settings measured with the lowest latency: 2560×1600 at the display's refresh rate (\(StreamProfile.recommendedFPS(displayFPS)) fps here), automatic bitrate, HEVC, no HDR or 4:4:4, Metal with V-sync off, lowest-latency pacing, full-range colour, full screen, statistics and graphs off. Display, sound, controllers and the app aren't changed\(profile.route.isRemote ? ", nor the bitrate, since this profile streams over the internet" : "").") {
+                    Button("Use Recommended Settings") { profile.applyRecommendedPicture(hostCodecModes: modes, displayFPS: displayFPS); customResolution = false }
+                }
+            }
+            let screen = StreamDisplays.screen(for: profile.window.display) ?? NSScreen.main
+            let native = screen.map { StreamDisplays.pixels($0, fullScreen: profile.window.fullScreen) }
+            // The whole panel, offered as a plain size on a display with a notch: full screen then covers the strip too.
+            let panelSize = screen.flatMap { StreamDisplays.hasNotch($0) ? StreamDisplays.nativePixels($0) : nil }
+            let panel = panelSize.map { (Int($0.width), Int($0.height)) }
+            // The same shape 1920 wide (1920×1248 on a 13-inch MacBook Air), beside 1200p.
+            let panelSmall = panelSize.flatMap { $0.width > 1920 ? (1920, Int(($0.height * 1920 / $0.width / 2).rounded()) * 2) : nil }
+            let panelSizes = [panel, panelSmall].compactMap { $0 }
+            SettingRow(title: "Resolution", info: "\"This Mac's display\" asks the host for the display's own panel pixels, whatever its \"looks like\" setting: in full screen, the panel less the strip beside the camera. A size with the whole panel's shape\(panel.map { ", like \($0.0)×\($0.1) or \(panelSmall.map { "\($0.0)×\($0.1)" } ?? "")," } ?? "") fills the screen beside the camera too: the stream then covers the screen and hides the menu bar instead of using macOS's full screen, which measured a few milliseconds more latency. Sunshine with a virtual display matches it exactly; otherwise the host scales.") {
                 Picker("Resolution", selection: Binding(get: { profile.video.width.map { "\($0)x\(profile.video.height ?? 0)" } ?? "display" }, set: { v in
                     if v == "display" { profile.video.width = nil; profile.video.height = nil; customResolution = false }
                     else if v == "custom" { customResolution = true; if profile.video.width == nil { profile.video.width = 1920; profile.video.height = 1080 } }
                     else { let p = v.split(separator: "x").compactMap { Int($0) }; profile.video.width = p.first; profile.video.height = p.last; customResolution = false }
                 })) {
-                    Text("This Mac's display").tag("display")
-                    ForEach(Self.resolutions, id: \.0) { r in Text("\(r.0) (\(r.1)×\(r.2))").tag("\(r.1)x\(r.2)") }
-                    if let w = profile.video.width, let h = profile.video.height, !Self.resolutions.contains(where: { $0.1 == w && $0.2 == h }) { Text("\(w)×\(h)").tag("\(w)x\(h)") }
+                    Text(verbatim: "This Mac's display\(native.map { " (\(Int($0.width))×\(Int($0.height)))" } ?? "")").tag("display")
+                    ForEach(Self.resolutions, id: \.0) { r in Text(verbatim: "\(r.0) (\(r.1)×\(r.2))").tag("\(r.1)x\(r.2)") }
+                    ForEach(panelSizes.filter { p in !Self.resolutions.contains(where: { $0.1 == p.0 && $0.2 == p.1 }) }, id: \.0) { p in Text(verbatim: "\(p.0)×\(p.1)").tag("\(p.0)x\(p.1)") }
+                    if let w = profile.video.width, let h = profile.video.height, !Self.resolutions.contains(where: { $0.1 == w && $0.2 == h }), !panelSizes.contains(where: { $0.0 == w && $0.1 == h }) { Text(verbatim: "\(w)×\(h)").tag("\(w)x\(h)") }
                     Divider()
                     Text("Custom…").tag("custom")
                 }
@@ -375,9 +391,9 @@ struct StreamProfileEditor: View {
             }
             if customResolution {
                 SettingRow(title: "Size in pixels") {
-                    TextField("Width", value: Binding(get: { profile.video.width ?? 1920 }, set: { profile.video.width = max(320, min(7680, $0 / 2 * 2)) }), format: .number.grouping(.never)).frame(width: 70)
+                    PixelField(title: "Width", value: profile.video.width ?? 1920, range: 320...7680) { profile.video.width = $0 }
                     Text("×")
-                    TextField("Height", value: Binding(get: { profile.video.height ?? 1080 }, set: { profile.video.height = max(200, min(4320, $0 / 2 * 2)) }), format: .number.grouping(.never)).frame(width: 70)
+                    PixelField(title: "Height", value: profile.video.height ?? 1080, range: 200...4320) { profile.video.height = $0 }
                 }
             }
             SettingRow(title: "Frame rate") {
@@ -403,6 +419,17 @@ struct StreamProfileEditor: View {
                           isOn: $profile.video.hdr)
             SettingToggle(title: "Full colour (4:4:4)", info: "Sharper coloured text and edges, for desktop use. Needs a host GPU that encodes 4:4:4, and about twice the bitrate.",
                           isOn: $profile.video.yuv444)
+            SettingRow(title: "Renderer", info: "What draws the picture. The display layer (AVSampleBufferDisplayLayer) lets macOS show each decoded frame, always on a display refresh. Metal (CAMetalLayer) draws frames itself and can show them without waiting for a refresh (V-sync off), for the lowest latency. If Metal can't show the stream, the display layer takes over by itself. Statistics show the time from decoding to the screen, measured with Metal and estimated with the display layer.") {
+                Picker("Renderer", selection: $profile.video.renderer) { ForEach(StreamProfile.Video.Renderer.allCases, id: \.self) { Text($0.title).tag($0) } }
+                    .labelsHidden().frame(maxWidth: 300)
+            }
+            if profile.video.renderer == .metal {
+                SettingToggle(title: "V-sync", info: "On waits for the display's refresh, so frames never tear. Off shows each frame the moment it's drawn: up to one refresh less delay (about 8 ms at 120 Hz, 16 ms at 60 Hz), with occasional tearing. Off works best in full screen with the statistics hidden, where macOS can send the picture straight to the display.",
+                              isOn: $profile.video.vsync)
+                if profile.video.vsync {
+                    SettingNote("For the lowest latency, turn V-sync off: each frame then reaches the screen as soon as it's drawn instead of waiting for the display's next refresh. Any tearing is least visible when the frame rate doesn't match the display's refresh rate exactly.")
+                }
+            }
             SettingRow(title: "Frame pacing", info: "Lowest latency shows each frame the moment it's decoded. Balanced waits for the display's next refresh. Smoothest holds a frame in reserve to hide network hiccups, adding about one frame of delay.") {
                 Picker("Frame pacing", selection: $profile.video.pacing) { ForEach(StreamProfile.Video.Pacing.allCases, id: \.self) { Text($0.title).tag($0) } }
                     .labelsHidden().frame(maxWidth: 180)
@@ -415,7 +442,7 @@ struct StreamProfileEditor: View {
                         .foregroundStyle(profile.video.frameBuffer == nil ? .secondary : .primary)
                 }
             }
-            SettingToggle(title: "Full-range colour", info: "Ask for 0–255 colour instead of 16–235. Turn on if blacks look grey or the picture looks washed out.",
+            SettingToggle(title: "Full-range colour", info: "Ask for 0–255 colour instead of 16–235 (limited range). On for new streams. Turn it off if blacks look crushed or the host can't send full range.",
                           isOn: $profile.video.fullRange)
             StreamDisplayRow(window: $profile.window)
             SettingRow(title: "Full screen", info: "In full screen, macOS turns on Game Mode for the stream: the Mac puts the stream first and halves Bluetooth latency for controllers and AirPods. You can turn it off from the Game Mode icon in the menu bar while streaming.") {
@@ -484,7 +511,7 @@ struct StreamProfileEditor: View {
 
     private var inputSection: some View {
         SettingsSection(title: "Keyboard and Mouse") {
-            SettingRow(title: "Mouse", info: "Captured locks the pointer to the stream and sends movement, as games expect; ⌃⌥⇧Z frees it. Pointer moves the host's pointer to where yours is, for desktop use.") {
+            SettingRow(title: "Mouse", info: "Captured locks the pointer to the stream and sends movement, as games expect; hold Esc for 5 seconds or press ⌃⌥⇧Z to free it, and click the stream to capture it again. Pointer moves the host's pointer to where yours is, for desktop use.") {
                 Picker("Mouse", selection: $profile.input.mouse) { ForEach(StreamProfile.Input.Mouse.allCases, id: \.self) { Text($0.title).tag($0) } }
                     .labelsHidden().frame(maxWidth: 220)
             }
@@ -503,7 +530,7 @@ struct StreamProfileEditor: View {
             SettingToggle(title: "Send Mac shortcuts to the host", info: "While the stream is in front, macOS's own shortcuts are turned off so they reach the host: ⌘Tab, ⌘Space, ⌃← / ⌃→, Mission Control, screenshots and the rest. With ⌘ as the Windows key that gives the host Windows-key shortcuts; with ⌥ and ⌘ swapped, Alt-Tab. They come back as soon as you switch away or the stream ends. Needs ⌘ is the Windows key on (off, ⌘ shortcuts stay on the Mac and so do the rest). ⌃⌥⇧ shortcuts stay with Nokcandu (⌃⌥⇧D hides the stream, ⌃⌥⇧Q ends it).", isOn: $profile.input.captureSystemShortcuts)
             SettingToggle(title: "Share the clipboard", info: "With an Apollo host: copied text on the Mac goes to the host when the stream comes to the front, and text copied on the host comes back when you switch away. In Apollo, allow this Mac's clipboard permissions under Device Management. The Stream menu can also send or fetch it by hand. While this is on, anything you copy on the Mac, passwords included, is sent to the host when you return to the stream.", isOn: $profile.input.clipboard)
             SettingToggle(title: "Swap ⌥ and ⌘", info: "For a Windows keyboard layout: ⌥ is the Windows key and ⌘ is Alt.", isOn: $profile.input.swapOptionCommand)
-            SettingNote("During a stream: ⌃⌥⇧Q ends it, ⌃⌥⇧Z frees or captures the pointer, ⌃⌥⇧X switches full screen, ⌃⌥⇧D hides it, ⌃⌥⇧S shows statistics.")
+            SettingNote("During a stream: ⌃⌥⇧Q ends it, ⌃⌥⇧Z frees or captures the pointer (or hold Esc for 5 seconds to free it), ⌃⌥⇧X switches full screen, ⌃⌥⇧D hides it, ⌃⌥⇧S shows statistics, ⌃⌥⇧K sends the Mac's shortcuts to the host or keeps them on the Mac.")
         }
     }
 
@@ -806,5 +833,72 @@ struct StreamDisplayRow: View {
 
     private func refresh() {
         screens = NSScreen.screens.compactMap { s in StreamDisplays.id(s).map { ($0, StreamDisplays.label(s)) } }
+    }
+}
+
+/// Wake Up, and what happened: the magic packet sent (and where), the host coming up, or why it couldn't be sent.
+struct WakeUpButton: View {
+    @ObservedObject private var m = StreamsModel.shared
+    let host: StreamHost
+
+    var body: some View {
+        let w = m.waking[host.id]
+        let online = m.status[host.id]?.online == true
+        HStack(spacing: 8) {
+            if !(online && w != nil) {
+                Button(w != nil && w?.sent == 0 && w?.failure == nil ? "Sending…" : "Wake Up") { m.wake(host) }
+                    .disabled(w != nil && w?.sent == 0 && w?.failure == nil)
+            }
+            if let w {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    Group {
+                        if let failure = w.failure {
+                            Label("Couldn't send the wake packet: \(failure)", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                        } else if online {
+                            Label("\(host.name) is awake", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                        } else if w.sent == 0 {
+                            Label("Sending the magic packet…", systemImage: "paperplane")
+                        } else if w.finished {
+                            Label("Magic packet sent, but \(host.name) hasn't answered after 2 minutes. Check that Wake-on-LAN is on in the PC's BIOS/UEFI and its network adapter settings, and that the PC is asleep rather than shut down (unless it supports waking from off).", systemImage: "exclamationmark.circle")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            let seconds = Int(context.date.timeIntervalSince(w.at))
+                            Label("Magic packet sent to \(w.targets.joined(separator: ", ")) · waiting for \(host.name) (\(seconds) s)", systemImage: "paperplane.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .font(.caption).lineLimit(3).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+}
+
+/// A number of pixels typed freely and used on Return or when the field loses focus: limiting it on every keystroke
+/// turned the number into 320 or 200 while backspacing.
+struct PixelField: View {
+    let title: String
+    let value: Int
+    let range: ClosedRange<Int>
+    let apply: (Int) -> Void
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField(title, text: $text)
+            .frame(width: 70)
+            .focused($focused)
+            .onAppear { text = String(value) }
+            .onChange(of: value) { _, v in if !focused { text = String(v) } }
+            .onChange(of: focused) { _, f in if !f { commit() } }
+            .onSubmit(commit)
+            .onDisappear(perform: commit)
+    }
+
+    private func commit() {
+        guard let n = Int(text.filter(\.isNumber)) else { text = String(value); return }
+        let v = min(range.upperBound, max(range.lowerBound, n)) / 2 * 2
+        text = String(v)
+        if v != value { apply(v) }
     }
 }

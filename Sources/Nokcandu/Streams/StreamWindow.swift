@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // The stream's window: the host's picture, its sound, and this Mac's keyboard, mouse and controllers going back.
 import AppKit
+import Combine
 import AVFoundation
 import GameController
 import NokcanduCore
@@ -17,9 +18,14 @@ import Charts
     @Published var statistics: StreamProfile.Window.Statistics = .off
     @Published var graphs = false
     @Published var statsText = ""
+    /// The part of `statsText` with this Mac's total, drawn in colour so it's easy to glance at.
+    @Published var totalText = ""
+    @Published var totalMs: Double?
     @Published var statsHistory = StreamTelemetryHistory()
     @Published var captured = false
     @Published var hint: String?
+    /// Holding Esc to free the pointer: 0…1, shown from the first second on; nil when not held.
+    @Published var escapeProgress: Double?
 }
 
 @MainActor final class StreamWindowController: NSWindowController, NSWindowDelegate, StreamConnectionDelegate, StreamPadRoute {
@@ -35,6 +41,8 @@ import Charts
     private let streamView: StreamView
     private var statsTimer: Timer?
     private var displayLink: CADisplayLink?
+    private var overlayView: NSView?
+    private var overlayWatch: AnyCancellable?
     private let sessionActivity = StreamSessionActivity()
     private var ended = false
     /// Keeps this controller alive while its window still shows an error: StreamsModel lets go of it as soon as the
@@ -50,6 +58,7 @@ import Charts
         profile = next
         connection.video.pacing = next.video.pacing
         connection.video.frameBuffer = next.video.frameBuffer
+        if next.video.renderer != old.video.renderer || next.video.vsync != old.video.vsync { applyRenderer() }
         connection.audio.volume = Float(next.audio.volume)
         connection.audio.outputDevice = next.audio.outputDevice
         keyboard.input = next.input
@@ -123,7 +132,7 @@ import Charts
         keyboard = StreamKeyboard(input: profile.input)
         self.identity = identity
         streamView = StreamView(frame: NSRect(x: 0, y: 0, width: 1280, height: 720))
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 720), styleMask: [.titled, .closable, .miniaturizable, .resizable],
+        let w = StreamNSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 720), styleMask: [.titled, .closable, .miniaturizable, .resizable],
                          backing: .buffered, defer: false)
         w.title = "\(profile.name) — \(host.name)"
         w.collectionBehavior = [.fullScreenPrimary, .managed]
@@ -135,12 +144,22 @@ import Charts
         state.statistics = profile.window.statistics
         state.graphs = profile.window.graphs
         w.delegate = self
+        w.fullScreenRequested = { [weak self, weak w] in
+            guard let self, let w, self.fillsPanel, !w.styleMask.contains(.fullScreen) else { return false }
+            self.setFullScreen(self.covering == nil)
+            return true
+        }
         streamView.controller = self
         streamView.videoLayer = connection.video.layer
         let overlay = PassthroughHostingView(rootView: StreamOverlay(state: state, quit: { [weak self] in self?.endStream(quitApp: false) }))
         overlay.passThrough = { [weak self] in self?.state.connected ?? false }
         overlay.translatesAutoresizingMaskIntoConstraints = false
         streamView.addSubview(overlay)
+        overlayView = overlay
+        // Nothing drawn over the picture while there's nothing to show, so macOS can send it straight to the
+        // display instead of compositing it with the window (lower latency; Metal's V-sync off needs it).
+        overlayWatch = state.objectWillChange.sink { [weak self] _ in DispatchQueue.main.async { self?.updateOverlayVisibility() } }
+        applyRenderer()
         NSLayoutConstraint.activate([overlay.leadingAnchor.constraint(equalTo: streamView.leadingAnchor), overlay.trailingAnchor.constraint(equalTo: streamView.trailingAnchor),
                                      overlay.topAnchor.constraint(equalTo: streamView.topAnchor), overlay.bottomAnchor.constraint(equalTo: streamView.bottomAnchor)])
         w.contentView = streamView
@@ -210,6 +229,7 @@ import Charts
 
     private func finish(error: String?) {
         guard !ended else { return }
+        if covering != nil { NSApp.presentationOptions = [] }
         ended = true
         sessionActivity.stop()
         statsTimer?.invalidate(); statsTimer = nil
@@ -245,7 +265,8 @@ import Charts
         applyKeyboardLayout()
         applyVBAN(profile.audio.vban)
         window?.makeFirstResponder(streamView)
-        let link = streamView.displayLink(target: self, selector: #selector(refresh))
+        let link = streamView.displayLink(target: self, selector: #selector(refresh(_:)))
+        holdTopRefreshRate(link)
         link.add(to: .main, forMode: .common)
         displayLink = link
         let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.updateStats() } }
@@ -253,8 +274,11 @@ import Charts
         statsTimer = timer
         if profile.input.mouse == .capture, window?.isKeyWindow == true { captureMouse() }
         if profile.input.clipboard { sendClipboard(auto: true) }
-        state.hint = profile.input.mouse == .capture ? "Press ⌃⌥⇧Z to free the pointer, ⌃⌥⇧Q to end the stream." : "Press ⌃⌥⇧Q to end the stream."
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in self?.state.hint = nil }
+        let hint = profile.input.mouse == .capture
+            ? "Free the pointer: hold Esc for 5 seconds or press ⌃⌥⇧Z · End the stream: ⌃⌥⇧Q"
+            : "End the stream: ⌃⌥⇧Q"
+        state.hint = hint
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in if self?.state.hint == hint { self?.state.hint = nil } }
     }
 
     func streamEnded(error: String?) {
@@ -268,12 +292,46 @@ import Charts
     func streamTriggerRumble(controller: Int, left: UInt16, right: UInt16) {}
     func streamMotionRequested(controller: Int, type: UInt8, rateHz: UInt16) { gamepads.motionRequested(controller, type: type, rateHz: rateHz) }
     func streamLight(controller: Int, r: UInt8, g: UInt8, b: UInt8) { gamepads.light(controller, r: r, g: g, b: b) }
+    func streamAdaptiveTriggers(controller: Int, flags: UInt8, typeLeft: UInt8, typeRight: UInt8, left: [UInt8], right: [UInt8]) {
+        gamepads.adaptiveTriggers(controller, flags: flags, typeLeft: typeLeft, typeRight: typeRight, left: left, right: right)
+    }
     func streamHDR(_ on: Bool) {
         StreamLog.shared.add("HDR \(on ? "on" : "off")")
         connection.video.layer.wantsExtendedDynamicRangeContent = on
+        connection.video.setHDR(on)
     }
 
-    @objc private func refresh() { connection.video.displayRefresh() }
+    @objc private func refresh(_ link: CADisplayLink) {
+        connection.video.displayRefresh(timestamp: link.targetTimestamp, duration: link.targetTimestamp - link.timestamp)
+    }
+
+    /// Keeps a ProMotion display at its top refresh rate for the whole stream. Left alone, macOS lowers the rate to
+    /// match the content (a game at 60 fps ran the panel at 60 Hz), and a frame then waits up to 16.7 ms for a
+    /// refresh instead of 8.3 (measured November 19: ~9.7 ms decode → screen instead of ~5.3).
+    private func holdTopRefreshRate(_ link: CADisplayLink) {
+        let top = Float(window?.screen?.maximumFramesPerSecond ?? 60)
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: top, maximum: top, preferred: top)
+        StreamLog.shared.add("Window: asking the display to stay at \(Int(top)) Hz")
+    }
+
+    // MARK: Renderer
+
+    /// Shows the picture with the profile's renderer (and V-sync for Metal). Falls back to the display layer, with a
+    /// message, when Metal isn't available or gives up during the stream.
+    private func applyRenderer() {
+        let r = connection.video.useRenderer(profile.video.renderer, vsync: profile.video.vsync) { [weak self] why in
+            guard let self else { return }
+            self.streamView.videoLayer = self.connection.video.layer
+            self.flash("Metal couldn't show this stream (\(why)). Using the display layer.")
+        }
+        if streamView.videoLayer !== r.layer { streamView.videoLayer = r.layer }
+        if let problem = r.problem { flash("Metal isn't available on this Mac (\(problem)). Using the display layer.") }
+    }
+
+    private func updateOverlayVisibility() {
+        overlayView?.isHidden = state.connected && state.error == nil && state.statsText.isEmpty && !state.graphs
+            && state.hint == nil && !state.poorConnection && state.escapeProgress == nil
+    }
 
     private var statsTicks = 0
     private var latestStats = StreamTelemetry.Sample()
@@ -286,24 +344,49 @@ import Charts
         state.statsHistory.append(v)
         statsTicks += 1
         if statsTicks % 5 == 0 {
-            StreamLog.shared.add(String(format: "Video stats: received %.0f fps, enqueued %.0f fps, decode avg/max %@/%@ ms, host %@ ms, RTT %@ ms (variation %@); %.1f Mbps; drops %d network, %d decode, %d pacing; max arrival/display/enqueue gaps %@/%@/%@ ms; presentation wait avg/max %@/%@ ms; sample %.2f s; stream activity active",
+            StreamLog.shared.add(String(format: "Video stats: received %.0f fps, enqueued %.0f fps, decode avg/max %@/%@ ms, host %@ ms, RTT %@ ms (variation %@); %.1f Mbps; drops %d network, %d decode, %d pacing; max arrival/display/enqueue gaps %@/%@/%@ ms; presentation wait avg/max %@/%@ ms; decode→screen avg/max %@/%@ ms%@, this Mac (first packet→screen) avg/max %@/%@ ms; %@; sample %.2f s; stream activity active",
                 v.receivedFPS, v.shownFPS, Self.ms(v.decodeMs), Self.ms(v.decodeMaxMs), Self.ms(v.hostMs), Self.ms(v.networkMs), Self.ms(v.networkVariationMs),
-                v.bitrateMbps, v.networkDropped, v.dropped, v.pacedDrops, Self.ms(v.arrivalGapMaxMs), Self.ms(v.displayGapMaxMs), Self.ms(v.enqueueGapMaxMs), Self.ms(v.presentationMs), Self.ms(v.presentationMaxMs), v.duration))
+                v.bitrateMbps, v.networkDropped, v.dropped, v.pacedDrops, Self.ms(v.arrivalGapMaxMs), Self.ms(v.displayGapMaxMs), Self.ms(v.enqueueGapMaxMs), Self.ms(v.presentationMs), Self.ms(v.presentationMaxMs),
+                Self.ms(v.screenMs), Self.ms(v.screenMaxMs), v.screenMeasured ? " measured" : " estimated", Self.ms(v.clientMs), Self.ms(v.clientMaxMs),
+                Self.rendererName(profile.video, metal: connection.video.metalRenderer != nil), v.duration))
+            StreamLog.shared.add("Video stats, \(Self.wholeLines(v.whole).map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: " · "))")
         }
         renderStats()
     }
+    /// The whole stream so far: averages, and the time 99% of frames stayed under (two lines, to keep the panel narrow).
+    private static func wholeLines(_ w: StreamTelemetry.Whole) -> [String] {
+        let t = Int(w.seconds), clock = t >= 3600 ? String(format: "%d:%02d:%02d", t / 3600, t / 60 % 60, t % 60) : String(format: "%d:%02d", t / 60, t % 60)
+        return ["Stream average (\(clock)): \(w.shownFPS.map { String(format: "%.1f", $0) } ?? "N/A") fps · this Mac \(ms(w.clientMs)) ms (99% under \(ms(w.clientP99Ms)))",
+                "    decode → screen \(ms(w.screenMs)) · decode \(ms(w.decodeMs)) · RTT \(ms(w.networkMs)) ms"]
+    }
+    private static func rendererName(_ v: StreamProfile.Video, metal: Bool) -> String {
+        metal ? "Metal, V-sync \(v.vsync ? "on" : "off")" : "AVSampleBufferDisplayLayer"
+    }
     private static func ms(_ value: Double?) -> String { value.map { String(format: "%.2f", $0) } ?? "N/A" }
     private func renderStats() {
-        guard state.statistics != .off else { state.statsText = ""; return }
+        guard state.statistics != .off else { state.statsText = ""; state.totalText = ""; return }
         let v = latestStats, video = connection.video
+        state.totalMs = v.clientMs
+        if state.statistics == .minimal {
+            // Just "frames shown per second/this Mac's total in ms", the total coloured.
+            state.totalText = v.clientMs.map { String(format: "%.1f", $0) } ?? "–"
+            state.statsText = "\(Int(v.shownFPS.rounded()))/\(state.totalText)"
+            return
+        }
+        state.totalText = "this Mac total \(Self.ms(v.clientMs)) ms"
         var lines = [String(format: "%d×%d  %@ (%@ range)  %.1f fps enqueued", video.width, video.height,
-            StreamConnection.formatName(connection.negotiatedFormat), startProfile.video.fullRange ? "full" : "limited", v.shownFPS)]
+            StreamConnection.formatName(connection.negotiatedFormat), startProfile.video.fullRange ? "full" : "limited", v.shownFPS) + " · " + Self.rendererName(profile.video, metal: video.metalRenderer != nil)]
         lines.append("Network RTT \(Self.ms(v.networkMs)) ms (variation \(Self.ms(v.networkVariationMs)))  Decode \(Self.ms(v.decodeMs)) ms")
+        lines.append("Decode → screen \(Self.ms(v.screenMs)) ms\(v.screenMeasured || v.screenMs == nil ? "" : " (estimated)") · \(state.totalText)")
+        lines.append(contentsOf: Self.wholeLines(v.whole))
         if state.statistics == .detailed {
             lines.append(String(format: "Video payload %.1f Mbps · peak %.1f · buffered %.1f frames", v.bitrateMbps, v.peakBitrateMbps, v.bufferedFrames))
             lines.append("Host min/avg/max \(Self.ms(v.hostMinMs))/\(Self.ms(v.hostMs))/\(Self.ms(v.hostMaxMs)) ms")
             lines.append("Decode min/avg/max \(Self.ms(v.decodeMinMs))/\(Self.ms(v.decodeMs))/\(Self.ms(v.decodeMaxMs)) ms")
-            lines.append("Renderer AVSampleBuffer · \(profile.video.pacing.title) · display \(window?.screen?.maximumFramesPerSecond ?? 0) Hz")
+            lines.append("Pacing \(profile.video.pacing.title) · display \(window?.screen?.maximumFramesPerSecond ?? 0) Hz · decode → screen max \(Self.ms(v.screenMaxMs)) · this Mac max \(Self.ms(v.clientMaxMs)) ms")
+            if let host = v.hostMs, let rtt = v.networkMs, let client = v.clientMs {
+                lines.append(String(format: "Estimated total (host + half the RTT + this Mac) %.1f ms", host + rtt / 2 + client))
+            }
             lines.append(String(format: "Received/decoded %.1f/%.1f fps · core queue %d frames · audio %.0f ms", v.receivedFPS, v.decodedFPS, LiGetPendingVideoFrames(), connection.audio.queuedMs))
             lines.append("Frame assembly \(Self.ms(v.assemblyMs)) · decoder queue \(Self.ms(v.queueMs)) · presentation wait \(Self.ms(v.presentationMs)) ms")
             lines.append("Drops since start: network/pacing \(Self.ms(v.networkDropPercent))%/\(Self.ms(v.pacingDropPercent))% (\(v.networkDropped)/\(v.pacedDrops)) · decode \(v.dropped)")
@@ -321,6 +404,7 @@ import Charts
         state.captured = true
     }
     func releaseMouse() {
+        stopEscapeHold()
         guard state.captured else { return }
         CGAssociateMouseAndMouseCursorPosition(1)
         NSCursor.unhide()
@@ -354,6 +438,7 @@ import Charts
     /// Moves a running stream to another display: out of full screen, across, and back in.
     func move(to screen: NSScreen) {
         guard let w = window, w.screen != screen else { return }
+        if covering != nil { uncover(); place(on: screen); cover(); return }
         if w.styleMask.contains(.fullScreen) {
             pendingMove = screen
             setFullScreen(false)
@@ -366,8 +451,10 @@ import Charts
     func windowDidChangeScreen(_ notification: Notification) {
         guard let s = window?.screen, state.connected else { return }
         StreamLog.shared.add("Window: moved to \(StreamDisplays.label(s))")
+        connection.video.metalRenderer?.setDisplayColorSpace(s.colorSpace?.cgColorSpace)
+        if let link = displayLink { holdTopRefreshRate(link) }
         // The host fixed the picture size at the start; say so when it no longer matches this display.
-        let px = StreamDisplays.pixels(s, fullScreen: profile.window.fullScreen)
+        let px = StreamDisplays.pixels(s, fullScreen: fillsPanel ? false : profile.window.fullScreen)
         let w = connection.video.width, h = connection.video.height
         if profile.video.width == nil, w > 0, h > 0, abs(Double(w) / Double(h) - px.width / px.height) > 0.02 {
             flash("The picture size is set when a stream starts. End and start it again to fit this display.")
@@ -381,7 +468,55 @@ import Charts
     /// Enters or leaves full screen and keeps at it until macOS has done it. A request made right after the window
     /// appears, before the app is active, or while another transition runs is dropped by macOS without an error,
     /// which left streams set to full screen in a window.
+    /// Full screen now, either way (macOS's full screen, or the whole panel for a notch-area resolution).
+    private var isFullScreenNow: Bool { covering != nil || window?.styleMask.contains(.fullScreen) == true }
+
     func setFullScreen(_ on: Bool) {
+        // A picture with the whole panel's shape: leave macOS's full screen first if it's on, then cover the panel.
+        if on, fillsPanel {
+            if window?.styleMask.contains(.fullScreen) == true { coverAfterExit = true; setNativeFullScreen(false) } else { cover() }
+            return
+        }
+        uncover()
+        setNativeFullScreen(on)
+    }
+
+    // MARK: The whole panel (notch-area resolutions)
+
+    /// The chosen size has the whole panel's shape (beside the camera too) on the display the stream plays on.
+    private var fillsPanel: Bool {
+        guard let s = window?.screen ?? StreamDisplays.screen(for: profile.window.display) ?? NSScreen.main else { return false }
+        return StreamDisplays.fillsPanel(s, width: profile.video.width, height: profile.video.height)
+    }
+
+    /// The window's frame and style before covering the panel; set while covering.
+    private var covering: (frame: NSRect, style: NSWindow.StyleMask)?
+    private var coverAfterExit = false
+
+    /// A borderless window over the whole screen, beside the camera housing too, with the menu bar and Dock hidden:
+    /// macOS's own full screen keeps windows below the housing. Measured higher latency than macOS's full screen
+    /// (~13.7 vs ~5.7 ms, November 19), which is why it's only used for the notch-area resolutions.
+    private func cover() {
+        guard let w = window, covering == nil, !ended, let s = w.screen ?? NSScreen.main else { return }
+        covering = (w.frame, w.styleMask)
+        NSApp.presentationOptions = [.hideDock, .hideMenuBar]
+        w.styleMask = [.borderless]
+        w.setFrame(s.frame, display: true)
+        w.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        StreamLog.shared.add("Window: covering the whole panel, notch area included (\(Int(s.frame.width))×\(Int(s.frame.height)) pt) on \(s.localizedName)")
+    }
+
+    private func uncover() {
+        guard let c = covering, let w = window else { return }
+        covering = nil
+        NSApp.presentationOptions = []
+        w.styleMask = c.style
+        w.setFrame(c.frame, display: true)
+        StreamLog.shared.add("Window: no longer covering the panel")
+    }
+
+    private func setNativeFullScreen(_ on: Bool) {
         fullScreenWanted = on
         fullScreenAttempts = 0
         if on { window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
@@ -393,7 +528,7 @@ import Charts
         if w.styleMask.contains(.fullScreen) == want { fullScreenWanted = nil; return }
         if !fullScreenMoving, w.isVisible, fullScreenAttempts < 8 {
             fullScreenAttempts += 1
-            w.toggleFullScreen(nil)
+            if let s = w as? StreamNSWindow { s.toggleNativeFullScreen() } else { w.toggleFullScreen(nil) }
         }
         guard fullScreenAttempts < 8 else {
             StreamLog.shared.add("Window: macOS didn't \(want ? "enter" : "leave") full screen")
@@ -414,6 +549,7 @@ import Charts
             StreamLog.shared.add("Window: \(w.styleMask.contains(.fullScreen) ? "full screen" : "windowed"), content \(Int(w.contentLayoutRect.width))×\(Int(w.contentLayoutRect.height)) pt on \(w.screen?.localizedName ?? "?")")
         }
         if let want = fullScreenWanted, window?.styleMask.contains(.fullScreen) == want { fullScreenWanted = nil }
+        if coverAfterExit, window?.styleMask.contains(.fullScreen) == false { coverAfterExit = false; cover() }
         if let target = pendingMove, window?.styleMask.contains(.fullScreen) == false {
             pendingMove = nil
             place(on: target)
@@ -436,6 +572,7 @@ import Charts
         DesktopPad.shared.evaluate(force: true)
     }
     func windowWillClose(_ notification: Notification) {
+        if covering != nil { covering = nil; NSApp.presentationOptions = [] }
         if !ended { endStream(quitApp: false) }
         // Let go after this call returns, not from inside it.
         if let held = heldForError { heldForError = nil; DispatchQueue.main.async { _ = held } }
@@ -446,7 +583,8 @@ import Charts
     private func clipboardClient() -> StreamClient {
         let h = connection.host
         return StreamClient(address: connection.address, httpPort: h.httpPort, httpsPort: h.httpsPort, identity: identity,
-                            serverCertificate: h.serverCertificate.flatMap { Data(base64Encoded: $0) })
+                            serverCertificate: h.serverCertificate.flatMap { Data(base64Encoded: $0) },
+                                  sunshine: h.capabilities.isSunshine)
     }
 
     /// Sends the Mac's clipboard text to the host. Automatically only when it changed since the last sync.
@@ -526,6 +664,15 @@ import Charts
 
     var micLevel: Float? { vban.map { $0.transmitting ? $0.meter : 0 } }
 
+    /// ⌃⌥⇧K (Moonlight PC's keyboard-grab combo): sends the Mac's own shortcuts (⌘Tab, ⌘Space, Mission Control…)
+    /// to the host, or gives them back to the Mac, for this stream. Applies at once; the saved setting is unchanged.
+    func toggleSystemShortcuts() {
+        guard profile.input.commandAsWindowsKey else { flash("⌘ stays on the Mac for this stream, so its shortcuts do too."); return }
+        profile.input.captureSystemShortcuts.toggle()
+        applyKeyboardLayout()
+        flash(profile.input.captureSystemShortcuts ? "Mac shortcuts go to the host" : "Mac shortcuts stay on the Mac")
+    }
+
     func toggleMicMute() {
         guard let v = vban else { flash("The VBAN microphone is off for this stream."); return }
         v.muted.toggle()
@@ -581,6 +728,7 @@ import Charts
             if down, handleShortcut(e) { return true }
             // With ⌘ kept on the Mac, its shortcuts work as usual (⌘Q, ⌘Tab, ⌘H…).
             if e.modifierFlags.contains(.command), !profile.input.commandAsWindowsKey { return false }
+            watchEscape(e, down: down)
             if !e.isARepeat { keyboard.key(e, down: down) }
             return true
         case .flagsChanged:
@@ -614,17 +762,53 @@ import Charts
             let all = StreamProfile.Window.Statistics.allCases
             state.statistics = all[(all.firstIndex(of: state.statistics)! + 1) % all.count]
             renderStats()
-        case "x": setFullScreen(!(window?.styleMask.contains(.fullScreen) ?? false))
-        case "d": window?.miniaturize(nil)
+        case "x": setFullScreen(!isFullScreenNow)
+        case "d": uncover(); window?.miniaturize(nil)
         case "m": toggleMicMute()
+        case "k": toggleSystemShortcuts()
         default: return false
         }
         return true
     }
 
+    /// Holding Esc for `escapeHold` seconds frees a captured pointer (Esc still reaches the host meanwhile: a short
+    /// press can't be told from a long one until the time is up).
+    private var escapeTimer: Timer?
+    static let escapeHold = 5.0, escapeShowAfter = 1.0
+
+    private func stopEscapeHold() {
+        escapeTimer?.invalidate(); escapeTimer = nil
+        if state.escapeProgress != nil { state.escapeProgress = nil }
+    }
+
+    private func watchEscape(_ e: NSEvent, down: Bool) {
+        guard e.keyCode == 0x35, !e.isARepeat else { return }
+        stopEscapeHold()
+        guard down, state.captured else { return }
+        let started = CACurrentMediaTime()
+        // A bar fills from the first second, so a normal press of Esc shows nothing.
+        let t = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let held = CACurrentMediaTime() - started
+                guard self.state.captured else { self.stopEscapeHold(); return }
+                if held >= Self.escapeHold {
+                    self.stopEscapeHold()
+                    self.releaseMouse()
+                    self.flash("Pointer freed. Click the stream to capture it again.")
+                } else if held >= Self.escapeShowAfter {
+                    self.state.escapeProgress = held / Self.escapeHold
+                }
+            }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        escapeTimer = t
+    }
+
     func keyEvent(_ e: NSEvent, down: Bool) {
         guard state.connected else { return }
         if down, handleShortcut(e) { return }
+        watchEscape(e, down: down)
         if e.isARepeat { return }        // the host makes its own repeats
         keyboard.key(e, down: down)
     }
@@ -695,10 +879,12 @@ import Charts
 /// Hosts the video layer and passes input to the controller.
 final class StreamView: NSView {
     weak var controller: StreamWindowController?
-    var videoLayer: AVSampleBufferDisplayLayer? {
+    /// The display layer or the Metal renderer's layer, below the overlay.
+    var videoLayer: CALayer? {
         didSet {
+            guard oldValue !== videoLayer else { return }
             oldValue?.removeFromSuperlayer()
-            if let v = videoLayer { layer?.addSublayer(v); needsLayout = true }
+            if let v = videoLayer { layer?.insertSublayer(v, at: 0); needsLayout = true; layoutVideo() }
         }
     }
     private var tracking: NSTrackingArea?
@@ -715,15 +901,31 @@ final class StreamView: NSView {
 
     override func layout() {
         super.layout()
+        layoutVideo()
+    }
+    override func viewDidChangeBackingProperties() { super.viewDidChangeBackingProperties(); layoutVideo() }
+
+    /// Points at the top kept clear of the picture (none today; kept for a window that covers a notch).
+    var topInset: CGFloat = 0 { didSet { if topInset != oldValue { layoutVideo() } } }
+    /// Where the picture may go: the view below `topInset`.
+    var pictureArea: CGRect { CGRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: max(1, bounds.height - topInset)) }
+
+    private func layoutVideo() {
+        if let m = controller?.connection.video.metalRenderer, m.layer === videoLayer {
+            // The Metal layer fills the view (so it can fill the screen); the picture is placed below the inset.
+            m.resize(bounds, scale: window?.backingScaleFactor ?? layer?.contentsScale ?? 2, topInset: topInset)
+            m.setDisplayColorSpace(window?.screen?.colorSpace?.cgColorSpace)
+            return
+        }
         CATransaction.begin(); CATransaction.setDisableActions(true)
-        videoLayer?.frame = bounds
+        videoLayer?.frame = pictureArea
         CATransaction.commit()
     }
 
     /// Where the picture is inside the view (letterboxed to the stream's shape).
     var videoRect: CGRect {
         guard let c = controller, c.connection.video.width > 0 else { return bounds }
-        return AVMakeRect(aspectRatio: CGSize(width: c.connection.video.width, height: c.connection.video.height), insideRect: bounds)
+        return AVMakeRect(aspectRatio: CGSize(width: c.connection.video.width, height: c.connection.video.height), insideRect: pictureArea)
     }
 
     override func updateTrackingAreas() {
@@ -785,7 +987,7 @@ struct StreamOverlay: View {
                     if state.connected && (!state.statsText.isEmpty || state.graphs) {
                         VStack(alignment: .leading, spacing: 3) {
                             if !state.statsText.isEmpty {
-                                Text(state.statsText).font(.system(size: 9, design: .monospaced)).lineSpacing(0).foregroundStyle(.white)
+                                Text(StreamTotalLatency.highlight(state.statsText, state.totalText, ms: state.totalMs)).font(.system(size: 9, design: .monospaced)).lineSpacing(0).foregroundStyle(.white)
                             }
                             if state.graphs { StreamStatsGraphs(samples: state.statsHistory.samples) }
                         }
@@ -798,6 +1000,14 @@ struct StreamOverlay: View {
                     }
                 }
                 Spacer()
+                if let p = state.escapeProgress {
+                    VStack(spacing: 6) {
+                        Text("Keep holding Esc to free the pointer").font(.callout).foregroundStyle(.white)
+                        ProgressView(value: min(1, p)).progressViewStyle(.linear).tint(.white).frame(width: 220)
+                    }
+                    .padding(.horizontal, 14).padding(.vertical, 9)
+                    .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 10))
+                }
                 if let hint = state.hint {
                     Text(hint).font(.callout).foregroundStyle(.white).padding(.horizontal, 12).padding(.vertical, 7)
                         .background(.black.opacity(0.6), in: Capsule()).transition(.opacity)
@@ -827,11 +1037,12 @@ private struct StreamStatsGraphs: View {
             }
             .chartXScale(domain: domain).chartYScale(domain: .automatic(includesZero: true))
             .chartXAxis(.hidden).frame(height: 50)
-            Text("Decode and presentation wait · ms").font(.system(size: 9))
+            Text("Decode, presentation wait and decode → screen · ms").font(.system(size: 9))
             Chart(samples) { s in
                 if let y = s.decodeMs { LineMark(x: .value("Time", s.time), y: .value("ms", y)).foregroundStyle(by: .value("Signal", "Decode avg")) }
                 if let y = s.decodeMaxMs { LineMark(x: .value("Time", s.time), y: .value("ms", y)).foregroundStyle(by: .value("Signal", "Decode max")) }
                 if let y = s.presentationMs { LineMark(x: .value("Time", s.time), y: .value("ms", y)).foregroundStyle(by: .value("Signal", "Presentation wait")) }
+                if let y = s.screenMs { LineMark(x: .value("Time", s.time), y: .value("ms", y)).foregroundStyle(by: .value("Signal", "Decode → screen")) }
             }
             .chartXScale(domain: domain).chartYScale(domain: .automatic(includesZero: true))
             .chartXAxis(.hidden).frame(height: 50)
@@ -854,4 +1065,30 @@ private struct StreamStatsGraphs: View {
 final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
     var passThrough: () -> Bool = { false }
     override func hitTest(_ point: NSPoint) -> NSView? { passThrough() ? nil : super.hitTest(point) }
+}
+
+/// This Mac's total in the statistics text, coloured by how good it is: green under 12 ms, yellow under 20, orange above.
+enum StreamTotalLatency {
+    static func highlight(_ text: String, _ total: String, ms: Double?) -> AttributedString {
+        var a = AttributedString(text)
+        guard !total.isEmpty, let ms, let r = a.range(of: total) else { return a }
+        a[r].foregroundColor = ms < 12 ? .green : ms < 20 ? .yellow : .orange
+        return a
+    }
+}
+
+/// The stream's window. Borderless while covering the whole panel, and a borderless window can't take the keyboard
+/// unless it says so.
+final class StreamNSWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+    /// The green button and View ▸ Enter Full Screen: the stream decides first (a picture with the whole panel's
+    /// shape covers the screen beside the camera instead of using macOS's full screen, which stops below it).
+    var fullScreenRequested: (() -> Bool)?
+    override func toggleFullScreen(_ sender: Any?) {
+        if fullScreenRequested?() == true { return }
+        super.toggleFullScreen(sender)
+    }
+    /// macOS's own full screen, for the stream's own use.
+    func toggleNativeFullScreen() { super.toggleFullScreen(nil) }
 }

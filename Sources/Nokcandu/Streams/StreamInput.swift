@@ -96,6 +96,7 @@ import NokcanduStreamCore
             PadMotionHandlers.set(c,handler:nil)
         }
         rumbleTimer?.invalidate(); rumbleTimer = nil
+        resetTriggers()
         numbers = [:]; pads = [:]
     }
 
@@ -356,14 +357,63 @@ import NokcanduStreamCore
         let cs = GCController.controllers().filter { numbers[ObjectIdentifier($0)] == n || (usesProfile && n == 0) }
         PadFeedback.shared.light(String(format: "#%02X%02X%02X", r, g, b), cs)
     }
+
+    // MARK: DualSense adaptive triggers
+
+    /// DualSense controllers whose triggers the host changed, put back to normal when the stream stops.
+    private var triggersSet: [ObjectIdentifier: GCDualSenseGamepad] = [:]
+    private var triggerEffectsLogged = 0
+
+    /// The host set adaptive-trigger effects (raw DualSense bytes) on player `n`. Applied to that player's
+    /// DualSense; any other controller has no adaptive triggers and is left alone.
+    func adaptiveTriggers(_ n: Int, flags: UInt8, typeLeft: UInt8, typeRight: UInt8, left: [UInt8], right: [UInt8]) {
+        let c: GCController?
+        if usesProfile && n == 0 { c = Self.profileController(steam: profileReadsSteam).gc }
+        else { c = GCController.controllers().first { numbers[ObjectIdentifier($0)] == n } }
+        guard let ds = c?.extendedGamepad as? GCDualSenseGamepad else { return }
+        triggersSet[ObjectIdentifier(ds)] = ds
+        if flags & UInt8(DS_EFFECT_LEFT_TRIGGER) != 0 { apply(StreamAdaptiveTrigger.decode(type: typeLeft, payload: left), typeLeft, to: ds.leftTrigger, "left") }
+        if flags & UInt8(DS_EFFECT_RIGHT_TRIGGER) != 0 { apply(StreamAdaptiveTrigger.decode(type: typeRight, payload: right), typeRight, to: ds.rightTrigger, "right") }
+    }
+
+    private func apply(_ effect: StreamAdaptiveTrigger?, _ type: UInt8, to t: GCDualSenseAdaptiveTrigger, _ side: String) {
+        if triggerEffectsLogged < 8 {
+            triggerEffectsLogged += 1
+            StreamLog.shared.add(String(format: "Controller: %@ adaptive trigger effect 0x%02X%@", side, type, effect == nil ? " (no equivalent; left as it is)" : ""))
+        }
+        guard let effect else { return }
+        switch effect {
+        case .off: t.setModeOff()
+        case .feedback(let z): t.setModeFeedback(resistiveStrengths: .init(values: Self.ten(z)))
+        case .feedbackFrom(let start, let strength): t.setModeFeedbackWithStartPosition(start, resistiveStrength: strength)
+        case .weapon(let start, let end, let strength): t.setModeWeaponWithStartPosition(start, endPosition: end, resistiveStrength: strength)
+        case .vibration(let z, let f): t.setModeVibration(amplitudes: .init(values: Self.ten(z)), frequency: f)
+        case .vibrationFrom(let start, let a, let f): t.setModeVibrationWithStartPosition(start, amplitude: a, frequency: f)
+        }
+    }
+
+    private static func ten(_ z: [Float]) -> (Float, Float, Float, Float, Float, Float, Float, Float, Float, Float) {
+        let v = z + Array(repeating: 0, count: max(0, 10 - z.count))
+        return (v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9])
+    }
+
+    /// Triggers back to normal (the stream ended or the controllers were set up again).
+    private func resetTriggers() {
+        for ds in triggersSet.values { ds.leftTrigger.setModeOff(); ds.rightTrigger.setModeOff() }
+        triggersSet = [:]
+    }
 }
 
 /// Keys from the stream window to the host.
 @MainActor final class StreamKeyboard {
+    /// Keys held on the host: the Windows code, plus `extendedBit` for an extended key, so Return and
+    /// keypad Enter (both 0x0D) are tracked, and released, separately.
     private var held = Set<Int>()
+    private static let extendedBit = 0x1_0000
     var input: StreamProfile.Input
     init(input: StreamProfile.Input) { self.input = input }
 
+    /// The host key for a Mac key code: its Windows code, with `extendedBit` set for an extended key.
     private func windowsKey(_ mac: Int) -> Int? {
         var k = mac
         if input.swapOptionCommand {
@@ -371,7 +421,16 @@ import NokcanduStreamCore
         }
         guard let vk = StreamKeys.windowsKey(k), vk != 0xFF else { return nil }
         if !input.commandAsWindowsKey, vk == 0x5B || vk == 0x5C { return nil }
-        return vk
+        return StreamKeys.isExtended(mac: k, windows: vk) ? vk | Self.extendedBit : vk
+    }
+
+    /// Sends a host key (see `windowsKey`), adding `MODIFIER_EXTENDED` for an extended key. The core removes
+    /// that flag for hosts that aren't Sunshine; Sunshine versions that don't know it ignore it.
+    private func send(_ key: Int, down: Bool, _ modifiers: Int8) {
+        let vk = key & 0xFFFF
+        var m = modifiers
+        if key & Self.extendedBit != 0 { m |= Int8(MODIFIER_EXTENDED) }
+        streamSendKey(Int16(bitPattern: UInt16(0x8000 | vk)), Int8(down ? KEY_ACTION_DOWN : KEY_ACTION_UP), m)
     }
 
     private func modifiers(_ f: NSEvent.ModifierFlags) -> Int8 {
@@ -384,9 +443,9 @@ import NokcanduStreamCore
     }
 
     func key(_ e: NSEvent, down: Bool) {
-        guard let vk = windowsKey(Int(e.keyCode)) else { return }
-        if down { held.insert(vk) } else { held.remove(vk) }
-        streamSendKey(Int16(bitPattern: UInt16(0x8000 | vk)), Int8(down ? KEY_ACTION_DOWN : KEY_ACTION_UP), modifiers(e.modifierFlags))
+        guard let key = windowsKey(Int(e.keyCode)) else { return }
+        if down { held.insert(key) } else { held.remove(key) }
+        send(key, down: down, modifiers(e.modifierFlags))
     }
 
     /// A modifier changed. Each key's flagsChanged events alternate press and release, so a held key is
@@ -401,35 +460,33 @@ import NokcanduStreamCore
         case 0x37, 0x36: flag = .command
         case 0x39:
             // Caps Lock reports its lock state: send a press and a release each time it changes.
-            if let vk = windowsKey(code) {
-                let k = Int16(bitPattern: UInt16(0x8000 | vk))
-                streamSendKey(k, Int8(KEY_ACTION_DOWN), 0); streamSendKey(k, Int8(KEY_ACTION_UP), 0)
-            }
+            if let key = windowsKey(code) { send(key, down: true, 0); send(key, down: false, 0) }
             return
         default: return
         }
-        guard let vk = windowsKey(code) else { return }
-        let down = !held.contains(vk) && f.contains(flag)
-        if down { held.insert(vk) } else { held.remove(vk) }
-        streamSendKey(Int16(bitPattern: UInt16(0x8000 | vk)), Int8(down ? KEY_ACTION_DOWN : KEY_ACTION_UP), modifiers(f))
+        guard let key = windowsKey(code) else { return }
+        let down = !held.contains(key) && f.contains(flag)
+        if down { held.insert(key) } else { held.remove(key) }
+        send(key, down: down, modifiers(f))
     }
 
     /// Lets go of everything (the window lost focus while keys were down).
     func releaseAll() {
-        for vk in held { streamSendKey(Int16(bitPattern: UInt16(0x8000 | vk)), Int8(KEY_ACTION_UP), 0) }
+        for key in held { send(key, down: false, 0) }
         held = []
     }
 
     /// A Mac key code from a Nokcandu profile (it outputs Mac key codes).
     func profileKey(_ mac: Int, _ down: Bool) {
-        guard let vk = windowsKey(mac) else { return }
-        if down { held.insert(vk) } else { held.remove(vk) }
-        streamSendKey(Int16(bitPattern: UInt16(0x8000 | vk)), Int8(down ? KEY_ACTION_DOWN : KEY_ACTION_UP), heldModifiers)
+        guard let key = windowsKey(mac) else { return }
+        if down { held.insert(key) } else { held.remove(key) }
+        send(key, down: down, heldModifiers)
     }
 
     /// The modifiers among the keys held (a profile's keys have no Mac event flags), so a mapped Ctrl
     /// with a mapped arrow arrives as Ctrl+arrow.
     private var heldModifiers: Int8 {
+        let held = Set(self.held.map { $0 & 0xFFFF })
         var m: Int32 = 0
         if held.contains(0xA0) || held.contains(0xA1) { m |= MODIFIER_SHIFT }
         if held.contains(0xA2) || held.contains(0xA3) { m |= MODIFIER_CTRL }

@@ -127,13 +127,30 @@ public struct StreamProfile: Codable, Hashable, Identifiable, Sendable {
         public var pacing: Pacing = .balanced
         /// Decoded frames held before showing (0…4); nil follows the pacing (0, 1 or 2).
         public var frameBuffer: Int?
-        /// Full-range colour (0–255) instead of limited (16–235).
-        public var fullRange = false
+        /// Full-range colour (0–255) instead of limited (16–235). On for new stream profiles (as in Moonlight PC
+        /// 6.2.0): the hardware decoder and display layer handle it, and it keeps the host's full 0–255 range
+        /// instead of squeezing it. Profiles saved before this field existed decode as limited (below).
+        public var fullRange = true
         /// Apple's low-latency frame interpolation doubles the frames shown (macOS 26 and later, Apple silicon).
         public var interpolation = false
         /// Apple's low-latency super resolution upscales a lower-resolution stream to the window (macOS 26 and later).
         public var upscaling = false
+        /// What draws the picture.
+        public var renderer: Renderer = .displayLayer
+        /// Metal only: wait for the display's refresh before showing a frame. Off shows each frame the moment it's
+        /// drawn (lowest latency; the picture can tear).
+        public var vsync = true
         public init() {}
+
+        public enum Renderer: String, Codable, CaseIterable, Sendable {
+            /// macOS shows decoded frames itself (AVSampleBufferDisplayLayer): always waits for a display refresh.
+            case displayLayer
+            /// Nokcandu draws decoded frames with Metal (CAMetalLayer): can show them without waiting (V-sync off).
+            case metal
+            public var title: String {
+                switch self { case .displayLayer: "Display layer (AVSampleBufferDisplayLayer)"; case .metal: "Metal (CAMetalLayer)" }
+            }
+        }
 
         public enum Codec: String, Codable, CaseIterable, Sendable {
             case automatic, h264, hevc, av1
@@ -270,8 +287,9 @@ public struct StreamProfile: Codable, Hashable, Identifiable, Sendable {
         public var displayName: String?
         public init() {}
         public enum Statistics: String, Codable, CaseIterable, Sendable {
-            case off, basic, detailed
-            public var title: String { switch self { case .off: "Off"; case .basic: "Frame rate and latency"; case .detailed: "Detailed" } }
+            /// `minimal`: just the frame rate and this Mac's total latency, "90/7.8".
+            case off, minimal, basic, detailed
+            public var title: String { switch self { case .off: "Off"; case .minimal: "FPS and latency"; case .basic: "Standard"; case .detailed: "Detailed" } }
         }
     }
 
@@ -295,7 +313,7 @@ public struct StreamProfile: Codable, Hashable, Identifiable, Sendable {
 }
 
 extension StreamProfile.Video {
-    private enum CodingKeys: String, CodingKey { case width, height, fps, bitrateKbps, codec, hdr, yuv444, pacing, fullRange, interpolation, upscaling, frameBuffer }
+    private enum CodingKeys: String, CodingKey { case width, height, fps, bitrateKbps, codec, hdr, yuv444, pacing, fullRange, interpolation, upscaling, frameBuffer, renderer, vsync }
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
         width = try c.decodeIfPresent(Int.self, forKey: .width)
@@ -310,6 +328,8 @@ extension StreamProfile.Video {
         interpolation = try c.decodeIfPresent(Bool.self, forKey: .interpolation) ?? false
         upscaling = try c.decodeIfPresent(Bool.self, forKey: .upscaling) ?? false
         frameBuffer = (try c.decodeIfPresent(Int.self, forKey: .frameBuffer)).map { max(0, min(4, $0)) }
+        renderer = (try? c.decodeIfPresent(Renderer.self, forKey: .renderer)) ?? .displayLayer
+        vsync = try c.decodeIfPresent(Bool.self, forKey: .vsync) ?? true
     }
 }
 extension StreamProfile.Audio {

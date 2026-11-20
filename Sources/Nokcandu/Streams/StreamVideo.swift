@@ -29,8 +29,17 @@ final class StreamVideoDecoder: @unchecked Sendable {
     private var buffered: Int { frameBuffer ?? Self.defaultBuffer(pacing) }
     static func defaultBuffer(_ p: StreamProfile.Video.Pacing) -> Int { switch p { case .lowestLatency: 0; case .balanced: 1; case .smoothest: 2 } }
     var fullRange = false
-    /// Decoded frames waiting for the display's next refresh (balanced and smoothest pacing).
+    /// The host's HDR metadata while HDR is on (`setHDR`), attached to every frame shown. Guarded by `frameLock`.
+    private var hdrMetadata: StreamHDRMetadata?
+    private var currentHDR: StreamHDRMetadata? { os_unfair_lock_lock(&frameLock); defer { os_unfair_lock_unlock(&frameLock) }; return hdrMetadata }
+    /// Decoded frames waiting for the display's next refresh (balanced and smoothest pacing), with when each
+    /// was decoded and when its first packet arrived.
     private var pending: [CVPixelBuffer] = []
+    private var receipts: [CFTimeInterval?] = []
+    /// Draws frames with Metal instead of the display layer while set (`useRenderer`). Guarded by `frameLock`.
+    private var metal: StreamMetalRenderer?
+    /// The display's refresh timing (main thread), for estimating when the display layer shows a frame.
+    private var lastVsync: CFTimeInterval = 0, refreshInterval: CFTimeInterval = 1.0 / 60
     let stats = StreamVideoStats()
     /// Asked for a key frame since the last decode error.
     private var needsIDR = false
@@ -62,7 +71,7 @@ final class StreamVideoDecoder: @unchecked Sendable {
     func cleanup() {
         lock.lock(); defer { lock.unlock() }
         invalidate()
-        os_unfair_lock_lock(&frameLock); pending.removeAll(); arrivals.removeAll(); os_unfair_lock_unlock(&frameLock)
+        os_unfair_lock_lock(&frameLock); pending.removeAll(); arrivals.removeAll(); receipts.removeAll(); os_unfair_lock_unlock(&frameLock)
         DispatchQueue.main.async { [layer] in layer.flushAndRemoveImage() }
     }
 
@@ -124,6 +133,8 @@ final class StreamVideoDecoder: @unchecked Sendable {
         guard let sample = Self.sampleBuffer(block, length: length, format: format) else { return DR_OK }
         let flags: VTDecodeFrameFlags = [._EnableAsynchronousDecompression]
         let decodeStarted = LiGetMicroseconds()
+        // The frame's first packet, on CACurrentMediaTime's clock (the core counts from its own start on the same clock).
+        let receivedAt: CFTimeInterval? = unit.receiveTimeUs > 0 ? CACurrentMediaTime() - Double(decodeStarted - min(decodeStarted, unit.receiveTimeUs)) / 1_000_000 : nil
         let status = VTDecompressionSessionDecodeFrame(session!, sampleBuffer: sample, flags: flags, infoFlagsOut: nil) { [weak self] status, _, image, _, _ in
             guard let self else { return }
             guard status == noErr, let image else {
@@ -133,7 +144,7 @@ final class StreamVideoDecoder: @unchecked Sendable {
             }
             self.decodedOne()
             self.stats.decoded(startedUs: decodeStarted)
-            self.show(image)
+            self.show(image, receivedAt: receivedAt)
         }
         if status != noErr {
             noteDecodeFailure(status)
@@ -176,17 +187,18 @@ final class StreamVideoDecoder: @unchecked Sendable {
 
     // MARK: Showing frames
 
-    private func show(_ image: CVPixelBuffer) {
+    private func show(_ image: CVPixelBuffer, receivedAt: CFTimeInterval?) {
         let keep = buffered
         let decodedAt = CACurrentMediaTime()
         // 0: show each frame the moment it's decoded.
-        guard keep > 0 else { enqueue(image, decodedAt: decodedAt); return }
+        guard keep > 0 else { enqueue(image, decodedAt: decodedAt, receivedAt: receivedAt); return }
         // Otherwise hold up to `keep` frames for the display's refreshes; the oldest beyond that are dropped.
         os_unfair_lock_lock(&frameLock)
         pending.append(image)
         arrivals.append(decodedAt)
+        receipts.append(receivedAt)
         let extra = pending.count - keep
-        if extra > 0 { pending.removeFirst(extra); arrivals.removeFirst(extra) }
+        if extra > 0 { pending.removeFirst(extra); arrivals.removeFirst(extra); receipts.removeFirst(extra) }
         let depth = pending.count
         os_unfair_lock_unlock(&frameLock)
         stats.telemetry.buffer(depth: depth)
@@ -195,23 +207,109 @@ final class StreamVideoDecoder: @unchecked Sendable {
     private var arrivals: [CFTimeInterval] = []
 
     /// Called on each display refresh.
-    func displayRefresh() {
+    func displayRefresh(timestamp: CFTimeInterval? = nil, duration: CFTimeInterval? = nil) {
+        if let timestamp, let duration, duration > 0 { lastVsync = timestamp; refreshInterval = duration }
         let keep = buffered
         let now = CACurrentMediaTime(), frameTime = 1 / Double(max(30, fps))
         stats.telemetry.displayTick(at: now)
         os_unfair_lock_lock(&frameLock)
         var next: CVPixelBuffer?
         var decodedAt = now
+        var receivedAt: CFTimeInterval?
         // Show the oldest frame once the buffer is full, or once it has waited its buffer time (a still desktop
         // sends few frames; don't hold the last one back).
         if !pending.isEmpty, pending.count >= keep || now - (arrivals.first ?? now) > Double(keep) * frameTime * 1.5 {
-            next = pending.removeFirst(); decodedAt = arrivals.removeFirst()
+            next = pending.removeFirst(); decodedAt = arrivals.removeFirst(); receivedAt = receipts.removeFirst()
         }
         os_unfair_lock_unlock(&frameLock)
-        if let next { enqueue(next, decodedAt: decodedAt) }
+        if let next { enqueue(next, decodedAt: decodedAt, receivedAt: receivedAt) }
     }
 
-    private func enqueue(_ image: CVPixelBuffer, decodedAt: CFTimeInterval) {
+    /// The display layer can't say when a frame reached the screen. Estimate (main thread): the first display
+    /// refresh after it was handed over, plus one refresh for the window server to put it on the display.
+    private func estimateOnScreen(decodedAt: CFTimeInterval, receivedAt: CFTimeInterval?) {
+        let now = CACurrentMediaTime(), interval = refreshInterval
+        guard lastVsync > 0, interval > 0 else { return }
+        let next = lastVsync + (max(0, (now - lastVsync) / interval).rounded(.up)) * interval
+        let shown = max(next, now) + interval
+        stats.telemetry.onScreen(decodeToScreenMs: (shown - decodedAt) * 1000, receiveToScreenMs: receivedAt.map { (shown - $0) * 1000 }, measured: false)
+    }
+
+    // MARK: Renderer
+
+    /// Main thread. Switches what draws the picture; returns the layer to show and, when Metal was asked for but
+    /// can't be used here, why (the display layer is used instead). `onMetalFailure` runs on the main thread if
+    /// Metal gives up during the stream.
+    func useRenderer(_ r: StreamProfile.Video.Renderer, vsync: Bool, onMetalFailure: @escaping (String) -> Void) -> (layer: CALayer, problem: String?) {
+        os_unfair_lock_lock(&frameLock); let current = metal; os_unfair_lock_unlock(&frameLock)
+        guard r == .metal else {
+            if current != nil {
+                os_unfair_lock_lock(&frameLock); metal = nil; os_unfair_lock_unlock(&frameLock)
+                StreamLog.shared.add("Video: drawing with the display layer")
+                LiRequestIdrFrame()       // the host sends frames only when the picture changes: repaint now
+            }
+            return (layer, nil)
+        }
+        if let current { current.vsync = vsync; return (current.layer, nil) }
+        let (made, why) = StreamMetalRenderer.make(vsync: vsync)
+        guard let m = made else {
+            StreamLog.shared.add("Video: Metal isn't available (\(why ?? "unknown")); drawing with the display layer")
+            return (layer, why ?? "Metal isn't available")
+        }
+        let telemetry = stats.telemetry
+        m.onDrawn = { f in telemetry.enqueued(waitMs: (CACurrentMediaTime() - f.decodedAt) * 1000, at: CACurrentMediaTime()) }
+        m.onScreen = { f, at in
+            telemetry.onScreen(decodeToScreenMs: (at - f.decodedAt) * 1000, receiveToScreenMs: f.receivedAt.map { (at - $0) * 1000 }, measured: true)
+        }
+        m.onReplaced = { telemetry.paced(dropped: 1) }
+        m.onFailure = { [weak self, weak m] why in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                os_unfair_lock_lock(&self.frameLock); if let m, self.metal === m { self.metal = nil }; os_unfair_lock_unlock(&self.frameLock)
+                LiRequestIdrFrame()
+                onMetalFailure(why)
+            }
+        }
+        m.setHDR(currentHDR)
+        os_unfair_lock_lock(&frameLock); metal = m; os_unfair_lock_unlock(&frameLock)
+        StreamLog.shared.add("Video: drawing with Metal on \(m.deviceName), V-sync \(vsync ? "on" : "off")")
+        LiRequestIdrFrame()
+        return (m.layer, nil)
+    }
+
+    /// The Metal renderer in use, if any (main thread: to size its layer).
+    var metalRenderer: StreamMetalRenderer? { os_unfair_lock_lock(&frameLock); defer { os_unfair_lock_unlock(&frameLock) }; return metal }
+
+    /// HDR switched on or off by the host (main thread). With it on, the host's mastering-display and
+    /// content-light metadata go on every frame, as Moonlight PC 6.2.0 does, so macOS shows HDR at the
+    /// brightness it was made for and tonemaps it on a display with less range.
+    func setHDR(_ on: Bool) {
+        let md = on ? StreamHDRMetadata.current() : nil
+        os_unfair_lock_lock(&frameLock); hdrMetadata = md; let metal = self.metal; os_unfair_lock_unlock(&frameLock)
+        metal?.setHDR(md)
+        if on {
+            StreamLog.shared.add("Video: HDR metadata from the host: \(md == nil ? "none" : [md!.masteringDisplayColorVolume != nil ? "mastering display" : nil, md!.contentLightLevelInfo != nil ? "content light level" : nil].compactMap { $0 }.joined(separator: " and "))")
+        }
+    }
+
+    /// HDR frames: the host's metadata, and a CGColorSpace for PQ and HLG (Moonlight found external displays
+    /// need it to show HDR properly). SDR frames are left as VideoToolbox made them.
+    private func attachHDR(_ image: CVPixelBuffer) {
+        guard let transfer = CVBufferCopyAttachment(image, kCVImageBufferTransferFunctionKey, nil) as? String else { return }
+        let space: CFString
+        if transfer == (kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ as String) { space = CGColorSpace.itur_2100_PQ }
+        else if transfer == (kCVImageBufferTransferFunction_ITU_R_2100_HLG as String) { space = CGColorSpace.itur_2100_HLG }
+        else { return }
+        os_unfair_lock_lock(&frameLock); let md = hdrMetadata; os_unfair_lock_unlock(&frameLock)
+        if let cs = CGColorSpace(name: space) { CVBufferSetAttachment(image, kCVImageBufferCGColorSpaceKey, cs, .shouldPropagate) }
+        if let d = md?.masteringDisplayColorVolume { CVBufferSetAttachment(image, kCVImageBufferMasteringDisplayColorVolumeKey, d as CFData, .shouldPropagate) }
+        if let d = md?.contentLightLevelInfo { CVBufferSetAttachment(image, kCVImageBufferContentLightLevelInfoKey, d as CFData, .shouldPropagate) }
+    }
+
+    private func enqueue(_ image: CVPixelBuffer, decodedAt: CFTimeInterval, receivedAt: CFTimeInterval?) {
+        os_unfair_lock_lock(&frameLock); let metal = self.metal; os_unfair_lock_unlock(&frameLock)
+        if let metal { metal.submit(.init(image: image, receivedAt: receivedAt, decodedAt: decodedAt)); return }
+        attachHDR(image)
         var desc: CMVideoFormatDescription?
         CMVideoFormatDescriptionCreateForImageBuffer(allocator: nil, imageBuffer: image, formatDescriptionOut: &desc)
         guard let desc else { return }
@@ -229,11 +327,13 @@ final class StreamVideoDecoder: @unchecked Sendable {
             if layer.status == .failed { layer.flush() }
             layer.enqueue(sample)
             stats.telemetry.enqueued(waitMs: (CACurrentMediaTime() - decodedAt) * 1000, at: CACurrentMediaTime())
+            estimateOnScreen(decodedAt: decodedAt, receivedAt: receivedAt)
         } else {
-            DispatchQueue.main.async { [stats] in
+            DispatchQueue.main.async { [stats, weak self] in
                 if layer.status == .failed { layer.flush() }
                 layer.enqueue(sample)
                 stats.telemetry.enqueued(waitMs: (CACurrentMediaTime() - decodedAt) * 1000, at: CACurrentMediaTime())
+                self?.estimateOnScreen(decodedAt: decodedAt, receivedAt: receivedAt)
             }
         }
     }
@@ -314,10 +414,22 @@ final class StreamVideoDecoder: @unchecked Sendable {
     private func makeSession(_ desc: CMVideoFormatDescription) -> Bool {
         let tenBit = videoFormat & Int32(VIDEO_FORMAT_MASK_10BIT) != 0
         let yuv444 = videoFormat & Int32(VIDEO_FORMAT_MASK_YUV444) != 0
+        // The range the stream actually uses (its VUI or AV1 sequence header), not the one asked for: a host
+        // resuming an app keeps the session's earlier range, and reading limited-range video as full range
+        // washes the picture out (seen November 19, after full range became the default).
+        let streamFull = (CMFormatDescriptionGetExtension(desc, extensionKey: kCMFormatDescriptionExtension_FullRangeVideo) as? Bool)
+        let fullRange = streamFull ?? self.fullRange
+        if let streamFull, streamFull != self.fullRange {
+            StreamLog.shared.add("Video: the host sends \(streamFull ? "full" : "limited")-range colour though \(self.fullRange ? "full" : "limited") was asked for (a resumed app keeps the range it started with); showing it as sent")
+        }
         let pixel: OSType
         switch (tenBit, yuv444, fullRange) {
-        case (true, true, _): pixel = kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange
-        case (true, false, _): pixel = kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
+        // 10-bit (HDR) follows the colour range too: it was always video range, so a full-range 10-bit stream
+        // was decoded into a buffer labelled for the narrower range.
+        case (true, true, true): pixel = kCVPixelFormatType_444YpCbCr10BiPlanarFullRange
+        case (true, true, false): pixel = kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange
+        case (true, false, true): pixel = kCVPixelFormatType_420YpCbCr10BiPlanarFullRange
+        case (true, false, false): pixel = kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
         case (false, true, true): pixel = kCVPixelFormatType_444YpCbCr8BiPlanarFullRange
         case (false, true, false): pixel = kCVPixelFormatType_444YpCbCr8BiPlanarVideoRange
         case (false, false, true): pixel = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange

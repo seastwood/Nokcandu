@@ -69,6 +69,25 @@ public enum StreamKeys {
         0x68: 0x1C,   // かな → convert
     ]
 
+    /// Keys Windows reads with the 0xE0 scan-code prefix ("extended" keys). Sunshine uses the flag to tell
+    /// keys that share a virtual-key code apart, such as Return and keypad Enter (both 0x0D). The set matches
+    /// Moonlight PC 6.2.0: navigation and arrow keys, Insert, Delete, Print Screen, keypad /, right Control and
+    /// Alt, the Windows and Menu keys, the browser keys, and keypad Enter (decided by the Mac key, since its
+    /// Windows code is Return's).
+    public static func isExtended(mac: Int, windows vk: Int) -> Bool {
+        mac == 0x4C || extendedWindowsKeys.contains(vk)
+    }
+
+    static let extendedWindowsKeys: Set<Int> = [
+        0x21, 0x22, 0x23, 0x24,                     // Page Up, Page Down, End, Home
+        0x25, 0x26, 0x27, 0x28,                     // arrows
+        0x2C, 0x2D, 0x2E,                           // Print Screen, Insert, Delete
+        0x6F,                                       // keypad /
+        0xA3, 0xA5,                                 // right Control, right Alt
+        0x5B, 0x5C, 0x5D,                           // Windows left, right, Menu
+        0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB, 0xAC,   // browser back … home
+    ]
+
     /// Windows modifier keys for the left/right modifier key codes.
     public static let modifierKeys: Set<Int> = [0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0x5B, 0x5C]
 }

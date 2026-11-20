@@ -1,5 +1,22 @@
 # Engineering learnings
 
+## Lower display latency needs our own presentation (November 19)
+
+`AVSampleBufferDisplayLayer` always waits for a refresh and can't report when a frame was shown, so its latency can only
+be estimated. The Metal renderer (`StreamMetalRenderer`) can turn V-sync off and measures presentation per drawable. Keep
+three drawables (direct-to-display path), never block the decoder on a drawable (newest frame wins), keep the overlay
+hidden when it shows nothing, and keep the automatic fallback to the display layer for Macs whose GPU can't import decoded
+frames. [Details, measurement method and Undo](investigations/metal-renderer-2026-11-19.md).
+
+## Upstream streaming fixes arrive through moonlight-common-c, not Moonlight PC's renderers (November 19)
+
+Reviewing Moonlight PC 6.2.0: its renderers don't apply to Nokcandu (VideoToolbox + AVSampleBufferDisplayLayer), but the
+streaming core does. Diffing the core Moonlight ships against our VoidLink-derived copy found three loss-recovery fixes and
+the extended-key flag missing; these are now applied and named in [streams.md](streams.md#layout). When a Moonlight release
+mentions recovery, input or security, compare the submodule commit range first. Swift can't import an array of anonymous C
+structs (`SS_HDR_METADATA.displayPrimaries`); read such fields from the struct's bytes and test the offsets. 10-bit decoding
+must follow the requested colour range like 8-bit does. [Review, scope, tests and Undo](investigations/moonlight-qt-6.2.0-review-2026-11-19.md).
+
 ## Release 0.14.5 acceptance scope (November 18)
 
 The user confirmed feature hiding works and authorized release with the new controller capabilities
