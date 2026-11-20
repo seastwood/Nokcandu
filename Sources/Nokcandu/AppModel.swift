@@ -136,7 +136,7 @@ final class AppModel: ObservableObject {
         if featureServicesReady { ControllerOwnershipCoordinator.shared.start() }
         if let visible = features.selection(sidebarTab) { sidebarTab = visible }
         if gamesEnabled { SharedSteam.refreshHostScriptsIfNeeded() }
-        if featureServicesReady { DesktopPad.shared.start(); PadDSUBridge.shared.configure() }
+        if featureServicesReady { DesktopPad.shared.start(); PadDSUBridge.shared.configure(); ControllerOverlay.shared.start() }
         Notifier.shared.start { [weak self] id in self?.selection = id }
         showWhatsNew = !showWelcome && WhatsNew.shouldShow()
         refresh()
@@ -557,7 +557,7 @@ final class AppModel: ObservableObject {
             foundFolders = []; categoryPrompt = nil
         }
         if !streamsEnabled { StreamsModel.shared.stopWatching() }
-        if previous.contains(.profiles) != next.contains(.profiles) { PadDSUBridge.shared.configure() }
+        if previous.contains(.profiles) != next.contains(.profiles) { PadDSUBridge.shared.configure(); ControllerOverlay.shared.start() }
         // Shared input processing remains available to profiles assigned to enabled games or streams.
         DesktopPad.shared.games = games
         DesktopPad.shared.evaluate(force: true)

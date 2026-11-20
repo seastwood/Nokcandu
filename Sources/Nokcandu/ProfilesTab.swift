@@ -341,6 +341,7 @@ struct ProfilesTabDetail: View {
                     ControllerOwnershipSettings()
                     PadDSUSettings()
                     PadGyroAndNotesSettings()
+                    ControllerOverlaySettingsView()
                     PadCaptureSettings()
                     PadHeadTrackingSettings()
                     ControllersSection()

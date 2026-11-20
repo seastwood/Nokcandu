@@ -1,0 +1,243 @@
+import Foundation
+import simd
+
+/// A 3D controller drawn over the screen or in a window of its own (for capture in streaming software), showing the
+/// buttons, sticks, triggers and trackpads as they're used and the controller turning with its gyro.
+public struct ControllerOverlaySettings: Codable, Equatable, Sendable {
+    public enum Mode: String, Codable, CaseIterable, Sendable {
+        /// Over everything, games and streams included, never taking clicks.
+        case onScreen
+        /// A window of its own, for window capture in OBS and the like.
+        case window
+        case off
+        public var title: String { switch self { case .onScreen: "Over games and streams"; case .window: "In its own window (for OBS)"; case .off: "Off" } }
+    }
+    public enum Model: String, Codable, CaseIterable, Sendable {
+        /// The controller last used.
+        case automatic
+        case steam2015 = "steamController2015", steam2026, xbox, switchPro, dualShock4
+        public var title: String {
+            switch self {
+            case .automatic: "The controller in use"
+            case .steam2015: "Steam Controller (2015)"
+            case .steam2026: "Steam Controller (2026)"
+            case .xbox: "Xbox"
+            case .switchPro: "Switch Pro Controller"
+            case .dualShock4: "DualShock 4 / DualSense"
+            }
+        }
+        /// The drawing for a controller by the name macOS or its driver gives it: Xbox's shape for anything not
+        /// recognised (the usual layout).
+        public static func forName(_ name: String) -> Model {
+            let n = name.lowercased()
+            if n.contains("steam") { return n.contains("2026") ? .steam2026 : .steam2015 }
+            // Before PlayStation's: a DualShock 4 calls itself "Wireless Controller", and so does Xbox's.
+            if n.contains("xbox") || n.contains("xinput") { return .xbox }
+            if n.contains("switch") || n.contains("pro controller") || n.contains("nintendo") || n.contains("joy-con") { return .switchPro }
+            if n.contains("dualshock") || n.contains("dualsense") || n.contains("playstation") || n.contains("wireless controller") || n.contains("ps4") || n.contains("ps5") { return .dualShock4 }
+            return .xbox
+        }
+    }
+    public enum Background: String, Codable, CaseIterable, Sendable {
+        case transparent, color
+        public var title: String { switch self { case .transparent: "Transparent"; case .color: "Colour (for chroma key)" } }
+    }
+    public var mode: Mode = .off
+    public var model: Model = .automatic
+    /// Width in points; the height follows the controller's shape.
+    public var size: Double = 320
+    public var opacity: Double = 1
+    /// Colours as "#RRGGBB".
+    public var bodyColor = "#3C4048"
+    public var buttonColor = "#7A808C"
+    public var highlightColor = "#3FA9FF"
+    public var background: Background = .transparent
+    public var backgroundColor = "#00B140"
+    /// Turning the drawn controller with the gyro, and how much of the real movement it shows (0…1.5).
+    public var gyro = true
+    public var gyroStrength: Double = 1
+    /// Where it sits over the screen: its centre as a fraction of the screen (0…1, from the bottom left).
+    public var positionX: Double = 0.85
+    public var positionY: Double = 0.15
+    /// The screen it's placed on (its name); nil or not connected: the main screen.
+    public var screen: String?
+
+    public static let sizes: ClosedRange<Double> = 120...900
+    public init() {}
+
+    public init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        let base = ControllerOverlaySettings()
+        mode = (try? c.decode(Mode.self, forKey: .mode)) ?? base.mode
+        // "steam2015" was the only choice at first (November 19), not a choice: the controller in use instead.
+        model = (try? c.decode(Model.self, forKey: .model)) ?? base.model
+        size = (try? c.decode(Double.self, forKey: .size)) ?? base.size
+        opacity = (try? c.decode(Double.self, forKey: .opacity)) ?? base.opacity
+        bodyColor = (try? c.decode(String.self, forKey: .bodyColor)) ?? base.bodyColor
+        buttonColor = (try? c.decode(String.self, forKey: .buttonColor)) ?? base.buttonColor
+        highlightColor = (try? c.decode(String.self, forKey: .highlightColor)) ?? base.highlightColor
+        background = (try? c.decode(Background.self, forKey: .background)) ?? base.background
+        backgroundColor = (try? c.decode(String.self, forKey: .backgroundColor)) ?? base.backgroundColor
+        gyro = (try? c.decode(Bool.self, forKey: .gyro)) ?? base.gyro
+        gyroStrength = (try? c.decode(Double.self, forKey: .gyroStrength)) ?? base.gyroStrength
+        positionX = (try? c.decode(Double.self, forKey: .positionX)) ?? base.positionX
+        positionY = (try? c.decode(Double.self, forKey: .positionY)) ?? base.positionY
+        screen = try? c.decodeIfPresent(String.self, forKey: .screen)
+        // The first colours (November 19) were too dark to read on a dark screen.
+        if bodyColor == "#2B2D31" && buttonColor == "#4A4D55" { bodyColor = base.bodyColor; buttonColor = base.buttonColor }
+        clamp()
+    }
+
+    public mutating func clamp() {
+        size = min(Self.sizes.upperBound, max(Self.sizes.lowerBound, size.isFinite ? size : 320))
+        opacity = min(1, max(0.1, opacity.isFinite ? opacity : 1))
+        gyroStrength = min(1.5, max(0, gyroStrength.isFinite ? gyroStrength : 1))
+        positionX = min(1, max(0, positionX.isFinite ? positionX : 0.85))
+        positionY = min(1, max(0, positionY.isFinite ? positionY : 0.15))
+    }
+
+    public static let key = "controllerOverlay"
+    public static func load(_ defaults: UserDefaults = .standard) -> ControllerOverlaySettings {
+        guard let data = defaults.data(forKey: key), let s = try? JSONDecoder().decode(Self.self, from: data) else { return .init() }
+        return s
+    }
+    public func save(_ defaults: UserDefaults = .standard) {
+        if let data = try? JSONEncoder().encode(self) { defaults.set(data, forKey: Self.key) }
+    }
+
+    /// "#RRGGBB" as 0…1 components; nil when it isn't one.
+    public static func rgb(_ hex: String) -> (r: Double, g: Double, b: Double)? {
+        var s = hex.trimmingCharacters(in: .whitespaces)
+        if s.hasPrefix("#") { s.removeFirst() }
+        guard s.count == 6, let v = UInt32(s, radix: 16) else { return nil }
+        return (Double(v >> 16 & 0xFF) / 255, Double(v >> 8 & 0xFF) / 255, Double(v & 0xFF) / 255)
+    }
+    public static func hex(r: Double, g: Double, b: Double) -> String {
+        func c(_ x: Double) -> Int { Int((min(1, max(0, x)) * 255).rounded()) }
+        return String(format: "#%02X%02X%02X", c(r), c(g), c(b))
+    }
+}
+
+/// What the overlay draws: one moment of a controller.
+public struct ControllerOverlayInput: Equatable, Sendable {
+    public var buttons: Set<PadProfiles.Input> = []
+    /// Sticks and trackpads: x right, y up, −1…1.
+    public var leftStick = SIMD2<Float>.zero, rightStick = SIMD2<Float>.zero
+    public var leftPad = SIMD2<Float>.zero, rightPad = SIMD2<Float>.zero
+    public var leftTouch = false, rightTouch = false
+    /// 0…1.
+    public var leftTrigger: Float = 0, rightTrigger: Float = 0
+    public init() {}
+
+    /// From held inputs and axes as the remapper has them: SDL's axes (0, 1 left stick, 2, 3 right stick, y down,
+    /// ±32767; 4, 5 triggers 0…32767).
+    public init(buttons: Set<PadProfiles.Input>, axes: [Int: Int]) {
+        func v(_ n: Int) -> Float { Float(max(-32767, min(32767, axes[n] ?? 0))) / 32767 }
+        self.buttons = buttons
+        leftStick = .init(v(0), -v(1)); rightStick = .init(v(2), -v(3))
+        leftTrigger = max(0, v(4)); rightTrigger = max(0, v(5))
+    }
+
+    public init(_ s: SteamControllerReport.State) {
+        buttons = s.buttons
+        leftStick = .init(s.stick.x, s.stick.y)
+        rightStick = .init(s.rightStick.x, s.rightStick.y)
+        leftPad = .init(s.leftPad.x, s.leftPad.y); rightPad = .init(s.rightPad.x, s.rightPad.y)
+        leftTouch = s.leftTouch; rightTouch = s.rightTouch
+        leftTrigger = s.leftTrigger; rightTrigger = s.rightTrigger
+    }
+
+    /// The same picture to the eye: stick and pad positions and triggers within a hundredth. Reports come in at
+    /// hundreds a second; most change nothing that can be seen, and those aren't drawn again.
+    public func looksLike(_ o: ControllerOverlayInput) -> Bool {
+        func near(_ a: SIMD2<Float>, _ b: SIMD2<Float>) -> Bool { abs(a.x - b.x) < 0.01 && abs(a.y - b.y) < 0.01 }
+        return buttons == o.buttons && leftTouch == o.leftTouch && rightTouch == o.rightTouch
+            && near(leftStick, o.leftStick) && near(rightStick, o.rightStick)
+            && (!leftTouch || near(leftPad, o.leftPad)) && (!rightTouch || near(rightPad, o.rightPad))
+            && abs(leftTrigger - o.leftTrigger) < 0.01 && abs(rightTrigger - o.rightTrigger) < 0.01
+    }
+}
+
+/// Which way the controller is facing, from its gyro and accelerometer.
+///
+/// The controller's axes, as the gyro and accelerometer report them: x to the right, y out of its face, z towards
+/// the player (the same as the drawn model's). The gyro is integrated; gravity from the accelerometer slowly pulls
+/// the tilt back to the truth (a gyro alone drifts), and with no compass to correct turning, the heading eases back
+/// to the front by itself. `orientation` is relative to how the controller was held when it was last recentred.
+public struct ControllerOverlayMotion: Sendable {
+    /// Controller → world.
+    public private(set) var attitude = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+    private var reference = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+    private var bias = SIMD3<Float>.zero
+    private var last: Double?
+    private var started = false
+    /// How quickly gravity corrects the tilt, and how quickly the heading returns to the front (per second).
+    public var gravityRate: Float = 2.0
+    public var headingReturn: Float = 0.25
+    public init() {}
+
+    static let up = SIMD3<Float>(0, 1, 0)
+
+    /// `gyro` in radians per second, `acceleration` in g, `time` in seconds.
+    public mutating func update(gyro: [Float], acceleration: [Float], at time: Double) {
+        guard gyro.count == 3, acceleration.count == 3 else { return }
+        let w = SIMD3(gyro[0], gyro[1], gyro[2]), a = SIMD3(acceleration[0], acceleration[1], acceleration[2])
+        guard all(w .== w), all(a .== a) else { return }                    // NaN
+        let g = simd_length(a)
+        if !started {
+            // Start from the tilt gravity shows, facing the front, and call that the rest position.
+            if g > 0.5 { attitude = Self.rotation(from: a / g, to: Self.up) }
+            reference = attitude; started = true; last = time; return
+        }
+        let dt = Float(min(0.05, max(0, time - (last ?? time)))); last = time
+        guard dt > 0 else { return }
+        // Bias: while turning slowly, follow the reading slowly (a resting gyro reads a little).
+        var rate = w - bias
+        if simd_length(rate) < 0.05 { bias += (w - bias) * min(1, dt * 0.5) }
+        rate = SIMD3(abs(rate.x) < 0.007 ? 0 : rate.x, abs(rate.y) < 0.007 ? 0 : rate.y, abs(rate.z) < 0.007 ? 0 : rate.z)
+        let angle = simd_length(rate) * dt
+        if angle > 0 { attitude = simd_normalize(attitude * simd_quatf(angle: angle, axis: rate / simd_length(rate))) }
+        // Gravity: where up should be in the controller's own terms, against where the accelerometer says it is,
+        // trusted only while the controller isn't being shaken (close to 1 g).
+        if g > 0.8 && g < 1.2 {
+            let predicted = attitude.inverse.act(Self.up), measured = a / g
+            let fix = Self.rotation(from: measured, to: predicted)
+            let k = min(1, gravityRate * dt)
+            attitude = simd_normalize(attitude * simd_slerp(simd_quatf(ix: 0, iy: 0, iz: 0, r: 1), fix, k))
+        }
+        // Heading: turn back towards the rest heading about world up.
+        if headingReturn > 0 {
+            let yaw = Self.heading(attitude * reference.inverse)
+            attitude = simd_normalize(simd_quatf(angle: -yaw * min(1, headingReturn * dt), axis: Self.up) * attitude)
+        }
+    }
+
+    /// The controller's turn since the rest position, in the world's terms (what the drawing applies), scaled by
+    /// `strength` (0 none, 1 the real movement).
+    public func orientation(strength: Float = 1) -> simd_quatf {
+        let r = attitude * reference.inverse
+        return simd_slerp(simd_quatf(ix: 0, iy: 0, iz: 0, r: 1), r, max(0, strength))
+    }
+
+    /// The way it's held now becomes the rest position.
+    public mutating func recenter() { reference = attitude }
+    public mutating func reset() { self = ControllerOverlayMotion() }
+
+    /// The turn about world up in a world-frame rotation (where it moves the forward direction, −z, to).
+    static func heading(_ q: simd_quatf) -> Float {
+        let f = q.act(SIMD3<Float>(0, 0, -1))
+        guard f.x * f.x + f.z * f.z > 1e-6 else { return 0 }
+        return atan2(-f.x, -f.z)
+    }
+
+    /// The shortest rotation taking unit vector `a` to unit vector `b`.
+    static func rotation(from a: SIMD3<Float>, to b: SIMD3<Float>) -> simd_quatf {
+        let d = simd_dot(a, b)
+        if d > 0.999999 { return simd_quatf(ix: 0, iy: 0, iz: 0, r: 1) }
+        if d < -0.999999 {
+            let axis = abs(a.x) < 0.9 ? simd_normalize(simd_cross(a, SIMD3(1, 0, 0))) : simd_normalize(simd_cross(a, SIMD3(0, 1, 0)))
+            return simd_quatf(angle: .pi, axis: axis)
+        }
+        return simd_quatf(from: a, to: b)
+    }
+}
