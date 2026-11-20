@@ -6,6 +6,10 @@ public enum WineSelection {
     static let preferenceKey = "defaultWineEngine"
     public static let minimum = EngineVersion(major: 10, minor: 0, revision: 0)
     public static func parse(_ tag: String) -> EngineVersion? {
+        // An installed engine from another project, by its runtime id.
+        if tag.hasPrefix("ext-") {
+            return RuntimeManager.manifest(for: tag).flatMap { EngineVersion(versionString: $0.wineVersion) }
+        }
         guard let version = EngineVersion(assetName: "WS12WineSikarugir\(tag).tar.xz"), version >= minimum else { return nil }
         return version
     }
@@ -37,6 +41,10 @@ public enum WineSelection {
     }
     public static func spec(for engine: EngineVersion) -> RuntimeSpec {
         var spec = RecipeCatalog.sikarugirWine10
+        if let external = engine.external {
+            spec.id = external; spec.engine = external; spec.wineVersionString = engine.versionString
+            return spec
+        }
         spec.id = RuntimeManager.runtimeID(engine: engine, template: .tested)
         spec.engine = engine.engineName; spec.wineVersionString = engine.versionString
         return spec
@@ -46,6 +54,12 @@ public enum WineSelection {
                                log: @escaping @Sendable (String) -> Void) async throws -> String {
         guard engine >= minimum else { throw NokError("Wine 10.0 is the earliest supported version.") }
         let spec = spec(for: engine)
+        if engine.external != nil {
+            // Installed from Settings → Updates; nothing to download here.
+            guard RuntimeManager.isCached(id: spec.id) else { throw NokError("\(engine) isn't installed. Add it in Settings → Updates.") }
+            guard RuntimeManager.manifest(for: spec.id)?.selfTest != false else { throw NokError("\(engine) failed the Windows startup check on this Mac.") }
+            return spec.id
+        }
         guard !EngineSelfTests.failed(spec.id) else { throw NokError("\(engine) failed the Windows startup check on this Mac and cannot be selected.") }
         if engine == .tested, RuntimeManager.isCached(RecipeCatalog.sikarugirWine10) { return spec.id }
         var catalog: UpdateCatalog

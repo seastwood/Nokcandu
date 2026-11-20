@@ -7,9 +7,12 @@ public struct EngineVersion: Comparable, Hashable, Codable, CustomStringConverti
     public var major: Int, minor: Int, revision: Int
     /// nil: an Intel (x86_64) engine, as every engine so far. .arm64: a native Apple silicon engine.
     public var arch: EngineLayout.Arch? = nil
+    /// An engine from another project (`ExternalEngines`), by its runtime id; nil for Sikarugir's.
+    public var external: String? = nil
 
-    public init(major: Int, minor: Int, revision: Int, arch: EngineLayout.Arch? = nil) {
+    public init(major: Int, minor: Int, revision: Int, arch: EngineLayout.Arch? = nil, external: String? = nil) {
         self.major = major; self.minor = minor; self.revision = revision; self.arch = arch == .x86_64 ? nil : arch
+        self.external = external
     }
 
     /// From a release asset name like "WS12WineSikarugir11.0_1.tar.xz" (other engine families are ignored).
@@ -23,18 +26,38 @@ public struct EngineVersion: Comparable, Hashable, Codable, CustomStringConverti
 
     /// From an engine's version file: "wine sikarugir 10.0 (revision 8)" or "wine sikarugir 10.0".
     public init?(versionString: String) {
+        if let m = versionString.firstMatch(of: #/^wine external (\S+) (\d+)\.(\d+)/#) {
+            major = Int(m.2)!; minor = Int(m.3)!; revision = 0; arch = .arm64; external = String(m.1)
+            return
+        }
         guard let m = versionString.firstMatch(of: #/sikarugir (\d+)\.(\d+)(?: \(revision (\d+)\))?/#) else { return nil }
         major = Int(m.1)!; minor = Int(m.2)!; revision = m.3.flatMap { Int($0) } ?? 0
     }
 
-    public var tag: String { "\(major).\(minor)" + (revision > 0 ? "_\(revision)" : "") + (isARM ? "_arm64" : "") }
-    public var engineName: String { "WS12WineSikarugir" + tag }
-    public var versionString: String { "wine sikarugir \(major).\(minor)" + (revision > 0 ? " (revision \(revision))" : "") }
-    public var description: String { "Wine \(major).\(minor)" + (revision > 0 ? " r\(revision)" : "") + (isARM ? " (Apple silicon, experimental)" : "") }
+    public var tag: String {
+        if let external { return external }
+        return "\(major).\(minor)" + (revision > 0 ? "_\(revision)" : "") + (isARM ? "_arm64" : "")
+    }
+    public var engineName: String { external ?? "WS12WineSikarugir" + tag }
+    public var versionString: String {
+        if let external { return ExternalEngines.versionString(id: external, wine: "\(major).\(minor)") }
+        return "wine sikarugir \(major).\(minor)" + (revision > 0 ? " (revision \(revision))" : "")
+    }
+    public var description: String {
+        if let external {
+            let name = ExternalEngines.info(id: external)?.title ?? external
+            return "\(name), Wine \(major).\(minor) (Apple silicon, preview)"
+        }
+        return "Wine \(major).\(minor)" + (revision > 0 ? " r\(revision)" : "") + (isARM ? " (Apple silicon, experimental)" : "")
+    }
 
-    /// Same Wine version: Intel builds sort above ARM ones, which stay a manual, experimental choice.
+    /// Same Wine version: Intel builds sort above ARM ones, which stay a manual, experimental choice; Sikarugir's
+    /// above other projects'.
     public static func < (a: Self, b: Self) -> Bool {
-        (a.major, a.minor, a.revision, a.isARM ? 0 : 1) < (b.major, b.minor, b.revision, b.isARM ? 0 : 1)
+        if (a.major, a.minor, a.revision, a.isARM ? 0 : 1, a.external == nil ? 1 : 0) != (b.major, b.minor, b.revision, b.isARM ? 0 : 1, b.external == nil ? 1 : 0) {
+            return (a.major, a.minor, a.revision, a.isARM ? 0 : 1, a.external == nil ? 1 : 0) < (b.major, b.minor, b.revision, b.isARM ? 0 : 1, b.external == nil ? 1 : 0)
+        }
+        return (a.external ?? "") < (b.external ?? "")
     }
 
     /// The engine Nokcandu's recipes were validated with.

@@ -89,6 +89,9 @@ public enum GameApp {
         let support = h.appendingPathComponent("SharedSupport")
         let wine = support.appendingPathComponent("wine/bin/wine")
         guard enabled else { removeAll(host: h); return }
+        // A sealed engine's loader can't be copied into a wrapper: its entitlement belongs to the original, and
+        // macOS kills a copy. Those games run as the engine's own program.
+        guard !EngineLayout(contents: h).isSealed else { removeAll(host: h); return }
         // Wine 11 engines can't start from a wrapper while the helper library is loaded (Windows' shared user
         // data can't be mapped and the game quits at once), so those games run as plain wine.
         // Wine 11: ntdll re-execs the engine's real loader (lib/wine/x86_64-unix/wine), so that's the program macOS

@@ -55,6 +55,7 @@ struct UpdatesView: View {
                     }
                     if model.gamesEnabled {
                         engineSection
+                        ExternalEnginesSection()
                         lavSection
                         storeSection
                         rosettaSection

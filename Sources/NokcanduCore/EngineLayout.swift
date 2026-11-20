@@ -50,6 +50,10 @@ public struct EngineLayout: Equatable, Sendable {
             .replacingOccurrences(of: "x86_64-windows/", with: "aarch64-windows/")
     }
 
+    /// An engine from another project, kept exactly as it came (`ExternalEngines`): its files are links into a
+    /// signed app, and changing anything in it would break the signature macOS checks. Nothing may write into it.
+    public var isSealed: Bool { FileManager.default.fileExists(atPath: wine.appendingPathComponent(ExternalEngines.infoName).path) }
+
     /// Rosetta is needed for Intel engines only.
     public var needsRosetta: Bool { arch == .x86_64 }
 

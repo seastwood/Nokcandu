@@ -96,6 +96,7 @@ public enum AudioBuffer {
 
     /// Writes the adjusted driver for an app (from its saved original), re-signed.
     static func write(ms: Int, host h: URL) throws {
+        guard !EngineLayout(contents: h).isSealed else { throw NokError("This engine is kept exactly as its makers built it, so Nokcandu can't adjust its audio buffer.") }
         let fm = FileManager.default
         let drv = driver(h), orig = original(h)
         // Keep the engine's own file once; every change starts from it.
