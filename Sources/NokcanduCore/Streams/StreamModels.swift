@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Streams: game streaming from a PC running Sunshine (or another GameStream host) to this Mac.
-// The protocol side follows Moonlight and VoidLink; see docs/streams.md.
+// The protocol side follows Moonlight; see docs/streams.md.
 import Foundation
 
 /// A computer that streams to this Mac.

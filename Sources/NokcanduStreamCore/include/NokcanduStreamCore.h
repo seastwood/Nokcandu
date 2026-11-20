@@ -1,4 +1,4 @@
-// Nokcandu Streams: the Moonlight streaming core (VoidLink's moonlight-common-c fork) and Nokcandu's
+// Nokcandu Streams: the Moonlight streaming core (moonlight-common-c) and Nokcandu's
 // pairing and host-request helpers.
 // SPDX-License-Identifier: GPL-3.0-only
 #include "../moonlight/src/Limelight.h"

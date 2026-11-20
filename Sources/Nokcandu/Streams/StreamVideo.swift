@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Decodes the host's video with VideoToolbox (hardware H.264, HEVC and AV1) and shows it on an
-// AVSampleBufferDisplayLayer, paced to the display. Follows VoidLink's VideoDecoderRenderer.
+// AVSampleBufferDisplayLayer, paced to the display. Follows Moonlight's VideoDecoderRenderer.
 import AVFoundation
 import CoreMedia
 import CoreVideo

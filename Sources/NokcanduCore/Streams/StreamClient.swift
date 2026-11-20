@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // The GameStream host API (Sunshine, and NVIDIA GameStream before it): server info, apps, pairing, launch and quit.
-// Pairing follows Moonlight/VoidLink's PairManager.
+// Pairing follows Moonlight's PairManager.
 import Foundation
 import CryptoKit
 import NokcanduStreamCore
@@ -376,7 +376,7 @@ public final class StreamClient: @unchecked Sendable {
         }
     }
 
-    /// VoidLink hosts can change the bitrate during a stream.
+    /// Some hosts can change the bitrate during a stream.
     public func changeBitrate(kbps: Int) throws {
         _ = try get("/bitrate?\(q)&clientname=\(deviceName.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "Mac")&bitrate=\(kbps)", https: true)
     }

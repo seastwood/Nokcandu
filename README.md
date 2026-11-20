@@ -71,7 +71,7 @@ Needs Xcode or the Command Line Tools (Swift 5.9+). To release, bump `VERSION`, 
 
 Nokcandu is licensed under the GNU General Public License, version 3 (see [LICENSE](LICENSE)). Releases up to and including 0.12.18 were published under the MIT license, and those copies keep it.
 
-- The streaming client is derived from [VoidLink](https://github.com/The-Fried-Fish/VoidLink-previously-moonlight-zwm) and [moonlight-common-c](https://github.com/moonlight-stream/moonlight-common-c) (GPL-3.0).
+- Streams is built on [Moonlight](https://moonlight-stream.org)'s streaming core, [moonlight-common-c](https://github.com/moonlight-stream/moonlight-common-c) (GPL-3.0), by Cameron Gutman and the Moonlight contributors.
 - Downloaded at runtime from their official releases: Wine and the Sikarugir engine/wrapper (LGPL-2.1+, [Sikarugir-App](https://github.com/Sikarugir-App)), which bundle DXVK (zlib), Mesa KosmicKrisp (MIT), MoltenVK (Apache-2.0) and Apple's D3DMetal (Apple's license), and LAV Filters (GPL-2.0, on request).
 - When you use them: the store clients [gogdl](https://github.com/Heroic-Games-Launcher/heroic-gogdl), [legendary](https://github.com/derrod/legendary) and [nile](https://github.com/imLinguin/nile) (GPL-3.0, run as separate programs), [winetricks](https://github.com/Winetricks/winetricks) (LGPL-2.1+), fix data from [umu-protonfixes](https://github.com/Open-Wine-Components/umu-protonfixes) (BSD-2-Clause) and anti-cheat data from [AreWeAntiCheatYet](https://github.com/AreWeAntiCheatYet/AreWeAntiCheatYet) (MIT).
 - Nokcandu's Wine Mac driver (for the resizable window) is built from Wine's source with the patches in [Engine/winemac](Engine/winemac) (LGPL-2.1+).

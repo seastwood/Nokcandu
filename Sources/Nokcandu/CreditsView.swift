@@ -77,11 +77,8 @@ struct CreditsSettings: View {
                     what: "Unpacks Microsoft cabinet files.", license: "GPL", site: "https://www.cabextract.org.uk"),
         ]),
         Group(title: "Streams", projects: [
-            Project(name: "VoidLink", by: "True砖家 (TrueZhuangJia) and contributors",
-                    what: "The streaming client Nokcandu's Streams is ported from: its streaming core, pairing and decoding.", license: "GPL 3",
-                    site: "https://github.com/The-Fried-Fish/VoidLink-previously-moonlight-zwm"),
             Project(name: "Moonlight", by: "Cameron Gutman and the Moonlight contributors",
-                    what: "moonlight-common-c, the GameStream protocol core under VoidLink.", license: "GPL 3",
+                    what: "moonlight-common-c, the streaming core Streams is built on: the GameStream protocol, pairing, video, sound and input.", license: "GPL 3",
                     site: "https://moonlight-stream.org", donate: [("Donate", "https://moonlight-stream.org/#donate")]),
             Project(name: "ENet", by: "Lee Salzman", what: "Reliable messages over UDP, inside the streaming core.", license: "MIT", site: "http://enet.bespin.org"),
             Project(name: "nanors", by: "Sunshine and Moonlight contributors", what: "Error correction for the video stream.", license: "MIT",

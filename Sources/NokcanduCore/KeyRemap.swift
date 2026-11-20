@@ -113,7 +113,7 @@ public enum KeyRemap {
 
     // MARK: Layouts shared by games
 
-    /// A named set of remaps that any number of games can use ("Voidlink keys"). Editing it changes every game
+    /// A named set of remaps that any number of games can use ("Shooter keys"). Editing it changes every game
     /// using it. Kept in Application Support/Nokcandu/key-layouts.json. One layout can be the default: every game
     /// that hasn't been given keys of its own follows it.
     public struct Layout: Codable, Hashable, Identifiable, Sendable {

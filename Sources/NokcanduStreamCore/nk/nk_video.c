@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // A minimal AV1 sequence header reader (AV1 spec 5.5) for VideoToolbox's format description, in place of
-// FFmpeg's bitstream parser that VoidLink uses on iOS.
+// FFmpeg's bitstream parser.
 #include "nk_video.h"
 
 #include <stdarg.h>
