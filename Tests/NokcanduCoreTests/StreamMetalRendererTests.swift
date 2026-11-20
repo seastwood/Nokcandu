@@ -125,6 +125,12 @@ final class StreamMetalRendererTests: XCTestCase {
         }
         gpu.sort(); wall.sort()
         print(String(format: "Metal at 2560×1600: GPU median %.2f ms, max %.2f ms; test wall clock median %.2f ms", gpu[10], gpu.last!, wall[10]))
+        // GitHub's macOS runners are virtual machines with an emulated GPU ("Apple Paravirtual device"), 6 ms a
+        // frame there (November 19): the limit is for real hardware.
+        let name = MTLCreateSystemDefaultDevice()?.name ?? "?"
+        if name.localizedCaseInsensitiveContains("paravirtual") || ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true" {
+            throw XCTSkip("GPU timing on a virtual machine's GPU (\(name)): \(String(format: "%.2f", gpu[10])) ms")
+        }
         XCTAssertLessThan(gpu[10], 3, "GPU time per frame")
     }
 
