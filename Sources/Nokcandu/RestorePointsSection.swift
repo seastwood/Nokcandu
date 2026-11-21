@@ -7,6 +7,8 @@ import NokcanduCore
 struct RestorePointsSection: View {
     @EnvironmentObject var model: AppModel
     let game: InstalledGame
+    /// Inside History & Restore: rows only.
+    var embedded = false
     @State private var points: [RestorePoint] = []
     @State private var sizes: [String: Int64] = [:]
     @State private var busy = false
@@ -16,11 +18,29 @@ struct RestorePointsSection: View {
     var hostName: String { host?.deletingPathExtension().lastPathComponent ?? game.name }
     var shared: Bool { host.map { $0.standardizedFileURL != game.appURL.standardizedFileURL } ?? false }
 
+    var info: String {
+        shared
+            ? "\(game.name) runs inside \(hostName), so its restore points cover \(hostName) and every game in it. Restore puts the whole app back as it was."
+            : "Nokcandu takes one automatically before fixes, recommended setups and engine changes (the newest \(RestorePoints.keepAutomatic) are kept). They use almost no space until the game changes. Game files on another drive aren't included."
+    }
+
     var body: some View {
-        SettingsSection(title: "Restore Points",
-                        info: shared
-                            ? "\(game.name) runs inside \(hostName), so its restore points cover \(hostName) and every game in it. Restore puts the whole app back as it was."
-                            : "Nokcandu takes one automatically before fixes, recommended setups and engine changes (the newest \(RestorePoints.keepAutomatic) are kept). They use almost no space until the game changes. Game files on another drive aren't included.") {
+        Group {
+            if embedded { VStack(alignment: .leading, spacing: 8) { content } }
+            else { SettingsSection(title: "Restore Points", info: info) { content } }
+        }
+        .task(id: game.id) { reload() }
+
+        .confirmationDialog("Restore \(hostName) to \(restoring?.created.formatted(date: .abbreviated, time: .shortened) ?? "")?",
+                            isPresented: Binding(get: { restoring != nil }, set: { if !$0 { restoring = nil } })) {
+            Button("Restore") { if let p = restoring { restore(p) }; restoring = nil }
+            Button("Cancel", role: .cancel) { restoring = nil }
+        } message: {
+            Text("Settings, fixes, the engine and anything saved inside \(hostName) go back to how they were then — including game saves kept in its Windows folders. The current state is kept as a restore point first, so you can switch back.")
+        }
+    }
+
+    @ViewBuilder var content: some View {
                 if shared { SettingNote("Covers \(hostName) and every game in it.") }
                 if points.isEmpty {
                     Text("No restore points yet.").font(.callout).foregroundStyle(.secondary)
@@ -43,15 +63,6 @@ struct RestorePointsSection: View {
                     Button("Take Restore Point Now") { take() }.disabled(busy || host == nil)
                     if busy { ProgressView().controlSize(.small) }
                 }
-        }
-        .task(id: game.id) { reload() }
-        .confirmationDialog("Restore \(hostName) to \(restoring?.created.formatted(date: .abbreviated, time: .shortened) ?? "")?",
-                            isPresented: Binding(get: { restoring != nil }, set: { if !$0 { restoring = nil } })) {
-            Button("Restore") { if let p = restoring { restore(p) }; restoring = nil }
-            Button("Cancel", role: .cancel) { restoring = nil }
-        } message: {
-            Text("Settings, fixes, the engine and anything saved inside \(hostName) go back to how they were then — including game saves kept in its Windows folders. The current state is kept as a restore point first, so you can switch back.")
-        }
     }
 
     /// Listing and sizing read the drive, so both happen off the main thread.

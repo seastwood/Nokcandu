@@ -10,7 +10,6 @@ struct GameDetailView: View {
     @State private var checkResult: ShellResult?
     @State private var showDiagnostics = false
     @State private var showReport = false
-    @State private var showSettingsBackups = false
     @State private var confirmReset = false
     @State private var busy = false
     @State private var confirmRepair = false
@@ -124,6 +123,25 @@ struct GameDetailView: View {
                            title: w.verdict == .blocked ? "Anti-cheat blocks online play" : "Anti-cheat may affect online play",
                            detail: w.detail + " Based on areweanticheatyet.com (Linux/Steam Deck reports) — your results on a Mac may differ.") { EmptyView() })))
         }
+        if let message = model.helperActivation[game.id]?.message {
+            items.append(AttentionItem(id: "helper", view: AnyView(
+                NoticeCard(symbol: "exclamationmark.triangle", tint: .orange, title: "Nokcandu's helper isn't active for \(game.name)", detail: message) { EmptyView() })))
+        }
+        if model.statusUnavailable {
+            items.append(AttentionItem(id: "status", view: AnyView(
+                NoticeCard(symbol: "questionmark.circle", tint: .orange, title: "Game status is unavailable for now",
+                           detail: "The last known status is kept; changes that need the game closed wait for a reliable check.") { EmptyView() })))
+        }
+        if model.updating[game.id] == nil, let u = model.storeUpdates[game.id] {
+            items.append(AttentionItem(id: "store-update", view: AnyView(
+                NoticeCard(symbol: "arrow.down.circle.fill", tint: .blue, title: "Update available from \(u.link.store.title)",
+                           detail: "Installed \(u.installed) · newest \(u.latest)") {
+                    HStack {
+                        UpdateNoticeControl(notice: .init(kind: .store, target: game.id, version: u.latest))
+                        Button("Update") { model.updateGame(game) }.buttonStyle(.borderedProminent).disabled(running)
+                    }
+                })))
+        }
         return items
     }
 
@@ -190,12 +208,6 @@ struct GameDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 header
-                if let message = model.helperActivation[game.id]?.message {
-                    SettingNote(message, warning: true)
-                }
-                if model.statusUnavailable {
-                    SettingNote("Game status is temporarily unavailable. The last known status is kept; changes that require a closed game will wait for a reliable check.", warning: true)
-                }
                 AttentionArea(items: attentionItems).id("attention-\(game.id)-\(attentionItems.count)")
                 if let u = model.updating[game.id] {
                     VStack(alignment: .leading, spacing: 4) {
@@ -204,34 +216,12 @@ struct GameDetailView: View {
                         else { ProgressView().progressViewStyle(.linear); Text(u.line).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
                     }
                     .padding(12).background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-                } else if let u = model.storeUpdates[game.id] {
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: "arrow.down.circle.fill").foregroundStyle(.blue).font(.title3)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Update available from \(u.link.store.title)").font(.body.bold())
-                            Text("Installed \(u.installed) · newest \(u.latest)").font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        UpdateNoticeControl(notice: .init(kind: .store, target: game.id, version: u.latest))
-                        Button("Update") { model.updateGame(game) }.buttonStyle(.borderedProminent)
-                            .disabled({ if case .launcherRunning = model.runStates[game.id] ?? .notRunning { return true }; return false }())
-                    }
-                    .padding(12).background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
                 }
                 if game.custom != nil, !LibraryOrganizer.isLauncher(game) {
                     SuggestionsBanner(game: game).id("suggest-\(game.id)")
                 }
                 if game.native == nil { PendingSettingsSection(game: game) }
-                HStack {
-                    SettingSearchField(available: availableTabs, tab: $tab).frame(maxWidth: 360)
-                    Spacer()
-                    Picker("View", selection: $simple) {
-                        Text("Simple").tag(true)
-                        Text("Advanced").tag(false)
-                    }
-                    .pickerStyle(.segmented).labelsHidden().fixedSize()
-                    .help("Simple shows the settings most games need; Advanced shows everything (Wine, fixes, performance, Windows tools).")
-                }
+                SettingSearchField(available: availableTabs, tab: $tab).frame(maxWidth: 360)
                 Picker("Settings", selection: $tab) {
                     ForEach(availableTabs) { Label($0.title, systemImage: $0.symbol).tag($0) }
                 }
@@ -257,7 +247,6 @@ struct GameDetailView: View {
         .onChange(of: running) { if !running { cinematicDiagnosis = CinematicFix.diagnoseLastRun(game); graphicsHint = CrashHints.diagnose(game) } }
         .sheet(isPresented: $showDiagnostics) { DiagnosticsView(game: game) }
         .sheet(isPresented: $showReport) { ReportProblemView(game: game) }
-        .sheet(isPresented: $showSettingsBackups) { SettingsBackupsView(game: game).environmentObject(model) }
         .confirmationDialog("Repair \(game.name)?", isPresented: $confirmRepair) {
             Button("Repair") { runRepair() }
         } message: {
@@ -268,10 +257,10 @@ struct GameDetailView: View {
         } message: {
             Text((RestorePoints.automaticChosen ? "Takes a restore point, undoes" : "Undoes") + " every fix Nokcandu installed, and applies the recommended setup again (including suggestions you chose Not Now for). Saves, game files and the game's own options aren't touched." + (RestorePoints.automaticChosen ? " Restore Points brings your current settings back." : ""))
         }
-        .confirmationDialog("Reset \(game.name) to its tested settings?", isPresented: $confirmReset) {
+        .confirmationDialog("Reset \(game.name)'s screen settings?", isPresented: $confirmReset) {
             Button("Reset", role: .destructive, action: reset)
         } message: {
-            Text("Undoes every change Nokcandu made and returns to Fullscreen. Saves, replays, maps, and your other options are not touched.")
+            Text("Undoes every screen change Nokcandu made and returns to Fullscreen. Saves, replays, maps, and your other options are not touched.")
         }
     }
 
@@ -282,7 +271,7 @@ struct GameDetailView: View {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .overview: "Overview"; case .display: "Display"; case .performance: "Performance"
+            case .overview: "Overview"; case .display: "Display"; case .performance: "Performance & Sound"
             case .controls: "Controls"; case .compatibility: "Wine & Fixes"; case .storage: "Storage"
             }
         }
@@ -295,11 +284,9 @@ struct GameDetailView: View {
     }
     /// The last tab you used is remembered across games.
     @AppStorage("gameSettingsTab") private var tab: Tab = .overview
-    /// Simple hides Wine & Fixes and Performance (graphics mode moves to Overview). Remembered for every game.
-    @AppStorage("gamePageSimple") private var simple = false
 
     var hasDisplayTab: Bool {
-        DisplayController.supports(game) || hasResizable || game.hosted?.exe != nil || game.custom != nil
+        DisplayController.supports(game) || hasResizable || game.hosted?.exe != nil || game.custom != nil || RecipeSettings.supports(game)
     }
     var hasResizable: Bool {
         game.native == nil && WineTools.hostContents(for: game) != nil
@@ -315,27 +302,21 @@ struct GameDetailView: View {
             case .display: return hasDisplayTab
             case .performance: return hasPerformanceTab
             case .controls: return hasControlsTab
-            case .compatibility: return !simple || game.native != nil
             default: return true
             }
-        }.filter { !(simple && $0 == .performance) }
+        }
     }
     var currentTab: Tab { availableTabs.contains(tab) ? tab : .overview }
 
     @ViewBuilder var overviewTab: some View {
         if game.native == nil { GameSummarySection(game: game, lastCrash: crash, showDiagnostics: { showDiagnostics = true }) }
-        if simple, game.native == nil, game.custom != nil, !LibraryOrganizer.isLauncher(game) {
-            SettingsSection(title: "Graphics", info: "How the game's DirectX reaches the Mac. Switch to Advanced (top of this page) for fixes, the Wine version and Windows tools.") {
-                GraphicsPicker(game: game) { model.refresh() }.id("simple-graphics-\(game.id)-\(model.libraryRevision)")
-            }
-        }
         if game.custom?.disc != nil { GameDiscsSection(game: game).id("discs-\(game.id)-\(Discs.all(game.custom!).count)") }
         if game.battleNet != nil { BattleNetGameInfo(game: game) }
         if game.isSteamHost { SteamGamesSection().id("steamgames-\(model.games.count)") }
         if BattleNet.isHost(game) { BlizzardGamesSection(host: game).id("bnet-\(game.id)-\(model.games.count)") }
         if let k = PCLaunchers.kind(of: game) { LauncherGamesSection(host: game, kind: k).id("pcl-\(game.id)-\(model.games.count)") }
         if game.isSteamHost || game.usesSharedSteam { SteamTipsSection() }
-        if game.native == nil { ChangeHistorySection(game: game).id("history-\(game.id)") }
+        if game.native == nil { HistoryRestoreSection(game: game).id("history-\(game.id)-\(fixVersion)") }
         if game.isManaged { NotesSection(game: game).id(game.id) }
         aboutSection
     }
@@ -344,8 +325,10 @@ struct GameDetailView: View {
         if DisplayController.supports(game) { displaySection }
         // The resizable window lives in the game's Display section; games without one get it on its own.
         if hasResizable { ResizableWindowSection(game: game).id("resizable-\(game.id)") }
-        if game.custom != nil {
-            SettingsSection(title: "Graphics") { GraphicsPicker(game: game) }
+        if game.custom != nil || RecipeSettings.supports(game) {
+            SettingsSection(title: "Graphics", info: "How the game's DirectX reaches the Mac.") {
+                GraphicsPicker(game: game) { model.refresh() }.id("graphics-\(game.id)-\(model.libraryRevision)")
+            }
         }
         if game.custom != nil, game.battleNet == nil, !BattleNet.isHost(game), !DisplayController.supports(game) {
             GameResolutionSection(game: game).id("res-\(game.id)-\(game.custom?.displayPixels ?? [])")
@@ -357,9 +340,7 @@ struct GameDetailView: View {
         if game.custom != nil || game.isSteamHost || game.hosted?.exe != nil || RecipeSettings.supports(game) {
             PerformanceSection(game: game).id("perf-\(game.id)")
         }
-        if game.battleNet != nil {
-            SettingsSection(title: "Microphone") { MicrophoneSettingRow(game: game) }
-        }
+        if SoundSection.applies(game) { SoundSection(game: game).id("sound-\(game.id)") }
     }
 
     @ViewBuilder var controlsTab: some View {
@@ -394,7 +375,6 @@ struct GameDetailView: View {
             LauncherDriveBox(host: game, name: game.isSteamHost ? "Steam" : BattleNet.isHost(game) ? "Battle.net" : PCLaunchers.kind(of: game)!.title)
                 .id("drives-\(game.id)")
         }
-        if RestorePoints.hostApp(for: game) != nil { RestorePointsSection(game: game).id("restore-\(game.id)-\(fixVersion)-\(model.games.count)") }
         RemoveGameSection(game: game).id("remove-\(game.id)")
     }
 
@@ -450,15 +430,21 @@ struct GameDetailView: View {
     var displaySection: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 12) {
-                Picker("Display", selection: Binding(
-                    get: { display?.mode ?? .fillScreen },
-                    set: { apply($0) })) {
-                    ForEach(DisplayMode.allCases) { Text($0.title).tag($0) }
+                HStack {
+                    Picker("Display", selection: Binding(
+                        get: { display?.mode ?? .fillScreen },
+                        set: { apply($0) })) {
+                        ForEach(DisplayMode.allCases) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(maxWidth: 320)
+                    .disabled(running || busy || display?.launcher == .unrecognized)
+                    Spacer()
+                    Button("Reset…") { confirmReset = true }.controlSize(.small)
+                        .disabled(running || busy)
+                        .help("Return the screen settings to the tested ones.")
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(maxWidth: 320)
-                .disabled(running || busy || display?.launcher == .unrecognized)
 
                 if let d = display {
                     Text(d.mode == .fillScreen
@@ -474,11 +460,6 @@ struct GameDetailView: View {
                     }
                 }
                 if running { Text("Quit the game to change this.").font(.callout).foregroundStyle(.secondary) }
-                HStack {
-                    Button("Reset to Tested Settings…") { confirmReset = true }
-                        .disabled(running || busy)
-                    Spacer()
-                }
             }
             .padding(6)
         } label: { Text("Screen").font(.headline) }
@@ -508,7 +489,6 @@ struct GameDetailView: View {
                     Button { confirmResetAll = true } label: { Label("Reset to Recommended…", systemImage: "arrow.counterclockwise") }
                         .disabled(running || busy || repairing)
                         .help("Undo every fix and apply the recommended setup again.")
-                    Button("Settings Backups…") { showSettingsBackups = true }
                 }
                 if let missing = GameDataSpec.forGame(game)?.missingEssentials, !missing.isEmpty {
                     Label("The game's settings folder in Documents is missing \(missing.joined(separator: ", ")). Repair can put it back.", systemImage: "exclamationmark.triangle.fill")

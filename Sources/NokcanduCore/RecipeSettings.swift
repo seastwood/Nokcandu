@@ -17,9 +17,9 @@ public enum RecipeSettings {
     public static func load(_ g: InstalledGame) -> Settings {
         (try? Data(contentsOf: file(g))).flatMap { try? JSONDecoder().decode(Settings.self, from: $0) } ?? Settings()
     }
-    public static func graphics(_ g: InstalledGame) -> GraphicsPreset {
-        load(g).graphics ?? (g.recipe?.runtime.renderer == nil ? .compatible : .classic3D)
-    }
+    public static func graphics(_ g: InstalledGame) -> GraphicsPreset { load(g).graphics ?? defaultGraphics(g) }
+    /// The recipe's own graphics setup.
+    public static func defaultGraphics(_ g: InstalledGame) -> GraphicsPreset { g.recipe?.runtime.renderer == nil ? .compatible : .classic3D }
     static let marker = "# nokcandu-recipe-settings"
     static let invocation = "nokcandu_recipe_wine "
     static let block = #"""
@@ -86,13 +86,8 @@ nokcandu_recipe_wine() {
                 throw NokError("Choose a Windows program that exists in this game's Windows environment.")
             }
         }
-        if let mode = settings.graphics {
-            let layer: String? = switch mode {
-            case .classic3D: "d9vk"; case .modern3D: "dxvk3"; case .appleMetal: "d3dmetal"; case .dxmt: "dxmt"; case .classic2D: "cnc_ddraw"; case .compatible: nil
-            }
-            if let layer, !FileManager.default.fileExists(atPath: g.support.appendingPathComponent("renderer/\(layer)/wine").path) {
-                throw NokError("\(mode.title) isn't installed in this game's engine. Choose another graphics mode or install an engine containing that graphics layer in Updates.")
-            }
+        if let mode = settings.graphics, !mode.isAvailable(in: g) {
+            throw NokError("\(mode.title) isn't in this game's engine. Choose another graphics mode, or switch to an engine that has it.")
         }
         let env = try environment(settings, recipe: recipe)
         let current = try String(contentsOf: launcher, encoding: .utf8)

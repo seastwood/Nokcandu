@@ -82,7 +82,7 @@ struct GameWineSection: View {
 
     var body: some View {
         if let host {
-            SettingsSection(title: "Wine", info: "Wine is the engine that runs Windows programs on the Mac. Each game keeps the version it was set up with until you choose another; Roll Back returns to the previous one. Game files and saves aren't affected.") {
+            SettingsSection(title: "Wine", info: "Wine is the engine that runs Windows programs on the Mac. Each game keeps the version it was set up with until you choose another; Roll Back returns to the previous one. Use Selected Wine downloads a verified build if needed and keeps the previous engine for Roll Back. Game files and saves aren't affected.") {
                 HStack {
                     WineVersionMenu(selection: Binding(get: { shownTag }, set: { selected = $0 }), offersSources: true)
                         .disabled(working || info == nil)
@@ -97,7 +97,6 @@ struct GameWineSection: View {
                 if let reason { Text(reason).font(.caption).foregroundStyle(.orange) }
                 else if let warning { Text(warning).font(.caption).foregroundStyle(.orange) }
                 if let trial = info?.trial, trial.status == .trying {
-                    Text("Keep the current trial or roll back before trying another version.").font(.caption).foregroundStyle(.secondary)
                     EngineTrialBanner(game: host, state: trial)
                 }
                 HStack {
@@ -108,11 +107,11 @@ struct GameWineSection: View {
                     if working { ProgressView().controlSize(.small) }
                 }
                 if !progress.isEmpty { Text(progress).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
-                Text("Downloads a verified build if needed and keeps the previous engine for Roll Back. Game files and saves stay in place.")
-                    .font(.caption).foregroundStyle(.secondary)
                 if source != nil || target?.external != nil {
-                    Text("Apple silicon engines (preview) run Intel Windows programs with FEX instead of Rosetta. They come from other projects and are used exactly as built, so Nokcandu's raw mouse input, the resizable window, the audio buffer setting and the game's own name in the Dock aren't available with them.")
-                        .font(.caption).foregroundStyle(.orange)
+                    HStack(spacing: 4) {
+                        Text("Apple silicon engine (preview): some Nokcandu features don't apply.").font(.caption).foregroundStyle(.orange)
+                        InfoButton("Apple silicon engines run Intel Windows programs with FEX instead of Rosetta. They come from other projects and are used exactly as built, so Nokcandu's raw mouse input, the audio buffer setting and the game's own name in the Dock aren't available with them. The resizable window works on the engines Nokcandu has its driver for.")
+                    }
                 }
             }
             .confirmationDialog("Use \(target?.description ?? "this Wine version")?", isPresented: $confirmWarning) {

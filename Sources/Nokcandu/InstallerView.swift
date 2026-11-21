@@ -765,13 +765,46 @@ struct GraphicsPicker: View {
     @State private var detecting = false
     @State private var moltenVKChoice: Bool?
 
+    @State private var recipeChoice: GraphicsPreset?
+
     init(game: InstalledGame, onChange: @escaping () -> Void = {}) {
         self.game = game
         self.onChange = onChange
         _current = State(initialValue: game.custom?.graphics ?? .classic3D)
+        _recipeChoice = State(initialValue: RecipeSettings.supports(game) ? (PendingSettings.recipe(for: game) ?? RecipeSettings.load(game)).graphics : nil)
+    }
+
+    /// Recipe games keep their graphics in the recipe settings ("Recipe default" = the recipe's own setup).
+    var isRecipe: Bool { game.custom == nil && RecipeSettings.supports(game) }
+    func label(_ p: GraphicsPreset) -> String {
+        p.title + (p == game.custom?.confirmedGraphics ? " ✓" : "") + (p.isAvailable(in: game) ? "" : " — not in this engine")
     }
 
     var body: some View {
+        if isRecipe { recipeBody } else { customBody }
+    }
+
+    var recipeBody: some View {
+        SettingRow(title: "Graphics", info: "The recipe's own setup is tested for this game. Another mode applies after the game closes; modes this game's engine doesn't have can't be chosen.") {
+            Picker("Graphics", selection: Binding(get: { recipeChoice }, set: { applyRecipe($0) })) {
+                Text("Recipe default (\(RecipeSettings.defaultGraphics(game).title))").tag(nil as GraphicsPreset?)
+                ForEach(GraphicsPreset.allCases) { p in
+                    Text(label(p)).tag(Optional(p)).disabled(!p.isAvailable(in: game) && p != recipeChoice)
+                }
+            }
+            .labelsHidden().settingControl()
+        }
+    }
+
+    func applyRecipe(_ p: GraphicsPreset?) {
+        guard p != recipeChoice else { return }
+        var s = PendingSettings.recipe(for: game) ?? RecipeSettings.load(game)
+        s.graphics = p
+        app.changeSetting(for: game, title: "Graphics", success: "Graphics: \(p?.title ?? "recipe default").", change: .recipe(s),
+                          completion: { saved in if saved { recipeChoice = p; onChange() } })
+    }
+
+    var customBody: some View {
         VStack(alignment: .leading, spacing: 8) {
             SettingRow(title: "Graphics",
                        info: current.detail + (current.validated ? "" : " Not yet tested by Nokcandu.") + " A ✓ marks the mode you confirmed plays well."
@@ -779,7 +812,7 @@ struct GraphicsPicker: View {
                               ? "\n\nApplies to the games this launcher starts (they must be 64-bit, like Diablo II: Resurrected). The launcher itself draws its window separately." : "")) {
                 Picker("Graphics", selection: Binding(get: { current }, set: { apply($0) })) {
                     ForEach(GraphicsPreset.allCases) { p in
-                        Text(p.title + (p == game.custom?.confirmedGraphics ? " ✓" : "")).tag(p)
+                        Text(label(p)).tag(p).disabled(!p.isAvailable(in: game) && p != current)
                     }
                 }
                 .labelsHidden().settingControl()

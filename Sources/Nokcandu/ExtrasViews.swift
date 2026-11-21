@@ -101,7 +101,6 @@ struct PerformanceSection: View {
     let game: InstalledGame
     @State private var s = Performance.Settings()
     @State private var loaded = false
-    @State private var buffer: Int?
 
     var steam: Bool { game.usesSharedSteam || game.isSteamHost }
     var graphics: GraphicsPreset? { game.hosted != nil ? HostedSettings.graphics(game) : RecipeSettings.supports(game) ? RecipeSettings.graphics(game) : game.custom?.graphics }
@@ -160,17 +159,8 @@ struct PerformanceSection: View {
                 }
                 .labelsHidden().settingControl().disabled(d3dmetal)
             }
-            if let b = buffer {
-                SettingRow(title: "Audio buffer",
-                           info: "If sound crackles or has static, choose Large: games get a bigger sound buffer, so a busy moment doesn't cause gaps (adds a little sound delay). \(steam ? "Applies to all Steam games; quit Steam first." : "Quit the game first.")") {
-                    Picker("Audio buffer", selection: Binding(get: { b }, set: { setBuffer($0) })) {
-                        Text("Normal (10 ms)").tag(10); Text("Large (20 ms)").tag(20); Text("Extra large (40 ms)").tag(40)
-                    }.labelsHidden().settingControl()
-                }
-            }
-            if GameMicrophone.supported(game) { MicrophoneSettingRow(game: game) }
         }
-        .onAppear { s = PendingSettings.performance(for: game) ?? Performance.settings(for: game); buffer = game.hosted == nil ? PendingSettings.audioBuffer(for: game) ?? AudioBuffer.current(for: game) : nil; loaded = true }
+        .onAppear { s = PendingSettings.performance(for: game) ?? Performance.settings(for: game); loaded = true }
     }
 
     /// Fastest refresh among connected screens (ProMotion and external monitors report 120+).
@@ -185,16 +175,43 @@ struct PerformanceSection: View {
         model.changeSetting(for: game, title: "Game Frame Cap", change: .frameCap(fps))
     }
 
-    func setBuffer(_ ms: Int) {
-        model.changeSetting(for: game, title: "Audio Buffer", success: "Audio buffer: \(ms) ms chunks.", change: .audioBuffer(ms), completion: { _ in buffer = PendingSettings.audioBuffer(for: game) ?? AudioBuffer.current(for: game) })
-    }
-
     func save() {
         guard loaded else { return }
         let value = s
         model.changeSetting(for: game, title: "Performance", success: "Performance settings applied.", change: .performance(value), completion: { _ in s = PendingSettings.performance(for: game) ?? Performance.settings(for: game) })
     }
 
+}
+
+// MARK: - Sound
+
+/// The audio buffer and microphone access: the game's sound settings, next to Performance.
+struct SoundSection: View {
+    @EnvironmentObject var model: AppModel
+    let game: InstalledGame
+    @State private var buffer: Int?
+
+    var steam: Bool { game.usesSharedSteam || game.isSteamHost }
+    static func applies(_ game: InstalledGame) -> Bool { game.hosted == nil || GameMicrophone.supported(game) }
+
+    var body: some View {
+        SettingsSection(title: "Sound") {
+            if let b = buffer {
+                SettingRow(title: "Audio buffer",
+                           info: "If sound crackles or has static, choose Large: games get a bigger sound buffer, so a busy moment doesn't cause gaps (adds a little sound delay). \(steam ? "Applies to all Steam games; quit Steam first." : "Quit the game first.")") {
+                    Picker("Audio buffer", selection: Binding(get: { b }, set: { setBuffer($0) })) {
+                        Text("Normal (10 ms)").tag(10); Text("Large (20 ms)").tag(20); Text("Extra large (40 ms)").tag(40)
+                    }.labelsHidden().settingControl()
+                }
+            }
+            if GameMicrophone.supported(game) { MicrophoneSettingRow(game: game) }
+        }
+        .onAppear { buffer = game.hosted == nil ? PendingSettings.audioBuffer(for: game) ?? AudioBuffer.current(for: game) : nil }
+    }
+
+    func setBuffer(_ ms: Int) {
+        model.changeSetting(for: game, title: "Audio Buffer", success: "Audio buffer: \(ms) ms chunks.", change: .audioBuffer(ms), completion: { _ in buffer = PendingSettings.audioBuffer(for: game) ?? AudioBuffer.current(for: game) })
+    }
 }
 
 // MARK: - Storage
@@ -376,7 +393,6 @@ struct GameResolutionSection: View {
     @State private var working = false
     @State private var status = ""
 
-    @State private var showSettingsBackups = false
     @State private var confirmBFSetup = false
     var current: [Int]? { game.custom?.displayPixels }
     var selection: String { current.map { "\($0[0])x\($0[1])" } ?? "desktop" }
@@ -446,9 +462,6 @@ struct GameResolutionSection: View {
                         Text(reason).font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                SettingRow(title: "Game settings backups", info: "Copies of the game's own settings files, kept before Nokcandu or the game changes them, so you can put an earlier set back.") {
-                    Button("Settings Backups…") { showSettingsBackups = true }
-                }
                 if working { ProgressView().controlSize(.small) }
                 if !status.isEmpty { SettingNote(status) }
         }
@@ -460,7 +473,6 @@ struct GameResolutionSection: View {
         } message: {
             Text("Downloads missing DirectX components from Microsoft and the d3d8to9 project, uses Older 3D graphics, and applies the verified menu/mod restart correction and borderless window. Keeps your saved game resolution. Originals and settings backups are retained; each fix has Undo. If a step fails, completed fixes remain available and you can retry.")
         }
-        .sheet(isPresented: $showSettingsBackups) { SettingsBackupsView(game: game).environmentObject(model) }
     }
     var logger: @Sendable (String) -> Void { { line in Task { @MainActor in status = line } } }
 

@@ -142,6 +142,21 @@ public enum GraphicsPreset: String, Codable, CaseIterable, Identifiable, Sendabl
     }
 }
 
+extension GraphicsPreset {
+    /// The graphics layer a mode needs in the game's app (SharedSupport/renderer/<folder>/wine); nil = Wine's own.
+    public var rendererFolder: String? {
+        switch self {
+        case .classic3D: "d9vk"; case .modern3D: "dxvk3"; case .appleMetal: "d3dmetal"; case .dxmt: "dxmt"; case .classic2D: "cnc_ddraw"; case .compatible: nil
+        }
+    }
+    /// Whether the game's engine has this mode's graphics layer (Apple silicon engines from other projects, for
+    /// example, have none of them).
+    public func isAvailable(in g: InstalledGame) -> Bool {
+        guard let f = rendererFolder else { return true }
+        return FileManager.default.fileExists(atPath: g.support.appendingPathComponent("renderer/\(f)/wine").path)
+    }
+}
+
 public struct CustomGameConfig: Codable, Hashable {
     public var schema = 1
     public var id: String

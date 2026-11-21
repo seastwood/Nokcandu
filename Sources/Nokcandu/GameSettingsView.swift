@@ -38,7 +38,7 @@ struct GameSettingsSection: View {
     var invalidKeys: [String] { envRows.map(\.key).filter { !$0.isEmpty && !CustomGames.isValidEnvName($0) } }
 
     var body: some View {
-        SettingsSection(title: "Settings", info: "How Nokcandu starts this game: the Windows program Play opens, the options passed to it, and its disc image. Saving writes the game's launcher again (the small start-up script that opens Wine and the game).") {
+        SettingsSection(title: "Launch", info: "How Nokcandu starts this game: its name, the Windows program Play opens, the options passed to it, and its disc image. Saving writes the game's launcher again (the small start-up script that opens Wine and the game).") {
                 row("Name") {
                     TextField("Name", text: $draft.name).frame(maxWidth: 320)
                 }
@@ -332,21 +332,17 @@ struct RecipeSettingsSection: View {
         _draft = State(initialValue: value)
         _rows = State(initialValue: value.environment.sorted { $0.key < $1.key }.map { .init(key: $0.key, value: $0.value) })
     }
+    /// What's saved now (or waiting to be applied); the graphics mode is chosen on the Display tab.
+    var current: RecipeSettings.Settings { PendingSettings.recipe(for: game) ?? RecipeSettings.load(game) }
     var edited: RecipeSettings.Settings {
         var value = draft
         value.environment = Dictionary(rows.filter { !$0.key.isEmpty }.map { ($0.key, $0.value) }, uniquingKeysWith: { _, b in b })
+        value.graphics = current.graphics
         return value
     }
+    var dirty: Bool { edited != current }
     var body: some View {
-        SettingsSection(title: "Recipe Settings") {
-            Text("The recipe is a tested starting point. You can change these settings and return to the defaults at any time. Changes take effect after closing the game.")
-                .font(.caption).foregroundStyle(.secondary)
-            SettingRow(title: "Graphics") {
-                Picker("Graphics", selection: $draft.graphics) {
-                    Text("Recipe default").tag(nil as GraphicsPreset?)
-                    ForEach(GraphicsPreset.allCases) { Text($0.title).tag(Optional($0)) }
-                }.labelsHidden().settingControl()
-            }
+        SettingsSection(title: "Launch", info: "The recipe's own launch method is tested for this game. You can start another program, add options or environment variables, and go back to the recipe at any time. Changes apply after the game closes.") {
             SettingRow(title: "Program") {
                 HStack {
                     Button(draft.program.isEmpty ? "Recipe launch method" : (draft.program as NSString).lastPathComponent) { chooseProgram() }
@@ -373,8 +369,10 @@ struct RecipeSettingsSection: View {
             }
             HStack {
                 Button("Save Changes") { save() }.buttonStyle(.borderedProminent)
-                    .disabled(saving || edited == RecipeSettings.load(game) || rows.contains { !$0.key.isEmpty && !CustomGames.isValidEnvName($0.key) })
-                Button("Recipe Defaults") { draft = .init(); rows = [] }.disabled(saving)
+                    .disabled(saving || !dirty || rows.contains { !$0.key.isEmpty && !CustomGames.isValidEnvName($0.key) })
+                Button("Revert") { revert() }.disabled(saving || !dirty)
+                Spacer()
+                Button("Recipe Defaults") { var d = RecipeSettings.Settings(); d.microphone = draft.microphone; draft = d; rows = [] }.disabled(saving)
             }
         }
     }
@@ -386,9 +384,13 @@ struct RecipeSettingsSection: View {
         if let path = CustomGames.windowsPath(forUnix: url, prefix: game.prefix) { draft.program = path }
         else { model.fail(NokError("Choose a program inside this game's Windows environment.")) }
     }
+    func revert() {
+        draft = current
+        rows = draft.environment.sorted { $0.key < $1.key }.map { .init(key: $0.key, value: $0.value) }
+    }
     func save() {
         saving = true
         let value = edited
-        model.changeSetting(for: game, title: "Recipe Settings", success: "Recipe settings saved.", change: .recipe(value), completion: { _ in saving = false })
+        model.changeSetting(for: game, title: "Launch", success: "Launch settings saved.", change: .recipe(value), completion: { _ in saving = false })
     }
 }
