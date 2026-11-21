@@ -371,7 +371,6 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
             if s.flipGravity == true { a = a.map { -$0 } }
         }
         motion.update(gyro: gyro, acceleration: a, at: ProcessInfo.processInfo.systemUptime)
-        MotionLog.shared.add(gyro, a)
         scheduleDraw()
     }
 
@@ -714,28 +713,3 @@ final class StreamOverlayDrawer: @unchecked Sendable {
     }
 }
 
-
-/// Development only: with a file named "overlay-motion-log" in Nokcandu's support folder, the overlay's motion
-/// (gyro rad/s, then acceleration in g, in the overlay's axes) goes to overlay-motion.txt beside it for 30 seconds.
-@MainActor
-final class MotionLog {
-    static let shared = MotionLog()
-    private var lines: [String] = []
-    private var until: Double?
-    private var lastCheck = 0.0
-    func add(_ g: [Float], _ a: [Float]) {
-        let now = ProcessInfo.processInfo.systemUptime
-        let flag = NokPaths.support.appendingPathComponent("overlay-motion-log")
-        if until == nil, now - lastCheck > 1 {
-            lastCheck = now
-            if FileManager.default.fileExists(atPath: flag.path) { try? FileManager.default.removeItem(at: flag); until = now + 30; lines = [] }
-        }
-        guard let end = until else { return }
-        lines.append(String(format: "%.4f %.4f %.4f %.4f %.4f %.4f %.4f", now, g[0], g[1], g[2], a[0], a[1], a[2]))
-        if now > end {
-            until = nil
-            try? lines.joined(separator: "\n").write(to: NokPaths.support.appendingPathComponent("overlay-motion.txt"), atomically: true, encoding: .utf8)
-            lines = []
-        }
-    }
-}

@@ -8,6 +8,7 @@ import NokcanduCore
 import NokcanduStreamCore
 import SwiftUI
 import Charts
+import Metal
 
 /// What the overlay shows.
 @MainActor final class StreamWindowState: ObservableObject {
@@ -22,6 +23,8 @@ import Charts
     @Published var totalText = ""
     @Published var totalMs: Double?
     @Published var statsHistory = StreamTelemetryHistory()
+    /// The statistics are drawn into the picture (Metal), not over it.
+    @Published var statsInPicture = false
     @Published var captured = false
     @Published var hint: String?
     /// Holding Esc to free the pointer: 0…1, shown from the first second on; nil when not held.
@@ -68,7 +71,7 @@ import Charts
             state.statistics = next.window.statistics
             renderStats()
         }
-        state.graphs = next.window.graphs
+        if state.graphs != next.window.graphs { state.graphs = next.window.graphs; refreshStatsPicture() }
         if next.window.display != old.window.display, let target = StreamDisplays.screen(for: next.window.display) { move(to: target) }
         else if next.window.fullScreen != old.window.fullScreen { setFullScreen(next.window.fullScreen) }
         if next.input.mouse != old.input.mouse {
@@ -326,12 +329,13 @@ import Charts
             self.flash("Metal couldn't show this stream (\(why)). Using the display layer.")
         }
         if streamView.videoLayer !== r.layer { streamView.videoLayer = r.layer }
+        refreshStatsPicture()
         if let hz = window?.screen?.maximumFramesPerSecond { connection.video.metalRenderer?.setRefreshRate(Float(hz)) }
         if let problem = r.problem { flash("Metal isn't available on this Mac (\(problem)). Using the display layer.") }
     }
 
     private func updateOverlayVisibility() {
-        overlayView?.isHidden = state.connected && state.error == nil && state.statsText.isEmpty && !state.graphs
+        overlayView?.isHidden = state.connected && state.error == nil && (state.statsInPicture || (state.statsText.isEmpty && !state.graphs))
             && state.hint == nil && !state.poorConnection && state.escapeProgress == nil
     }
 
@@ -366,6 +370,7 @@ import Charts
     }
     private static func ms(_ value: Double?) -> String { value.map { String(format: "%.2f", $0) } ?? "N/A" }
     private func renderStats() {
+        defer { refreshStatsPicture() }
         guard state.statistics != .off else { state.statsText = ""; state.totalText = ""; return }
         let v = latestStats, video = connection.video
         state.totalMs = v.clientMs
@@ -395,6 +400,39 @@ import Charts
             lines.append("Max arrival/display/enqueue gap \(Self.ms(v.arrivalGapMaxMs))/\(Self.ms(v.displayGapMaxMs))/\(Self.ms(v.enqueueGapMaxMs)) ms")
         }
         state.statsText = lines.joined(separator: "\n")
+    }
+
+    // MARK: Statistics in the picture
+
+    /// With the Metal renderer, the statistics and graphs are drawn into each frame (an image made once a second),
+    /// like the controller overlay: a view over a full-screen stream makes the window server composite every frame,
+    /// which adds delay. The display layer still shows them over the picture.
+    private var statsLayer: StreamStatsLayer?
+    private weak var statsRenderer: StreamMetalRenderer?
+    private func refreshStatsPicture() {
+        let m = connection.video.metalRenderer
+        let wanted = state.connected && (!state.statsText.isEmpty || state.graphs)
+        if statsRenderer !== m || m == nil || streamView.videoLayer !== m?.layer || !wanted {
+            statsRenderer?.setOverlay(nil, key: "stats"); statsRenderer = nil; statsLayer = nil
+        }
+        guard let m, streamView.videoLayer === m.layer, wanted else {
+            if state.statsInPicture { state.statsInPicture = false }
+            updateOverlayVisibility(); return
+        }
+        let layer: StreamStatsLayer
+        if let l = statsLayer { layer = l } else {
+            let l = StreamStatsLayer(device: m.metalDevice)
+            m.setOverlay({ buffer, target in l.draw(buffer, target) }, key: "stats")
+            statsLayer = l; statsRenderer = m; layer = l
+        }
+        let scale = window?.backingScaleFactor ?? 2
+        let renderer = ImageRenderer(content: StreamStatsBlock(statsText: state.statsText, totalText: state.totalText, totalMs: state.totalMs,
+                                                               graphs: state.graphs, samples: state.statsHistory.samples))
+        renderer.scale = scale
+        guard let image = renderer.cgImage else { return }
+        layer.show(image, at: CGPoint(x: 12, y: 12), scale: scale, viewWidth: streamView.bounds.width)
+        if !state.statsInPicture { state.statsInPicture = true }
+        updateOverlayVisibility()
     }
 
     // MARK: Mouse
@@ -986,14 +1024,9 @@ struct StreamOverlay: View {
             }
             VStack {
                 HStack(alignment: .top) {
-                    if state.connected && (!state.statsText.isEmpty || state.graphs) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            if !state.statsText.isEmpty {
-                                Text(StreamTotalLatency.highlight(state.statsText, state.totalText, ms: state.totalMs)).font(.system(size: 9, design: .monospaced)).lineSpacing(0).foregroundStyle(.white)
-                            }
-                            if state.graphs { StreamStatsGraphs(samples: state.statsHistory.samples) }
-                        }
-                        .padding(5).background(.black.opacity(0.32), in: RoundedRectangle(cornerRadius: 4))
+                    if state.connected && !state.statsInPicture && (!state.statsText.isEmpty || state.graphs) {
+                        StreamStatsBlock(statsText: state.statsText, totalText: state.totalText, totalMs: state.totalMs,
+                                         graphs: state.graphs, samples: state.statsHistory.samples)
                     }
                     Spacer()
                     if state.poorConnection {
@@ -1020,6 +1053,92 @@ struct StreamOverlay: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(.easeInOut(duration: 0.2), value: state.hint)
+    }
+}
+
+/// The statistics text and graphs, over the picture or drawn into it.
+struct StreamStatsBlock: View {
+    let statsText: String, totalText: String, totalMs: Double?
+    let graphs: Bool
+    let samples: [StreamTelemetry.Sample]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if !statsText.isEmpty {
+                Text(StreamTotalLatency.highlight(statsText, totalText, ms: totalMs)).font(.system(size: 9, design: .monospaced)).lineSpacing(0).foregroundStyle(.white)
+            }
+            if graphs { StreamStatsGraphs(samples: samples) }
+        }
+        .padding(5).background(.black.opacity(0.32), in: RoundedRectangle(cornerRadius: 4))
+        .environment(\.colorScheme, .dark)
+    }
+}
+
+/// Draws an image (the statistics) into each Metal frame, at a place in points from the view's top left.
+final class StreamStatsLayer: @unchecked Sendable {
+    private let device: MTLDevice
+    private var texture: MTLTexture?
+    private var rect = CGRect.zero, viewWidth: CGFloat = 1
+    private var lock = os_unfair_lock()
+    private var pipelines: [MTLPixelFormat: MTLRenderPipelineState] = [:]
+    private let library: MTLLibrary?
+    private let sampler: MTLSamplerState?
+
+    init(device: MTLDevice) {
+        self.device = device
+        library = try? device.makeLibrary(source: StreamOverlayDrawer.shader, options: nil)
+        let sd = MTLSamplerDescriptor(); sd.minFilter = .linear; sd.magFilter = .linear
+        sampler = device.makeSamplerState(descriptor: sd)
+    }
+
+    /// Main thread. The image's pixels are sRGB-encoded and premultiplied, as an 8-bit frame holds them.
+    func show(_ image: CGImage, at origin: CGPoint, scale: CGFloat, viewWidth w: CGFloat) {
+        let width = image.width, height = image.height
+        guard width > 0, height > 0, let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: space,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue),
+              let data = ctx.data else { return }
+        ctx.clear(CGRect(x: 0, y: 0, width: width, height: height))
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
+        d.usage = .shaderRead; d.storageMode = .shared
+        guard let t = device.makeTexture(descriptor: d) else { return }
+        t.replace(region: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0, withBytes: data, bytesPerRow: width * 4)
+        let r = CGRect(x: origin.x, y: origin.y, width: CGFloat(width) / scale, height: CGFloat(height) / scale)
+        os_unfair_lock_lock(&lock); texture = t; rect = r; viewWidth = max(1, w); os_unfair_lock_unlock(&lock)
+    }
+
+    private func pipeline(_ format: MTLPixelFormat) -> MTLRenderPipelineState? {
+        if let p = pipelines[format] { return p }
+        guard let library, let v = library.makeFunction(name: "overlay_vertex"), let f = library.makeFunction(name: "overlay_fragment") else { return nil }
+        let d = MTLRenderPipelineDescriptor()
+        d.vertexFunction = v; d.fragmentFunction = f
+        let c = d.colorAttachments[0]!
+        c.pixelFormat = format; c.isBlendingEnabled = true
+        c.sourceRGBBlendFactor = .one; c.destinationRGBBlendFactor = .oneMinusSourceAlpha
+        c.sourceAlphaBlendFactor = .one; c.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        let p = try? device.makeRenderPipelineState(descriptor: d)
+        pipelines[format] = p
+        return p
+    }
+
+    /// Render queue.
+    func draw(_ buffer: MTLCommandBuffer, _ target: MTLTexture) {
+        os_unfair_lock_lock(&lock); let t = texture, r = rect, w = viewWidth; os_unfair_lock_unlock(&lock)
+        guard let t, r.width > 0, let pipeline = pipeline(target.pixelFormat), let sampler else { return }
+        let s = CGFloat(target.width) / w
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = target
+        pass.colorAttachments[0].loadAction = .load
+        pass.colorAttachments[0].storeAction = .store
+        guard let enc = buffer.makeRenderCommandEncoder(descriptor: pass) else { return }
+        enc.setRenderPipelineState(pipeline)
+        enc.setViewport(MTLViewport(originX: Double(r.minX * s), originY: Double(r.minY * s), width: Double(r.width * s), height: Double(r.height * s), znear: 0, zfar: 1))
+        enc.setFragmentTexture(t, index: 0)
+        enc.setFragmentSamplerState(sampler, index: 0)
+        var opacity: Float = 1
+        enc.setFragmentBytes(&opacity, length: MemoryLayout<Float>.size, index: 0)
+        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        enc.endEncoding()
     }
 }
 

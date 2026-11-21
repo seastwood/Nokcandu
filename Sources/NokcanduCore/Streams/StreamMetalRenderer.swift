@@ -58,13 +58,19 @@ public final class StreamMetalRenderer: @unchecked Sendable {
     /// Metal can't show this stream (any thread): fall back to the display layer.
     public var onFailure: ((String) -> Void)?
 
-    /// Something drawn over each frame before it's shown (the controller overlay), in the frame's own command
+    /// Something drawn over each frame before it's shown (the controller overlay, the statistics), in the frame's own command
     /// buffer. Drawing it here instead of in a window above keeps the stream a single opaque layer, so macOS's
     /// direct-to-display path stays on: any window over a full-screen stream makes the window server composite
     /// every frame, which adds frames of delay with V-sync off.
     public typealias Overlay = (_ buffer: MTLCommandBuffer, _ target: MTLTexture) -> Void
-    private var overlay: Overlay?   // guarded by `lock`
-    public func setOverlay(_ o: Overlay?) { os_unfair_lock_lock(&lock); overlay = o; os_unfair_lock_unlock(&lock) }
+    private var overlays: [(key: String, draw: Overlay)] = []   // guarded by `lock`; drawn in key order
+    /// Sets or (nil) removes one overlay: "controller" (the controller overlay), "stats" (the statistics).
+    public func setOverlay(_ o: Overlay?, key: String = "controller") {
+        os_unfair_lock_lock(&lock)
+        overlays.removeAll { $0.key == key }
+        if let o { overlays.append((key, o)); overlays.sort { $0.key < $1.key } }
+        os_unfair_lock_unlock(&lock)
+    }
     public var metalDevice: MTLDevice { device }
 
     private struct Config: Equatable {
@@ -272,8 +278,8 @@ public final class StreamMetalRenderer: @unchecked Sendable {
         failures = 0
         guard let drawable = given ?? layer.nextDrawable(), let buffer = commandQueue.makeCommandBuffer() else { return }
         guard encode(image, luma: luma, chroma: chroma, pipeline: pipeline, into: drawable.texture, buffer: buffer) else { return }
-        os_unfair_lock_lock(&lock); let over = overlay; os_unfair_lock_unlock(&lock)
-        over?(buffer, drawable.texture)
+        os_unfair_lock_lock(&lock); let over = overlays; os_unfair_lock_unlock(&lock)
+        for o in over { o.draw(buffer, drawable.texture) }
         let frame = f
         drawable.addPresentedHandler { [weak self] d in
             if d.presentedTime > 0 { self?.onScreen?(frame, d.presentedTime) }
