@@ -234,7 +234,7 @@ public enum GameLauncher {
         let support = WineTools.supportPath(host)
         func ours(_ pid: Int32) -> Bool {
             guard pid > 1, pid != getpid(), let path = WineTools.executablePath(pid) else { return false }
-            return WineTools.owns(executable: path, support: support) && kill(pid, 0) == 0
+            return WineTools.owns(pid: pid, executable: path, support: support) && kill(pid, 0) == 0
         }
         let lowered = loweredCommands(rows)
         for (pid, command) in lowered where match(command) && ours(pid) { return pid }

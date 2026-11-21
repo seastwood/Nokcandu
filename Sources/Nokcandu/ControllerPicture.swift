@@ -721,8 +721,9 @@ final class PadTester: ObservableObject {
             if lastButtons[n] != down { lastButtons[n] = down; pe_button(e,Int32(n),down,now) }
         }
         for (a,v) in axes where lastAxes[a] != v { lastAxes[a] = v; pe_axis(e,Int32(a),Int32(v),now) }
-        pe_gyro(e,state.gyro[0],state.gyro[1],state.gyro[2],now)
-        pe_accel(e,state.acceleration[0],state.acceleration[1],state.acceleration[2],now)
+        let g = state.sdlGyro, acc = state.sdlAcceleration
+        pe_gyro(e,g[0],g[1],g[2],now)
+        pe_accel(e,acc[0],acc[1],acc[2],now)
         var held = state.buttons.union(zones).union(tapsShown)
         if state.leftTrigger > 0.3 { held.insert(.lt) }; if state.leftTrigger > 0.95 { held.insert(.ltfull) }
         if state.rightTrigger > 0.3 { held.insert(.rt) }; if state.rightTrigger > 0.95 { held.insert(.rtfull) }

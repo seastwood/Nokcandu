@@ -203,15 +203,13 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
             inStream = renderer; streamDrawer = d
             panel?.orderOut(nil)
         }
-        // The panel fades the whole view; here the scene itself is faded.
-        if host.scene.rootNode.opacity != settings.opacity { host.scene.rootNode.opacity = settings.opacity }
+
         streamDrawer?.place(rect, screenWidth: f.width, opacity: settings.opacity)
     }
 
     private func leaveStream() {
         guard let r = inStream else { return }
         r.setOverlay(nil); inStream = nil; streamDrawer = nil
-        host?.scene.rootNode.opacity = 1
         if settings.mode == .onScreen, let panel { panel.orderFrontRegardless() }
     }
 
@@ -270,7 +268,7 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
         guard let state else { gone("steam"); return }
         let kind: ControllerOverlaySettings.Model = state.kind == .steam2026 ? .steam2026 : .steam2015
         update("steam", ControllerOverlayInput(state), kind: kind, name: kind.title)
-        if active == "steam" { move(state.gyro, state.acceleration) }
+        if active == "steam" { move(state.sdlGyro, state.sdlAcceleration) }
     }
 
     private func readMapped(_ source: String, _ buttons: Set<PadProfiles.Input>?, _ axes: [Int: Int]) {
@@ -594,13 +592,18 @@ struct ControllerOverlaySettingsView: View {
 
 // MARK: - Drawing into a stream's frames
 
-/// Draws the overlay's scene into a stream frame on the stream's render queue (SceneKit's renderer, in the frame's
-/// command buffer). The scene is changed on the main thread inside SceneKit transactions; the drawing holds
-/// SceneKit's lock, so it never sees half a change.
+/// Draws the overlay's scene into a stream frame on the stream's render queue. SceneKit renders the controller into
+/// a texture of its own (sRGB, at twice the size for smooth edges, clear around it), which is then blended onto the
+/// frame: SceneKit lights in linear colour and only an sRGB target converts it back, so drawing straight into the
+/// stream's plain 8-bit frame would come out much darker. The scene is changed on the main thread inside SceneKit
+/// transactions; the drawing holds SceneKit's lock, so it never sees half a change.
 final class StreamOverlayDrawer: @unchecked Sendable {
     private let renderer: SCNRenderer
-    private var depth: MTLTexture?
     private let device: MTLDevice
+    private var color: MTLTexture?, colorEncoded: MTLTexture?, depth: MTLTexture?
+    private var pipelines: [MTLPixelFormat: MTLRenderPipelineState] = [:]
+    private let library: MTLLibrary?
+    private let sampler: MTLSamplerState?
     private var lock = os_unfair_lock()
     private var rect = CGRect.zero, screenWidth: CGFloat = 1, opacity: Double = 1
 
@@ -610,6 +613,9 @@ final class StreamOverlayDrawer: @unchecked Sendable {
         renderer.scene = scene
         renderer.pointOfView = camera
         renderer.autoenablesDefaultLighting = false
+        library = try? device.makeLibrary(source: Self.shader, options: nil)
+        let sd = MTLSamplerDescriptor(); sd.minFilter = .linear; sd.magFilter = .linear
+        sampler = device.makeSamplerState(descriptor: sd)
     }
 
     /// Main thread: where it goes (points from the screen's top left) and how opaque it is.
@@ -617,28 +623,80 @@ final class StreamOverlayDrawer: @unchecked Sendable {
         os_unfair_lock_lock(&lock); rect = r; screenWidth = max(1, w); opacity = o; os_unfair_lock_unlock(&lock)
     }
 
+    static let shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+    struct V { float4 position [[position]]; float2 uv; };
+    vertex V overlay_vertex(uint id [[vertex_id]]) {
+        float2 p = float2((id << 1) & 2, id & 2);
+        V v; v.position = float4(p * 2 - 1, 0, 1); v.uv = float2(p.x, 1 - p.y); return v;
+    }
+    fragment float4 overlay_fragment(V in [[stage_in]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]],
+                                     constant float &opacity [[buffer(0)]]) {
+        return t.sample(s, in.uv) * opacity;        // premultiplied
+    }
+    """
+
+    private func pipeline(_ format: MTLPixelFormat) -> MTLRenderPipelineState? {
+        if let p = pipelines[format] { return p }
+        guard let library, let v = library.makeFunction(name: "overlay_vertex"), let f = library.makeFunction(name: "overlay_fragment") else { return nil }
+        let d = MTLRenderPipelineDescriptor()
+        d.vertexFunction = v; d.fragmentFunction = f
+        let c = d.colorAttachments[0]!
+        c.pixelFormat = format
+        c.isBlendingEnabled = true
+        c.sourceRGBBlendFactor = .one; c.destinationRGBBlendFactor = .oneMinusSourceAlpha
+        c.sourceAlphaBlendFactor = .one; c.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        let p = try? device.makeRenderPipelineState(descriptor: d)
+        pipelines[format] = p
+        return p
+    }
+
     /// Render queue.
     func draw(_ buffer: MTLCommandBuffer, _ target: MTLTexture) {
-        os_unfair_lock_lock(&lock); let r = rect, w = screenWidth; os_unfair_lock_unlock(&lock)
-        guard r.width > 0 else { return }
+        os_unfair_lock_lock(&lock); let r = rect, w = screenWidth, o = Float(opacity); os_unfair_lock_unlock(&lock)
+        guard r.width > 0, let pipeline = pipeline(target.pixelFormat), let sampler else { return }
         let scale = CGFloat(target.width) / w
-        let viewport = CGRect(x: r.minX * scale, y: r.minY * scale, width: r.width * scale, height: r.height * scale)
-        if depth?.width != target.width || depth?.height != target.height {
-            let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .depth32Float, width: target.width, height: target.height, mipmapped: false)
-            d.usage = .renderTarget; d.storageMode = .private
-            depth = device.makeTexture(descriptor: d)
+        let viewport = MTLViewport(originX: Double(r.minX * scale), originY: Double(r.minY * scale),
+                                   width: Double(r.width * scale), height: Double(r.height * scale), znear: 0, zfar: 1)
+        let tw = max(1, Int(viewport.width * 2)), th = max(1, Int(viewport.height * 2))
+        if color?.width != tw || color?.height != th {
+            let cd = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm_srgb, width: tw, height: th, mipmapped: false)
+            cd.usage = [.renderTarget, .shaderRead, .pixelFormatView]; cd.storageMode = .private
+            color = device.makeTexture(descriptor: cd)
+            colorEncoded = color?.makeTextureView(pixelFormat: .bgra8Unorm)
+            let dd = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .depth32Float, width: tw, height: th, mipmapped: false)
+            dd.usage = .renderTarget; dd.storageMode = .private
+            depth = device.makeTexture(descriptor: dd)
         }
-        guard let depth else { return }
+        guard let color, let colorEncoded, let depth else { return }
         let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture = target
-        pass.colorAttachments[0].loadAction = .load
+        pass.colorAttachments[0].texture = color
+        pass.colorAttachments[0].loadAction = .clear
+        pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
         pass.colorAttachments[0].storeAction = .store
         pass.depthAttachment.texture = depth
         pass.depthAttachment.loadAction = .clear
         pass.depthAttachment.clearDepth = 1
         pass.depthAttachment.storeAction = .dontCare
         SCNTransaction.lock()
-        renderer.render(atTime: CACurrentMediaTime(), viewport: viewport, commandBuffer: buffer, passDescriptor: pass)
+        renderer.render(atTime: CACurrentMediaTime(), viewport: CGRect(x: 0, y: 0, width: tw, height: th), commandBuffer: buffer, passDescriptor: pass)
         SCNTransaction.unlock()
+        // Onto the frame: an 8-bit frame holds sRGB-encoded values (read the texture undecoded), a floating-point
+        // (EDR) one linear values (read it decoded).
+        let source = target.pixelFormat == .bgra8Unorm || target.pixelFormat == .rgba8Unorm ? colorEncoded : color
+        let over = MTLRenderPassDescriptor()
+        over.colorAttachments[0].texture = target
+        over.colorAttachments[0].loadAction = .load
+        over.colorAttachments[0].storeAction = .store
+        guard let enc = buffer.makeRenderCommandEncoder(descriptor: over) else { return }
+        enc.setRenderPipelineState(pipeline)
+        enc.setViewport(viewport)
+        enc.setFragmentTexture(source, index: 0)
+        enc.setFragmentSamplerState(sampler, index: 0)
+        var opacity = o
+        enc.setFragmentBytes(&opacity, length: MemoryLayout<Float>.size, index: 0)
+        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        enc.endEncoding()
     }
 }

@@ -154,7 +154,54 @@ public enum WineTools {
     }
     static func owns(pid: Int32, contents: URL) -> Bool {
         guard pid > 1, pid != getpid(), let path = executablePath(pid) else { return false }
-        return owns(executable: path, support: supportPath(contents))
+        return owns(pid: pid, executable: path, support: supportPath(contents))
+    }
+    /// The executable check, then (for an engine kept outside the app) which environment the program runs in.
+    static func owns(pid: Int32, executable path: String, support: String) -> Bool {
+        if owns(executable: path, support: support) { return true }
+        // Engines used exactly as built (Apple silicon ones, signed) stay in their own folder and the app links to
+        // them, so their programs report the engine's folder. One engine can serve several apps: the program's
+        // current folder (inside the app's prefix) says which.
+        guard let engine = linkedEngine(support: support), path.hasPrefix(engine + "/") else { return false }
+        let rest = path.dropFirst(engine.count + 1)
+        guard rest.hasPrefix("lib/wine/") || rest.hasPrefix("bin/") else { return false }
+        guard let cwd = currentFolder(pid) else { return false }
+        let folder = !cwd.hasPrefix(support + "/") && cwd.hasPrefix("/private/") ? String(cwd.dropFirst("/private".count)) : cwd
+        return folder.hasPrefix(support + "/")
+    }
+
+    /// Where an app's linked engine really is (nil: the engine is the app's own). Briefly cached: an engine switch
+    /// changes it.
+    private static let linkedEngines = LockedCache<String, (Date, String)>(limit: 512)
+    static func linkedEngine(support: String) -> String? {
+        let now = Date()
+        if let (seen, value) = linkedEngines[support], now.timeIntervalSince(seen) < 10 { return value.isEmpty ? nil : value }
+        let wine = URL(fileURLWithPath: support).appendingPathComponent("wine")
+        let lib = wine.appendingPathComponent("lib")
+        var value = ""
+        if (try? FileManager.default.destinationOfSymbolicLink(atPath: lib.path)) != nil {
+            value = lib.resolvingSymlinksInPath().deletingLastPathComponent().standardizedFileURL.path
+        }
+        linkedEngines[support] = (now, value)
+        return value.isEmpty ? nil : value
+    }
+
+    /// A process's current folder (nil when unreadable). Wine keeps a program's Unix current folder at its Windows
+    /// one, which is inside the prefix (or the app's GameFiles) for the environment's programs. (Wine rewrites the
+    /// memory holding a program's arguments and environment, so WINEPREFIX can't be read from outside.)
+    private static let cwdCache = LockedCache<Int32, (Date, String?)>(limit: 4096)
+    static func currentFolder(_ pid: Int32) -> String? {
+        let now = Date()
+        if let (seen, value) = cwdCache[pid], now.timeIntervalSince(seen) < 2 { return value }
+        var info = proc_vnodepathinfo()
+        let size = Int32(MemoryLayout<proc_vnodepathinfo>.size)
+        var value: String?
+        if proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &info, size) == size {
+            value = withUnsafeBytes(of: &info.pvi_cdir.vip_path) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) }
+            if value?.isEmpty == true { value = nil }
+        }
+        cwdCache[pid] = (now, value)
+        return value
     }
 
     /// A process's executable, briefly cached: one status pass asks about the same few hundred processes for
@@ -179,7 +226,7 @@ public enum WineTools {
     /// (that is a live session, never touched), otherwise those that have been running for `minimumAge` seconds
     /// (a program only just started may be about to start its server).
     static func leftovers(_ processes: [(pid: Int32, executable: String, started: Double)], now: Double, minimumAge: Double) -> [Int32] {
-        if processes.contains(where: { $0.executable.hasSuffix("/wine/bin/wineserver") }) { return [] }
+        if processes.contains(where: { $0.executable.hasSuffix("/bin/wineserver") }) { return [] }   // linked engines report their own bin/
         return processes.filter { now - $0.started >= minimumAge }.map(\.pid)
     }
     /// Ends Windows programs of this environment that outlived its Wine server. A session's background programs

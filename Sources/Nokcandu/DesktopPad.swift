@@ -767,8 +767,9 @@ final class DesktopPad: ObservableObject {
         let held = Set(buttons.map { Int(pe_input_named($0.rawValue)) })
         lastSteamReport = (state, held, baseAxes)
         consume(sourceState.update(source: "steam-usb", buttons: held, axes: axes))
-        pe_gyro(e,state.gyro[0],state.gyro[1],state.gyro[2],now)
-        pe_accel(e,state.acceleration[0],state.acceleration[1],state.acceleration[2],now)
+        let g = state.sdlGyro, acc = state.sdlAcceleration
+        pe_gyro(e,g[0],g[1],g[2],now)
+        pe_accel(e,acc[0],acc[1],acc[2],now)
     }
 
     private func releaseTap(_ side: Int, engine e: OpaquePointer, now: Double) {

@@ -16,7 +16,15 @@ public struct SteamControllerReport {
         public var leftPad: Point, rightPad: Point
         public var leftTouch: Bool, rightTouch: Bool
         public var leftTrigger: Float, rightTrigger: Float
+        /// The report's own axes (the 2026 controller's gyro y is flipped to match the original's). Use `sdlGyro` and
+        /// `sdlAcceleration` for anything that needs to know which way is which.
         public var gyro: [Float], acceleration: [Float]
+        /// The motion in SDL's axes, which the pad engine and the overlay use: x right, y out of the face, z towards
+        /// the player. SDL (SDL_hidapi_steam.c, _steam_triton.c) reports Steam Controllers' gyro as the report's
+        /// (x, z, y) and the accelerometer as (x, z, −y): the report's y runs along the controller, its z out of the
+        /// face. Without this, turning reads as tilting and tilting as turning.
+        public var sdlGyro: [Float] { gyro.count == 3 ? [gyro[0], gyro[2], gyro[1]] : gyro }
+        public var sdlAcceleration: [Float] { acceleration.count == 3 ? [acceleration[0], acceleration[2], -acceleration[1]] : acceleration }
         /// Which Steam Controller: the original (its right trackpad is its right stick) or the 2026 one (a right
         /// stick of its own, square trackpads with pressure).
         public var kind: SteamControllerModel = .original
