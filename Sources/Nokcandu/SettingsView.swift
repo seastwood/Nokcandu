@@ -73,6 +73,9 @@ struct GeneralSettings: View {
                     Toggle("Mac notifications while Nokcandu is in the background", isOn: Binding(get: { Notifier.enabled }, set: { Notifier.enabled = $0; model.objectWillChange.send() }))
                     Text("When a store game is added, a game doesn't start, or a game is running low on memory. Click one to open that game.")
                         .font(.caption).foregroundStyle(.secondary)
+                    Toggle("Hold notifications while playing or streaming", isOn: Binding(get: { PadNotificationPreferences.holdWhilePlaying() }, set: { PadNotificationPreferences.setHoldWhilePlaying($0); model.objectWillChange.send() }))
+                    Text("While a Nokcandu game or a stream is in front, Nokcandu's notifications wait until you leave it, and its notes when a controller layer or the gyro switches aren't shown: anything that appears over a full-screen game or stream makes macOS compose the screen again, which adds delay. For other apps' notifications, use the Gaming Focus (System Settings › Focus › Gaming), which can turn on by itself when a controller macOS knows connects.")
+                        .font(.caption).foregroundStyle(.secondary)
                     Toggle("Lower store apps' priority while a game is in front", isOn: Binding(
                         get: { !FileManager.default.fileExists(atPath: NokPaths.support.appendingPathComponent("launchers-normal-priority").path) },
                         set: { on in

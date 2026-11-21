@@ -18,6 +18,9 @@ final class DesktopPad: ObservableObject {
     /// outputs (controller, keys, mouse, scrolling, typed text) goes to the host instead of this Mac.
     weak var stream: StreamPadRoute? { didSet { evaluate(force: true) } }
     private var streaming: Bool { stream?.isFront == true }
+    /// A Nokcandu game or a stream is in front.
+    var playing: Bool { streaming || gameInFront }
+    private var gameInFront = false
 
     static let onKey = "desktopPadOn", profileKey = "desktopPadProfile", rulesKey = "desktopPadApps", masterKey = "padProfilesOff"
     static let controllerRulesKey = "desktopPadControllers", calibrateKeyKey = "padCalibrateShortcut"
@@ -308,6 +311,8 @@ final class DesktopPad: ObservableObject {
         let routingChanged = stream?.refreshControllerProfile(profiles: all) ?? false
         let force = force || routingChanged
         let g = game(for: front)
+        if gameInFront != (g != nil) { gameInFront = g != nil }
+        if !playing { Notifier.shared.playingEnded() }
         gamePID = g != nil && g?.native == nil ? (front?.processIdentifier ?? 0) : 0
         let features = AppFeatures.current
         if !features.allowsProfile(forGame: g != nil, inStream: streaming) {
@@ -647,8 +652,9 @@ final class DesktopPad: ObservableObject {
                         }
                         guard !runtime.steamSource, let e = runtime.engine else { return }
                         MacVirtualControllers.shared.motion(gyro: (r.x, r.y, r.z), accel: (a.x, a.y, a.z))
-                        pe_gyro(e, Float(r.x), Float(r.y), Float(r.z), DesktopPad.now())
-                        pe_accel(e, Float(a.x), Float(a.y), Float(a.z), DesktopPad.now())
+                        let g = GameControllerMotion.gyro(r.x, r.y, r.z), acc = GameControllerMotion.acceleration(a.x, a.y, a.z)
+                        pe_gyro(e, g[0], g[1], g[2], DesktopPad.now())
+                        pe_accel(e, acc[0], acc[1], acc[2], DesktopPad.now())
                     }
                 }
             }

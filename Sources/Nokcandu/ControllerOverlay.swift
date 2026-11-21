@@ -312,7 +312,7 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
             if active == key, settings.gyro, let m = c.motion {
                 if m.sensorsRequireManualActivation && !m.sensorsActive { m.sensorsActive = true }
                 let r = m.rotationRate, a = m.hasGravityAndUserAcceleration ? m.gravity : m.acceleration
-                move([Float(r.x), Float(r.y), Float(r.z)], [Float(a.x), Float(a.y), Float(a.z)], source: key)
+                move(GameControllerMotion.gyro(r.x, r.y, r.z), GameControllerMotion.acceleration(a.x, a.y, a.z), source: key)
             }
         }
     }
@@ -336,7 +336,7 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
         if changed && active == key { scheduleDraw() }
     }
 
-    /// Back and Start held together for a second: the way the controller is held becomes the rest position.
+    /// Back and Start held together for a second: the way the controller faces becomes the front.
     private func watchRecenterCombo(_ input: ControllerOverlayInput) {
         guard input.buttons.isSuperset(of: [.back, .start]) else { comboSince = nil; comboDone = false; return }
         let now = ProcessInfo.processInfo.systemUptime
@@ -566,7 +566,7 @@ struct ControllerOverlaySettingsView: View {
                     }
                     HStack {
                         Button("Recentre") { overlay.recenter() }
-                        Text("Or hold Back and Start together for a second (View and Menu, Share and Options, − and +). The way you hold the controller then becomes its rest position. Turning drifts back to the front by itself.")
+                        Text("Or hold Back and Start together for a second (View and Menu, Share and Options, − and +). The way the controller faces then becomes the front. Its tilt is always the real one, so held the usual way its face is towards you; turning drifts back to the front by itself.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }

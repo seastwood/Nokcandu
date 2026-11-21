@@ -46,6 +46,8 @@ final class PadHUD {
 
     func show(_ text: String, symbol: String, progress: Double? = nil, stay: Double = 1.2, force: Bool = false) {
         guard force || Self.enabled else { return }
+        // Over a game or stream, a note makes macOS compose the screen again (more delay): held, unless asked for.
+        guard force || !(DesktopPad.shared.playing && PadNotificationPreferences.holdWhilePlaying()) else { return }
         lastWasGyro = false
         let p = panel ?? make()
         panel = p

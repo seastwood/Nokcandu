@@ -622,9 +622,11 @@ final class PadTester: ObservableObject {
         read(g)
         if let m = c.motion, let e = engine {
             let r = m.rotationRate, t = Self.now()
-            pe_gyro(e, Float(r.x), Float(r.y), Float(r.z), t)
+            let g = GameControllerMotion.gyro(r.x, r.y, r.z)
+            pe_gyro(e, g[0], g[1], g[2], t)
             let a = m.hasGravityAndUserAcceleration ? m.gravity : m.acceleration
-            pe_accel(e, Float(a.x), Float(a.y), Float(a.z), t)
+            let acc = GameControllerMotion.acceleration(a.x, a.y, a.z)
+            pe_accel(e, acc[0], acc[1], acc[2], t)
             if t - lastGyroShown > 0.1 {
                 let speed = (sqrt(r.x * r.x + r.y * r.y + r.z * r.z) * 180 / .pi).rounded()
                 if speed != gyroSpeed { gyroSpeed = speed }

@@ -53,6 +53,30 @@ final class ControllerOverlayTests: XCTestCase {
         XCTAssertEqual(abs(m.orientation().axis.x), 1, accuracy: 0.02, "about x")
     }
 
+    /// Held the usual way, tipped up 45° towards the player: the drawing shows that tilt (so its face is towards the
+    /// camera), and turning about the room's up while it's tipped turns the drawing about up, not partly about its
+    /// own length.
+    func testHeldTippedShowsTheTiltAndTurnsAboutUp() {
+        var m = ControllerOverlayMotion()
+        m.headingReturn = 0
+        let t: Float = 45 * .pi / 180
+        // The far end (the triggers, −z) raised: up, in the controller's terms, leans towards −z.
+        let tipped: [Float] = [0, cos(t), -sin(t)]
+        m.update(gyro: [0, 0, 0], acceleration: tipped, at: 0)
+        let rest = m.orientation()
+        XCTAssertEqual(angle(rest), 45, accuracy: 0.5)
+        XCTAssertEqual(abs(rest.axis.x), 1, accuracy: 0.01)
+        // The drawn face looks up and towards the player, where the camera is.
+        let face = rest.act(SIMD3<Float>(0, 1, 0))
+        XCTAssertEqual(face.y, cos(t), accuracy: 0.01); XCTAssertEqual(face.z, sin(t), accuracy: 0.01)
+        // 90°/s about the room's up for half a second, in the controller's own terms.
+        let up = rest.inverse.act(SIMD3<Float>(0, 1, 0)) * (.pi / 2)
+        for i in 1...125 { m.update(gyro: [up.x, up.y, up.z], acceleration: m.orientation().inverse.act(SIMD3<Float>(0, 1, 0)).array, at: Double(i) / 250) }
+        let turn = m.orientation() * rest.inverse
+        XCTAssertEqual(angle(turn), 45, accuracy: 3)
+        XCTAssertEqual(abs(turn.axis.y), 1, accuracy: 0.02, "about up")
+    }
+
     /// Shaking (far from 1 g) isn't taken as gravity.
     func testShakesAreIgnored() {
         var m = ControllerOverlayMotion()
@@ -132,3 +156,5 @@ final class ControllerOverlayTests: XCTestCase {
         XCTAssertFalse(a.looksLike(b))
     }
 }
+
+private extension SIMD3 where Scalar == Float { var array: [Float] { [x, y, z] } }

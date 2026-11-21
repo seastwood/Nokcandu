@@ -212,19 +212,24 @@ public struct ControllerOverlayMotion: Sendable {
         }
         // Heading: turn back towards the rest heading about world up.
         if headingReturn > 0 {
-            let yaw = Self.heading(attitude * reference.inverse)
+            let yaw = Self.wrapped(Self.heading(attitude) - Self.heading(reference))
             attitude = simd_normalize(simd_quatf(angle: -yaw * min(1, headingReturn * dt), axis: Self.up) * attitude)
         }
     }
 
-    /// The controller's turn since the rest position, in the world's terms (what the drawing applies), scaled by
-    /// `strength` (0 none, 1 the real movement).
+    /// How the controller is held (what the drawing applies): its real tilt, which gravity shows, facing the way it
+    /// faced at the rest position. Held the usual way, tipped up towards you, the drawing tips up towards the camera
+    /// the same way, so its face shows; turning it about the room's up turns the drawing about up, whatever the tilt.
+    /// (Turns measured from a rest pose drawn flat came out as a mix of turning and tilting while it was held
+    /// tipped.) `strength` scales it: 0 flat and facing the front, 1 the real pose.
     public func orientation(strength: Float = 1) -> simd_quatf {
-        let r = attitude * reference.inverse
+        let r = simd_normalize(simd_quatf(angle: -Self.heading(reference), axis: Self.up) * attitude)
         return simd_slerp(simd_quatf(ix: 0, iy: 0, iz: 0, r: 1), r, max(0, strength))
     }
 
-    /// The way it's held now becomes the rest position.
+    static func wrapped(_ a: Float) -> Float { atan2(sin(a), cos(a)) }
+
+    /// The way it faces now becomes the front.
     public mutating func recenter() { reference = attitude }
     public mutating func reset() { self = ControllerOverlayMotion() }
 

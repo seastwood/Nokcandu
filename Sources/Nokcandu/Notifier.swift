@@ -1,5 +1,6 @@
 import AppKit
 import UserNotifications
+import NokcanduCore
 
 /// Mac notifications for things that happen while Nokcandu is in the background (a store game was added,
 /// a game didn't start, a game is low on memory). Clicking one opens that game's page. While Nokcandu is in
@@ -23,7 +24,20 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     static func post(title: String, body: String, gameID: String?) {
         guard enabled, NSApp?.isActive != true else { return }
+        if DesktopPad.shared.playing && PadNotificationPreferences.holdWhilePlaying() {
+            shared.held.hold(Note(title: title, body: body, gameID: gameID)); return
+        }
         shared.post(title: title, body: body, gameID: gameID)
+    }
+
+    struct Note: Equatable { let title: String, body: String, gameID: String? }
+    private var held = HeldNotifications<Note>()
+    /// The game or stream left the front: what waited is posted now (or dropped, with Nokcandu in front, whose own
+    /// banner and Recent Activity have it).
+    func playingEnded() {
+        let notes = held.release()
+        guard Self.enabled, NSApp?.isActive != true else { return }
+        for n in notes { post(title: n.title, body: n.body, gameID: n.gameID) }
     }
 
     private func post(title: String, body: String, gameID: String?) {
