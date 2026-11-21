@@ -403,6 +403,7 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
         if model.root.isHidden != hidden { model.root.isHidden = hidden }
         if turned { model.root.simdOrientation = q; shownOrientation = q }
         SCNTransaction.commit()
+        streamDrawer?.changed()
     }
 
     static func color(_ hex: String) -> NSColor {
@@ -618,6 +619,9 @@ final class StreamOverlayDrawer: @unchecked Sendable {
     private let sampler: MTLSamplerState?
     private var lock = os_unfair_lock()
     private var rect = CGRect.zero, screenWidth: CGFloat = 1, opacity: Double = 1
+    /// The scene changed since it was last drawn (guarded by `lock`). Unchanged, each frame reuses the last drawing,
+    /// so a controller held still or put down costs one small copy a frame instead of a 3D render.
+    private var needsRender = true
 
     init(device: MTLDevice, scene: SCNScene, camera: SCNNode?) {
         self.device = device
@@ -632,8 +636,14 @@ final class StreamOverlayDrawer: @unchecked Sendable {
 
     /// Main thread: where it goes (points from the screen's top left) and how opaque it is.
     func place(_ r: CGRect, screenWidth w: CGFloat, opacity o: Double) {
-        os_unfair_lock_lock(&lock); rect = r; screenWidth = max(1, w); opacity = o; os_unfair_lock_unlock(&lock)
+        os_unfair_lock_lock(&lock)
+        if rect != r || screenWidth != max(1, w) { needsRender = true }
+        rect = r; screenWidth = max(1, w); opacity = o
+        os_unfair_lock_unlock(&lock)
     }
+
+    /// Main thread: the drawing changed (buttons, sticks, the gyro's turn, colours, the controller drawn).
+    func changed() { os_unfair_lock_lock(&lock); needsRender = true; os_unfair_lock_unlock(&lock) }
 
     static let shader = """
     #include <metal_stdlib>
@@ -666,13 +676,14 @@ final class StreamOverlayDrawer: @unchecked Sendable {
 
     /// Render queue.
     func draw(_ buffer: MTLCommandBuffer, _ target: MTLTexture) {
-        os_unfair_lock_lock(&lock); let r = rect, w = screenWidth, o = Float(opacity); os_unfair_lock_unlock(&lock)
+        os_unfair_lock_lock(&lock); let r = rect, w = screenWidth, o = Float(opacity); var render = needsRender; needsRender = false; os_unfair_lock_unlock(&lock)
         guard r.width > 0, let pipeline = pipeline(target.pixelFormat), let sampler else { return }
         let scale = CGFloat(target.width) / w
         let viewport = MTLViewport(originX: Double(r.minX * scale), originY: Double(r.minY * scale),
                                    width: Double(r.width * scale), height: Double(r.height * scale), znear: 0, zfar: 1)
         let tw = max(1, Int(viewport.width * 2)), th = max(1, Int(viewport.height * 2))
         if color?.width != tw || color?.height != th {
+            render = true
             let cd = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm_srgb, width: tw, height: th, mipmapped: false)
             cd.usage = [.renderTarget, .shaderRead, .pixelFormatView]; cd.storageMode = .private
             color = device.makeTexture(descriptor: cd)
@@ -682,6 +693,7 @@ final class StreamOverlayDrawer: @unchecked Sendable {
             depth = device.makeTexture(descriptor: dd)
         }
         guard let color, let colorEncoded, let depth else { return }
+        if render {
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = color
         pass.colorAttachments[0].loadAction = .clear
@@ -694,6 +706,7 @@ final class StreamOverlayDrawer: @unchecked Sendable {
         SCNTransaction.lock()
         renderer.render(atTime: CACurrentMediaTime(), viewport: CGRect(x: 0, y: 0, width: tw, height: th), commandBuffer: buffer, passDescriptor: pass)
         SCNTransaction.unlock()
+        }
         // Onto the frame: an 8-bit frame holds sRGB-encoded values (read the texture undecoded), a floating-point
         // (EDR) one linear values (read it decoded).
         let source = target.pixelFormat == .bgra8Unorm || target.pixelFormat == .rgba8Unorm ? colorEncoded : color
