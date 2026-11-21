@@ -498,7 +498,7 @@ private struct FocusWhilePlayingRow: View {
             // Back from Shortcuts after adding them.
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in Task { await check() } }
         VStack(alignment: .leading, spacing: 6) {
-            Text("Silences other apps' notifications too, with the Gaming Focus. macOS only lets Shortcuts turn a Focus on, so Nokcandu runs two shortcuts, “\(FocusWhilePlaying.startName)” and “\(FocusWhilePlaying.stopName)”, when a game or stream comes to the front and when it leaves. Useful with a Steam Controller, which doesn't turn the Gaming Focus on by itself. To use another Focus, change it in the two shortcuts.")
+            Text("Silences other apps' notifications too, with Do Not Disturb. macOS only lets Shortcuts turn a Focus on, so Nokcandu runs two shortcuts, “\(FocusWhilePlaying.startName)” and “\(FocusWhilePlaying.stopName)”, when a game or stream comes to the front and when it leaves. Useful with a Steam Controller, which doesn't turn the Gaming Focus on by itself. To use another Focus, change it in the two shortcuts (a Focus such as Gaming must be set up in System Settings › Focus first).")
             if on && !missing.isEmpty {
                 Label("Not in Shortcuts yet: \(missing.map { "“\($0)”" }.joined(separator: " and ")).", systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange)
@@ -510,6 +510,9 @@ private struct FocusWhilePlayingRow: View {
                     Text("Shortcuts asks you to add each one: click Add Shortcut.")
                 }
                 if let problem { Text(problem).foregroundStyle(.red) }
+            }
+            if on, let failed = FocusWhilePlaying.problem {
+                Label(failed, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
             }
         }
         .font(.caption).foregroundStyle(.secondary)

@@ -46,7 +46,7 @@ final class FocusWhilePlaying {
     }
 
     /// Makes the missing shortcuts and hands them to Shortcuts, which asks to add each one (“Add Shortcut”): apps
-    /// can't add shortcuts by themselves. Each is one “Set Focus” action, Gaming on or off; shortcut files must be
+    /// can't add shortcuts by themselves. Each is one “Set Focus” action, Do Not Disturb on or off; shortcut files must be
     /// signed to be imported, which /usr/bin/shortcuts does. Returns what went wrong, if anything.
     static func addShortcuts(missing: [String]) async -> String? {
         await Task.detached { () -> String? in
@@ -79,17 +79,28 @@ final class FocusWhilePlaying {
             "WFWorkflowOutputContentItemClasses": [Any](), "WFWorkflowHasOutputFallback": false, "WFQuickActionSurfaces": [Any](),
             "WFWorkflowActions": [[
                 "WFWorkflowActionIdentifier": "is.workflow.actions.dnd.set",
-                "WFWorkflowActionParameters": [
-                    "Enabled": on ? 1 : 0,
-                    "FocusModes": ["Identifier": "com.apple.focus.gaming", "DisplayString": "Gaming"],
-                ] as [String: Any],
+                // Do Not Disturb: every Mac has it (a Gaming Focus exists only once it's been set up in System Settings).
+                "WFWorkflowActionParameters": ["Enabled": on ? 1 : 0] as [String: Any],
             ]],
         ]
     }
 
+    /// Why the last shortcut failed (shown in Settings); nil once one runs.
+    static let problemKey = "focusShortcutsProblem"
+    static var problem: String? { UserDefaults.standard.string(forKey: problemKey) }
+
     private static func run(_ name: String) {
         let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/shortcuts"); p.arguments = ["run", name]
-        p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
+        let err = Pipe(); p.standardOutput = FileHandle.nullDevice; p.standardError = err
+        p.terminationHandler = { p in
+            let text = String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "Error: ", with: "")
+            let failed = p.terminationStatus != 0
+            DispatchQueue.main.async {
+                if failed { UserDefaults.standard.set("“\(name)” didn't run: \(text.isEmpty ? "Shortcuts reported an error." : text)", forKey: problemKey) }
+                else { UserDefaults.standard.removeObject(forKey: problemKey) }
+            }
+        }
         try? p.run()
     }
 }
