@@ -19,7 +19,7 @@ final class PendingSettingsE2ETests: XCTestCase {
         let env = WineTools.environment(contents: game.contents)
         let wine = game.support.appendingPathComponent("wine/bin/wine").path
         fputs("starting temporary Windows command\n", stderr)
-        let active = Task { try await Shell.runAsync(wine, ["cmd", "/c", "ping -t 127.0.0.1"], env: env, timeout: 40) }
+        let active = Task { try await Shell.runAsync(wine, ["cmd", "/c", "ping -n 600 127.0.0.1"], env: env, timeout: 600) }   // Wine's ping ignores -t; stopped below
         for _ in 0..<80 {
             if PendingSettings.activity(for: game) == .active { break }
             try await Task.sleep(nanoseconds: 100_000_000)
