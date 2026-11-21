@@ -92,6 +92,22 @@ jobs:
           for V in $(cat Engine/winemac/SUPPORTED_WINE); do
             strings build/winemac-$V/x86_64-unix/winemac.so | grep -q nokcandu-virtual-display
           done
+      - name: Nokcandu's Wine Mac driver for Apple silicon engines (kept build)
+        id: armdriver
+        uses: actions/cache@v6
+        with:
+          path: build/winenokmac-metalsharp-*
+          key: winenokmac-v1-xcode27.2-27B52-${{ hashFiles('Engine/winemac/**') }}
+      - name: Build the Apple silicon driver (only when no kept build matches these patches)
+        if: steps.armdriver.outputs.cache-hit != 'true'
+        run: |
+          for R in $(cat Engine/winemac/SUPPORTED_METALSHARP); do bash Engine/winemac/build-metalsharp.sh "$R"; done
+      - name: Check the Apple silicon driver
+        run: |
+          for R in $(cat Engine/winemac/SUPPORTED_METALSHARP); do
+            test -f "build/winenokmac-metalsharp-$R/aarch64-unix/winenokmac.so"
+            test -f "build/winenokmac-metalsharp-$R/wine-version"
+          done
       - name: Build native IPX packet module
         run: |
           # Source tools are prepared by the driver build; a restored driver cache may omit them.
