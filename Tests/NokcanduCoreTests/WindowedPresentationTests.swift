@@ -28,6 +28,35 @@ final class WindowedPresentationTests: XCTestCase {
         XCTAssertFalse(WindowedPresentation.registryOn(prefix: p))
     }
 
+    func testGraphicsDriverChoiceForAppleSiliconEngines() throws {
+        let p = try prefix("WINE REGISTRY Version 2\n\n[Software\\\\Wine\\\\Drivers] 2\n#time=1\n\n[Software\\\\Wine\\\\Mac Driver] 2\n\"WindowedFullscreen\"=\"y\"\n")
+        XCTAssertNil(WindowedPresentation.graphicsSetting(prefix: p))
+        try WindowedPresentation.setUserValues(header: WindowedPresentation.driversHeader, ["Graphics": WindowedPresentation.armGraphics], prefix: p)
+        XCTAssertEqual(WindowedPresentation.graphicsSetting(prefix: p), "nokmac,mac")
+        XCTAssertTrue(try user(p).contains("[Software\\\\Wine\\\\Drivers] 2\n#time=1\n\"Graphics\"=\"nokmac,mac\"\n"))
+        XCTAssertTrue(WindowedPresentation.registryOn(prefix: p))
+        try WindowedPresentation.setUserValues(header: WindowedPresentation.driversHeader, ["Graphics": nil], prefix: p)
+        XCTAssertNil(WindowedPresentation.graphicsSetting(prefix: p))
+        XCTAssertTrue(WindowedPresentation.registryOn(prefix: p))   // other keys untouched
+    }
+
+    func testAppleSiliconDriverReachesTheLauncherThroughPerfEnv() throws {
+        let h = FileManager.default.temporaryDirectory.appendingPathComponent("nok-wp-arm-\(UUID().uuidString)")
+        XCTAssertNil(Performance.envFileText(host: h))
+        let so = WindowedPresentation.armDir(h).appendingPathComponent(WindowedPresentation.armFiles[0])
+        try FileManager.default.createDirectory(at: so.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: so)
+        Performance.writeEnv(host: h)
+        let env = try String(contentsOf: h.appendingPathComponent("SharedSupport/nokcandu/perf.env"), encoding: .utf8)
+        XCTAssertTrue(env.contains(WindowedPresentation.armEnvLine), env)
+        var e: [String: String] = ["WINEDLLPATH": "/x"]
+        WindowedPresentation.addEnvironment(contents: h, to: &e)
+        XCTAssertEqual(e["WINEDLLPATH"], WindowedPresentation.armDir(h).path + ":/x")
+        try FileManager.default.removeItem(at: WindowedPresentation.armDir(h))
+        Performance.writeEnv(host: h)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: h.appendingPathComponent("SharedSupport/nokcandu/perf.env").path))
+    }
+
     func testCreatesSection() throws {
         let p = try prefix("WINE REGISTRY Version 2\n")
         try WindowedPresentation.setMacDriver(["WindowedFullscreen": "y"], prefix: p)

@@ -92,6 +92,21 @@ for V in $(cat Engine/winemac/SUPPORTED_WINE); do
     echo "Note: no Wine Mac driver for Wine $V here (the resizable window won't be offered on those engines)."
   fi
 done
+# Nokcandu's Wine Mac driver for Apple silicon engines (winenokmac, Engine/winemac/build-metalsharp.sh), one per
+# supported MetalSharp release in Engine/winemac/SUPPORTED_METALSHARP, bundled as Resources/winenokmac/<Wine version>/.
+rm -rf "$APP/Contents/Resources/winenokmac"
+for R in $(cat Engine/winemac/SUPPORTED_METALSHARP 2>/dev/null); do
+  D="build/winenokmac-metalsharp-$R"
+  if [ -f "$D/aarch64-unix/winenokmac.so" ] && [ -f "$D/wine-version" ]; then
+    W="$(cat "$D/wine-version")"
+    mkdir -p "$APP/Contents/Resources/winenokmac/$W"
+    cp -R "$D/aarch64-unix" "$D/aarch64-windows" "$D/i386-windows" "$D/server-requests" "$D/engine" "$D/wine-version" "$APP/Contents/Resources/winenokmac/$W/"
+  elif [ "${NOKCANDU_REQUIRE_WINEMAC:-0}" = 1 ]; then
+    echo "Nokcandu's Wine Mac driver for MetalSharp $R isn't built (Engine/winemac/build-metalsharp.sh): a release needs it."; exit 1
+  else
+    echo "Note: no Wine Mac driver for MetalSharp $R here (no resizable window on that Apple silicon engine)."
+  fi
+done
 # Exact-fingerprint USB Pro descriptor correction, built separately with SDL enabled.
 HID_BUILD=build/controller-hid-11.0
 [ -f "$HID_BUILD/winebus.so" ] || { echo "Build Engine/controller-hid/build.sh before packaging."; exit 1; }
@@ -134,7 +149,7 @@ p=pathlib.Path(sys.argv[1]); m=json.loads((p/'manifest.json').read_text())
 m['sourceSHA256']=hashlib.sha256((p/'winebus.so').read_bytes()).hexdigest()
 (p/'manifest.json').write_text(json.dumps(m)+'\n')
 PYHIDSIGNED
-for SO in "$APP"/Contents/Resources/winemac/*/x86_64-unix/winemac.so; do
+for SO in "$APP"/Contents/Resources/winemac/*/x86_64-unix/winemac.so "$APP"/Contents/Resources/winenokmac/*/aarch64-unix/winenokmac.so; do
   [ -f "$SO" ] && codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$SO"
 done
 

@@ -19,8 +19,12 @@ final class ExternalEngineIntegrationTests: XCTestCase {
         XCTAssertEqual(engine.external, id)
         XCTAssertTrue(WineSelection.versions(catalog: nil, cached: RuntimeManager.cachedRuntimes()).contains(engine))
 
-        // A clone of the game (APFS: instant, no space).
+        // A clone of the game (APFS: instant, no space until either copy changes). Clones from a run that was
+        // stopped before it could clean up are removed first.
         let fm = FileManager.default
+        for name in (try? fm.contentsOfDirectory(atPath: fm.temporaryDirectory.path)) ?? [] where name.hasPrefix("engine-switch-") {
+            try? fm.removeItem(at: fm.temporaryDirectory.appendingPathComponent(name))
+        }
         let dir = fm.temporaryDirectory.appendingPathComponent("engine-switch-\(UUID().uuidString)")
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: dir) }

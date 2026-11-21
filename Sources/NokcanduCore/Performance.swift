@@ -65,17 +65,42 @@ public enum Performance {
         return out
     }
 
-    /// Rewrites each game's perf.env from its saved settings when an older Nokcandu wrote it differently
-    /// (for example before DXMT got Apple's Metal FPS counter). Runs with the launch maintenance.
+    /// The whole perf.env for an app: the performance switches, then what Nokcandu's resizable window needs on Apple
+    /// silicon engines (WindowedPresentation.armEnvLine). nil = no file.
+    static func envFileText(host h: URL) -> String? {
+        var out = ""
+        if let d = try? Data(contentsOf: folder(h).appendingPathComponent("perf.json")),
+           let s = try? JSONDecoder().decode(Settings.self, from: d), !s.isDefault { out = envText(s) }
+        if WindowedPresentation.armDriverInstalled(host: h) {
+            if out.isEmpty { out = "# Written by Nokcandu. Change its settings there, not here.\n" }
+            out += "# Nokcandu's Mac driver for the resizable window (Apple silicon engine)\n" + WindowedPresentation.armEnvLine + "\n"
+        }
+        return out.isEmpty ? nil : out
+    }
+
+    /// Writes (or removes) an app's perf.env from what it should contain now.
+    public static func writeEnv(host h: URL) {
+        let env = folder(h).appendingPathComponent("perf.env")
+        guard let text = envFileText(host: h) else { try? FileManager.default.removeItem(at: env); return }
+        let want = Data(text.utf8)
+        if (try? Data(contentsOf: env)) != want {
+            try? FileManager.default.createDirectory(at: folder(h), withIntermediateDirectories: true)
+            try? want.write(to: env, options: .atomic)
+        }
+    }
+
+    /// Rewrites each game's perf.env when an older Nokcandu wrote it differently (for example before DXMT got
+    /// Apple's Metal FPS counter). Runs with the launch maintenance.
     public static func refreshEnvFiles(_ games: [InstalledGame]) {
         var seen = Set<String>()
         for g in games {
             guard let h = settingsContents(g), seen.insert(h.path).inserted else { continue }
-            let f = folder(h), env = f.appendingPathComponent("perf.env")
-            guard let d = try? Data(contentsOf: f.appendingPathComponent("perf.json")),
-                  let s = try? JSONDecoder().decode(Settings.self, from: d), !s.isDefault else { continue }
-            let want = Data(envText(s).utf8)
-            if (try? Data(contentsOf: env)) != want { try? want.write(to: env, options: .atomic) }
+            let f = folder(h)
+            // Only files Nokcandu has reasons to write: saved switches, or the Apple silicon driver.
+            guard FileManager.default.fileExists(atPath: f.appendingPathComponent("perf.json").path)
+                    || WindowedPresentation.armDriverInstalled(host: h)
+                    || FileManager.default.fileExists(atPath: f.appendingPathComponent("perf.env").path) else { continue }
+            writeEnv(host: h)
         }
     }
 
@@ -84,10 +109,6 @@ public enum Performance {
         let f = folder(h)
         try FileManager.default.createDirectory(at: f, withIntermediateDirectories: true)
         try JSONEncoder().encode(s).write(to: f.appendingPathComponent("perf.json"), options: .atomic)
-        if s.isDefault {
-            try? FileManager.default.removeItem(at: f.appendingPathComponent("perf.env"))
-        } else {
-            try Data(envText(s).utf8).write(to: f.appendingPathComponent("perf.env"), options: .atomic)
-        }
+        writeEnv(host: h)
     }
 }

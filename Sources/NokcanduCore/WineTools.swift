@@ -53,6 +53,7 @@ public enum WineTools {
         WineEnvironment.apply(contents: c, to: &env)
         GameMicrophone.apply(contents: c, to: &env)
         NativeIPXNetworking.addEnvironment(contents: c, to: &env)
+        WindowedPresentation.addEnvironment(contents: c, to: &env)
         env["WINEDEBUG"] = "-all"
         env["WINEMSYNC"] = "1"
         env["PATH"] = support.appendingPathComponent("wine/bin").path + ":/usr/bin:/bin:/usr/sbin:/sbin"

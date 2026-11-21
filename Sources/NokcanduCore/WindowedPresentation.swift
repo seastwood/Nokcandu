@@ -53,7 +53,9 @@ public enum WindowedPresentation {
     public static var supportedWine: [String] {
         bundledDrivers.keys.sorted { $0.compare($1, options: .numeric) == .orderedAscending }
     }
-    public static func supports(_ v: EngineVersion) -> Bool { bundledDrivers["\(v.major).\(v.minor)"] != nil }
+    public static func supports(_ v: EngineVersion) -> Bool {
+        v.isARM ? armDrivers["\(v.major).\(v.minor)"] != nil : bundledDrivers["\(v.major).\(v.minor)"] != nil
+    }
     /// The engine's Wine version, from its version file.
     static func engineVersion(host h: URL) -> EngineVersion? {
         (try? String(contentsOf: h.appendingPathComponent("SharedSupport/wine/version"), encoding: .utf8)).flatMap(EngineVersion.init(versionString:))
@@ -65,6 +67,117 @@ public enum WindowedPresentation {
         guard EngineLayout(contents: h).arch == .x86_64 else { return nil }
         guard let d = engineVersion(host: h).flatMap({ bundledDrivers["\($0.major).\($0.minor)"] }) else { return nil }
         return serverRequestsMatch(driver: d, host: h) ? d : nil
+    }
+
+    // MARK: Apple silicon engines
+
+    /// Apple silicon engines (MetalSharp's) are signed and stay exactly as their makers built them, so Nokcandu's
+    /// driver never goes into them. It is a driver of its own name (winenokmac.drv, Engine/winemac/build-metalsharp.sh)
+    /// kept in the game's app: Wine finds it through WINEDLLPATH (perf.env, and the environment of Nokcandu's own
+    /// Wine tools), its Windows halves sit in the prefix like any of Wine's (Wine loads a driver only when its file
+    /// is in system32/syswow64), and "Graphics"="nokmac,mac" picks it. With anything missing, Wine falls back to the
+    /// engine's own driver ("mac"), so the game still starts.
+    static let armFiles = ["aarch64-unix/winenokmac.so", "aarch64-windows/winenokmac.drv", "i386-windows/winenokmac.drv"]
+    /// Where each Windows half goes in the prefix.
+    static let armPrefixCopies = ["aarch64-windows/winenokmac.drv": "drive_c/windows/system32/winenokmac.drv",
+                                  "i386-windows/winenokmac.drv": "drive_c/windows/syswow64/winenokmac.drv"]
+    static let armGraphics = "nokmac,mac"
+    static func armDir(_ h: URL) -> URL { h.appendingPathComponent("SharedSupport/nokcandu/winenokmac", isDirectory: true) }
+    static func isARM(_ h: URL) -> Bool { EngineLayout(contents: h).arch == .arm64 }
+
+    /// The ARM drivers this app carries: Resources/winenokmac/<Wine major.minor>/.
+    nonisolated(unsafe) static var armDriversForTesting: [String: URL]?
+    static var armDrivers: [String: URL] {
+        if let t = armDriversForTesting { return t }
+        guard let root = NokPaths.bundledResource("winenokmac") else { return [:] }
+        var out: [String: URL] = [:]
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? [] where name.first?.isNumber == true {
+            let d = root.appendingPathComponent(name, isDirectory: true)
+            if armFiles.allSatisfy({ FileManager.default.fileExists(atPath: d.appendingPathComponent($0).path) }) { out[name] = d }
+        }
+        return out
+    }
+    /// The ARM driver for this engine: same Wine version, and its wineserver numbers requests as the driver expects.
+    static func bundledARM(host h: URL) -> URL? {
+        guard isARM(h), let d = engineVersion(host: h).flatMap({ armDrivers["\($0.major).\($0.minor)"] }) else { return nil }
+        return serverRequestsMatch(driver: d, host: h) ? d : nil
+    }
+
+    /// What's installed for an ARM engine.
+    static func armState(host h: URL) -> EngineState {
+        let fm = FileManager.default, dir = armDir(h)
+        let installed = armFiles.allSatisfy { fm.fileExists(atPath: dir.appendingPathComponent($0).path) }
+        guard let b = bundledARM(host: h) else { return .unsupported }
+        guard installed else { return .stock }
+        let prefix = h.appendingPathComponent("SharedSupport/prefix")
+        let windowsSame = armFiles.dropFirst().allSatisfy { sha(dir.appendingPathComponent($0)) == sha(b.appendingPathComponent($0)) }
+            && armPrefixCopies.allSatisfy { sha(prefix.appendingPathComponent($0.value)) == sha(b.appendingPathComponent($0.key)) }
+        let st = stampValues(armDir(h).appendingPathComponent("installed.sha256"))
+        let soSame = st?.installed == sha(dir.appendingPathComponent(armFiles[0])) && st?.source == sha(b.appendingPathComponent(armFiles[0]))
+        return windowsSame && soSame && graphicsSetting(prefix: prefix) == armGraphics ? .nokcandu : .outdated
+    }
+
+    static func installARM(host h: URL) throws {
+        guard let b = bundledARM(host: h) else { throw NokError("This Apple silicon engine isn't one Nokcandu's driver is built for; nothing was changed.") }
+        if armState(host: h) == .nokcandu { return }
+        let fm = FileManager.default, dir = armDir(h), tmp = dir.appendingPathExtension("nokcandu-tmp")
+        let prefix = h.appendingPathComponent("SharedSupport/prefix")
+        try? fm.removeItem(at: tmp)
+        try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+        for f in armFiles {
+            let dst = tmp.appendingPathComponent(f)
+            try fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fm.copyItem(at: b.appendingPathComponent(f), to: dst)
+        }
+        let so = tmp.appendingPathComponent(armFiles[0])
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: so.path)
+        let sign = try Shell.run("/usr/bin/codesign", ["--force", "--sign", "-", so.path], timeout: 60)
+        guard sign.ok else { try? fm.removeItem(at: tmp); throw NokError("Couldn't sign the Mac driver: \(sign.combined.suffix(200))") }
+        try Data("\(sha(so) ?? "") \(sha(b.appendingPathComponent(armFiles[0])) ?? "")\n".utf8)
+            .write(to: tmp.appendingPathComponent("installed.sha256"), options: .atomic)
+        try? fm.removeItem(at: dir)
+        try fm.moveItem(at: tmp, to: dir)
+        for (src, rel) in armPrefixCopies {
+            let dst = prefix.appendingPathComponent(rel)
+            try fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let t = dst.appendingPathExtension("nokcandu-tmp")
+            try? fm.removeItem(at: t)
+            try fm.copyItem(at: dir.appendingPathComponent(src), to: t)
+            if fm.fileExists(atPath: dst.path) { _ = try fm.replaceItemAt(dst, withItemAt: t) } else { try fm.moveItem(at: t, to: dst) }
+        }
+        try setUserValues(header: driversHeader, ["Graphics": armGraphics], prefix: prefix)
+        Performance.writeEnv(host: h)
+    }
+
+    /// Takes Nokcandu's ARM driver out of the game's app and prefix (the engine's own driver is used again).
+    static func restoreARM(host h: URL) throws {
+        let fm = FileManager.default, prefix = h.appendingPathComponent("SharedSupport/prefix")
+        if graphicsSetting(prefix: prefix) == armGraphics { try setUserValues(header: driversHeader, ["Graphics": nil], prefix: prefix) }
+        for rel in armPrefixCopies.values { try? fm.removeItem(at: prefix.appendingPathComponent(rel)) }
+        try? fm.removeItem(at: armDir(h))
+        Performance.writeEnv(host: h)
+    }
+
+    /// The launcher line (in perf.env) that lets Wine find the driver.
+    static let armEnvLine = #"if [ -f "$SUPPORT/nokcandu/winenokmac/aarch64-unix/winenokmac.so" ]; then export WINEDLLPATH="$SUPPORT/nokcandu/winenokmac${WINEDLLPATH:+:$WINEDLLPATH}"; fi"#
+    static func armDriverInstalled(host h: URL) -> Bool {
+        FileManager.default.fileExists(atPath: armDir(h).appendingPathComponent(armFiles[0]).path)
+    }
+    /// The same for Wine tools Nokcandu starts itself.
+    static func addEnvironment(contents h: URL, to env: inout [String: String]) {
+        guard armDriverInstalled(host: h) else { return }
+        env["WINEDLLPATH"] = armDir(h).path + (env["WINEDLLPATH"].map { ":" + $0 } ?? "")
+    }
+
+    static let driversHeader = "[Software\\\\Wine\\\\Drivers]"
+    static func graphicsSetting(prefix: URL) -> String? {
+        guard let u = try? String(contentsOf: prefix.appendingPathComponent("user.reg"), encoding: .utf8),
+              let r = u.range(of: driversHeader) else { return nil }
+        for line in u[r.upperBound...].split(separator: "\n").dropFirst() {
+            if line.hasPrefix("[") { break }
+            if line.hasPrefix("\"Graphics\"=\"") { return String(line.dropFirst(12).dropLast()) }
+        }
+        return nil
     }
 
     // MARK: Wine server requests
@@ -106,12 +219,17 @@ public enum WindowedPresentation {
     /// bits are the target's offset in the image; names live in __TEXT, where that equals the file offset.
     static func requestNames(inMachO all: Data) -> [String]? {
         var data = all
+        #if arch(arm64)
+        let wanted = 0x0100_000C   // the slice of the Mac it runs on
+        #else
+        let wanted = 0x0100_0007
+        #endif
         if all.count > 8, all.prefix(4) == Data([0xca, 0xfe, 0xba, 0xbe]) {
             func be32(_ o: Int) -> Int { all[o..<o + 4].reduce(0) { $0 << 8 | Int($1) } }
             var found: Data?
             for i in 0..<be32(4) {
                 let e = 8 + i * 20
-                if be32(e) == 0x0100_0007 { found = all.subdata(in: be32(e + 8)..<be32(e + 8) + be32(e + 12)) }
+                if be32(e) == wanted { found = all.subdata(in: be32(e + 8)..<be32(e + 8) + be32(e + 12)) }
             }
             guard let f = found else { return nil }
             data = f
@@ -167,6 +285,7 @@ public enum WindowedPresentation {
 
     /// What driver this app's engine has now.
     public static func engineState(host h: URL) -> EngineState {
+        if isARM(h) { return armState(host: h) }
         let l = lib(h)
         guard files.allSatisfy({ FileManager.default.fileExists(atPath: l.appendingPathComponent($0).path) }) else { return .missing }
         // The .so is re-signed when installed, so compare the Windows halves and recognise ours by its exports' strings.
@@ -196,8 +315,9 @@ public enum WindowedPresentation {
     }
     static func stamp(_ h: URL) -> URL { backup(h).appendingPathComponent("installed.sha256") }
     /// "installed-sha source-sha": the signed copy in the engine, and the bundled driver it was made from.
-    static func installedStamp(_ h: URL) -> (installed: String, source: String)? {
-        let parts = ((try? String(contentsOf: stamp(h), encoding: .utf8)) ?? "").split(whereSeparator: \.isWhitespace).map(String.init)
+    static func installedStamp(_ h: URL) -> (installed: String, source: String)? { stampValues(stamp(h)) }
+    static func stampValues(_ file: URL) -> (installed: String, source: String)? {
+        let parts = ((try? String(contentsOf: file, encoding: .utf8)) ?? "").split(whereSeparator: \.isWhitespace).map(String.init)
         return parts.count == 2 ? (parts[0], parts[1]) : nil
     }
 
@@ -247,8 +367,17 @@ public enum WindowedPresentation {
     public static func unavailable(for g: InstalledGame) -> String? {
         if g.native != nil { return "Mac games use their own windows." }
         guard let h = WineTools.hostContents(for: g) else { return "This game has no Windows environment." }
+        if isARM(h) {
+            if g.hosted != nil || g.battleNet != nil || g.usesSharedSteam || h.standardizedFileURL.path != g.contents.standardizedFileURL.path {
+                return "On Apple silicon engines the resizable window is for games in their own app so far. The game plays on the Mac's screen."
+            }
+            if bundledARM(host: h) == nil {
+                let v = engineVersion(host: h).map { "Wine \($0.major).\($0.minor)" } ?? "this engine"
+                return "Nokcandu's resizable window isn't built for this Apple silicon engine (\(v)) yet. The game plays on the Mac's screen."
+            }
+            return nil
+        }
         if bundled == nil { return "This copy of Nokcandu doesn't include its Wine Mac driver." }
-        if EngineLayout(contents: h).arch == .arm64 { return "The resizable window isn't available for Apple silicon (ARM) Wine engines yet. The game plays on the Mac's screen." }
         switch engineState(host: h) {
         case .unsupported:
             let v = engineVersion(host: h).map { "Wine \($0.major).\($0.minor)" } ?? "This game's engine"
@@ -310,9 +439,15 @@ public enum WindowedPresentation {
         if await WineTools.environmentIsRunning(for: g) { applyLive(want, for: g); return }
         // Our driver is in an engine it doesn't fit (an engine update in place, or a driver from an older Nokcandu):
         // put the engine's own driver back so the game starts with working input, on the Mac's screen.
-        if bundled(host: h) == nil, isOurs(lib(h).appendingPathComponent(files[0])) {
+        if (isARM(h) && bundledARM(host: h) == nil && armDriverInstalled(host: h)) ||
+            (!isARM(h) && bundled(host: h) == nil && isOurs(lib(h).appendingPathComponent(files[0]))) {
             try apply(nil, host: h)
             if want != nil { throw NokError(unavailable(for: g) ?? "The resizable window doesn't fit this game's engine.") }
+            return
+        }
+        // Off on an Apple silicon engine, but Nokcandu's driver (or its Graphics choice) is still there: take it out.
+        if want == nil, isARM(h), armDriverInstalled(host: h) || graphicsSetting(prefix: h.appendingPathComponent("SharedSupport/prefix")) == armGraphics {
+            try apply(nil, host: h)
             return
         }
         if want == applied(host: h), want == nil || engineState(host: h) == .nokcandu { return }
@@ -370,6 +505,7 @@ public enum WindowedPresentation {
 
     /// Puts Nokcandu's driver into the app's engine (keeping the original once), re-signed.
     static func install(host h: URL) throws {
+        if isARM(h) { try installARM(host: h); return }
         guard bundled != nil else { throw NokError("This copy of Nokcandu doesn't include its Wine Mac driver.") }
         guard let b = bundled(host: h) else { throw NokError("This game's Wine engine isn't one Nokcandu's driver is built for; nothing was changed.") }
         let fm = FileManager.default, l = lib(h), bk = backup(h)
@@ -435,6 +571,7 @@ public enum WindowedPresentation {
 
     /// Puts the engine's own driver back (no-op if it never had ours).
     static func restore(host h: URL) throws {
+        if isARM(h) { try restoreARM(host: h); return }
         let fm = FileManager.default, l = lib(h), bk = backup(h)
         guard isOurs(l.appendingPathComponent(files[0])) else { return }
         guard backupIsOriginal(h) else {
@@ -455,24 +592,35 @@ public enum WindowedPresentation {
 
     /// Sets (or with nil, removes) string values in the prefix's Mac Driver key. The game must not be running.
     static func setMacDriver(_ values: [String: String?], prefix: URL) throws {
+        try setUserValues(header: header, values, prefix: prefix)
+    }
+
+    /// Sets (or with nil, removes) string values in one key of the prefix's user registry.
+    static func setUserValues(header: String, _ values: [String: String?], prefix: URL) throws {
         let u = prefix.appendingPathComponent("user.reg")
-        var user = try String(contentsOf: u, encoding: .utf8)
-        for (name, _) in values {
-            // Drop any existing line for this value (inside any section; the names are ours).
-            user = user.split(separator: "\n", omittingEmptySubsequences: false)
-                .filter { !$0.hasPrefix("\"\(name)\"=") }.joined(separator: "\n")
-        }
-        let add = values.sorted { $0.key < $1.key }.compactMap { k, v in v.map { "\"\(k)\"=\"\($0)\"\n" } }.joined()
-        if !add.isEmpty {
-            if let r = user.range(of: header) {
-                var end = user[r.upperBound...].firstIndex(of: "\n").map { user.index(after: $0) } ?? user.endIndex
-                if user[end...].hasPrefix("#time=") { end = user[end...].firstIndex(of: "\n").map { user.index(after: $0) } ?? user.endIndex }
-                user.insert(contentsOf: add, at: end)
-            } else {
-                user += (user.hasSuffix("\n") ? "" : "\n") + "\n\(header) 0\n" + add
+        var lines = try String(contentsOf: u, encoding: .utf8).split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        // Drop the existing lines for these values in this key only (another key may use the same names).
+        var start = lines.firstIndex { $0.hasPrefix(header + " ") || $0 == header }
+        if let st = start {
+            var i = st + 1
+            while i < lines.count, !lines[i].hasPrefix("[") {
+                if values.keys.contains(where: { lines[i].hasPrefix("\"\($0)\"=") }) { lines.remove(at: i) } else { i += 1 }
             }
         }
-        try Data(user.utf8).write(to: u, options: .atomic)
+        let add = values.sorted { $0.key < $1.key }.compactMap { k, v in v.map { "\"\(k)\"=\"\($0)\"" } }
+        if !add.isEmpty {
+            if start == nil {
+                if lines.last == "" { lines.removeLast() }
+                lines += ["", "\(header) 0"]
+                start = lines.count - 1
+                lines += add + [""]
+            } else {
+                var at = start! + 1
+                if at < lines.count, lines[at].hasPrefix("#time=") { at += 1 }
+                lines.insert(contentsOf: add, at: at)
+            }
+        }
+        try Data(lines.joined(separator: "\n").utf8).write(to: u, options: .atomic)
     }
 
     public static func registryOn(prefix: URL) -> Bool {
@@ -482,7 +630,7 @@ public enum WindowedPresentation {
     /// Keeps environments that use it working after an engine or Nokcandu update (new driver build):
     /// reinstalls the driver where it's missing or outdated. Skips running environments and unknown engines.
     public static func refresh(_ games: [InstalledGame]) {
-        guard bundled != nil else { return }
+        guard bundled != nil || !armDrivers.isEmpty else { return }
         var hosts = Set<URL>()
         for g in games where g.native == nil { if let h = WineTools.hostContents(for: g), applied(host: h) != nil { hosts.insert(h) } }
         for h in hosts {

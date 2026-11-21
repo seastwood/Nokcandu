@@ -29,12 +29,23 @@ public enum NokPaths {
     }
     public static var support: URL {
         // Unit tests make throwaway games: their records and backups stay out of the real Application Support.
-        if SystemIntegration.isTesting { return testSupport }
+        if SystemIntegration.isTesting { _ = staleTestSupportRemoved; return testSupport }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? home.appendingPathComponent("Library/Application Support")
         return base.appendingPathComponent("Nokcandu", isDirectory: true)
     }
     static let testSupport = FileManager.default.temporaryDirectory.appendingPathComponent("nokcandu-tests-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+    /// Test runs that were stopped (a hung engine test, a cancelled build) can't remove their support folder, and one
+    /// with an installed engine is gigabytes: each new test run removes those of runs that are no longer running.
+    static let staleTestSupportRemoved: Bool = {
+        let fm = FileManager.default, tmp = fm.temporaryDirectory
+        for name in (try? fm.contentsOfDirectory(atPath: tmp.path)) ?? [] where name.hasPrefix("nokcandu-tests-") {
+            guard let pid = Int32(name.dropFirst("nokcandu-tests-".count)), pid != ProcessInfo.processInfo.processIdentifier,
+                  kill(pid, 0) != 0, errno == ESRCH else { continue }
+            try? fm.removeItem(at: tmp.appendingPathComponent(name))
+        }
+        return true
+    }()
     public static var backups: URL { support.appendingPathComponent("Backups", isDirectory: true) }
     public static var journals: URL { support.appendingPathComponent("Journals", isDirectory: true) }
     public static var diagnostics: URL { support.appendingPathComponent("Diagnostics", isDirectory: true) }
