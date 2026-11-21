@@ -196,6 +196,7 @@ struct StreamHostSummary: View {
                 .confirmationDialog("Remove \(host.name)?", isPresented: $confirmRemove) {
                     Button("Remove Host and Its Stream Profiles", role: .destructive) { m.removeHost(host.id) }
                 } message: { Text("Its stream profiles are removed too. To use it again, connect and pair with it again.") }
+                StreamQuietNotice()
                 SettingsSection(title: "Addresses") {
                     LabeledContent("This network", value: host.localAddress ?? "—")
                     LabeledContent("Over the internet", value: host.remoteAddress ?? "—")
@@ -225,6 +226,7 @@ struct StreamProfileEditor: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 header
+                StreamQuietNotice()
                 appSection
                 videoSection
                 controllerSection

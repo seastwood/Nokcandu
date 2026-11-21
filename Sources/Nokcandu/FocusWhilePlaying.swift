@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import NokcanduCore
 
 /// Other apps' notifications while playing: macOS lets no app turn a Focus on, but Shortcuts can ("Set Focus").
@@ -102,5 +103,53 @@ final class FocusWhilePlaying {
             }
         }
         try? p.run()
+    }
+}
+
+
+/// On the streams pages: other apps' notifications over a full-screen stream add delay, so suggest Do Not Disturb
+/// while streaming until it's set up (or turned down).
+struct StreamQuietNotice: View {
+    @AppStorage(FocusWhilePlaying.key) private var on = false
+    @AppStorage("streamQuietNoticeDismissed") private var dismissed = false
+    @State private var missing: [String] = []
+    @State private var checked = false
+    @State private var adding = false
+    @State private var problem: String?
+
+    var body: some View {
+        Group {
+            if !dismissed && checked && (!on || !missing.isEmpty) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("Silence notifications while streaming", systemImage: "moon.fill").font(.headline)
+                    Text("A notification appearing over a full-screen stream makes macOS compose the screen again, which adds a lot of delay. Nokcandu can turn on Do Not Disturb while a stream or game is in front, and off when you leave, through two shortcuts it adds to Shortcuts (it asks you to confirm each one).")
+                        .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    HStack {
+                        Button(adding ? "Adding…" : !on ? (missing.isEmpty ? "Turn On" : "Turn On and Add the Shortcuts") : "Add the Shortcuts") {
+                            on = true
+                            guard !missing.isEmpty else { return }
+                            adding = true; problem = nil
+                            Task { problem = await FocusWhilePlaying.addShortcuts(missing: missing); adding = false }
+                        }
+                        .buttonStyle(.borderedProminent).disabled(adding)
+                        Button("Not Now") { dismissed = true }
+                        Spacer()
+                    }
+                    if on && !missing.isEmpty { Text("In Shortcuts, click Add Shortcut for each one.").font(.caption).foregroundStyle(.secondary) }
+                    if let problem { Text(problem).font(.caption).foregroundStyle(.red) }
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color.accentColor.opacity(0.1)))
+            }
+        }
+        .task { await check() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in Task { await check() } }
+    }
+
+    private func check() async {
+        let names = await FocusWhilePlaying.installedNames()
+        missing = [FocusWhilePlaying.startName, FocusWhilePlaying.stopName].filter { !names.contains($0) }
+        checked = true
     }
 }

@@ -487,13 +487,13 @@ struct ShortcutRecorder: View {
 
 /// Turning a Focus on while playing, through two Shortcuts the user makes.
 private struct FocusWhilePlayingRow: View {
-    @State private var on = FocusWhilePlaying.enabled
+    @AppStorage(FocusWhilePlaying.key) private var on = false
     @State private var missing: [String] = []
     @State private var adding = false
     @State private var problem: String?
     var body: some View {
         Toggle("Turn on a Focus while playing or streaming", isOn: $on)
-            .onChange(of: on) { _, v in FocusWhilePlaying.enabled = v; if !v { FocusWhilePlaying.shared.playing(false) }; Task { await check() } }
+            .onChange(of: on) { _, v in if !v { FocusWhilePlaying.shared.playing(false) }; Task { await check() } }
             .task { await check() }
             // Back from Shortcuts after adding them.
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in Task { await check() } }
