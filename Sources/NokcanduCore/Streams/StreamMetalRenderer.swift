@@ -58,6 +58,15 @@ public final class StreamMetalRenderer: @unchecked Sendable {
     /// Metal can't show this stream (any thread): fall back to the display layer.
     public var onFailure: ((String) -> Void)?
 
+    /// Something drawn over each frame before it's shown (the controller overlay), in the frame's own command
+    /// buffer. Drawing it here instead of in a window above keeps the stream a single opaque layer, so macOS's
+    /// direct-to-display path stays on: any window over a full-screen stream makes the window server composite
+    /// every frame, which adds frames of delay with V-sync off.
+    public typealias Overlay = (_ buffer: MTLCommandBuffer, _ target: MTLTexture) -> Void
+    private var overlay: Overlay?   // guarded by `lock`
+    public func setOverlay(_ o: Overlay?) { os_unfair_lock_lock(&lock); overlay = o; os_unfair_lock_unlock(&lock) }
+    public var metalDevice: MTLDevice { device }
+
     private struct Config: Equatable {
         var pixelFormat: OSType, matrix: String?, transfer: String?, primaries: String?, chroma: String?, hdrVersion: Int
     }
@@ -263,6 +272,8 @@ public final class StreamMetalRenderer: @unchecked Sendable {
         failures = 0
         guard let drawable = given ?? layer.nextDrawable(), let buffer = commandQueue.makeCommandBuffer() else { return }
         guard encode(image, luma: luma, chroma: chroma, pipeline: pipeline, into: drawable.texture, buffer: buffer) else { return }
+        os_unfair_lock_lock(&lock); let over = overlay; os_unfair_lock_unlock(&lock)
+        over?(buffer, drawable.texture)
         let frame = f
         drawable.addPresentedHandler { [weak self] d in
             if d.presentedTime > 0 { self?.onScreen?(frame, d.presentedTime) }

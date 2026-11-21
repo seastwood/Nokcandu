@@ -4,6 +4,8 @@ import SwiftUI
 import simd
 import NokcanduCore
 import GameController
+import Metal
+import os
 
 /// The 3D controller overlay (Controllers → Settings → Controller overlay): over everything, or in a window of its
 /// own for window capture in OBS. It reads the controller the same way the remapper does and changes nothing about
@@ -43,6 +45,10 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
     /// When Back and Start started being held together (recentring after a second).
     private var comboSince: Double?, comboDone = false
     private var panel: NSPanel?, window: NSWindow?
+    /// Over a full-screen stream, the overlay is drawn into the stream's own frames instead of the panel.
+    private var inStream: StreamMetalRenderer?
+    private var streamDrawer: StreamOverlayDrawer?
+    private var streamCheck: Timer?
     private var host: OverlayHostView?
     private var model: OverlayControllerModel?
     private var modelKind: ControllerOverlaySettings.Model?
@@ -72,6 +78,7 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
         } else {
             resize()
         }
+        watchStreams()
         if settings.mode != .onScreen { arranging = false }
         listen()
         drawNow()
@@ -112,6 +119,7 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
             gcObservers.forEach(NotificationCenter.default.removeObserver); gcObservers = []
             listening = false
         }
+        streamCheck?.invalidate(); streamCheck = nil; leaveStream()
         panel?.orderOut(nil); panel = nil
         if let w = window { w.delegate = nil; w.orderOut(nil) }; window = nil
         host = nil; model = nil; modelKind = nil; shownInput = nil; shownOrientation = nil
@@ -160,8 +168,51 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
     }
 
     private func applyArranging() {
+        // Arranging needs the panel to drag; the stream drawing comes back afterwards.
+        if arranging { leaveStream() } else if settings.mode == .onScreen { updateStream() }
         panel?.ignoresMouseEvents = !arranging
         host?.arranging = arranging && panel != nil
+    }
+
+    // MARK: Inside a full-screen stream
+
+    /// Twice a second while the overlay is over everything: is a stream showing full screen on the overlay's screen?
+    private func watchStreams() {
+        guard settings.mode == .onScreen else { streamCheck?.invalidate(); streamCheck = nil; leaveStream(); return }
+        updateStream()
+        guard streamCheck == nil else { return }
+        streamCheck = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateStream() }
+        }
+    }
+
+    private func updateStream() {
+        guard let host, let screen = targetScreen, !arranging,
+              let stream = DesktopPad.shared.stream as? StreamWindowController, let w = stream.window, w.isVisible, w.screen == screen,
+              w.styleMask.contains(.fullScreen) || w.frame.equalTo(screen.frame),
+              let renderer = stream.connection.video.metalRenderer else { leaveStream(); return }
+        // Where the panel would be, in points from the screen's top left (the drawable covers the screen).
+        let f = screen.frame, size = self.size
+        var origin = CGPoint(x: f.width * settings.positionX - size.width / 2, y: f.height * settings.positionY - size.height / 2)
+        origin.x = min(max(origin.x, 0), f.width - size.width); origin.y = min(max(origin.y, 0), f.height - size.height)
+        let rect = CGRect(x: origin.x, y: f.height - origin.y - size.height, width: size.width, height: size.height)
+        if inStream !== renderer {
+            leaveStream()
+            let d = StreamOverlayDrawer(device: renderer.metalDevice, scene: host.scene, camera: host.camera)
+            renderer.setOverlay { buffer, target in d.draw(buffer, target) }
+            inStream = renderer; streamDrawer = d
+            panel?.orderOut(nil)
+        }
+        // The panel fades the whole view; here the scene itself is faded.
+        if host.scene.rootNode.opacity != settings.opacity { host.scene.rootNode.opacity = settings.opacity }
+        streamDrawer?.place(rect, screenWidth: f.width, opacity: settings.opacity)
+    }
+
+    private func leaveStream() {
+        guard let r = inStream else { return }
+        r.setOverlay(nil); inStream = nil; streamDrawer = nil
+        host?.scene.rootNode.opacity = 1
+        if settings.mode == .onScreen, let panel { panel.orderFrontRegardless() }
     }
 
     // MARK: A window of its own
@@ -371,6 +422,7 @@ final class OverlayHostView: NSView {
     var onDragEnd: (() -> Void)?
     var onDone: (() -> Void)? { didSet { arrangeView.onDone = onDone } }
     var arranging = false { didSet { arrangeView.isHidden = !arranging } }
+    var camera: SCNNode? { sceneView.pointOfView }
     var background: NSColor? {
         didSet {
             sceneView.backgroundColor = background ?? .clear
@@ -479,7 +531,7 @@ struct ControllerOverlaySettingsView: View {
             Picker("Show", selection: $overlay.settings.mode) {
                 ForEach(ControllerOverlaySettings.Mode.allCases, id: \.self) { Text($0.title).tag($0) }
             }
-            Text("A 3D controller showing your buttons, sticks, triggers and trackpads as you use them, turning with the gyro. Over games and streams, it sits on top of everything and never takes clicks. In its own window, add it to OBS as a macOS Screen Capture source set to Window, and use a background colour with a Chroma Key filter. Anything drawn over a full-screen stream can add a millisecond or two of latency.")
+            Text("A 3D controller showing your buttons, sticks, triggers and trackpads as you use them, turning with the gyro. Over games and streams, it sits on top of everything and never takes clicks. In its own window, add it to OBS as a macOS Screen Capture source set to Window, and use a background colour with a Chroma Key filter. Over a full-screen stream it's drawn into the stream's own picture, so it adds almost no delay.")
                 .font(.caption).foregroundStyle(.secondary)
             if overlay.settings.mode != .off {
                 Picker("Controller", selection: $overlay.settings.model) {
@@ -536,5 +588,57 @@ struct ControllerOverlaySettingsView: View {
             guard let rgb = NSColor(c).usingColorSpace(.sRGB) else { return }
             overlay.settings[keyPath: key] = ControllerOverlaySettings.hex(r: rgb.redComponent, g: rgb.greenComponent, b: rgb.blueComponent)
         })
+    }
+}
+
+
+// MARK: - Drawing into a stream's frames
+
+/// Draws the overlay's scene into a stream frame on the stream's render queue (SceneKit's renderer, in the frame's
+/// command buffer). The scene is changed on the main thread inside SceneKit transactions; the drawing holds
+/// SceneKit's lock, so it never sees half a change.
+final class StreamOverlayDrawer: @unchecked Sendable {
+    private let renderer: SCNRenderer
+    private var depth: MTLTexture?
+    private let device: MTLDevice
+    private var lock = os_unfair_lock()
+    private var rect = CGRect.zero, screenWidth: CGFloat = 1, opacity: Double = 1
+
+    init(device: MTLDevice, scene: SCNScene, camera: SCNNode?) {
+        self.device = device
+        renderer = SCNRenderer(device: device, options: nil)
+        renderer.scene = scene
+        renderer.pointOfView = camera
+        renderer.autoenablesDefaultLighting = false
+    }
+
+    /// Main thread: where it goes (points from the screen's top left) and how opaque it is.
+    func place(_ r: CGRect, screenWidth w: CGFloat, opacity o: Double) {
+        os_unfair_lock_lock(&lock); rect = r; screenWidth = max(1, w); opacity = o; os_unfair_lock_unlock(&lock)
+    }
+
+    /// Render queue.
+    func draw(_ buffer: MTLCommandBuffer, _ target: MTLTexture) {
+        os_unfair_lock_lock(&lock); let r = rect, w = screenWidth; os_unfair_lock_unlock(&lock)
+        guard r.width > 0 else { return }
+        let scale = CGFloat(target.width) / w
+        let viewport = CGRect(x: r.minX * scale, y: r.minY * scale, width: r.width * scale, height: r.height * scale)
+        if depth?.width != target.width || depth?.height != target.height {
+            let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .depth32Float, width: target.width, height: target.height, mipmapped: false)
+            d.usage = .renderTarget; d.storageMode = .private
+            depth = device.makeTexture(descriptor: d)
+        }
+        guard let depth else { return }
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = target
+        pass.colorAttachments[0].loadAction = .load
+        pass.colorAttachments[0].storeAction = .store
+        pass.depthAttachment.texture = depth
+        pass.depthAttachment.loadAction = .clear
+        pass.depthAttachment.clearDepth = 1
+        pass.depthAttachment.storeAction = .dontCare
+        SCNTransaction.lock()
+        renderer.render(atTime: CACurrentMediaTime(), viewport: viewport, commandBuffer: buffer, passDescriptor: pass)
+        SCNTransaction.unlock()
     }
 }
