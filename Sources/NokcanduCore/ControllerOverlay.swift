@@ -56,9 +56,8 @@ public struct ControllerOverlaySettings: Codable, Equatable, Sendable {
     /// Turning the drawn controller with the gyro, and how much of the real movement it shows (0…1.5).
     public var gyro = true
     public var gyroStrength: Double = 1
-    /// How high above the controller it's seen from, in degrees above level (30 in front … 85 from above). The drawing
-    /// shows the controller's real tilt, so held tipped up towards you, a lower view looks at its face head-on.
-    public var viewAngle: Double = 72
+    /// How high above the controller it's seen from, in degrees above level (30 in front … 85 from above).
+    public var viewAngle: Double = 54
     public static let viewAngles: ClosedRange<Double> = 30...85
     /// Where it sits over the screen: its centre as a fraction of the screen (0…1, from the bottom left).
     public var positionX: Double = 0.85
@@ -89,6 +88,8 @@ public struct ControllerOverlaySettings: Codable, Equatable, Sendable {
         gyro = (try? c.decode(Bool.self, forKey: .gyro)) ?? base.gyro
         gyroStrength = (try? c.decode(Double.self, forKey: .gyroStrength)) ?? base.gyroStrength
         viewAngle = (try? c.decode(Double.self, forKey: .viewAngle)) ?? base.viewAngle
+        // 72 was the default while the drawing showed the real tilt (November 20); it's drawn level now.
+        if viewAngle == 72 { viewAngle = base.viewAngle }
         positionX = (try? c.decode(Double.self, forKey: .positionX)) ?? base.positionX
         positionY = (try? c.decode(Double.self, forKey: .positionY)) ?? base.positionY
         screen = try? c.decodeIfPresent(String.self, forKey: .screen)
@@ -102,7 +103,7 @@ public struct ControllerOverlaySettings: Codable, Equatable, Sendable {
         size = min(Self.sizes.upperBound, max(Self.sizes.lowerBound, size.isFinite ? size : 320))
         opacity = min(1, max(0.1, opacity.isFinite ? opacity : 1))
         gyroStrength = min(1.5, max(0, gyroStrength.isFinite ? gyroStrength : 1))
-        viewAngle = min(Self.viewAngles.upperBound, max(Self.viewAngles.lowerBound, viewAngle.isFinite ? viewAngle : 72))
+        viewAngle = min(Self.viewAngles.upperBound, max(Self.viewAngles.lowerBound, viewAngle.isFinite ? viewAngle : 54))
         positionX = min(1, max(0, positionX.isFinite ? positionX : 0.85))
         positionY = min(1, max(0, positionY.isFinite ? positionY : 0.15))
     }
@@ -185,6 +186,12 @@ public struct ControllerOverlayMotion: Sendable {
     /// How quickly gravity corrects the tilt, and how quickly the heading returns to the front (per second).
     public var gravityRate: Float = 2.0
     public var headingReturn: Float = 0.25
+    /// The usual hold: how far the front is tipped up (radians) is drawn level. Learned while the controller is held
+    /// still (per second, after a moment of stillness), so putting it down or holding it differently settles back to
+    /// level by itself; recentring sets it at once.
+    public var neutralReturn: Float = 0.6
+    private var neutralPitch: Float = 0
+    private var stillFor: Float = 0
     public init() {}
 
     static let up = SIMD3<Float>(0, 1, 0)
@@ -198,7 +205,7 @@ public struct ControllerOverlayMotion: Sendable {
         if !started {
             // Start from the tilt gravity shows, facing the front, and call that the rest position.
             if g > 0.5 { attitude = Self.rotation(from: a / g, to: Self.up) }
-            reference = attitude; started = true; last = time; return
+            reference = attitude; neutralPitch = Self.pitch(attitude); started = true; last = time; return
         }
         let dt = Float(min(0.05, max(0, time - (last ?? time)))); last = time
         guard dt > 0 else { return }
@@ -216,6 +223,11 @@ public struct ControllerOverlayMotion: Sendable {
             let k = min(1, gravityRate * dt)
             attitude = simd_normalize(attitude * simd_slerp(simd_quatf(ix: 0, iy: 0, iz: 0, r: 1), fix, k))
         }
+        // The usual hold: learned while still.
+        stillFor = simd_length(rate) < 0.12 ? stillFor + dt : 0
+        if neutralReturn > 0 && stillFor > 0.75 {
+            neutralPitch += (Self.pitch(attitude) - neutralPitch) * min(1, neutralReturn * dt)
+        }
         // Heading: turn back towards the rest heading about world up.
         if headingReturn > 0 {
             let yaw = Self.wrapped(Self.heading(attitude) - Self.heading(reference))
@@ -223,20 +235,27 @@ public struct ControllerOverlayMotion: Sendable {
         }
     }
 
-    /// How the controller is held (what the drawing applies): its real tilt, which gravity shows, facing the way it
-    /// faced at the rest position. Held the usual way, tipped up towards you, the drawing tips up towards the camera
-    /// the same way, so its face shows; turning it about the room's up turns the drawing about up, whatever the tilt.
-    /// (Turns measured from a rest pose drawn flat came out as a mix of turning and tilting while it was held
-    /// tipped.) `strength` scales it: 0 flat and facing the front, 1 the real pose.
+    /// What the drawing applies: the controller's turn about the room's up since the rest heading, how far its front is
+    /// tipped up beyond the usual hold, and how far it's rolled about its own length, each drawn about the drawing's
+    /// own axes (up, side to side, front to back). Held the usual way it's drawn level, and each movement shows as
+    /// that movement, however steeply the controller is held (a held controller is often tipped up 50–60°, where
+    /// turning it in the room's terms is mostly rolling in its own). `strength` scales it: 0 level and facing front.
     public func orientation(strength: Float = 1) -> simd_quatf {
-        let r = simd_normalize(simd_quatf(angle: -Self.heading(reference), axis: Self.up) * attitude)
+        let yaw = Self.wrapped(Self.heading(attitude) - Self.heading(reference))
+        let levelled = simd_quatf(angle: -Self.heading(attitude), axis: Self.up) * attitude     // facing −z
+        let pitch = Self.pitch(attitude)
+        let roll = simd_normalize(simd_quatf(angle: -pitch, axis: SIMD3(1, 0, 0)) * levelled)    // about z only
+        let r = simd_normalize(simd_quatf(angle: yaw, axis: Self.up) * simd_quatf(angle: pitch - neutralPitch, axis: SIMD3(1, 0, 0)) * roll)
         return simd_slerp(simd_quatf(ix: 0, iy: 0, iz: 0, r: 1), r, max(0, strength))
     }
 
+    /// How far the front (−z) is tipped up, in radians.
+    static func pitch(_ q: simd_quatf) -> Float { asin(max(-1, min(1, q.act(SIMD3<Float>(0, 0, -1)).y))) }
+
     static func wrapped(_ a: Float) -> Float { atan2(sin(a), cos(a)) }
 
-    /// The way it faces now becomes the front.
-    public mutating func recenter() { reference = attitude }
+    /// The way it faces now becomes the front, and the way it's held level.
+    public mutating func recenter() { reference = attitude; neutralPitch = Self.pitch(attitude) }
     public mutating func reset() { self = ControllerOverlayMotion() }
 
     /// The turn about world up in a world-frame rotation (where it moves the forward direction, −z, to).

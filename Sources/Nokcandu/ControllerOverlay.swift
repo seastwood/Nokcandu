@@ -337,7 +337,7 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
         if changed && active == key { scheduleDraw() }
     }
 
-    /// Back and Start held together for a second: the way the controller faces becomes the front.
+    /// Back and Start held together for a second: the way the controller is held becomes level and the front.
     private func watchRecenterCombo(_ input: ControllerOverlayInput) {
         guard input.buttons.isSuperset(of: [.back, .start]) else { comboSince = nil; comboDone = false; return }
         let now = ProcessInfo.processInfo.systemUptime
@@ -371,6 +371,7 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
             if s.flipGravity == true { a = a.map { -$0 } }
         }
         motion.update(gyro: gyro, acceleration: a, at: ProcessInfo.processInfo.systemUptime)
+        MotionLog.shared.add(gyro, a)
         scheduleDraw()
     }
 
@@ -578,7 +579,7 @@ struct ControllerOverlaySettingsView: View {
                     }
                     HStack {
                         Button("Recentre") { overlay.recenter() }
-                        Text("Or hold Back and Start together for a second (View and Menu, Share and Options, − and +). The way the controller faces then becomes the front. Its tilt is always the real one, so held the usual way its face is towards you; turning drifts back to the front by itself.")
+                        Text("Or hold Back and Start together for a second (View and Menu, Share and Options, − and +). The way you hold the controller then becomes level and facing the front. Both also settle back by themselves a moment after you stop moving it.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
@@ -710,5 +711,31 @@ final class StreamOverlayDrawer: @unchecked Sendable {
         enc.setFragmentBytes(&opacity, length: MemoryLayout<Float>.size, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         enc.endEncoding()
+    }
+}
+
+
+/// Development only: with a file named "overlay-motion-log" in Nokcandu's support folder, the overlay's motion
+/// (gyro rad/s, then acceleration in g, in the overlay's axes) goes to overlay-motion.txt beside it for 30 seconds.
+@MainActor
+final class MotionLog {
+    static let shared = MotionLog()
+    private var lines: [String] = []
+    private var until: Double?
+    private var lastCheck = 0.0
+    func add(_ g: [Float], _ a: [Float]) {
+        let now = ProcessInfo.processInfo.systemUptime
+        let flag = NokPaths.support.appendingPathComponent("overlay-motion-log")
+        if until == nil, now - lastCheck > 1 {
+            lastCheck = now
+            if FileManager.default.fileExists(atPath: flag.path) { try? FileManager.default.removeItem(at: flag); until = now + 30; lines = [] }
+        }
+        guard let end = until else { return }
+        lines.append(String(format: "%.4f %.4f %.4f %.4f %.4f %.4f %.4f", now, g[0], g[1], g[2], a[0], a[1], a[2]))
+        if now > end {
+            until = nil
+            try? lines.joined(separator: "\n").write(to: NokPaths.support.appendingPathComponent("overlay-motion.txt"), atomically: true, encoding: .utf8)
+            lines = []
+        }
     }
 }

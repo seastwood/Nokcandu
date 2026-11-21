@@ -43,7 +43,7 @@ final class ControllerOverlayTests: XCTestCase {
     /// Tilting forward 30° with the gyro reading nothing (a gyro that missed it): gravity brings the drawing to 30°.
     func testGravityCorrectsTheTilt() {
         var m = ControllerOverlayMotion()
-        m.headingReturn = 0
+        m.headingReturn = 0; m.neutralReturn = 0
         m.update(gyro: [0, 0, 0], acceleration: flat, at: 0)
         let t: Float = 30 * .pi / 180
         // Pitched about x: up, in the controller's terms, leans towards −z.
@@ -53,28 +53,42 @@ final class ControllerOverlayTests: XCTestCase {
         XCTAssertEqual(abs(m.orientation().axis.x), 1, accuracy: 0.02, "about x")
     }
 
-    /// Held the usual way, tipped up 45° towards the player: the drawing shows that tilt (so its face is towards the
-    /// camera), and turning about the room's up while it's tipped turns the drawing about up, not partly about its
-    /// own length.
-    func testHeldTippedShowsTheTiltAndTurnsAboutUp() {
+    /// Held the usual way, tipped up 60° (as a held Steam Controller was measured): drawn level; turning about the
+    /// room's up turns the drawing about its up; rolling about its own length rolls the drawing about its length.
+    func testHeldTippedIsLevelAndEachMovementShowsAsItself() {
+        func run(_ axis: (simd_quatf) -> SIMD3<Float>) -> simd_quatf {
+            var m = ControllerOverlayMotion()
+            m.headingReturn = 0; m.neutralReturn = 0
+            let t: Float = 60 * .pi / 180
+            let tipped: [Float] = [0, cos(t), -sin(t)]          // the front raised: up leans towards −z
+            m.update(gyro: [0, 0, 0], acceleration: tipped, at: 0)
+            XCTAssertLessThan(angle(m.orientation()), 0.5, "the usual hold is drawn level")
+            var attitude = simd_quatf(angle: t, axis: SIMD3(1, 0, 0))   // controller → room
+            let rate: Float = .pi / 2, dt: Float = 1 / 250
+            for i in 1...125 {
+                let w = attitude.inverse.act(axis(attitude)) * rate          // in the controller's terms
+                attitude = simd_normalize(attitude * simd_quatf(angle: rate * dt, axis: simd_normalize(w)))
+                let g = attitude.inverse.act(SIMD3<Float>(0, 1, 0))
+                m.update(gyro: [w.x, w.y, w.z], acceleration: [g.x, g.y, g.z], at: Double(i) / 250)
+            }
+            return m.orientation()
+        }
+        let turned = run { _ in SIMD3(0, 1, 0) }                             // about the room's up
+        XCTAssertEqual(angle(turned), 45, accuracy: 3)
+        XCTAssertEqual(abs(turned.axis.y), 1, accuracy: 0.03, "turning shows as turning")
+        let rolled = run { $0.act(SIMD3(0, 0, 1)) }                          // about its own length
+        XCTAssertEqual(angle(rolled), 45, accuracy: 3)
+        XCTAssertEqual(abs(rolled.axis.z), 1, accuracy: 0.03, "rolling shows as rolling")
+    }
+
+    /// Put down or held differently, it settles back to level by itself once it's still.
+    func testUsualHoldIsLearnedWhileStill() {
         var m = ControllerOverlayMotion()
-        m.headingReturn = 0
-        let t: Float = 45 * .pi / 180
-        // The far end (the triggers, −z) raised: up, in the controller's terms, leans towards −z.
+        m.update(gyro: [0, 0, 0], acceleration: [0, 1, 0], at: 0)
+        let t: Float = 25 * .pi / 180
         let tipped: [Float] = [0, cos(t), -sin(t)]
-        m.update(gyro: [0, 0, 0], acceleration: tipped, at: 0)
-        let rest = m.orientation()
-        XCTAssertEqual(angle(rest), 45, accuracy: 0.5)
-        XCTAssertEqual(abs(rest.axis.x), 1, accuracy: 0.01)
-        // The drawn face looks up and towards the player, where the camera is.
-        let face = rest.act(SIMD3<Float>(0, 1, 0))
-        XCTAssertEqual(face.y, cos(t), accuracy: 0.01); XCTAssertEqual(face.z, sin(t), accuracy: 0.01)
-        // 90°/s about the room's up for half a second, in the controller's own terms.
-        let up = rest.inverse.act(SIMD3<Float>(0, 1, 0)) * (.pi / 2)
-        for i in 1...125 { m.update(gyro: [up.x, up.y, up.z], acceleration: m.orientation().inverse.act(SIMD3<Float>(0, 1, 0)).array, at: Double(i) / 250) }
-        let turn = m.orientation() * rest.inverse
-        XCTAssertEqual(angle(turn), 45, accuracy: 3)
-        XCTAssertEqual(abs(turn.axis.y), 1, accuracy: 0.02, "about up")
+        for i in 1...(250 * 10) { m.update(gyro: [0, 0, 0], acceleration: tipped, at: Double(i) / 250) }
+        XCTAssertLessThan(angle(m.orientation()), 1)
     }
 
     /// Shaking (far from 1 g) isn't taken as gravity.
