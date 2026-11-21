@@ -205,7 +205,7 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
             panel?.orderOut(nil)
         }
 
-        streamDrawer?.place(rect, screenWidth: f.width, opacity: settings.opacity)
+        streamDrawer?.place(rect, screenWidth: f.width, scale: screen.backingScaleFactor, opacity: settings.opacity)
     }
 
     private func leaveStream() {
@@ -619,20 +619,27 @@ struct ControllerOverlaySettingsView: View {
 /// stream's plain 8-bit frame would come out much darker. The scene is changed on the main thread inside SceneKit
 /// transactions; the drawing holds SceneKit's lock, so it never sees half a change.
 final class StreamOverlayDrawer: @unchecked Sendable {
+    /// The 3D drawing is rendered on the main thread with its own command queue, only when it changed, into one of
+    /// two textures; each stream frame just copies the newest finished one. The stream never waits for SceneKit
+    /// (rendering inside the frame, a moving controller held up frames: up to 70 ms).
     private let renderer: SCNRenderer
     private let device: MTLDevice
-    private var color: MTLTexture?, colorEncoded: MTLTexture?, depth: MTLTexture?
-    private var pipelines: [MTLPixelFormat: MTLRenderPipelineState] = [:]
+    private let queue: MTLCommandQueue?
+    private struct Target { let color: MTLTexture; let encoded: MTLTexture; let depth: MTLTexture }
+    private var targets: [Target] = []           // main thread
+    private var next = 0                          // main thread
+    private var inFlight = false, pending = false // main thread
+    private var front: Target?                    // guarded by `lock`
+    private var pipelines: [MTLPixelFormat: MTLRenderPipelineState] = [:]   // render queue
     private let library: MTLLibrary?
     private let sampler: MTLSamplerState?
     private var lock = os_unfair_lock()
-    private var rect = CGRect.zero, screenWidth: CGFloat = 1, opacity: Double = 1
-    /// The scene changed since it was last drawn (guarded by `lock`). Unchanged, each frame reuses the last drawing,
-    /// so a controller held still or put down costs one small copy a frame instead of a 3D render.
-    private var needsRender = true
+    private var rect = CGRect.zero, screenWidth: CGFloat = 1, opacity: Double = 1   // guarded by `lock`
+    private var scale: CGFloat = 2                                                  // main thread
 
     init(device: MTLDevice, scene: SCNScene, camera: SCNNode?) {
         self.device = device
+        queue = device.makeCommandQueue()
         renderer = SCNRenderer(device: device, options: nil)
         renderer.scene = scene
         renderer.pointOfView = camera
@@ -642,16 +649,59 @@ final class StreamOverlayDrawer: @unchecked Sendable {
         sampler = device.makeSamplerState(descriptor: sd)
     }
 
-    /// Main thread: where it goes (points from the screen's top left) and how opaque it is.
-    func place(_ r: CGRect, screenWidth w: CGFloat, opacity o: Double) {
+    /// Main thread: where it goes (points from the screen's top left), the screen's scale, and how opaque it is.
+    func place(_ r: CGRect, screenWidth w: CGFloat, scale s: CGFloat, opacity o: Double) {
         os_unfair_lock_lock(&lock)
-        if rect != r || screenWidth != max(1, w) { needsRender = true }
+        let moved = rect.size != r.size
         rect = r; screenWidth = max(1, w); opacity = o
         os_unfair_lock_unlock(&lock)
+        if moved || s != scale || front == nil { scale = s; changed() }
     }
 
-    /// Main thread: the drawing changed (buttons, sticks, the gyro's turn, colours, the controller drawn).
-    func changed() { os_unfair_lock_lock(&lock); needsRender = true; os_unfair_lock_unlock(&lock) }
+    /// Main thread: the drawing changed (buttons, sticks, the gyro's turn, colours, the controller drawn). Renders it
+    /// now, or right after the render in progress (never more than one behind).
+    func changed() {
+        guard !inFlight else { pending = true; return }
+        os_unfair_lock_lock(&lock); let r = rect; os_unfair_lock_unlock(&lock)
+        // Twice the screen's pixels, for smooth edges when it's drawn down onto the frame.
+        let tw = max(1, Int(r.width * scale * 2)), th = max(1, Int(r.height * scale * 2))
+        guard r.width > 0, let queue, let buffer = queue.makeCommandBuffer() else { return }
+        if targets.first?.color.width != tw || targets.first?.color.height != th {
+            targets = (0..<2).compactMap { _ in makeTarget(tw, th) }; next = 0
+        }
+        guard targets.count == 2 else { return }
+        let t = targets[next]; next = 1 - next
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = t.color
+        pass.colorAttachments[0].loadAction = .clear
+        pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+        pass.colorAttachments[0].storeAction = .store
+        pass.depthAttachment.texture = t.depth
+        pass.depthAttachment.loadAction = .clear
+        pass.depthAttachment.clearDepth = 1
+        pass.depthAttachment.storeAction = .dontCare
+        renderer.render(atTime: CACurrentMediaTime(), viewport: CGRect(x: 0, y: 0, width: tw, height: th), commandBuffer: buffer, passDescriptor: pass)
+        inFlight = true
+        buffer.addCompletedHandler { [weak self] _ in
+            guard let self else { return }
+            os_unfair_lock_lock(&self.lock); self.front = t; os_unfair_lock_unlock(&self.lock)
+            DispatchQueue.main.async {
+                self.inFlight = false
+                if self.pending { self.pending = false; self.changed() }
+            }
+        }
+        buffer.commit()
+    }
+
+    private func makeTarget(_ w: Int, _ h: Int) -> Target? {
+        let cd = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm_srgb, width: w, height: h, mipmapped: false)
+        cd.usage = [.renderTarget, .shaderRead, .pixelFormatView]; cd.storageMode = .private
+        let dd = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .depth32Float, width: w, height: h, mipmapped: false)
+        dd.usage = .renderTarget; dd.storageMode = .private
+        guard let c = device.makeTexture(descriptor: cd), let e = c.makeTextureView(pixelFormat: .bgra8Unorm),
+              let d = device.makeTexture(descriptor: dd) else { return nil }
+        return Target(color: c, encoded: e, depth: d)
+    }
 
     static let shader = """
     #include <metal_stdlib>
@@ -682,49 +732,20 @@ final class StreamOverlayDrawer: @unchecked Sendable {
         return p
     }
 
-    /// Render queue.
+    /// Render queue: the newest finished drawing onto the frame (a copy; nothing waits for SceneKit).
     func draw(_ buffer: MTLCommandBuffer, _ target: MTLTexture) {
-        os_unfair_lock_lock(&lock); let r = rect, w = screenWidth, o = Float(opacity); var render = needsRender; needsRender = false; os_unfair_lock_unlock(&lock)
-        guard r.width > 0, let pipeline = pipeline(target.pixelFormat), let sampler else { return }
-        let scale = CGFloat(target.width) / w
-        let viewport = MTLViewport(originX: Double(r.minX * scale), originY: Double(r.minY * scale),
-                                   width: Double(r.width * scale), height: Double(r.height * scale), znear: 0, zfar: 1)
-        let tw = max(1, Int(viewport.width * 2)), th = max(1, Int(viewport.height * 2))
-        if color?.width != tw || color?.height != th {
-            render = true
-            let cd = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm_srgb, width: tw, height: th, mipmapped: false)
-            cd.usage = [.renderTarget, .shaderRead, .pixelFormatView]; cd.storageMode = .private
-            color = device.makeTexture(descriptor: cd)
-            colorEncoded = color?.makeTextureView(pixelFormat: .bgra8Unorm)
-            let dd = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .depth32Float, width: tw, height: th, mipmapped: false)
-            dd.usage = .renderTarget; dd.storageMode = .private
-            depth = device.makeTexture(descriptor: dd)
-        }
-        guard let color, let colorEncoded, let depth else { return }
-        if render {
-        let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture = color
-        pass.colorAttachments[0].loadAction = .clear
-        pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
-        pass.colorAttachments[0].storeAction = .store
-        pass.depthAttachment.texture = depth
-        pass.depthAttachment.loadAction = .clear
-        pass.depthAttachment.clearDepth = 1
-        pass.depthAttachment.storeAction = .dontCare
-        SCNTransaction.lock()
-        renderer.render(atTime: CACurrentMediaTime(), viewport: CGRect(x: 0, y: 0, width: tw, height: th), commandBuffer: buffer, passDescriptor: pass)
-        SCNTransaction.unlock()
-        }
-        // Onto the frame: an 8-bit frame holds sRGB-encoded values (read the texture undecoded), a floating-point
-        // (EDR) one linear values (read it decoded).
-        let source = target.pixelFormat == .bgra8Unorm || target.pixelFormat == .rgba8Unorm ? colorEncoded : color
+        os_unfair_lock_lock(&lock); let r = rect, w = screenWidth, o = Float(opacity), t = front; os_unfair_lock_unlock(&lock)
+        guard let t, r.width > 0, let pipeline = pipeline(target.pixelFormat), let sampler else { return }
+        let s = CGFloat(target.width) / w
+        // An 8-bit frame holds sRGB-encoded values (read the drawing undecoded), a floating-point (EDR) one linear values.
+        let source = target.pixelFormat == .bgra8Unorm || target.pixelFormat == .rgba8Unorm ? t.encoded : t.color
         let over = MTLRenderPassDescriptor()
         over.colorAttachments[0].texture = target
         over.colorAttachments[0].loadAction = .load
         over.colorAttachments[0].storeAction = .store
         guard let enc = buffer.makeRenderCommandEncoder(descriptor: over) else { return }
         enc.setRenderPipelineState(pipeline)
-        enc.setViewport(viewport)
+        enc.setViewport(MTLViewport(originX: Double(r.minX * s), originY: Double(r.minY * s), width: Double(r.width * s), height: Double(r.height * s), znear: 0, zfar: 1))
         enc.setFragmentTexture(source, index: 0)
         enc.setFragmentSamplerState(sampler, index: 0)
         var opacity = o
