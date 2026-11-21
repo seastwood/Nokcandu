@@ -356,14 +356,32 @@ public enum WindowedPresentation {
 
     static func applied(host h: URL) -> [Int]? {
         if let t = try? String(contentsOf: appliedFile(h), encoding: .utf8) { return parse(t) }
-        // Never recorded: read the registry itself.
-        guard let u = try? String(contentsOf: h.appendingPathComponent("SharedSupport/prefix/user.reg"), encoding: .utf8),
-              u.contains("\"WindowedFullscreen\"=\"y\"") else { return nil }
-        guard let r = u.range(of: #""WindowedResolution"="([0-9]+x[0-9]+)""#, options: .regularExpression) else { return automatic }
-        return parse(String(u[r]).components(separatedBy: "\"")[3])
+        // Never recorded: read the registry itself (megabytes: once per change of the file, not every status pass).
+        let reg = h.appendingPathComponent("SharedSupport/prefix/user.reg")
+        guard let a = try? FileManager.default.attributesOfItem(atPath: reg.path) else { return nil }
+        let stamp = "\((a[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)/\((a[.size] as? NSNumber)?.intValue ?? 0)"
+        if let cached = registryAnswers[reg.path], cached.stamp == stamp { return cached.value }
+        var value: [Int]?
+        if let u = try? String(contentsOf: reg, encoding: .utf8), u.contains("\"WindowedFullscreen\"=\"y\"") {
+            if let r = u.range(of: #""WindowedResolution"="([0-9]+x[0-9]+)""#, options: .regularExpression) {
+                value = parse(String(u[r]).components(separatedBy: "\"")[3])
+            } else { value = automatic }
+        }
+        registryAnswers[reg.path] = RegistryAnswer(stamp: stamp, value: value)
+        return value
     }
+    private struct RegistryAnswer { let stamp: String; let value: [Int]? }
+    private static let registryAnswers = LockedCache<String, RegistryAnswer>(limit: 256)
+
 
     /// Why it can't be used for this game (nil = it can).
+    /// On an Apple silicon engine (a preview engine) the resizable window is a preview too: Nokcandu's driver is in
+    /// place on it, but no game has been confirmed to show its picture there yet.
+    public static func isPreview(for g: InstalledGame) -> Bool {
+        guard g.native == nil, let h = WineTools.hostContents(for: g) else { return false }
+        return isARM(h)
+    }
+
     public static func unavailable(for g: InstalledGame) -> String? {
         if g.native != nil { return "Mac games use their own windows." }
         guard let h = WineTools.hostContents(for: g) else { return "This game has no Windows environment." }

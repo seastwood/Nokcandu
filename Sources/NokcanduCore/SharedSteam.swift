@@ -665,7 +665,8 @@ public enum SharedSteam {
         runningGames(processes: GameLauncher.processSnapshot())
     }
     static func runningGames(processes: [(Int32, String)]) -> [Int: Int32] {
-        matchRunning(processes.map { "\($0.0) \($0.1)" }.joined(separator: "\n"), folders: installFolders())
+        // Only Windows programs can be Steam games: skips searching hundreds of Mac processes' text each pass.
+        matchRunning(processes.filter { GameLauncher.looksWindows($0.1) }.map { "\($0.0) \($0.1)" }.joined(separator: "\n"), folders: installFolders())
     }
 
     static func matchRunning(_ ps: String, folders: [String: Int]) -> [Int: Int32] {

@@ -964,6 +964,7 @@ struct ResizableWindowSection: View {
             }
             if size != nil { SettingNote("Works best with the game set to full screen in its own settings.") }
             if let reason { SettingNote(reason) }
+            else if WindowedPresentation.isPreview(for: game) { SettingNote("Preview on Apple silicon engines: Nokcandu's Mac driver (winenokmac) is in place, but games aren't confirmed to show their picture in the window yet. Turn it off if the game stays black.") }
             if working { ProgressView().controlSize(.small) }
             if !status.isEmpty { SettingNote(status) }
             Color.clear.frame(height: 0).onAppear { size = WindowedPresentation.setting(for: game) }

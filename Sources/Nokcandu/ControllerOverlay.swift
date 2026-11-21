@@ -280,9 +280,18 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
         update(source, ControllerOverlayInput(buttons: buttons, axes: axes), kind: .forName(source.hasPrefix("switch2") ? "switch" : name), name: name)
     }
 
+    /// The controllers macOS knows (less Steam Controllers) with their key and name, worked out when one connects or
+    /// disconnects: reading a controller's category or vendor costs more than reading its buttons, 60 times a second.
+    private var gcPads: [(controller: GCController, key: String, name: String, kind: ControllerOverlaySettings.Model, touchpad: GCControllerTouchpad?)] = []
+
     private func watchGameControllers() {
         let pads = gameControllers
-        for key in sources.keys where key.hasPrefix("gc:") && !pads.contains(where: { "gc:\(ObjectIdentifier($0).hashValue)" == key }) { gone(key) }
+        gcPads = pads.map { c in
+            let name = c.vendorName ?? c.productCategory
+            return (c, "gc:\(ObjectIdentifier(c).hashValue)", name, .forName(c.productCategory + " " + name),
+                    c.physicalInputProfile.allElements.compactMap { $0 as? GCControllerTouchpad }.first)
+        }
+        for key in sources.keys where key.hasPrefix("gc:") && !gcPads.contains(where: { $0.key == key }) { gone(key) }
         if pads.isEmpty { gcTimer?.invalidate(); gcTimer = nil; return }
         guard gcTimer == nil else { return }
         gcTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
@@ -296,20 +305,19 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
     }
 
     private func pollGameControllers() {
-        for c in gameControllers {
+        for (c, key, name, kind, touchpad) in gcPads {
             guard let g = c.extendedGamepad else { continue }
-            let key = "gc:\(ObjectIdentifier(c).hashValue)", name = c.vendorName ?? c.productCategory
             let state = PadGC.state(g)
             var i = ControllerOverlayInput(buttons: Set(state.buttons.filter(\.1).map(\.0)), axes: [:])
             func v(_ n: Int32) -> Float { state.axes.first { $0.0 == n }?.1 ?? 0 }
             i.leftStick = [v(0), -v(1)]; i.rightStick = [v(2), -v(3)]
             i.leftTrigger = v(4); i.rightTrigger = v(5)
             // The first touchpad (DualShock 4, DualSense): the overlay's left pad.
-            if let tp = c.physicalInputProfile.allElements.compactMap({ $0 as? GCControllerTouchpad }).first {
+            if let tp = touchpad {
                 i.leftTouch = tp.touchState != .up
                 i.leftPad = [tp.touchSurface.xAxis.value, tp.touchSurface.yAxis.value]
             }
-            update(key, i, kind: .forName(c.productCategory + " " + name), name: name)
+            update(key, i, kind: kind, name: name)
             if active == key, settings.gyro, let m = c.motion {
                 if m.sensorsRequireManualActivation && !m.sensorsActive { m.sensorsActive = true }
                 let r = m.rotationRate, a = m.hasGravityAndUserAcceleration ? m.gravity : m.acceleration

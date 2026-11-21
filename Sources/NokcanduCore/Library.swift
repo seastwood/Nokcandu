@@ -236,15 +236,49 @@ public enum GameLauncher {
             guard pid > 1, pid != getpid(), let path = WineTools.executablePath(pid) else { return false }
             return WineTools.owns(pid: pid, executable: path, support: support) && kill(pid, 0) == 0
         }
-        let lowered = loweredCommands(rows)
-        for (pid, command) in lowered where match(command) && ours(pid) { return pid }
+        let lowered = windowsCommands(rows)
+        for row in lowered where match(row.command) && ours(row.pid) { return row.pid }
         // A private game may hand off from its configured launcher to another
         // executable. Keep tracking that game's own environment, never another
         // game's similarly named process or a shared store client.
         if hasPrivateGamePrefix(game) {
-            for (pid, command) in lowered where privateGameCommand(command) && ours(pid) { return pid }
+            for row in lowered where row.privateGame && ours(row.pid) { return row.pid }
         }
         return nil
+    }
+
+    /// The programs Wine runs show a Windows command line ("C:\\Games\\game.exe …"); every other process on the
+    /// Mac (hundreds) can't be a game's program. Kept once per process scan, lowercased, with whether it counts as
+    /// a private game's program, so a status pass doesn't search every process's text once per game.
+    struct WindowsCommand { let pid: Int32; let command: String; let privateGame: Bool }
+    private static let windowsCache = LockedCache<Int, [WindowsCommand]>(limit: 4)
+    static func windowsCommands(_ rows: [(Int32, String)]) -> [WindowsCommand] {
+        var hasher = Hasher()
+        hasher.combine(rows.count)
+        for row in rows { hasher.combine(row.0); hasher.combine(row.1) }
+        let key = hasher.finalize()
+        if let cached = windowsCache[key] { return cached }
+        let found = rows.compactMap { row -> WindowsCommand? in
+            guard looksWindows(row.1) else { return nil }
+            let c = row.1.lowercased()
+            return WindowsCommand(pid: row.0, command: c, privateGame: privateGameCommand(c))
+        }
+        windowsCache[key] = found
+        return found
+    }
+    /// A drive-letter path at the start (C:\, z:/), possibly quoted, or an .exe anywhere: cheap byte checks.
+    static func looksWindows(_ command: String) -> Bool {
+        var u = Array(command.utf8.prefix(4))
+        if u.first == UInt8(ascii: "\"") { u.removeFirst() }
+        if u.count >= 3, (65...90).contains(u[0]) || (97...122).contains(u[0]), u[1] == UInt8(ascii: ":"),
+           u[2] == UInt8(ascii: "\\") || u[2] == UInt8(ascii: "/") { return true }
+        let bytes = Array(command.utf8)
+        guard bytes.count >= 4 else { return false }
+        for i in 0...(bytes.count - 4) where bytes[i] == UInt8(ascii: ".") {
+            let e = bytes[i + 1] | 0x20, x = bytes[i + 2] | 0x20, e2 = bytes[i + 3] | 0x20
+            if e == UInt8(ascii: "e") && x == UInt8(ascii: "x") && e2 == UInt8(ascii: "e") { return true }
+        }
+        return false
     }
 
     /// Lowercased process commands, computed once per process scan rather than once per game.
