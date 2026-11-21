@@ -53,8 +53,9 @@ final class ControllerOverlayTests: XCTestCase {
         XCTAssertEqual(abs(m.orientation().axis.x), 1, accuracy: 0.02, "about x")
     }
 
-    /// Held the usual way, tipped up 60° (as a held Steam Controller was measured): drawn level; turning about the
-    /// room's up turns the drawing about its up; rolling about its own length rolls the drawing about its length.
+    /// Held the usual way, tipped up 60° (as a held Steam Controller was measured): drawn level; spinning it about its
+    /// face turns the drawing about its up; tilting it about its length rolls the drawing about its length; tipping the
+    /// front further tips the drawing.
     func testHeldTippedIsLevelAndEachMovementShowsAsItself() {
         func run(_ axis: (simd_quatf) -> SIMD3<Float>) -> simd_quatf {
             var m = ControllerOverlayMotion()
@@ -73,12 +74,15 @@ final class ControllerOverlayTests: XCTestCase {
             }
             return m.orientation()
         }
-        let turned = run { _ in SIMD3(0, 1, 0) }                             // about the room's up
+        let turned = run { $0.act(SIMD3(0, 1, 0)) }                          // spun about its face
         XCTAssertEqual(angle(turned), 45, accuracy: 3)
         XCTAssertEqual(abs(turned.axis.y), 1, accuracy: 0.03, "turning shows as turning")
-        let rolled = run { $0.act(SIMD3(0, 0, 1)) }                          // about its own length
+        let rolled = run { $0.act(SIMD3(0, 0, 1)) }                          // tilted about its length
         XCTAssertEqual(angle(rolled), 45, accuracy: 3)
         XCTAssertEqual(abs(rolled.axis.z), 1, accuracy: 0.03, "rolling shows as rolling")
+        let tipped = run { $0.act(SIMD3(1, 0, 0)) }                          // the front tipped further
+        XCTAssertEqual(angle(tipped), 45, accuracy: 3)
+        XCTAssertEqual(abs(tipped.axis.x), 1, accuracy: 0.03, "tipping shows as tipping")
     }
 
     /// Put down or held differently, it settles back to level by itself once it's still.

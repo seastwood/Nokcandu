@@ -230,27 +230,37 @@ public struct ControllerOverlayMotion: Sendable {
         }
         // Heading: turn back towards the rest heading about world up.
         if headingReturn > 0 {
-            let yaw = Self.wrapped(Self.heading(attitude) - Self.heading(reference))
+            let yaw = Self.wrapped(Self.angles(attitude).yaw - Self.angles(reference).yaw)
             attitude = simd_normalize(simd_quatf(angle: -yaw * min(1, headingReturn * dt), axis: Self.up) * attitude)
         }
     }
 
-    /// What the drawing applies: the controller's turn about the room's up since the rest heading, how far its front is
-    /// tipped up beyond the usual hold, and how far it's rolled about its own length, each drawn about the drawing's
-    /// own axes (up, side to side, front to back). Held the usual way it's drawn level, and each movement shows as
-    /// that movement, however steeply the controller is held (a held controller is often tipped up 50–60°, where
-    /// turning it in the room's terms is mostly rolling in its own). `strength` scales it: 0 level and facing front.
+    /// What the drawing applies: the controller's turn from the usual hold, in the controller's own terms. The usual
+    /// hold (facing the rest heading, the front tipped up as it's usually held, level side to side) is drawn level;
+    /// spinning it about its face turns the drawing about its up, tilting it about its length rolls the drawing about
+    /// its length, tipping the front tips the drawing, however steeply it's held. (Measured in the room's terms, a
+    /// controller held tipped up 50–60° mixes these: turning about the room's up is mostly rolling about its length.)
+    /// `strength` scales it: 0 level and facing front.
     public func orientation(strength: Float = 1) -> simd_quatf {
-        let yaw = Self.wrapped(Self.heading(attitude) - Self.heading(reference))
-        let levelled = simd_quatf(angle: -Self.heading(attitude), axis: Self.up) * attitude     // facing −z
-        let pitch = Self.pitch(attitude)
-        let roll = simd_normalize(simd_quatf(angle: -pitch, axis: SIMD3(1, 0, 0)) * levelled)    // about z only
-        let r = simd_normalize(simd_quatf(angle: yaw, axis: Self.up) * simd_quatf(angle: pitch - neutralPitch, axis: SIMD3(1, 0, 0)) * roll)
+        let hold = simd_quatf(angle: Self.angles(reference).yaw, axis: Self.up) * simd_quatf(angle: neutralPitch, axis: SIMD3(1, 0, 0))
+        let r = simd_normalize(hold.inverse * attitude)
         return simd_slerp(simd_quatf(ix: 0, iy: 0, iz: 0, r: 1), r, max(0, strength))
     }
 
-    /// How far the front (−z) is tipped up, in radians.
-    static func pitch(_ q: simd_quatf) -> Float { asin(max(-1, min(1, q.act(SIMD3<Float>(0, 0, -1)).y))) }
+    /// A pose as turn about up, then bank (about the horizontal front-to-back line), then front tipped up:
+    /// q = yaw(about y) · bank(about z) · pitch(about x). Taken from the controller's side (x) axis, which stays near
+    /// level however steeply it's held.
+    static func angles(_ q: simd_quatf) -> (yaw: Float, bank: Float, pitch: Float) {
+        let x = q.act(SIMD3<Float>(1, 0, 0))
+        let bank = asin(max(-1, min(1, x.y)))
+        let yaw = x.x * x.x + x.z * x.z > 1e-8 ? atan2(-x.z, x.x) : 0
+        let rest = simd_quatf(angle: -bank, axis: SIMD3(0, 0, 1)) * simd_quatf(angle: -yaw, axis: up) * q
+        let f = rest.act(SIMD3<Float>(0, 0, -1))
+        return (yaw, bank, atan2(f.y, -f.z))
+    }
+
+    /// How far the front is tipped up beyond level, in radians (with the bank taken out).
+    static func pitch(_ q: simd_quatf) -> Float { angles(q).pitch }
 
     static func wrapped(_ a: Float) -> Float { atan2(sin(a), cos(a)) }
 
