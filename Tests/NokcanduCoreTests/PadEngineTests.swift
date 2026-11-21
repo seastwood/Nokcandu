@@ -155,6 +155,33 @@ final class PadEngineTests: XCTestCase {
         XCTAssertEqual(Double(r.axes[2]), 16384, accuracy: 100)
     }
 
+    /// Turned like a steering wheel, right side down 22°, while held tipped up towards you: half of a 2°…42° range
+    /// steers right on the left stick; level is straight ahead, and the gyro turning it further is followed at once.
+    func testSteeringWheel() {
+        let r = PadRecorder("gyro out=wheel wheel=42 wheeldead=2 cal=off")
+        let tip = 40.0 * Double.pi / 180, turn = 22.0 * Double.pi / 180
+        // Up in the controller's terms: tipped up (leaning towards −z), then its right side dropped (up leans to −x).
+        func up(_ t: Double) -> (Float, Float, Float) { (Float(-sin(t)), Float(cos(t) * cos(tip)), Float(-cos(t) * sin(tip))) }
+        let level = up(0)
+        pe_accel(r.engine, level.0, level.1, level.2, 1)
+        XCTAssertEqual(r.axes[0], 0)
+        let right = up(turn)
+        pe_accel(r.engine, right.0, right.1, right.2, 1.01)       // first gravity is only blended in slowly…
+        for i in 0..<400 { pe_accel(r.engine, right.0, right.1, right.2, 1.02 + Double(i) / 250) }
+        XCTAssertEqual(Double(r.axes[0]), 0.5 * 32767, accuracy: 600)
+        XCTAssertEqual(pe_wheel_angle([Double(right.0), Double(right.1), Double(right.2)]), 22, accuracy: 0.01)
+        XCTAssertEqual(pe_wheel_angle([Double(level.0), Double(level.1), Double(level.2)]), 0, accuracy: 0.01)
+    }
+
+    /// The gyro moves the wheel straight away, without waiting for gravity.
+    func testSteeringWheelFollowsTheGyro() {
+        let r = PadRecorder("gyro out=wheel wheel=45 wheeldead=0 cal=off")
+        pe_accel(r.engine, 0, 1, 0, 1)                            // flat
+        // Turning right like a wheel, about the axis towards the player (z), clockwise as you see it: −z.
+        for i in 1...50 { pe_gyro(r.engine, 0, 0, Float(-90 * Double.pi / 180), 1 + Double(i) / 200) }   // 0.25 s at 90°/s
+        XCTAssertGreaterThan(Double(r.axes[0]), 0.4 * 32767)
+    }
+
     func testReleaseAllLetsGo() {
         let r = PadRecorder("bind 0 a press=key:13\nbind 0 b press=pad:x")
         r.press("a", true, 1); r.press("b", true, 1)

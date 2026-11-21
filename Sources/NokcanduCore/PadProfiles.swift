@@ -459,8 +459,8 @@ public enum PadProfiles {
     }
 
     public enum GyroOutput: String, CaseIterable, Codable, Hashable, Sendable {
-        case off, mouse, leftStick, rightStick, scroll
-        public var title: String { switch self { case .off: "Off"; case .mouse: "Mouse"; case .leftStick: "Left stick"; case .rightStick: "Right stick"; case .scroll: "Scrolling" } }
+        case off, mouse, leftStick, rightStick, scroll, wheel
+        public var title: String { switch self { case .off: "Off"; case .mouse: "Mouse"; case .leftStick: "Left stick"; case .rightStick: "Right stick"; case .scroll: "Scrolling"; case .wheel: "Steering wheel (left stick)" } }
     }
     public enum GyroTurn: String, CaseIterable, Codable, Hashable, Sendable {
         case yaw, roll, both
@@ -497,6 +497,10 @@ public enum PadProfiles {
         public var countsPerTurn: Double?
         /// Scrolling: wheel steps per degree tipped.
         public var scrollRate: Double?
+        /// Steering wheel: how far it's turned like a wheel (degrees) to steer all the way, and how far at the centre
+        /// is ignored (holding it straight shouldn't drift).
+        public var wheelAngle: Double?
+        public var wheelDeadzone: Double?
         /// Mouse movement per degree, as the engine gets it.
         public var effectiveSensitivity: (slow: Double, fast: Double) {
             if let r = realWorld, r > 0 { let s = r * (countsPerTurn ?? 4000) / 360; return (s, s) }
@@ -802,8 +806,9 @@ public enum PadProfiles {
         func n(_ d: Double) -> String { String(format: "%g", d) }
         var lines = ["nokpad 1"]
         func gyroLine(_ g: Gyro, layer: Int) -> String {
-            let gout: String = { switch g.output { case .off: "off"; case .mouse: "mouse"; case .leftStick: "lstick"; case .rightStick: "rstick"; case .scroll: "scroll" } }()
-            return "gyro out=\(gout) on=\(g.startsOn ? 1 : 0) world=\(g.worldSpace == true ? 1 : 0) scrollrate=\(n(g.scrollRate ?? 0.1)) min=\(n(g.effectiveSensitivity.slow)) max=\(n(g.effectiveSensitivity.fast)) lo=\(n(g.slowSpeed)) hi=\(n(g.fastSpeed)) smooth=\(n(g.smoothing)) tight=\(n(g.tightening)) invx=\(g.invertX ? 1 : 0) invy=\(g.invertY ? 1 : 0) yaw=\(g.turn.rawValue) stickfull=\(n(g.stickFullSpeed)) stickmin=\(n(g.stickMinimum)) cal=\(g.autoCalibrate && automaticCalibration ? "auto" : "off") xs=\(n(g.xScale ?? 1)) ys=\(n(g.yScale ?? 1)) yw=\(n(g.yaw)) rw=\(n(g.roll)) euro=\(g.filter == true ? 1 : 0) mincut=\(n(g.filterMinCutoff ?? 5)) beta=\(n(g.filterBeta ?? 0.05))" + (layer > 0 ? " layer=\(layer)" : "")
+            let gout: String = { switch g.output { case .off: "off"; case .mouse: "mouse"; case .leftStick: "lstick"; case .rightStick: "rstick"; case .scroll: "scroll"; case .wheel: "wheel" } }()
+            return "gyro out=\(gout) on=\(g.startsOn ? 1 : 0) world=\(g.worldSpace == true ? 1 : 0) scrollrate=\(n(g.scrollRate ?? 0.1)) min=\(n(g.effectiveSensitivity.slow)) max=\(n(g.effectiveSensitivity.fast)) lo=\(n(g.slowSpeed)) hi=\(n(g.fastSpeed)) smooth=\(n(g.smoothing)) tight=\(n(g.tightening)) invx=\(g.invertX ? 1 : 0) invy=\(g.invertY ? 1 : 0) yaw=\(g.turn.rawValue) stickfull=\(n(g.stickFullSpeed)) stickmin=\(n(g.stickMinimum)) cal=\(g.autoCalibrate && automaticCalibration ? "auto" : "off") xs=\(n(g.xScale ?? 1)) ys=\(n(g.yScale ?? 1)) yw=\(n(g.yaw)) rw=\(n(g.roll)) euro=\(g.filter == true ? 1 : 0) mincut=\(n(g.filterMinCutoff ?? 5)) beta=\(n(g.filterBeta ?? 0.05))"
+                + (g.output == .wheel ? " wheel=\(n(g.wheelAngle ?? 45)) wheeldead=\(n(g.wheelDeadzone ?? 2))" : "") + (layer > 0 ? " layer=\(layer)" : "")
         }
         func stickLine(_ i: Int, _ s: Stick, layer: Int) -> String {
             let mode: String, to: Int

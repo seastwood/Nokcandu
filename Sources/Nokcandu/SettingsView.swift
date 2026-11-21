@@ -76,6 +76,7 @@ struct GeneralSettings: View {
                     Toggle("Hold notifications while playing or streaming", isOn: Binding(get: { PadNotificationPreferences.holdWhilePlaying() }, set: { PadNotificationPreferences.setHoldWhilePlaying($0); model.objectWillChange.send() }))
                     Text("While a Nokcandu game or a stream is in front, Nokcandu's notifications wait until you leave it, and its notes when a controller layer or the gyro switches aren't shown: anything that appears over a full-screen game or stream makes macOS compose the screen again, which adds delay. For other apps' notifications, use the Gaming Focus (System Settings › Focus › Gaming), which can turn on by itself when a controller macOS knows connects.")
                         .font(.caption).foregroundStyle(.secondary)
+                    FocusWhilePlayingRow()
                     Toggle("Lower store apps' priority while a game is in front", isOn: Binding(
                         get: { !FileManager.default.fileExists(atPath: NokPaths.support.appendingPathComponent("launchers-normal-priority").path) },
                         set: { on in
@@ -482,4 +483,29 @@ struct ShortcutRecorder: View {
         }
     }
     func stop() { if let m = monitor { NSEvent.removeMonitor(m) }; monitor = nil }
+}
+
+/// Turning a Focus on while playing, through two Shortcuts the user makes.
+private struct FocusWhilePlayingRow: View {
+    @State private var on = FocusWhilePlaying.enabled
+    @State private var missing: [String] = []
+    var body: some View {
+        Toggle("Turn on a Focus while playing or streaming", isOn: $on)
+            .onChange(of: on) { _, v in FocusWhilePlaying.enabled = v; if !v { FocusWhilePlaying.shared.playing(false) }; Task { await check() } }
+            .task { await check() }
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Silences other apps' notifications too. macOS only lets Shortcuts turn a Focus on, so make two shortcuts in the Shortcuts app, each with one “Set Focus” action: “\(FocusWhilePlaying.startName)” turning the Gaming Focus (or any) on, and “\(FocusWhilePlaying.stopName)” turning it off. Nokcandu runs them when a game or stream comes to the front and when it leaves. Useful with a Steam Controller, which doesn't turn the Gaming Focus on by itself.")
+            if on && !missing.isEmpty {
+                Label("Not found in Shortcuts yet: \(missing.map { "“\($0)”" }.joined(separator: " and ")).", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+            }
+            Button("Open Shortcuts") { NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Shortcuts.app")) }
+        }
+        .font(.caption).foregroundStyle(.secondary)
+    }
+    private func check() async {
+        guard on else { missing = []; return }
+        let names = await FocusWhilePlaying.installedNames()
+        missing = [FocusWhilePlaying.startName, FocusWhilePlaying.stopName].filter { !names.contains($0) }
+    }
 }

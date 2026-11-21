@@ -840,7 +840,19 @@ struct ControllerProfileEditor: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
-        if g.wrappedValue.output != .off {
+        if g.wrappedValue.output == .wheel {
+            Section {
+                slider("Full lock at", Binding(get: { g.wrappedValue.wheelAngle ?? 45 }, set: { var v = g.wrappedValue; v.wheelAngle = $0.rounded(); g.wrappedValue = v }),
+                       10...90, "%.0f°", info: "Turning the controller this far, like a steering wheel, steers all the way. Smaller is quicker steering.")
+                slider("Straight within", Binding(get: { g.wrappedValue.wheelDeadzone ?? 2 }, set: { var v = g.wrappedValue; v.wheelDeadzone = ($0 * 2).rounded() / 2; g.wrappedValue = v }),
+                       0...15, "%.1f°", info: "Turns smaller than this steer straight, so holding it nearly level doesn't drift.")
+                Toggle("Invert left and right", isOn: g.invertX)
+            } header: { Text("Steering") } footer: {
+                Text("Turn the controller like a wheel to steer with the left stick: level is straight ahead, the right side down steers right. Hold it however is comfortable (flat, tipped up towards you, or upright like a wheel); the gyro and the controller's sense of gravity work out the turn. The left stick's own movement still adds to it.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        if g.wrappedValue.output != .off && g.wrappedValue.output != .wheel {
             Section("Left and right comes from") {
                 slider("Turning (yaw)", Binding(get: { g.wrappedValue.yaw }, set: { var v = g.wrappedValue; v.yawAmount = ($0 * 20).rounded() / 20; v.rollAmount = v.roll; g.wrappedValue = v }),
                        0...2, "%.0f%%", scale: 100, info: "Turning the controller left and right, like turning a steering wheel lying flat.")
@@ -875,13 +887,13 @@ struct ControllerProfileEditor: View {
             Section("Scrolling") {
                 slider("Speed", Binding(get: { g.wrappedValue.scrollRate ?? 0.1 }, set: { var v = g.wrappedValue; v.scrollRate = $0; g.wrappedValue = v }), 0.02...1, "%.2f", info: "Wheel steps for each degree the controller is tipped back or forward.")
             }
-        } else if g.wrappedValue.output != .off {
+        } else if g.wrappedValue.output != .off && g.wrappedValue.output != .wheel {
             Section("Stick") {
                 slider("Full push at", g.stickFullSpeed, 30...720, "%.0f °/s", info: "Turning this fast pushes the stick all the way.")
                 slider("Least push", g.stickMinimum, 0...0.5, "%.2f", info: "Games ignore small stick movements; this starts beyond their dead zone.")
             }
         }
-        if g.wrappedValue.output != .off {
+        if g.wrappedValue.output != .off && g.wrappedValue.output != .wheel {
             Section("Steadiness") {
                 slider("Smoothing below", g.smoothing, 0...20, "%.1f °/s", info: "Slow movements are averaged for steadier aim; fast ones stay instant. 0 is off.")
                 slider("Steady below", g.tightening, 0...10, "%.1f °/s", info: "Very small movements (hand shake) are scaled down. 0 is off.")

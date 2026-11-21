@@ -313,6 +313,7 @@ final class DesktopPad: ObservableObject {
         let g = game(for: front)
         if gameInFront != (g != nil) { gameInFront = g != nil }
         if !playing { Notifier.shared.playingEnded() }
+        FocusWhilePlaying.shared.playing(playing)
         gamePID = g != nil && g?.native == nil ? (front?.processIdentifier ?? 0) : 0
         let features = AppFeatures.current
         if !features.allowsProfile(forGame: g != nil, inStream: streaming) {

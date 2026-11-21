@@ -71,6 +71,7 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
         useModel(wantedKind)
         host.background = settings.background == .color ? Self.color(settings.backgroundColor) : nil
         host.alphaValue = settings.opacity
+        host.view(from: settings.viewAngle)
         if old?.mode != settings.mode || (panel == nil && window == nil) {
             panel?.orderOut(nil); panel?.contentView = nil; panel = nil
             if let w = window { w.delegate = nil; w.contentView = nil; w.orderOut(nil) }; window = nil
@@ -421,6 +422,13 @@ final class OverlayHostView: NSView {
     var onDone: (() -> Void)? { didSet { arrangeView.onDone = onDone } }
     var arranging = false { didSet { arrangeView.isHidden = !arranging } }
     var camera: SCNNode? { sceneView.pointOfView }
+    /// Above the controller and towards the player, `degrees` above level, looking at it.
+    func view(from degrees: Double) {
+        guard let camera else { return }
+        let a = Float(degrees * .pi / 180), distance: Float = 9.16
+        camera.simdPosition = SIMD3(0, distance * sin(a), distance * cos(a))
+        camera.simdLook(at: SIMD3(0, -0.1, 0.05), up: SIMD3(0, 1, 0), localFront: SIMD3(0, 0, -1))
+    }
     var background: NSColor? {
         didSet {
             sceneView.backgroundColor = background ?? .clear
@@ -452,9 +460,6 @@ final class OverlayHostView: NSView {
         let camera = SCNNode(); camera.camera = SCNCamera()
         camera.camera?.fieldOfView = 25
         camera.camera?.zNear = 0.1; camera.camera?.zFar = 50
-        // In front of the player and above, looking down at the controller as it's held.
-        camera.simdPosition = SIMD3(0, 7.4, 5.4)
-        camera.simdLook(at: SIMD3(0, -0.1, 0.05))
         scene.rootNode.addChildNode(camera)
         sceneView.pointOfView = camera
 
@@ -562,6 +567,13 @@ struct ControllerOverlaySettingsView: View {
                         HStack {
                             Slider(value: $overlay.settings.gyroStrength, in: 0...1.5, step: 0.05).frame(width: 180)
                             Text(verbatim: "\(Int((overlay.settings.gyroStrength * 100).rounded()))%").monospacedDigit().frame(width: 52, alignment: .trailing)
+                        }
+                    }
+                    LabeledContent("Seen from") {
+                        HStack {
+                            Text("In front").font(.caption).foregroundStyle(.secondary)
+                            Slider(value: $overlay.settings.viewAngle, in: ControllerOverlaySettings.viewAngles, step: 1).frame(width: 160)
+                            Text("Above").font(.caption).foregroundStyle(.secondary)
                         }
                     }
                     HStack {

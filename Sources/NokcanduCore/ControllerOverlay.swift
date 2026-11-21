@@ -56,6 +56,10 @@ public struct ControllerOverlaySettings: Codable, Equatable, Sendable {
     /// Turning the drawn controller with the gyro, and how much of the real movement it shows (0…1.5).
     public var gyro = true
     public var gyroStrength: Double = 1
+    /// How high above the controller it's seen from, in degrees above level (30 in front … 85 from above). The drawing
+    /// shows the controller's real tilt, so held tipped up towards you, a lower view looks at its face head-on.
+    public var viewAngle: Double = 72
+    public static let viewAngles: ClosedRange<Double> = 30...85
     /// Where it sits over the screen: its centre as a fraction of the screen (0…1, from the bottom left).
     public var positionX: Double = 0.85
     public var positionY: Double = 0.15
@@ -84,6 +88,7 @@ public struct ControllerOverlaySettings: Codable, Equatable, Sendable {
         backgroundColor = (try? c.decode(String.self, forKey: .backgroundColor)) ?? base.backgroundColor
         gyro = (try? c.decode(Bool.self, forKey: .gyro)) ?? base.gyro
         gyroStrength = (try? c.decode(Double.self, forKey: .gyroStrength)) ?? base.gyroStrength
+        viewAngle = (try? c.decode(Double.self, forKey: .viewAngle)) ?? base.viewAngle
         positionX = (try? c.decode(Double.self, forKey: .positionX)) ?? base.positionX
         positionY = (try? c.decode(Double.self, forKey: .positionY)) ?? base.positionY
         screen = try? c.decodeIfPresent(String.self, forKey: .screen)
@@ -97,6 +102,7 @@ public struct ControllerOverlaySettings: Codable, Equatable, Sendable {
         size = min(Self.sizes.upperBound, max(Self.sizes.lowerBound, size.isFinite ? size : 320))
         opacity = min(1, max(0.1, opacity.isFinite ? opacity : 1))
         gyroStrength = min(1.5, max(0, gyroStrength.isFinite ? gyroStrength : 1))
+        viewAngle = min(Self.viewAngles.upperBound, max(Self.viewAngles.lowerBound, viewAngle.isFinite ? viewAngle : 72))
         positionX = min(1, max(0, positionX.isFinite ? positionX : 0.85))
         positionY = min(1, max(0, positionY.isFinite ? positionY : 0.15))
     }

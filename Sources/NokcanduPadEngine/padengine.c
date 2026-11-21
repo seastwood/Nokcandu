@@ -68,7 +68,7 @@ typedef struct {
     double rest_x, rest_y;
 } stick_t;
 
-enum { G_OFF, G_MOUSE, G_LSTICK, G_RSTICK, G_SCROLL };
+enum { G_OFF, G_MOUSE, G_LSTICK, G_RSTICK, G_SCROLL, G_WHEEL };
 enum { Y_YAW, Y_ROLL, Y_BOTH };
 
 enum { A_OFF, A_PAD, A_MOUSE };
@@ -89,7 +89,7 @@ enum { T_RELEASE_OUTS, T_HOLD, T_DOUBLE_WAIT, T_TURBO, T_SIM_WAIT, T_MACRO };
 typedef struct {
     int out, yaw; bool def, invx, invy, autocal, euro;
     double min, max, lo, hi, smooth, tight, stickfull, stickmin, xs, ys, yw, rw, mincut, beta;
-    bool world; double scrollrate;
+    bool world; double scrollrate, wheel, wheeldead;
 } gyro_cfg_t;
 enum { MS_DOWN, MS_UP, MS_WAIT, MS_TEXT };
 typedef struct { unsigned char kind; out_t o; int ms; char *text; } mstep_t;
@@ -141,6 +141,9 @@ struct pe_engine {
     int gyro_out, gyro_yaw; bool gyro_default, gyro_toggled; int gyro_on_holds, gyro_off_holds;
     bool gyro_touch_required, gyro_touched;
     double g_min, g_max, g_lo, g_hi, g_smooth, g_tight, g_stickfull, g_stickmin;
+    // Steering wheel: the tilt (degrees) that steers all the way, the tilt ignored at the centre, and which way is up
+    // in the controller's terms (the gyro turns it, gravity keeps it true).
+    double g_wheel, g_wheeldead, wh_up[3]; bool wh_init;
     bool g_invx, g_invy, g_autocal, uses_gyro;
     double g_xs, g_ys, g_yw, g_rw;     // how much turning (yaw) and tilting (roll) move left and right
     double cal_x, cal_y, cal_z, still_since, last_gyro, cal_last; bool cal_have;
@@ -268,14 +271,14 @@ static double opt_d(const char *v, double d) { return v ? atof(v) : d; }
 static void save_gyro(const pe_engine *e, gyro_cfg_t *c) {
     *c = (gyro_cfg_t){ e->gyro_out, e->gyro_yaw, e->gyro_default, e->g_invx, e->g_invy, e->g_autocal, e->g_euro,
                        e->g_min, e->g_max, e->g_lo, e->g_hi, e->g_smooth, e->g_tight, e->g_stickfull, e->g_stickmin,
-                       e->g_xs, e->g_ys, e->g_yw, e->g_rw, e->g_mincut, e->g_beta, e->g_world, e->g_scrollrate };
+                       e->g_xs, e->g_ys, e->g_yw, e->g_rw, e->g_mincut, e->g_beta, e->g_world, e->g_scrollrate, e->g_wheel, e->g_wheeldead };
 }
 static void load_gyro(pe_engine *e, const gyro_cfg_t *c) {
     e->gyro_out = c->out; e->gyro_yaw = c->yaw; e->gyro_default = c->def; e->g_invx = c->invx; e->g_invy = c->invy;
     e->g_autocal = c->autocal; e->g_euro = c->euro; e->g_min = c->min; e->g_max = c->max; e->g_lo = c->lo; e->g_hi = c->hi;
     e->g_smooth = c->smooth; e->g_tight = c->tight; e->g_stickfull = c->stickfull; e->g_stickmin = c->stickmin;
     e->g_xs = c->xs; e->g_ys = c->ys; e->g_yw = c->yw; e->g_rw = c->rw; e->g_mincut = c->mincut; e->g_beta = c->beta;
-    e->g_world = c->world; e->g_scrollrate = c->scrollrate;
+    e->g_world = c->world; e->g_scrollrate = c->scrollrate; e->g_wheel = c->wheel; e->g_wheeldead = c->wheeldead;
 }
 static int hexval(char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1; }
 
@@ -293,7 +296,7 @@ pe_engine *pe_create(const char *text, pe_sink sink) {
         e->trig_soft[s] = 0.3; e->trig_full[s] = 0.95;
     }
     e->gyro_out = G_OFF; e->gyro_default = true; e->g_min = 8; e->g_max = 8; e->g_lo = 0; e->g_hi = 75;
-    e->g_smooth = 0; e->g_tight = 0; e->g_xs = 1; e->g_ys = 1; e->g_yw = 1; e->g_rw = 0; e->g_stickfull = 300; e->g_stickmin = 0.1; e->g_autocal = true; e->g_scrollrate = 0.1;
+    e->g_smooth = 0; e->g_tight = 0; e->g_xs = 1; e->g_ys = 1; e->g_yw = 1; e->g_rw = 0; e->g_stickfull = 300; e->g_stickmin = 0.1; e->g_autocal = true; e->g_scrollrate = 0.1; e->g_wheel = 45; e->g_wheeldead = 2;
     e->g_mincut = 5; e->g_beta = 0.05;
     for (int l = 0; l < MAX_LAYERS; l++) for (int s2 = 0; s2 < 2; s2++) e->stick_cfg[l][s2] = e->stick[s2];
     e->touch_sens = 1500; e->touch_scroll = 12; e->touch_zone = -1; e->touch_click_in = -1;
@@ -340,8 +343,9 @@ pe_engine *pe_create(const char *text, pe_sink sink) {
             int L = (int)opt_d(OPT("layer"), 0); if (L < 0 || L >= MAX_LAYERS) continue;
             gyro_cfg_t base; save_gyro(e, &base);
             const char *o = OPT("out");
-            if (o) e->gyro_out = !strcmp(o, "mouse") ? G_MOUSE : !strcmp(o, "lstick") ? G_LSTICK : !strcmp(o, "rstick") ? G_RSTICK : !strcmp(o, "scroll") ? G_SCROLL : G_OFF;
+            if (o) e->gyro_out = !strcmp(o, "mouse") ? G_MOUSE : !strcmp(o, "lstick") ? G_LSTICK : !strcmp(o, "rstick") ? G_RSTICK : !strcmp(o, "scroll") ? G_SCROLL : !strcmp(o, "wheel") ? G_WHEEL : G_OFF;
             e->g_world = opt_d(OPT("world"), 0) != 0; e->g_scrollrate = opt_d(OPT("scrollrate"), 0.1);
+            e->g_wheel = opt_d(OPT("wheel"), 45); e->g_wheeldead = opt_d(OPT("wheeldead"), 2);
             const char *y = OPT("yaw");
             if (y) e->gyro_yaw = !strcmp(y, "roll") ? Y_ROLL : !strcmp(y, "both") ? Y_BOTH : Y_YAW;
             e->gyro_default = opt_d(OPT("on"), 1) != 0;
@@ -872,7 +876,7 @@ static void update_pad_sticks(pe_engine *e) {
         double x, y, m; stick_shape(k, k->x, k->y, &x, &y, &m);
         sx[k->to] += x * k->xs; sy[k->to] += (k->invy ? -y : y) * k->ys;
     }
-    sx[0] += e->gyro_stick_x * (e->gyro_out == G_LSTICK); sy[0] += e->gyro_stick_y * (e->gyro_out == G_LSTICK);
+    sx[0] += e->gyro_stick_x * (e->gyro_out == G_LSTICK || e->gyro_out == G_WHEEL); sy[0] += e->gyro_stick_y * (e->gyro_out == G_LSTICK);
     sx[1] += e->gyro_stick_x * (e->gyro_out == G_RSTICK); sy[1] += e->gyro_stick_y * (e->gyro_out == G_RSTICK);
     for (int s = 0; s < 2; s++) {
         double dx = e->ndev ? dev_pad(e, 2 * s) : 0, dy = e->ndev ? dev_pad(e, 2 * s + 1) : 0;
@@ -1156,6 +1160,50 @@ static void calibration_sample(pe_engine *e, double x, double y, double z, doubl
     } else if (e->cal_mode == 2) cal_report(e, (float)fmin(p, 0.99));
 }
 
+// MARK: Steering wheel
+
+/// How far the controller is turned like a steering wheel, in degrees, right +: how far its right side has dropped
+/// below level, from which way is up in its own terms. The same however it's held: flat, tipped up towards you, or
+/// upright like a wheel.
+double pe_wheel_angle(const double up[3]) {
+    return atan2(-up[0], sqrt(up[1] * up[1] + up[2] * up[2])) * 180 / M_PI;
+}
+
+static void wheel_out(pe_engine *e) {
+    double sx = 0;
+    if (e->wh_init && gyro_enabled(e)) {
+        double a = pe_wheel_angle(e->wh_up);
+        if (e->g_invx) a = -a;
+        double past = fabs(a) - e->g_wheeldead;
+        if (past > 0) { double r = past / fmax(1, e->g_wheel - e->g_wheeldead); sx = copysign(r > 1 ? 1 : r, a); }
+    }
+    if (sx != e->gyro_stick_x || e->gyro_stick_y != 0) { e->gyro_stick_x = sx; e->gyro_stick_y = 0; update_pad_sticks(e); }
+}
+
+static void wheel_normalize(double u[3]) {
+    double n = sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
+    if (n > 1e-6) { u[0] /= n; u[1] /= n; u[2] /= n; }
+}
+
+/// The gyro (degrees per second) turns "up" the other way, in the controller's terms: quick and smooth.
+static void wheel_gyro(pe_engine *e, double x, double y, double z, double dt) {
+    if (e->wh_init && dt > 0) {
+        double w[3] = { x * M_PI / 180 * dt, y * M_PI / 180 * dt, z * M_PI / 180 * dt }, *u = e->wh_up;
+        double c[3] = { w[1] * u[2] - w[2] * u[1], w[2] * u[0] - w[0] * u[2], w[0] * u[1] - w[1] * u[0] };
+        for (int k = 0; k < 3; k++) u[k] -= c[k];
+        wheel_normalize(u);
+    }
+    wheel_out(e);
+}
+
+/// Gravity keeps "up" true (a gyro alone drifts), trusted only near 1 g (not while the controller is shaken).
+static void wheel_gravity(pe_engine *e, double ux, double uy, double uz, double g) {
+    double u[3] = { ux, uy, uz };
+    if (!e->wh_init) { for (int k = 0; k < 3; k++) e->wh_up[k] = u[k]; e->wh_init = true; }
+    else if (g > 0.85 && g < 1.15) { for (int k = 0; k < 3; k++) e->wh_up[k] += (u[k] - e->wh_up[k]) * 0.02; wheel_normalize(e->wh_up); }
+    wheel_out(e);
+}
+
 void pe_gyro(pe_engine *e, float gx, float gy, float gz, double now) {
     if (!e || e->gyro_out == G_OFF || e->control_route[4] == 1 || e->control_route[4] == 3) return;
     pe_tick(e, now);
@@ -1169,6 +1217,7 @@ void pe_gyro(pe_engine *e, float gx, float gy, float gz, double now) {
     if (fabs(x) < 0.4) x = 0;
     if (fabs(y) < 0.4) y = 0;
     if (fabs(z) < 0.4) z = 0;
+    if (e->gyro_out == G_WHEEL) { wheel_gyro(e, x, y, z, dt); return; }
     // Right-handed axes (x right, y out of the face, z towards the player), counter-clockwise positive: turning
     // right is −y, tilting right is −z — the same sign, so "both" adds them. Left is +.
     double yaw = y * e->g_yw + z * e->g_rw;
@@ -1614,6 +1663,7 @@ void pe_accel(pe_engine *e, float ax, float ay, float az, double now) {
         for (int k = 0; k < 3; k++) e->acc_up[k] = e->acc_init ? e->acc_up[k] + (u[k] - e->acc_up[k]) * 0.1 : u[k];
         e->acc_init = true; e->acc_at = now;
     }
+    if (e->gyro_out == G_WHEEL && e->control_route[4] != 1 && e->control_route[4] != 3) { pe_tick(e, now); wheel_gravity(e, ax / g, ay / g, az / g, g); }
     if (!pe_uses_tilt(e)) return;
     pe_tick(e, now);
     // Which way is up, for turning about gravity: followed slowly, so a shake of the hand doesn't tip it.

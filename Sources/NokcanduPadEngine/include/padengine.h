@@ -99,6 +99,8 @@ void pe_tick(pe_engine *e, double now);
 double pe_next_deadline(const pe_engine *e);
 /// Whether the engine wants gyro data (some binding or setting uses it).
 bool pe_uses_gyro(const pe_engine *e);
+/// Steering-wheel turn (degrees, right +) from which way is up in the controller's terms (SDL axes).
+double pe_wheel_angle(const double up[3]);
 enum { PE_KEYBOARD_MENU = 255, PE_RUMBLE_MENU = 254 };   // sink.menu ids: the on-screen keyboard, a rumble
 /// The touchpad: finger 0 or 1 touching (or lifted), at x, y 0…1 (y down).
 void pe_touch(pe_engine *e, int finger, bool down, float x, float y, double now);
