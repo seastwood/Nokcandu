@@ -489,17 +489,28 @@ struct ShortcutRecorder: View {
 private struct FocusWhilePlayingRow: View {
     @State private var on = FocusWhilePlaying.enabled
     @State private var missing: [String] = []
+    @State private var adding = false
+    @State private var problem: String?
     var body: some View {
         Toggle("Turn on a Focus while playing or streaming", isOn: $on)
             .onChange(of: on) { _, v in FocusWhilePlaying.enabled = v; if !v { FocusWhilePlaying.shared.playing(false) }; Task { await check() } }
             .task { await check() }
+            // Back from Shortcuts after adding them.
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in Task { await check() } }
         VStack(alignment: .leading, spacing: 6) {
-            Text("Silences other apps' notifications too. macOS only lets Shortcuts turn a Focus on, so make two shortcuts in the Shortcuts app, each with one “Set Focus” action: “\(FocusWhilePlaying.startName)” turning the Gaming Focus (or any) on, and “\(FocusWhilePlaying.stopName)” turning it off. Nokcandu runs them when a game or stream comes to the front and when it leaves. Useful with a Steam Controller, which doesn't turn the Gaming Focus on by itself.")
+            Text("Silences other apps' notifications too, with the Gaming Focus. macOS only lets Shortcuts turn a Focus on, so Nokcandu runs two shortcuts, “\(FocusWhilePlaying.startName)” and “\(FocusWhilePlaying.stopName)”, when a game or stream comes to the front and when it leaves. Useful with a Steam Controller, which doesn't turn the Gaming Focus on by itself. To use another Focus, change it in the two shortcuts.")
             if on && !missing.isEmpty {
-                Label("Not found in Shortcuts yet: \(missing.map { "“\($0)”" }.joined(separator: " and ")).", systemImage: "exclamationmark.triangle")
+                Label("Not in Shortcuts yet: \(missing.map { "“\($0)”" }.joined(separator: " and ")).", systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange)
+                HStack {
+                    Button(adding ? "Adding…" : "Add the Shortcuts") {
+                        adding = true; problem = nil
+                        Task { problem = await FocusWhilePlaying.addShortcuts(missing: missing); adding = false }
+                    }.disabled(adding)
+                    Text("Shortcuts asks you to add each one: click Add Shortcut.")
+                }
+                if let problem { Text(problem).foregroundStyle(.red) }
             }
-            Button("Open Shortcuts") { NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Shortcuts.app")) }
         }
         .font(.caption).foregroundStyle(.secondary)
     }

@@ -9,7 +9,7 @@ import NokcanduCore
 final class FocusWhilePlaying {
     static let shared = FocusWhilePlaying()
     static let key = "focusShortcutsWhilePlaying"
-    static let startName = "Nokcandu Playing", stopName = "Nokcandu Stopped Playing"
+    nonisolated static let startName = "Nokcandu Playing", stopName = "Nokcandu Stopped Playing"
     static var enabled: Bool {
         get { UserDefaults.standard.bool(forKey: key) }
         set { UserDefaults.standard.set(newValue, forKey: key) }
@@ -43,6 +43,48 @@ final class FocusWhilePlaying {
             let data = out.fileHandleForReading.readDataToEndOfFile(); p.waitUntilExit()
             return Set(String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init))
         }.value
+    }
+
+    /// Makes the missing shortcuts and hands them to Shortcuts, which asks to add each one (“Add Shortcut”): apps
+    /// can't add shortcuts by themselves. Each is one “Set Focus” action, Gaming on or off; shortcut files must be
+    /// signed to be imported, which /usr/bin/shortcuts does. Returns what went wrong, if anything.
+    static func addShortcuts(missing: [String]) async -> String? {
+        await Task.detached { () -> String? in
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("nokcandu-focus-shortcuts-\(UUID().uuidString)")
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            var made: [URL] = []
+            for name in missing {
+                let plain = folder.appendingPathComponent("plain-\(name == startName ? "on" : "off").shortcut")
+                let signed = folder.appendingPathComponent("\(name).shortcut")
+                guard let data = try? PropertyListSerialization.data(fromPropertyList: workflow(on: name == startName), format: .binary, options: 0),
+                      (try? data.write(to: plain)) != nil else { return "Couldn't write the shortcut files." }
+                let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/shortcuts")
+                p.arguments = ["sign", "--mode", "anyone", "--input", plain.path, "--output", signed.path]
+                p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
+                guard (try? p.run()) != nil else { return "Shortcuts couldn't sign them." }
+                p.waitUntilExit()
+                guard p.terminationStatus == 0, FileManager.default.fileExists(atPath: signed.path) else { return "Shortcuts couldn't sign them (it needs an internet connection)." }
+                made.append(signed)
+            }
+            for url in made { await MainActor.run { _ = NSWorkspace.shared.open(url) } }
+            return nil
+        }.value
+    }
+
+    nonisolated static func workflow(on: Bool) -> [String: Any] {
+        [
+            "WFWorkflowMinimumClientVersion": 900, "WFWorkflowMinimumClientVersionString": "900",
+            "WFWorkflowIcon": ["WFWorkflowIconStartColor": on ? 4292093695 : 255, "WFWorkflowIconGlyphNumber": 61440],
+            "WFWorkflowImportQuestions": [Any](), "WFWorkflowTypes": [Any](), "WFWorkflowInputContentItemClasses": [Any](),
+            "WFWorkflowOutputContentItemClasses": [Any](), "WFWorkflowHasOutputFallback": false, "WFQuickActionSurfaces": [Any](),
+            "WFWorkflowActions": [[
+                "WFWorkflowActionIdentifier": "is.workflow.actions.dnd.set",
+                "WFWorkflowActionParameters": [
+                    "Enabled": on ? 1 : 0,
+                    "FocusModes": ["Identifier": "com.apple.focus.gaming", "DisplayString": "Gaming"],
+                ] as [String: Any],
+            ]],
+        ]
     }
 
     private static func run(_ name: String) {
