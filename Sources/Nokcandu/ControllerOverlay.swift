@@ -203,6 +203,8 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
             renderer.setOverlay { buffer, target in d.draw(buffer, target) }
             inStream = renderer; streamDrawer = d
             panel?.orderOut(nil)
+            host.viewPaused = true
+            StreamLog.shared.add("Controller overlay: drawn into the stream's frames")
         }
 
         streamDrawer?.place(rect, screenWidth: f.width, scale: screen.backingScaleFactor, opacity: settings.opacity)
@@ -211,7 +213,9 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
     private func leaveStream() {
         guard let r = inStream else { return }
         r.setOverlay(nil); inStream = nil; streamDrawer = nil
+        host?.viewPaused = false
         if settings.mode == .onScreen, let panel { panel.orderFrontRegardless() }
+        StreamLog.shared.add("Controller overlay: over the screen again (a window above the stream)")
     }
 
     // MARK: A window of its own
@@ -431,6 +435,15 @@ final class OverlayHostView: NSView {
     var onDone: (() -> Void)? { didSet { arrangeView.onDone = onDone } }
     var arranging = false { didSet { arrangeView.isHidden = !arranging } }
     var camera: SCNNode? { sceneView.pointOfView }
+    /// While the drawing goes into a stream's frames, the on-screen view stops drawing (its window is hidden, but
+    /// SceneKit would still render it on every change, with its own display timing).
+    var viewPaused = false {
+        didSet {
+            guard viewPaused != oldValue else { return }
+            sceneView.scene = viewPaused ? nil : scene
+            sceneView.isHidden = viewPaused
+        }
+    }
     /// Above the controller and towards the player, `degrees` above level, looking at it.
     func view(from degrees: Double) {
         guard let camera else { return }
