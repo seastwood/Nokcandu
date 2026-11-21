@@ -82,6 +82,17 @@ public struct EngineLayout: Equatable, Sendable {
         }
     }
 
+    /// The x86 emulators Windows' WoW64 layer is told to use (HKLM\Software\Microsoft\Wow64\x86 and \amd64):
+    /// an ARM engine's own (FEX's, or the xtajit names), Wine's plain 32-bit layer on Intel. nil: leave as is.
+    public var wow64Emulators: (x86: String, amd64: String?)? {
+        guard arch == .arm64 else { return ("wow64cpu.dll", nil) }
+        let fm = FileManager.default
+        let dirs = [lib.appendingPathComponent("aarch64-windows"), lib.appendingPathComponent("arm64ec-windows")]
+        func has(_ n: String) -> Bool { dirs.contains { fm.fileExists(atPath: $0.appendingPathComponent(n).path) } }
+        guard let x86 = ["libwow64fex.dll", "xtajit.dll"].first(where: has) else { return nil }
+        return (x86, ["libarm64ecfex.dll", "xtajit64.dll"].first(where: has))
+    }
+
     /// Suffix after "SharedSupport/" for any engine's real loader (both layouts), for process ownership checks.
     static let loaderSuffixes = ["wine/lib/wine/x86_64-unix/wine", "wine/lib/wine/aarch64-unix/wine"]
 }

@@ -299,7 +299,60 @@ public enum ExternalEngines {
         let wine = contents.appendingPathComponent("SharedSupport/wine/bin/wine").path
         let r = try? await Shell.runAsync(wine, ["cmd", "/c", "ver"], env: env, timeout: 180)
         _ = try? await Shell.runAsync(contents.appendingPathComponent("SharedSupport/wine/bin/wineserver").path, ["-k"], env: env, timeout: 60)
-        return r?.stdout.contains("Windows") == true
+        let ok = r?.stdout.contains("Windows") == true
+        if ok { recordSystemFiles(id: id, freshPrefix: prefix) }
+        return ok
+    }
+
+    // MARK: System files a new environment gets
+
+    static func systemFilesURL(id: String) -> URL { RuntimeManager.folder(for: id).appendingPathComponent("system-files.json") }
+
+    /// The engine's makers may put files into every new Windows environment beyond Wine's own (MetalSharp's
+    /// 32-bit OpenGL bridge, winemetalgl.dll, for one). Updating an existing environment doesn't add them, so a game
+    /// switched to the engine can lack them. From the fresh environment the startup check made: each system file
+    /// (by folder and name) and the engine file it is a copy of (same name and size).
+    static func recordSystemFiles(id: String, freshPrefix: URL) {
+        let fm = FileManager.default
+        guard let info = info(id: id) else { return }
+        let root = RuntimeManager.folder(for: id).appendingPathComponent(info.engine).resolvingSymlinksInPath()
+        var index: [String: [(String, Int)]] = [:]
+        // Relative paths come straight from the enumerator, so /private, /var and a linked lib/ folder don't matter.
+        let lib = root.appendingPathComponent("lib")
+        if let e = fm.enumerator(atPath: lib.path + "/") {
+            for case let rel as String in e {
+                let u = lib.appendingPathComponent(rel)
+                guard let v = try? u.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]), v.isRegularFile == true, let size = v.fileSize else { continue }
+                index[u.lastPathComponent.lowercased(), default: []].append(("lib/" + rel, size))
+            }
+        }
+        var map: [String: String] = [:]
+        for dir in ["system32", "syswow64"] {
+            let d = freshPrefix.appendingPathComponent("drive_c/windows/\(dir)")
+            for name in (try? fm.contentsOfDirectory(atPath: d.path)) ?? [] {
+                guard let size = (try? fm.attributesOfItem(atPath: d.appendingPathComponent(name).path))?[.size] as? Int,
+                      let source = index[name.lowercased()]?.first(where: { $0.1 == size }) else { continue }
+                map["\(dir)/\(name)"] = source.0
+            }
+        }
+        if let data = try? JSONEncoder().encode(map) { try? data.write(to: systemFilesURL(id: id)) }
+    }
+
+    /// Adds the system files a new environment of this engine would have and this one lacks (never replacing one).
+    /// Returns how many were added.
+    @discardableResult
+    public static func addMissingSystemFiles(id: String, prefix: URL) -> Int {
+        let fm = FileManager.default
+        guard let info = info(id: id), let data = try? Data(contentsOf: systemFilesURL(id: id)),
+              let map = try? JSONDecoder().decode([String: String].self, from: data) else { return 0 }
+        let root = RuntimeManager.folder(for: id).appendingPathComponent(info.engine).resolvingSymlinksInPath()
+        var added = 0
+        for (target, source) in map.sorted(by: { $0.key < $1.key }) {
+            let dest = prefix.appendingPathComponent("drive_c/windows/\(target)")
+            guard fm.fileExists(atPath: dest.deletingLastPathComponent().path), !fm.fileExists(atPath: dest.path) else { continue }
+            if (try? fm.copyItem(at: root.appendingPathComponent(source), to: dest)) != nil { added += 1 }
+        }
+        return added
     }
 
     /// Removes an installed engine, unless a game still uses it.

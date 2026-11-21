@@ -66,6 +66,32 @@ final class ExternalEngineTests: XCTestCase {
         XCTAssertNil("MetalSharp-Wine-8.0-x86_64.zip".wholeMatch(of: re))
     }
 
+    /// System files a fresh environment of the engine has are traced to the engine's own files and added to an
+    /// environment that lacks them, never replacing one it has.
+    func testMissingSystemFilesComeFromTheEngine() throws {
+        let fm = FileManager.default
+        let id = "ext-sysfiles-\(UUID().uuidString.prefix(6).lowercased())"
+        let runtime = RuntimeManager.folder(for: id)
+        defer { try? fm.removeItem(at: runtime) }
+        let wine = runtime.appendingPathComponent("Contents/SharedSupport/wine")
+        try fm.createDirectory(at: wine.appendingPathComponent("lib/extra/i386-windows"), withIntermediateDirectories: true)
+        try Data("gl32".utf8).write(to: wine.appendingPathComponent("lib/extra/i386-windows/bridge.dll"))
+        let info = ExternalEngines.Info(id: id, name: "T", source: nil, release: "1", wineVersion: "11.0", installedAt: Date(),
+                                        engine: "Contents/SharedSupport/wine", from: "x", license: nil, sealed: false, arch: .arm64)
+        let enc = JSONEncoder(); enc.dateEncodingStrategy = .iso8601
+        try enc.encode(info).write(to: wine.appendingPathComponent("engine.json"))
+        let fresh = fm.temporaryDirectory.appendingPathComponent("fresh-\(UUID().uuidString)")
+        let game = fm.temporaryDirectory.appendingPathComponent("game-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: fresh); try? fm.removeItem(at: game) }
+        for p in [fresh, game] { try fm.createDirectory(at: p.appendingPathComponent("drive_c/windows/syswow64"), withIntermediateDirectories: true) }
+        try Data("gl32".utf8).write(to: fresh.appendingPathComponent("drive_c/windows/syswow64/bridge.dll"))
+        try Data("made at setup".utf8).write(to: fresh.appendingPathComponent("drive_c/windows/syswow64/generated.dll"))
+        ExternalEngines.recordSystemFiles(id: id, freshPrefix: fresh)
+        XCTAssertEqual(ExternalEngines.addMissingSystemFiles(id: id, prefix: game), 1, "only files traced to the engine")
+        XCTAssertEqual(try Data(contentsOf: game.appendingPathComponent("drive_c/windows/syswow64/bridge.dll")), Data("gl32".utf8))
+        XCTAssertEqual(ExternalEngines.addMissingSystemFiles(id: id, prefix: game), 0, "nothing replaced")
+    }
+
     /// The engine is found inside an app (its Contents) or a folder, a few levels down.
     func testFindsTheEngineRoot() throws {
         let fm = FileManager.default

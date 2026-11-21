@@ -501,6 +501,17 @@ public enum EngineUpdate {
             do { try AutomaticDriveMappings.recordNew(contents: c, before: drivesBefore, images: imageMounts) }
             catch { log("Could not record automatic installer drives; leaving those mappings unchanged: \(error.localizedDescription)") }
             if !r.ok { log("wineboot exited \(r.status); checking that Windows programs still run…") }
+            // Updating an environment keeps its registry values, so one made by an Intel engine still names Intel
+            // Wine's 32-bit layer: under an ARM engine, 32-bit programs then start with no x86 emulator and crash.
+            try await setWow64Emulators(c, wine: wine)
+            if runtimeID.hasPrefix("ext-") {
+                if !FileManager.default.fileExists(atPath: ExternalEngines.systemFilesURL(id: runtimeID).path) {
+                    log("Learning which system files this engine gives new Windows environments…")
+                    _ = await ExternalEngines.selfTest(id: runtimeID)
+                }
+                let n = ExternalEngines.addMissingSystemFiles(id: runtimeID, prefix: g.prefix)
+                if n > 0 { log("Added \(n) system file\(n == 1 ? "" : "s") the engine gives new Windows environments…") }
+            }
             // The real test: can the new engine run a Windows program in this environment?
             log("Checking that Windows programs run with the new engine…")
             let v = try await Shell.runAsync(wine, ["cmd", "/c", "ver"], env: wineEnv(c), timeout: 300)
@@ -514,6 +525,16 @@ public enum EngineUpdate {
             throw error
         }
         log("Done. \(g.name) now uses \(m.wineVersion). Play it, then Keep or Roll Back.")
+    }
+
+    /// Points Windows' WoW64 layer at the engine's x86 emulators (`EngineLayout.wow64Emulators`).
+    static func setWow64Emulators(_ c: URL, wine: String) async throws {
+        guard let e = EngineLayout(contents: c).wow64Emulators else { return }
+        var keys = [("x86", e.x86)]
+        if let amd64 = e.amd64 { keys.append(("amd64", amd64)) }
+        for (key, value) in keys {
+            _ = try await Shell.runAsync(wine, ["reg", "add", "HKLM\\Software\\Microsoft\\Wow64\\\(key)", "/ve", "/d", value, "/f"], env: wineEnv(c), timeout: 120)
+        }
     }
 
     /// Puts the previous engine and Windows system files back.
