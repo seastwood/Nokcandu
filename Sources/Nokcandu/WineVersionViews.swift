@@ -6,7 +6,10 @@ struct WineVersionMenu: View {
     @EnvironmentObject var model: AppModel
     @Binding var selection: String
     var includeDefault = false
+    /// Also list Apple silicon engines that aren't installed yet (chosen: downloaded when applied).
+    var offersSources = false
     @State private var versions: [EngineVersion] = [.tested]
+    @State private var sources: [ExternalEngines.Source] = []
 
     var body: some View {
         Picker("Wine version", selection: $selection) {
@@ -16,6 +19,10 @@ struct WineVersionMenu: View {
                     .tag(version.tag)
                     .disabled(EngineSelfTests.failed(WineSelection.spec(for: version).id))
             }
+            if offersSources && !sources.isEmpty {
+                Divider()
+                ForEach(sources) { s in Text("\(s.name) (Apple silicon, preview)").tag(ExternalEngines.sourceTag(s)) }
+            }
         }
         .task(id: model.catalog?.checkedAt) {
             let catalog = model.catalog
@@ -23,7 +30,12 @@ struct WineVersionMenu: View {
                 WineSelection.versions(catalog: catalog, cached: RuntimeManager.cachedRuntimes())
             }.value
             for version in [WineSelection.parse(selection), WineSelection.defaultEngine()].compactMap({ $0 }) where !values.contains(version) { values.append(version) }
-            if !Task.isCancelled { versions = values.sorted(by: >) }
+            if !Task.isCancelled {
+                versions = values.sorted(by: >)
+                // A source with an engine already installed is listed by that engine instead.
+                let installed = ExternalEngines.installed().compactMap(\.source)
+                sources = ExternalEngines.sources().filter { !installed.contains($0.id) }
+            }
         }
     }
 }
@@ -63,6 +75,8 @@ struct GameWineSection: View {
     var host: InstalledGame? { WineSelection.host(for: game, in: model.games) }
     var shownTag: String { selected.isEmpty ? info?.requested ?? info?.current?.tag ?? EngineVersion.tested.tag : selected }
     var target: EngineVersion? { WineSelection.parse(shownTag) }
+    /// An Apple silicon engine chosen before it's installed: its newest release is installed when applied.
+    var source: ExternalEngines.Source? { ExternalEngines.source(forTag: shownTag) }
     var reason: String? { info?.reason }
     var warning: String? { info?.warning }
 
@@ -70,7 +84,7 @@ struct GameWineSection: View {
         if let host {
             SettingsSection(title: "Wine", info: "Wine is the engine that runs Windows programs on the Mac. Each game keeps the version it was set up with until you choose another; Roll Back returns to the previous one. Game files and saves aren't affected.") {
                 HStack {
-                    WineVersionMenu(selection: Binding(get: { shownTag }, set: { selected = $0 }))
+                    WineVersionMenu(selection: Binding(get: { shownTag }, set: { selected = $0 }), offersSources: true)
                         .disabled(working || info == nil)
                     PendingSettingBadge(title: "Wine version")
                 }
@@ -90,12 +104,16 @@ struct GameWineSection: View {
                     Button(working ? "Preparing Wine…" : "Use Selected Wine") {
                         if warning != nil { confirmWarning = true } else { apply() }
                     }
-                    .disabled(working || info == nil || target == info?.current || target == nil || reason != nil || info?.trial?.status == .trying)
+                    .disabled(working || info == nil || (target == nil && source == nil) || (target != nil && target == info?.current) || reason != nil || info?.trial?.status == .trying)
                     if working { ProgressView().controlSize(.small) }
                 }
                 if !progress.isEmpty { Text(progress).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
                 Text("Downloads a verified build if needed and keeps the previous engine for Roll Back. Game files and saves stay in place.")
                     .font(.caption).foregroundStyle(.secondary)
+                if source != nil || target?.external != nil {
+                    Text("Apple silicon engines (preview) run Intel Windows programs with FEX instead of Rosetta. They come from other projects and are used exactly as built, so Nokcandu's raw mouse input, the resizable window, the audio buffer setting and the game's own name in the Dock aren't available with them.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
             }
             .confirmationDialog("Use \(target?.description ?? "this Wine version")?", isPresented: $confirmWarning) {
                 Button("Use Selected Wine") { apply() }
@@ -118,14 +136,28 @@ struct GameWineSection: View {
         }
     }
     func apply() {
-        guard let host, let target, reason == nil else { return }
+        guard let host, reason == nil, target != nil || source != nil else { return }
+        let chosenSource = source, chosenTarget = target, games = model.games
         working = true; progress = ""
         Task {
             do {
-                let id = try await WineSelection.prepare(target, catalog: model.catalog) { line in
-                    Task { @MainActor in progress = line }
+                let log: @Sendable (String) -> Void = { line in Task { @MainActor in progress = line } }
+                var engine = chosenTarget
+                if let s = chosenSource {
+                    log("Looking for \(s.name)'s newest release…")
+                    let r = try await ExternalEngines.latest(s)
+                    let id = try await ExternalEngines.install(r, log: log)
+                    guard let installed = WineSelection.parse(id), RuntimeManager.manifest(for: id)?.selfTest == true else {
+                        throw NokError("\(s.name) was installed but didn't pass the Windows startup check on this Mac, so it can't be used.")
+                    }
+                    if let problem = WineSelection.incompatibility(host: host, target: installed, games: games) { throw NokError(problem) }
+                    engine = installed
+                    selected = installed.tag
                 }
-                model.changeSetting(for: host, title: "Wine version", success: "Trying \(target). Play, then Keep or Roll Back.", change: .wine(id), completion: { _ in working = false })
+                guard let engine else { working = false; return }
+                let id = try await WineSelection.prepare(engine, catalog: model.catalog, log: log)
+                model.changeSetting(for: host, title: "Wine version", success: "Trying \(engine). Play, then Keep or Roll Back.", change: .wine(id),
+                                    progress: log, completion: { _ in working = false; progress = "" })
             } catch { model.fail(error); working = false }
         }
     }

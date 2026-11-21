@@ -1,7 +1,11 @@
 import Foundation
 
-/// Wine engines from other projects, used exactly as they come: native Apple silicon (ARM64) builds with an x86
-/// emulator such as FEX, which run Intel Windows programs without Rosetta.
+/// Wine engines from other projects: native Apple silicon (ARM64) builds with an x86 emulator such as FEX, which
+/// run Intel Windows programs without Rosetta, or any other Wine build someone has (Intel ones run under Rosetta).
+///
+/// An engine signed with a provisioning profile (Apple's cross-architecture entitlement) is kept untouched and
+/// linked, as below. Any other engine is moved into the runtime as ordinary files, so Nokcandu's own features that
+/// adjust the engine (its window driver where the Wine version matches, the per-game app, the audio buffer) work.
 ///
 /// Nothing here is tied to one project. A source is a GitHub repository and a pattern for the release file;
 /// MetalSharp Wine is the first built-in one, and more can be added (Settings → Updates) or an engine can be added
@@ -56,6 +60,12 @@ public enum ExternalEngines {
         added.removeAll { $0.id == id }
         try JSONEncoder().encode(added).write(to: sourcesFile, options: .atomic)
     }
+    /// The Wine menu's entry for a source whose engine isn't installed yet.
+    public static func sourceTag(_ s: Source) -> String { "source:" + s.id }
+    public static func source(forTag tag: String) -> Source? {
+        guard tag.hasPrefix("source:") else { return nil }
+        return sources().first { sourceTag($0) == tag }
+    }
     public static func slug(_ s: String) -> String {
         let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789.")
         let lowered = s.lowercased().map { allowed.contains($0) ? $0 : "-" }
@@ -76,7 +86,27 @@ public enum ExternalEngines {
         public var engine: String
         public var from: String
         public var license: String?
-        public var title: String { "\(name) \(release)" }
+        /// Kept exactly as it came (a signed engine): nothing writes into it.
+        public var sealed: Bool
+        public var arch: EngineLayout.Arch
+        public var title: String { release == name ? name : "\(name) \(release)" }
+        enum CodingKeys: String, CodingKey { case id, name, source, release, wineVersion, installedAt, engine, from, license, sealed, arch }
+        public init(id: String, name: String, source: String?, release: String, wineVersion: String, installedAt: Date, engine: String,
+                    from: String, license: String?, sealed: Bool, arch: EngineLayout.Arch) {
+            self.id = id; self.name = name; self.source = source; self.release = release; self.wineVersion = wineVersion
+            self.installedAt = installedAt; self.engine = engine; self.from = from; self.license = license; self.sealed = sealed; self.arch = arch
+        }
+        public init(from d: Decoder) throws {
+            let c = try d.container(keyedBy: CodingKeys.self)
+            id = try c.decode(String.self, forKey: .id); name = try c.decode(String.self, forKey: .name)
+            source = try c.decodeIfPresent(String.self, forKey: .source); release = try c.decode(String.self, forKey: .release)
+            wineVersion = try c.decode(String.self, forKey: .wineVersion); installedAt = try c.decode(Date.self, forKey: .installedAt)
+            engine = try c.decode(String.self, forKey: .engine); from = try c.decode(String.self, forKey: .from)
+            license = try c.decodeIfPresent(String.self, forKey: .license)
+            // Before Intel engines could be added, every one was a sealed ARM engine.
+            sealed = try c.decodeIfPresent(Bool.self, forKey: .sealed) ?? true
+            arch = try c.decodeIfPresent(EngineLayout.Arch.self, forKey: .arch) ?? .arm64
+        }
     }
     static let infoName = "engine.json"
 
@@ -90,8 +120,14 @@ public enum ExternalEngines {
         let ids = (try? FileManager.default.contentsOfDirectory(atPath: NokPaths.runtimes.path)) ?? []
         return ids.filter { !$0.hasPrefix(".") }.compactMap(info(id:)).sorted { $0.installedAt > $1.installedAt }
     }
+    /// An app whose engine came from another project (sealed or copied).
+    public static func isExternal(contents: URL) -> Bool {
+        FileManager.default.fileExists(atPath: contents.appendingPathComponent("SharedSupport/wine/\(infoName)").path)
+    }
     /// The version-file text that identifies an external engine (read back by `EngineVersion(versionString:)`).
-    public static func versionString(id: String, wine: String) -> String { "wine external \(id) \(wine)" }
+    public static func versionString(id: String, wine: String, arch: EngineLayout.Arch = .arm64) -> String {
+        "wine external \(id) \(wine)" + (arch == .x86_64 ? " x86_64" : "")
+    }
 
     // MARK: Finding and installing
 
@@ -122,14 +158,22 @@ public enum ExternalEngines {
     /// Downloads (checking the published SHA-256) and installs a release. Returns the runtime id.
     public static func install(_ r: Release, log: @escaping @Sendable (String) -> Void) async throws -> String {
         let file = try await Updates.download(r.asset, log: log)
-        let id = "ext-" + slug(r.source.id + "-" + r.tag)
-        return try await install(file: file, id: id, name: r.source.name, source: r.source.id, release: r.tag,
+        let release = r.tag.hasPrefix("v") ? String(r.tag.dropFirst()) : r.tag
+        let id = "ext-" + slug(r.source.id + "-" + release)
+        return try await install(file: file, id: id, name: r.source.name, source: r.source.id, release: release,
                                  from: r.asset.url.absoluteString, license: r.source.license, log: log)
     }
 
-    /// Installs an engine from a file or folder: an app, a .zip, a .tar.xz/.tar.gz, or a folder with bin/wine.
+    /// Installs an engine from a file or folder: an app, a .zip, a .tar.xz/.tar.gz, or a folder with bin/wine, for
+    /// either processor.
     public static func install(file: URL, name: String? = nil, log: @escaping @Sendable (String) -> Void) async throws -> String {
         let base = name ?? file.deletingPathExtension().lastPathComponent.replacingOccurrences(of: ".tar", with: "")
+        // A file from a known source (its release file, by name) is recorded as that source's.
+        if name == nil, let s = sources().first(where: { (try? Regex($0.asset)).map { file.lastPathComponent.wholeMatch(of: $0) != nil } ?? false }) {
+            let release = file.lastPathComponent.firstMatch(of: #/\d+(?:\.\d+)+/#).map { String($0.0) } ?? base
+            return try await install(file: file, id: "ext-" + slug(s.id + "-" + release), name: s.name, source: s.id, release: release,
+                                     from: file.path, license: s.license, log: log)
+        }
         let id = "ext-" + slug(base)
         return try await install(file: file, id: id, name: base, source: nil, release: base, from: file.path, license: nil, log: log)
     }
@@ -160,29 +204,37 @@ public enum ExternalEngines {
         do {
             guard let root = findRoot(engineDir) else { throw NokError("No Wine engine found inside (looked for bin/wine with lib/wine beside it).") }
             let layout = EngineLayout(wine: root)
-            guard layout.arch == .arm64 else { throw NokError("That's an Intel (x86_64) engine. This is for native Apple silicon engines; Intel ones come from Updates.") }
-            guard layout.runs64BitX86 else { throw NokError("This engine has no x86 emulator (FEX), so it can't run Intel Windows programs.") }
+            guard layout.runs64BitX86 else { throw NokError("This Apple silicon engine has no x86 emulator (FEX), so it can't run Intel Windows programs.") }
+            let sealed = isSigned(engineDir)
             // Where the engine sits inside the runtime folder (both paths resolved: /var and /private/var are one).
             let rootPath = root.resolvingSymlinksInPath().path, stagingPath = staging.resolvingSymlinksInPath().path
             guard rootPath.hasPrefix(stagingPath + "/") else { throw NokError("The engine's folder couldn't be located after unpacking.") }
             let relative = String(rootPath.dropFirst(stagingPath.count + 1))
             let finalRoot = final.appendingPathComponent(relative)
             let wineVersion = try await version(of: root)
-            log("Found \(name) with Wine \(wineVersion)\(layout.runs32BitX86 ? ", 32- and 64-bit" : ", 64-bit only").")
+            log("Found \(name) with Wine \(wineVersion) for \(layout.arch.title)\(layout.runs32BitX86 ? ", 32- and 64-bit" : ", 64-bit only").")
             // The runtime: the parts every game gets, empty where the engine brings its own (graphics, frameworks).
             let contents = staging.appendingPathComponent("Contents")
             for part in ["Frameworks", "SharedSupport/renderer", "Resources/vulkan"] {
                 try fm.createDirectory(at: contents.appendingPathComponent(part), withIntermediateDirectories: true)
             }
             let wine = contents.appendingPathComponent("SharedSupport/wine")
-            try fm.createDirectory(at: wine, withIntermediateDirectories: true)
-            for part in ["bin", "lib", "share"] where fm.fileExists(atPath: root.appendingPathComponent(part).path) {
-                try fm.createSymbolicLink(atPath: wine.appendingPathComponent(part).path, withDestinationPath: finalRoot.appendingPathComponent(part).path)
+            var engineRelative = relative
+            if sealed {
+                try fm.createDirectory(at: wine, withIntermediateDirectories: true)
+                for part in ["bin", "lib", "share"] where fm.fileExists(atPath: root.appendingPathComponent(part).path) {
+                    try fm.createSymbolicLink(atPath: wine.appendingPathComponent(part).path, withDestinationPath: finalRoot.appendingPathComponent(part).path)
+                }
+            } else {
+                // Ordinary files: the engine itself becomes the runtime's wine folder (games get APFS clones).
+                try fm.moveItem(at: root, to: wine)
+                try? fm.removeItem(at: engineDir)
+                engineRelative = "Contents/SharedSupport/wine"
             }
-            let versionText = versionString(id: id, wine: wineVersion)
+            let versionText = versionString(id: id, wine: wineVersion, arch: layout.arch)
             try Data((versionText + "\n").utf8).write(to: wine.appendingPathComponent("version"))
             let info = Info(id: id, name: name, source: source, release: release, wineVersion: wineVersion, installedAt: Date(),
-                            engine: relative, from: from, license: license)
+                            engine: engineRelative, from: from, license: license, sealed: sealed, arch: layout.arch)
             let enc = JSONEncoder(); enc.dateEncodingStrategy = .iso8601; enc.outputFormatting = [.prettyPrinted, .sortedKeys]
             try enc.encode(info).write(to: wine.appendingPathComponent(infoName))
             let manifest = RuntimeManifest(id: id, engine: name, wineVersion: versionText, template: "the engine's own",
@@ -201,6 +253,14 @@ public enum ExternalEngines {
         if !ok { log("\(name) didn't pass the startup check on this Mac; it stays installed but can't be chosen.") }
         else { log("\(name) is ready. Choose it in a game's Wine settings.") }
         return id
+    }
+
+    /// Signed with a provisioning profile somewhere inside (the engine's app or its loader app): such an engine
+    /// only runs as it came, from where it is.
+    static func isSigned(_ dir: URL) -> Bool {
+        guard let e = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: nil) else { return false }
+        for case let u as URL in e where u.lastPathComponent == "embedded.provisionprofile" { return true }
+        return false
     }
 
     /// The folder holding bin/wine and lib/wine (the app's Contents for an app), up to four levels down.
@@ -229,10 +289,15 @@ public enum ExternalEngines {
         let contents = RuntimeManager.folder(for: id).appendingPathComponent("Contents")
         let prefix = fm.temporaryDirectory.appendingPathComponent("nokcandu-engine-check-\(UUID().uuidString)")
         defer { try? fm.removeItem(at: prefix) }
-        var env = ProcessInfo.processInfo.environment
+        // A clean environment, and no offer to install Wine's .NET or web components: in a new Windows environment
+        // that prompt waits for an answer nobody gives.
+        let parent = ProcessInfo.processInfo.environment
+        var env = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": parent["HOME"] ?? NSHomeDirectory(), "USER": parent["USER"] ?? "",
+                   "TMPDIR": parent["TMPDIR"] ?? NSTemporaryDirectory()]
         env["WINEPREFIX"] = prefix.path; env["WINEDEBUG"] = "-all"; env["WINEBOOT_HIDE_DIALOG"] = "1"
+        env["WINEDLLOVERRIDES"] = "mscoree,mshtml="
         let wine = contents.appendingPathComponent("SharedSupport/wine/bin/wine").path
-        let r = try? await Shell.runAsync(wine, ["cmd", "/c", "ver"], env: env, timeout: 300)
+        let r = try? await Shell.runAsync(wine, ["cmd", "/c", "ver"], env: env, timeout: 180)
         _ = try? await Shell.runAsync(contents.appendingPathComponent("SharedSupport/wine/bin/wineserver").path, ["-k"], env: env, timeout: 60)
         return r?.stdout.contains("Windows") == true
     }
@@ -240,7 +305,7 @@ public enum ExternalEngines {
     /// Removes an installed engine, unless a game still uses it.
     public static func remove(id: String, games: [InstalledGame]) throws {
         guard let info = info(id: id) else { return }
-        let text = versionString(id: id, wine: info.wineVersion)
+        let text = versionString(id: id, wine: info.wineVersion, arch: info.arch)
         if let g = games.first(where: { $0.wineVersion == text }) { throw NokError("\(g.name) uses \(info.title). Choose another Wine version for it first.") }
         try SystemIntegration.trash(RuntimeManager.folder(for: id))
     }

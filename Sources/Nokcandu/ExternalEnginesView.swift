@@ -14,13 +14,13 @@ struct ExternalEnginesSection: View {
     @State private var addingSource = false
 
     var body: some View {
-        SettingsSection(title: "Apple silicon engines (preview)", info: "Wine built for Apple silicon, with an x86 emulator (FEX) that runs Intel Windows programs instead of Rosetta, which macOS 28 mostly removes. These come from other projects and are kept exactly as their makers built them, so some of Nokcandu's features that work by adjusting the engine aren't available with them: raw mouse input from Nokcandu's helper, the resizable game window, the audio buffer setting, and the game's own name in the Dock. Choose one per game in its Wine settings; Roll Back returns to the previous engine.") {
+        SettingsSection(title: "Other Wine engines (preview)", info: "Engines from other projects. Apple silicon ones are Wine built for Apple silicon, with an x86 emulator (FEX) that runs Intel Windows programs instead of Rosetta, which macOS 28 mostly removes. These come from other projects and are kept exactly as their makers built them, so some of Nokcandu's features that work by adjusting the engine aren't available with them: raw mouse input from Nokcandu's helper, the resizable game window, the audio buffer setting, and the game's own name in the Dock. Pick one in a game's Wine settings: it downloads then, and Roll Back returns to the previous engine. Here you can add other sources, or any Wine engine you've downloaded (\"Add Engine From File…\"), Intel or Apple silicon, and remove installed ones. An engine that isn't signed by its makers is copied in, and Nokcandu's own features work with it as with its usual engines.") {
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(installed, id: \.id) { e in
                     HStack(alignment: .firstTextBaseline) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(e.title).bold()
-                            Text("Wine \(e.wineVersion) · installed \(e.installedAt.formatted(date: .abbreviated, time: .omitted))\(RuntimeManager.manifest(for: e.id)?.selfTest == false ? " · didn't pass the startup check" : "")")
+                            Text("Wine \(e.wineVersion) · \(e.arch == .arm64 ? "Apple silicon" : "Intel (Rosetta)")\(e.sealed ? " · kept as built" : "") · installed \(e.installedAt.formatted(date: .abbreviated, time: .omitted))\(RuntimeManager.manifest(for: e.id)?.selfTest == false ? " · didn't pass the startup check" : "")")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
@@ -40,7 +40,6 @@ struct ExternalEnginesSection: View {
                         if ExternalEngines.builtIn.contains(where: { $0.id == s.id }) == false {
                             Button("Remove Source") { try? ExternalEngines.removeSource(s.id); reload() }.disabled(busy != nil)
                         }
-                        Button(busy == s.id ? "Installing…" : "Install Latest") { installLatest(s) }.disabled(busy != nil)
                     }
                 }
                 HStack {
@@ -49,7 +48,7 @@ struct ExternalEnginesSection: View {
                     if busy != nil { ProgressView().controlSize(.small) }
                 }
                 if !status.isEmpty { Text(status).font(.caption).foregroundStyle(.secondary).lineLimit(3) }
-                Text("Needs macOS 26.5 or later. Only files with a published SHA-256 are downloaded.")
+                Text("Choose these in a game's Wine settings. Needs macOS 26.5 or later; only files with a published SHA-256 are downloaded.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -66,17 +65,9 @@ struct ExternalEnginesSection: View {
             await MainActor.run { busy = nil; reload() }
         }
     }
-    private func installLatest(_ s: ExternalEngines.Source) {
-        run(s.id) { log in
-            log("Looking for \(s.name)'s newest release…")
-            let r = try await ExternalEngines.latest(s)
-            if ExternalEngines.installed().contains(where: { $0.source == s.id && $0.release == r.tag }) { log("\(s.name) \(r.tag) is already installed."); return }
-            _ = try await ExternalEngines.install(r, log: log)
-        }
-    }
     private func addFromFile() {
         let p = NSOpenPanel()
-        p.message = "Choose an Apple silicon Wine engine: an app, a .zip, a .tar.xz, or a folder with bin/wine."
+        p.message = "Choose a Wine engine for macOS: an app, a .zip, a .tar.xz, or a folder with bin/wine (Intel or Apple silicon)."
         p.canChooseFiles = true; p.canChooseDirectories = true; p.allowsMultipleSelection = false
         guard p.runModal() == .OK, let url = p.url else { return }
         run("file") { log in _ = try await ExternalEngines.install(file: url, log: log) }

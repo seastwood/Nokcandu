@@ -26,8 +26,8 @@ public struct EngineVersion: Comparable, Hashable, Codable, CustomStringConverti
 
     /// From an engine's version file: "wine sikarugir 10.0 (revision 8)" or "wine sikarugir 10.0".
     public init?(versionString: String) {
-        if let m = versionString.firstMatch(of: #/^wine external (\S+) (\d+)\.(\d+)/#) {
-            major = Int(m.2)!; minor = Int(m.3)!; revision = 0; arch = .arm64; external = String(m.1)
+        if let m = versionString.firstMatch(of: #/^wine external (\S+) (\d+)\.(\d+)( x86_64)?/#) {
+            major = Int(m.2)!; minor = Int(m.3)!; revision = 0; arch = m.4 == nil ? .arm64 : nil; external = String(m.1)
             return
         }
         guard let m = versionString.firstMatch(of: #/sikarugir (\d+)\.(\d+)(?: \(revision (\d+)\))?/#) else { return nil }
@@ -40,13 +40,13 @@ public struct EngineVersion: Comparable, Hashable, Codable, CustomStringConverti
     }
     public var engineName: String { external ?? "WS12WineSikarugir" + tag }
     public var versionString: String {
-        if let external { return ExternalEngines.versionString(id: external, wine: "\(major).\(minor)") }
+        if let external { return ExternalEngines.versionString(id: external, wine: "\(major).\(minor)", arch: isARM ? .arm64 : .x86_64) }
         return "wine sikarugir \(major).\(minor)" + (revision > 0 ? " (revision \(revision))" : "")
     }
     public var description: String {
         if let external {
             let name = ExternalEngines.info(id: external)?.title ?? external
-            return "\(name), Wine \(major).\(minor) (Apple silicon, preview)"
+            return "\(name), Wine \(major).\(minor) " + (isARM ? "(Apple silicon, preview)" : "(imported)")
         }
         return "Wine \(major).\(minor)" + (revision > 0 ? " r\(revision)" : "") + (isARM ? " (Apple silicon, experimental)" : "")
     }
@@ -440,6 +440,9 @@ public enum EngineUpdate {
         // Setup must use the just-installed loader, while the game's identity
         // wrapper still belongs to its previous engine. Keep the audio guard.
         env["NOKCANDU_NO_GAME_APP"] = "1"
+        // Engines from other projects may not carry the Wine Mono and Gecko versions their Wine asks for; Wine then
+        // stops to offer a download, and the switch waits on a window. The environment keeps the ones it has.
+        if EngineLayout(contents: c).isSealed || ExternalEngines.isExternal(contents: c) { env["WINEDLLOVERRIDES"] = "mscoree,mshtml=" }
         return env
     }
 
@@ -489,7 +492,7 @@ public enum EngineUpdate {
             try fm.createDirectory(at: stateURL(c).deletingLastPathComponent(), withIntermediateDirectories: true)
             try ChangeJournal.encoder.encode(st).write(to: stateURL(c))
 
-            log("Updating the Windows environment for the new engine (wineboot)…")
+            log("Updating the Windows environment for the new engine (usually under a minute)…")
             let wine = c.appendingPathComponent("SharedSupport/wine/bin/wine").path
             let drivesBefore = AutomaticDriveMappings.snapshot(prefix: g.prefix)
             let r = try await Shell.runAsync(wine, ["wineboot", "-u"], env: wineEnv(c), timeout: 600)
@@ -499,6 +502,7 @@ public enum EngineUpdate {
             catch { log("Could not record automatic installer drives; leaving those mappings unchanged: \(error.localizedDescription)") }
             if !r.ok { log("wineboot exited \(r.status); checking that Windows programs still run…") }
             // The real test: can the new engine run a Windows program in this environment?
+            log("Checking that Windows programs run with the new engine…")
             let v = try await Shell.runAsync(wine, ["cmd", "/c", "ver"], env: wineEnv(c), timeout: 300)
             _ = try? await Shell.runAsync(c.appendingPathComponent("SharedSupport/wine/bin/wineserver").path, ["-w"], env: wineEnv(c), timeout: 120)
             guard v.stdout.contains("Windows") else {

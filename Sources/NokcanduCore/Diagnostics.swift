@@ -283,6 +283,9 @@ public enum Diagnostics {
     /// Nokcandu's fixes to Wine's audio driver (microphone input, buffer size) still apply to this engine?
     static func audioDriverChecks(_ g: InstalledGame) -> [DiagCheck] {
         guard let h = WineTools.hostContents(for: g) else { return [] }
+        if EngineLayout(contents: h).isSealed {
+            return [DiagCheck(layer: .runtime, title: "Audio driver", status: .info, detail: "This engine is kept exactly as its makers built it, so Nokcandu's microphone fix and audio buffer setting don't apply to it")]
+        }
         switch AudioBuffer.status(host: h) {
         case .fixed:
             return [DiagCheck(layer: .runtime, title: "Audio driver", status: .ok, detail: "Microphone fix and audio buffer setting apply to this engine")]

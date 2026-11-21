@@ -464,13 +464,14 @@ final class AppModel: ObservableObject {
     private var settingHosts = Set<String>()
     /// Save desired changes immediately; never close or reopen a game to change a setting.
     func changeSetting(for game: InstalledGame, title: String, success: String = "Settings saved.",
-                       change: PendingSettings.Change, completion: @escaping (Bool) -> Void = { _ in }) {
+                       change: PendingSettings.Change, progress: (@Sendable (String) -> Void)? = nil,
+                       completion: @escaping (Bool) -> Void = { _ in }) {
         Task {
             do {
                 let outcome = try await Task.detached(priority: .userInitiated) {
                     let current = GameLibrary.inspect(game.appURL) ?? game
                     try PendingSettings.save(change, title: title, for: current)
-                    let outcome = try await PendingSettings.apply(for: current)
+                    let outcome = try await PendingSettings.apply(for: current, log: progress ?? { _ in })
                     if outcome == .applied {
                         _ = try? PendingSettings.ensureHelper(for: current)
                         try? LauncherEntry.ensure(GameLibrary.inspect(current.appURL) ?? current)

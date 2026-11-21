@@ -52,7 +52,12 @@ public struct EngineLayout: Equatable, Sendable {
 
     /// An engine from another project, kept exactly as it came (`ExternalEngines`): its files are links into a
     /// signed app, and changing anything in it would break the signature macOS checks. Nothing may write into it.
-    public var isSealed: Bool { FileManager.default.fileExists(atPath: wine.appendingPathComponent(ExternalEngines.infoName).path) }
+    public var isSealed: Bool {
+        guard let d = try? Data(contentsOf: wine.appendingPathComponent(ExternalEngines.infoName)) else { return false }
+        let dec = JSONDecoder(); dec.dateDecodingStrategy = .iso8601
+        // An engine.json that can't be read is treated as sealed: never write into something not understood.
+        return (try? dec.decode(ExternalEngines.Info.self, from: d))?.sealed ?? true
+    }
 
     /// Rosetta is needed for Intel engines only.
     public var needsRosetta: Bool { arch == .x86_64 }

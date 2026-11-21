@@ -325,9 +325,9 @@ struct UpdatesView: View {
                     Label("An engine built for Apple silicon is available: \(n.joined(separator: ", ")).", systemImage: "sparkles")
                         .foregroundStyle(.green)
                 } else {
-                    Text("All current Wine engines are Intel code that runs through Rosetta. Apple has said full Rosetta ends with macOS 28. Nokcandu checks daily for an engine built for Apple silicon and will show it here.")
+                    Text("Nokcandu's usual Wine engines are Intel code that runs through Rosetta, and Apple has said full Rosetta ends with macOS 28. Engines built for Apple silicon, from other projects, are available as a preview: choose one in a game's Wine settings (see Other Wine engines above). Nokcandu also checks daily for an Apple silicon build of its usual engine.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    Text("Until one exists, wait before upgrading to macOS 28.").font(.caption.bold())
+                    Text("Before upgrading to macOS 28, try your games on an Apple silicon engine.").font(.caption.bold())
                 }
             }
             .padding(6).frame(maxWidth: .infinity, alignment: .leading)
