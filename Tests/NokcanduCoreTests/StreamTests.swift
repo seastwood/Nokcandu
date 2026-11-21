@@ -320,7 +320,7 @@ final class StreamRecommendedTests: XCTestCase {
         p.audio.volume = 0.5; p.window.display = "screen-uuid"
         p.applyRecommendedPicture()
         XCTAssertTrue(p.usesRecommendedPicture())
-        XCTAssertEqual(p.video.width, 2560); XCTAssertEqual(p.video.height, 1600); XCTAssertEqual(p.video.fps, 60)
+        XCTAssertEqual(p.video.width, 2560); XCTAssertEqual(p.video.height, 1600); XCTAssertEqual(p.video.fps, 120)
         XCTAssertEqual(p.video.codec, .hevc); XCTAssertEqual(p.video.renderer, .metal); XCTAssertFalse(p.video.vsync)
         XCTAssertEqual(p.video.pacing, .lowestLatency); XCTAssertTrue(p.video.fullRange); XCTAssertNil(p.video.bitrateKbps)
         XCTAssertEqual(p.audio.volume, 0.5, "sound is left alone"); XCTAssertEqual(p.window.display, "screen-uuid", "so is the display")
@@ -334,16 +334,16 @@ final class StreamRecommendedTests: XCTestCase {
     }
 
     func testRecommendedFrameRateFollowsTheDisplay() {
-        XCTAssertEqual(StreamProfile.recommendedFPS(nil), 60)
-        XCTAssertEqual(StreamProfile.recommendedFPS(60), 60)
+        XCTAssertEqual(StreamProfile.recommendedFPS(nil), 120)
+        XCTAssertEqual(StreamProfile.recommendedFPS(60), 120, "fresher frames on a 60 Hz screen too")
         XCTAssertEqual(StreamProfile.recommendedFPS(120), 120)
-        XCTAssertEqual(StreamProfile.recommendedFPS(100), 90)
+        XCTAssertEqual(StreamProfile.recommendedFPS(100), 120)
         XCTAssertEqual(StreamProfile.recommendedFPS(144), 144)
-        XCTAssertEqual(StreamProfile.recommendedFPS(30), 60, "never below 60")
+        XCTAssertEqual(StreamProfile.recommendedFPS(30), 120)
         var p = StreamProfile(id: "p", hostID: "h", name: "Home")
         p.applyRecommendedPicture(displayFPS: 120)
         XCTAssertEqual(p.video.fps, 120)
-        XCTAssertTrue(p.usesRecommendedPicture(displayFPS: 120)); XCTAssertFalse(p.usesRecommendedPicture(displayFPS: 60))
+        XCTAssertTrue(p.usesRecommendedPicture(displayFPS: 120)); XCTAssertTrue(p.usesRecommendedPicture(displayFPS: 60)); XCTAssertFalse(p.usesRecommendedPicture(displayFPS: 144))
     }
 }
 

@@ -35,6 +35,12 @@ public final class StreamMetalRenderer: @unchecked Sendable {
     private var lock = os_unfair_lock()
     private var pending: Frame?
     private var draining = false
+    /// Frames handed to the layer that haven't reached the screen yet, when the last was handed over, and how long
+    /// frames take to reach the screen (smoothed). Shown directly (full screen), a frame is on screen within a few
+    /// milliseconds. Composited by the window server (a window, a moment after switching Spaces), frames wait for the
+    /// display's refresh: decoded faster than that, they queued three deep (~70 ms at 60 Hz). Then only one frame
+    /// waits for the screen, and newer ones replace the next to draw.
+    private var unpresented = 0, lastHandedOver: CFTimeInterval = 0, screenLag: CFTimeInterval = 0
     private var hdrMetadata: StreamHDRMetadata?
     private var hdrVersion = 0
     /// The colour space of the screen showing the stream (main thread sets it; nil until known).
@@ -257,6 +263,11 @@ public final class StreamMetalRenderer: @unchecked Sendable {
         while true {
             os_unfair_lock_lock(&lock)
             guard let f = pending, link == nil else { draining = false; os_unfair_lock_unlock(&lock); return }
+            // Composited: wait for the frame on its way to the screen (its arrival starts drawing again), unless
+            // it's overdue (a frame macOS never shows mustn't stop the stream).
+            if unpresented > 0 && screenLag > 0.010 && CACurrentMediaTime() - lastHandedOver < 0.1 {
+                draining = false; os_unfair_lock_unlock(&lock); return
+            }
             pending = nil
             os_unfair_lock_unlock(&lock)
             autoreleasepool { draw(f) }
@@ -280,9 +291,19 @@ public final class StreamMetalRenderer: @unchecked Sendable {
         guard encode(image, luma: luma, chroma: chroma, pipeline: pipeline, into: drawable.texture, buffer: buffer) else { return }
         os_unfair_lock_lock(&lock); let over = overlays; os_unfair_lock_unlock(&lock)
         for o in over { o.draw(buffer, drawable.texture) }
-        let frame = f
+        let frame = f, counted = given == nil, handedOver = CACurrentMediaTime()
+        if counted { os_unfair_lock_lock(&lock); unpresented += 1; lastHandedOver = handedOver; os_unfair_lock_unlock(&lock) }
         drawable.addPresentedHandler { [weak self] d in
-            if d.presentedTime > 0 { self?.onScreen?(frame, d.presentedTime) }
+            guard let self else { return }
+            if d.presentedTime > 0 { self.onScreen?(frame, d.presentedTime) }
+            guard counted else { return }
+            os_unfair_lock_lock(&self.lock)
+            self.unpresented = max(0, self.unpresented - 1)
+            if d.presentedTime > 0 { self.screenLag += (max(0, d.presentedTime - handedOver) - self.screenLag) * 0.2 }
+            let kick = self.pending != nil && !self.draining && self.link == nil
+            if kick { self.draining = true }
+            os_unfair_lock_unlock(&self.lock)
+            if kick { self.renderQueue.async { [weak self] in self?.drain() } }
         }
         // The CVMetalTextures must live until the GPU has read them.
         buffer.addCompletedHandler { _ in withExtendedLifetime(textures) {} }

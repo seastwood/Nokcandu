@@ -364,7 +364,7 @@ struct StreamProfileEditor: View {
             let modes = StreamsModel.shared.host(profile.hostID)?.capabilities.codecModes ?? 0
             let displayFPS = (StreamDisplays.screen(for: profile.window.display) ?? NSScreen.main)?.maximumFramesPerSecond
             if !profile.usesRecommendedPicture(hostCodecModes: modes, displayFPS: displayFPS) {
-                SettingRow(title: "Recommended settings", info: "The settings measured with the lowest latency: 2560×1600 at the display's refresh rate (\(StreamProfile.recommendedFPS(displayFPS)) fps here), automatic bitrate, HEVC, no HDR or 4:4:4, Metal with V-sync off, lowest-latency pacing, full-range colour, full screen, statistics and graphs off. Display, sound, controllers and the app aren't changed\(profile.route.isRemote ? ", nor the bitrate, since this profile streams over the internet" : "").") {
+                SettingRow(title: "Recommended settings", info: "The settings measured with the lowest latency: 2560×1600 at \(StreamProfile.recommendedFPS(displayFPS)) fps (at least 120: with V-sync off even a 60 Hz screen shows fresher frames), automatic bitrate, HEVC, no HDR or 4:4:4, Metal with V-sync off, lowest-latency pacing, full-range colour, full screen, statistics and graphs off. Display, sound, controllers and the app aren't changed\(profile.route.isRemote ? ", nor the bitrate, since this profile streams over the internet" : "").") {
                     Button("Use Recommended Settings") { profile.applyRecommendedPicture(hostCodecModes: modes, displayFPS: displayFPS); customResolution = false }
                 }
             }

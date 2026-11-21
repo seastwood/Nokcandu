@@ -32,9 +32,11 @@ extension StreamProfile {
     }
 
     public static let frameRates = [30, 60, 90, 120, 144, 165, 240]
+    /// At least 120: with V-sync off, a 60 Hz screen then shows frames up to 8 ms fresher (measured 3–4 ms less on
+    /// average, November 21); a faster screen gets its own rate.
     public static func recommendedFPS(_ display: Int?) -> Int {
-        guard let display, display > 0 else { return 60 }
-        return frameRates.last(where: { $0 <= display && $0 >= 60 }) ?? 60
+        guard let display, display > 120 else { return 120 }
+        return frameRates.last(where: { $0 <= display }) ?? 120
     }
 
     public func usesRecommendedPicture(hostCodecModes: Int = 0, displayFPS: Int? = nil) -> Bool {
