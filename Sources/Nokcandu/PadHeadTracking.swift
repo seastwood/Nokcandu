@@ -72,21 +72,25 @@ final class PadHeadTracking: ObservableObject {
                     if x != 0 || y != 0 { DesktopPad.shared.headMovement(settings.invertX ? -x : x, settings.invertY ? -y : y) }
                 } else if settings.output == .directions {
                     let (x, y) = self.stickTransform.sample(yaw: motion.attitude.yaw, pitch: motion.attitude.pitch,
-                        range: settings.stickRange, deadZone: settings.deadZone, smoothing: settings.smoothing, active: active)
+                        range: settings.stickRange, deadZone: settings.deadZone, smoothing: settings.smoothing, active: active,
+                        settleTime: settings.settleTime ?? 0, settleBelow: settings.selectAt * 0.8, now: motion.timestamp)
                     let pick = active ? self.directions.update(x: settings.invertX ? -x : x, y: settings.invertY ? y : -y,
                                                                sectors: settings.sectors, selectAt: settings.selectAt) : nil
                     if !active { self.directions.reset() }
                     DesktopPad.shared.headDirection(pick)
                 } else {
                     let (x,y) = self.stickTransform.sample(yaw:motion.attitude.yaw,pitch:motion.attitude.pitch,
-                        range:settings.stickRange,deadZone:settings.deadZone,smoothing:settings.smoothing,active:active)
+                        range:settings.stickRange,deadZone:settings.deadZone,smoothing:settings.smoothing,active:active,
+                        settleTime:settings.settleTime ?? 0,settleBelow:0.2,now:motion.timestamp)
                     if active { DesktopPad.shared.headStick(settings.invertX ? -x:x,settings.invertY ? -y:y,right:settings.output == .rightStick) }
                     else { DesktopPad.shared.releaseHeadStick() }
                 }
                 if HeadMotionOverlay.shared.wanted {
                     let range = settings.output == .mouse ? 0.35 : settings.stickRange
                     let (sx, sy) = self.shownTransform.sample(yaw: motion.attitude.yaw, pitch: motion.attitude.pitch,
-                        range: range, deadZone: settings.deadZone, smoothing: 1, active: true)
+                        range: range, deadZone: settings.deadZone, smoothing: 1, active: true,
+                        settleTime: settings.output == .mouse ? 0 : settings.settleTime ?? 0,
+                        settleBelow: settings.output == .directions ? settings.selectAt * 0.8 : 0.2, now: motion.timestamp)
                     // The picture's y is up; the stick's is down.
                     HeadMotionOverlay.shared.moved(.init(x: settings.invertX ? -sx : sx, y: settings.invertY ? sy : -sy,
                         dead: settings.output == .directions ? settings.selectAt : min(1, settings.deadZone / max(0.001, range)),
@@ -112,6 +116,15 @@ struct PadHeadTrackingSettings: View {
 }
 
 struct PadHeadProfileSettings: View {
+    /// Optional: the centre slowly follows the head while it stays inside, so only deliberate turns count.
+    @ViewBuilder var settleControls: some View {
+        Toggle("Recentre slowly while inside", isOn: Binding(get: { settings.settleTime != nil }, set: { settings.settleTime = $0 ? 3 : nil }))
+        if let t = settings.settleTime {
+            Slider(value: Binding(get: { t }, set: { settings.settleTime = $0 }), in: 0.5...10, step: 0.5) { Text("Follows within") }
+            Text(String(format: "While your head stays inside %@, the centre follows it over about %.1f s: slow drift and shifting how you sit fade away, and only a quicker, deliberate turn reaches the edge.", settings.output == .directions ? "the inner circle" : "the middle", t))
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
     @Binding var settings: PadHeadMotionSettings
     let profileID: String
     let layers: [String]
@@ -136,6 +149,7 @@ struct PadHeadProfileSettings: View {
                     Slider(value: $settings.selectAt, in: 0.15...0.9) { Text("Turn to pick") }
                     Text(String(format: "A direction is held once you turn %.0f° (%.0f%% of the way out), and let go when you come back.", settings.selectAt * settings.stickRange * 180 / Double.pi, settings.selectAt * 100))
                         .font(.caption).foregroundStyle(.secondary)
+                    settleControls
                     Text("Show it with the controller overlay: Settings → Controller overlay → Headphone motion picture.").font(.caption).foregroundStyle(.secondary)
                     ForEach(PadHeadDirections.inputs(settings.sectors), id: \.self) { i in
                         DisclosureGroup(i.title(family)) { editInput(i) }
@@ -144,6 +158,7 @@ struct PadHeadProfileSettings: View {
                     Text("Uses the selected stick’s settings and active layer: map its directions to WASD or other keys, macros and actions. For a held radial menu, choose the same stick in the menu, bind a controller button to open it while held, and turn your head to select. Physical stick input combines with head motion; the stronger deflection wins. This is input to Nokcandu’s mapping engine, not a new Windows gamepad.").font(.caption).foregroundStyle(.secondary)
                     Button("Edit \(settings.output == .rightStick ? "right" : "left") stick mappings") { editStick(settings.output == .rightStick ? 1 : 0) }
                     Slider(value:$settings.stickRange,in:0.05...1) { Text("Head turn for full stick") }
+                    settleControls
                     Text(String(format:"Full deflection: %.0f°",settings.stickRange*180/Double.pi)).font(.caption)
                 }
                 Picker("Activate head motion", selection: $settings.activation) {

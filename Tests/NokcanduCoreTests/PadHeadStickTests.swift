@@ -50,3 +50,26 @@ final class PadHeadStickTests: XCTestCase {
         XCTAssertEqual(r.take(),["key 18 down","key 18 up"])
     }
 }
+
+final class PadHeadSettleTests: XCTestCase {
+    func testCentreFollowsSlowlyInsideButNotOutside() {
+        var h = PadHeadStick()
+        _ = h.sample(yaw: 0, pitch: 0, range: 0.5, deadZone: 0, smoothing: 1, settleTime: 1, settleBelow: 0.4, now: 0)
+        // Held a little to the left (inside): drifts back toward the middle over a few seconds.
+        var x = 0.0
+        for i in 1...300 { x = h.sample(yaw: 0.1, pitch: 0, range: 0.5, deadZone: 0, smoothing: 1, settleTime: 1, settleBelow: 0.4, now: Double(i) / 60).0 }
+        XCTAssertLessThan(abs(x), 0.02)
+        // A deliberate turn (outside) is not settled away.
+        var far = 0.0
+        for i in 301...600 { far = h.sample(yaw: 0.1 + 0.4, pitch: 0, range: 0.5, deadZone: 0, smoothing: 1, settleTime: 1, settleBelow: 0.4, now: Double(i) / 60).0 }
+        XCTAssertLessThan(far, -0.7)
+    }
+
+    func testOffWhenNoSettleTime() {
+        var h = PadHeadStick()
+        _ = h.sample(yaw: 0, pitch: 0, range: 0.5, deadZone: 0, smoothing: 1, now: 0)
+        var x = 0.0
+        for i in 1...300 { x = h.sample(yaw: 0.1, pitch: 0, range: 0.5, deadZone: 0, smoothing: 1, now: Double(i) / 60).0 }
+        XCTAssertEqual(x, -0.2, accuracy: 0.001)
+    }
+}

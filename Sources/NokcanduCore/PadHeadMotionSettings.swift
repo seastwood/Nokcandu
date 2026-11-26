@@ -28,6 +28,9 @@ public struct PadHeadMotionSettings: Codable, Hashable, Sendable {
     /// Directions: how many (4 or 8), and how far the head turns (of the full range) to pick one.
     public var sectors: Int = 4
     public var selectAt: Double = 0.5
+    /// Seconds for the centre to follow the head while it stays inside (directions: inside "turn to pick"; sticks:
+    /// the inner fifth); nil: it stays where it was set.
+    public var settleTime: Double?
     public init(included: Bool = true, enabled: Bool = true, sensitivity: Double = 1200, smoothing: Double = 0.5,
                 deadZone: Double = 0.001, invertX: Bool = false, invertY: Bool = false,
                 activation: Activation = .always, activationButton: PadProfiles.Input = .lb, activationLayer: String = "", output: Output = .mouse, stickRange: Double = 0.25) {
@@ -36,7 +39,7 @@ public struct PadHeadMotionSettings: Codable, Hashable, Sendable {
         self.included = included; self.enabled = enabled; self.sensitivity = sensitivity; self.smoothing = smoothing
         self.deadZone = deadZone; self.invertX = invertX; self.invertY = invertY
     }
-    private enum CodingKeys: String, CodingKey { case included, enabled, sensitivity, smoothing, deadZone, invertX, invertY, activation, activationButton, activationLayer, output, stickRange, sectors, selectAt }
+    private enum CodingKeys: String, CodingKey { case included, enabled, sensitivity, smoothing, deadZone, invertX, invertY, activation, activationButton, activationLayer, output, stickRange, sectors, selectAt, settleTime }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.init(included: try c.decodeIfPresent(Bool.self, forKey: .included) ?? true,
@@ -52,6 +55,7 @@ public struct PadHeadMotionSettings: Codable, Hashable, Sendable {
                   output: try c.decodeIfPresent(Output.self, forKey: .output) ?? .mouse,
                   stickRange: try c.decodeIfPresent(Double.self, forKey: .stickRange) ?? 0.25)
         sectors = (try? c.decodeIfPresent(Int.self, forKey: .sectors)).flatMap { $0 } == 8 ? 8 : 4
+        settleTime = (try? c.decodeIfPresent(Double.self, forKey: .settleTime)).flatMap { $0 }.map { min(20, max(0.5, $0)) }
         selectAt = min(0.95, max(0.1, (try? c.decodeIfPresent(Double.self, forKey: .selectAt)).flatMap { $0 } ?? 0.5))
     }
     /// Gate only headphone output; controller gyro and the button's mapping stay independent.
