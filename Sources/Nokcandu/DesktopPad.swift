@@ -482,6 +482,7 @@ final class DesktopPad: ObservableObject {
         sink.mouse_button = { _, b, d in MainActor.assumeIsolated { DesktopPad.shared.mouse(Int(b), d) } }
         sink.mouse_move = { _, x, y in MainActor.assumeIsolated { DesktopPad.shared.move(Int(x), Int(y)) } }
         sink.wheel = { _, n in MainActor.assumeIsolated { DesktopPad.shared.wheel(Int(n)) } }
+        sink.hwheel = { _, n in MainActor.assumeIsolated { DesktopPad.shared.hwheel(Int(n)) } }
         sink.state = { _, l, g in MainActor.assumeIsolated { DesktopPad.shared.stateChanged(layer: Int(l), gyro: Int(g)) } }
         sink.text = { _, t in let s = t.map { String(cString: $0) } ?? ""; MainActor.assumeIsolated { DesktopPad.shared.typeText(s) } }
         sink.menu = { _, m, sl in MainActor.assumeIsolated { DesktopPad.shared.menuChanged(Int(m), Int(sl)) } }
@@ -1077,6 +1078,11 @@ final class DesktopPad: ObservableObject {
     private func wheel(_ n: Int) {
         if streaming { stream?.wheel(n); return }
         CGEvent(scrollWheelEvent2Source: PadEventSource.source(), units: .line, wheelCount: 1, wheel1: Int32(n), wheel2: 0, wheel3: 0)?.post(tap: .cghidEventTap)
+    }
+    /// Sideways: + right, − left (macOS's second wheel is + left).
+    private func hwheel(_ n: Int) {
+        if streaming { stream?.hwheel(n); return }
+        CGEvent(scrollWheelEvent2Source: PadEventSource.source(), units: .line, wheelCount: 2, wheel1: 0, wheel2: Int32(-n), wheel3: 0)?.post(tap: .cghidEventTap)
     }
 }
 

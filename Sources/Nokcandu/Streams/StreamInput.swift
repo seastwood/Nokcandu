@@ -551,6 +551,8 @@ enum StreamMouseButtons {
     func mouseMove(_ dx: Int, _ dy: Int)
     func absoluteMouse(_ point: CGPoint)
     func wheel(_ clicks: Int)
+    /// Sideways: + right, − left.
+    func hwheel(_ clicks: Int)
     func text(_ s: String)
 }
 

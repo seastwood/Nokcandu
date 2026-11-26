@@ -31,11 +31,14 @@ public enum PadProfiles {
         case lpg1, lpg2, lpg3, lpg4, rpg1, rpg2, rpg3, rpg4
         /// Headphone motion as a radial menu: where the head turns, clockwise from up (four use 1, 3, 5, 7).
         case hm1, hm2, hm3, hm4, hm5, hm6, hm7, hm8
+        /// A stick pushed past its outer ring (Stick.ring), held while it's out there (walk, and run at the edge).
+        case lsring, rsring
+        public static func stickRing(_ s: Int) -> Input { s == 0 ? .lsring : .rsring }
         public static let headDirections: [Input] = [.hm1, .hm2, .hm3, .hm4, .hm5, .hm6, .hm7, .hm8]
         public static let touchSensors: Set<Input> = [.rpclick, .lgrip, .rgrip, .lstouch, .rstouch]
         public var id: String { rawValue }
         /// Not a button on the controller: a stick direction, a touchpad zone or a tilt.
-        public var isVirtual: Bool { isStickDirection || Self.touchZones.contains(self) || Self.tilts.contains(self) || Self.padZones.contains(self) || self == .lptap || self == .rptap || Self.padZoneInputs.contains(self) || Self.touchSensors.contains(self) || Self.gestureInputs.contains(self) || Self.headDirections.contains(self) }
+        public var isVirtual: Bool { isStickDirection || Self.touchZones.contains(self) || Self.tilts.contains(self) || Self.padZones.contains(self) || self == .lptap || self == .rptap || Self.padZoneInputs.contains(self) || Self.touchSensors.contains(self) || Self.gestureInputs.contains(self) || Self.headDirections.contains(self) || self == .lsring || self == .rsring }
         /// Zone `n` (0-based) of a pad: its tap, and its click.
         public static func padZoneTap(_ side: Int, _ n: Int) -> Input { (side == 0 ? [Input.lpt1, .lpt2, .lpt3, .lpt4, .lpt5] : [.rpt1, .rpt2, .rpt3, .rpt4, .rpt5])[min(4, max(0, n))] }
         public static func padZoneClick(_ side: Int, _ n: Int) -> Input { (side == 0 ? [Input.lpc1, .lpc2, .lpc3, .lpc4, .lpc5] : [.rpc1, .rpc2, .rpc3, .rpc4, .rpc5])[min(4, max(0, n))] }
@@ -75,6 +78,7 @@ public enum PadProfiles {
             case (.lpg3, _): "Left pad gesture 3"; case (.lpg4, _): "Left pad gesture 4"
             case (.rpg1, _): "Right pad gesture 1"; case (.rpg2, _): "Right pad gesture 2"
             case (.rpg3, _): "Right pad gesture 3"; case (.rpg4, _): "Right pad gesture 4"
+            case (.lsring, .valve): "Joystick outer ring"; case (.lsring, _): "Left stick outer ring"; case (.rsring, _): "Right stick outer ring"
             case (.hm1, _): "Head up"; case (.hm2, _): "Head up right"; case (.hm3, _): "Head right"; case (.hm4, _): "Head down right"
             case (.hm5, _): "Head down"; case (.hm6, _): "Head down left"; case (.hm7, _): "Head left"; case (.hm8, _): "Head up left"
             case (.rpclick, _): "Right trackpad click"
@@ -130,6 +134,7 @@ public enum PadProfiles {
         case key(Int)                   // Mac key code
         case mouse(MouseButton)
         case wheel(up: Bool)
+        case hwheel(right: Bool)        // scroll sideways
         case gyroOn, gyroOff, gyroToggle
         case layerHold(String), layerToggle(String)     // layer names
         case macro(String)                              // a macro's id
@@ -175,6 +180,7 @@ public enum PadProfiles {
             case .key(let k): "key:\(k)"
             case .mouse(let m): "mouse:\(m.rawValue)"
             case .wheel(let up): "wheel:\(up ? "up" : "down")"
+            case .hwheel(let r): "hwheel:\(r ? "right" : "left")"
             case .gyroOn: "gyro:on"; case .gyroOff: "gyro:off"; case .gyroToggle: "gyro:toggle"
             case .layerHold(let n): "layerhold:\(n)"; case .layerToggle(let n): "layertoggle:\(n)"
             case .macro(let id): "macro:\(id)"; case .menu(let id): "menu:\(id)"; case .keyboard: "keyboard"; case .calibrate: "calibrate"; case .rumble: "rumble"
@@ -195,6 +201,7 @@ public enum PadProfiles {
             case "rumble": self = .rumble
             case "overlay": self = .overlayMappings
             case "headcenter": self = .recenterHead
+            case "hwheel": self = .hwheel(right: v != "left")
             case "trig": self = .trigger(right: v == "r")
             case "padtoggle": guard let i = Input(rawValue: v), Input.padButtons.contains(i) else { return nil }; self = .padToggle(i)
             case "trigtoggle": guard v == "l" || v == "r" else { return nil }; self = .triggerToggle(right: v == "r")
@@ -241,6 +248,7 @@ public enum PadProfiles {
             case .key(let k): PadProfiles.keyTitle(k)
             case .mouse(let m): m.title
             case .wheel(let up): up ? "Scroll up" : "Scroll down"
+            case .hwheel(let r): r ? "Scroll right" : "Scroll left"
             case .gyroOn: "Gyro on while held"; case .gyroOff: "Gyro off while held"; case .gyroToggle: "Gyro on/off"
             case .layerHold(let n): "\(n) while held"; case .layerToggle(let n): "\(n) on/off"
             case .macro: "Macro"; case .menu: "On-screen menu"; case .keyboard: "On-screen keyboard"; case .calibrate: "Calibrate the gyro"; case .rumble: "Rumble"
@@ -279,12 +287,24 @@ public enum PadProfiles {
         public var togetherOutputs: [Output] = []
         public var holdTime: Double?
         public var doubleTime: Double?
+        /// Fires when the button is let go (whatever it did while held).
+        public var release: [Output]?
+        /// Each press does the next of these, in place of `press` (weapons 1, 2, 3…).
+        public var cycle: [[Output]]?
+        /// Held longer still (`longTime`, seconds): this in place of `hold`.
+        public var longHold: [Output]?
+        public var longTime: Double?
+        /// The tap fires the moment it's pressed; a hold or double tap still follows.
+        public var instantTap: Bool?
         public init(press: [Output] = [], tap: [Output] = [], hold: [Output] = [], double: [Output] = [], turbo: Int? = nil,
                     together: Input? = nil, togetherOutputs: [Output] = []) {
             self.press = press; self.tap = tap; self.hold = hold; self.double = double; self.turbo = turbo
             self.together = together; self.togetherOutputs = togetherOutputs
         }
-        public var isEmpty: Bool { press.isEmpty && tap.isEmpty && hold.isEmpty && double.isEmpty && togetherOutputs.isEmpty }
+        public var isEmpty: Bool {
+            press.isEmpty && tap.isEmpty && hold.isEmpty && double.isEmpty && togetherOutputs.isEmpty
+                && (release ?? []).isEmpty && (cycle ?? []).allSatisfy(\.isEmpty) && (longHold ?? []).isEmpty
+        }
         public static func `as`(_ o: Output) -> Binding { Binding(press: [o]) }
     }
 
@@ -470,6 +490,8 @@ public enum PadProfiles {
         public var edgeBoostTime: Double?
         /// Scrolling: lines per second at full push.
         public var scrollSpeed: Double?
+        /// Outer ring: pushed this far (0.3…1) holds the stick's outer-ring input (nil: 0.9).
+        public var ring: Double?
         /// Four directions: up and down scroll (at `scrollSpeed`) while left and right stay set on their own.
         public var directionsScroll: Bool?
         public init(mode: StickMode = .stick) { self.mode = mode }
@@ -842,7 +864,7 @@ public enum PadProfiles {
             let k = s.keys.count == 4 ? s.keys : [13, 1, 0, 2]
             let vscroll = s.mode == .directions && s.directionsScroll == true
             let sens = s.mode == .scroll || vscroll ? (s.scrollSpeed ?? 20) : s.speed
-            return "stick \(i) mode=\(mode) to=\(to) dz=\(n(s.deadzone)) outer=\(n(s.outer)) sens=\(n(sens)) power=\(n(s.curve)) flick360=\(n(s.countsPerTurn)) flicktime=\(n(s.flickTime)) keys=\(k.map(String.init).joined(separator: ",")) invy=\(s.invertY ? 1 : 0) xs=\(n(s.xScale ?? 1)) ys=\(n(s.yScale ?? 1)) ramp=\(n(s.edgeBoost ?? 0)) ramptime=\(n(s.edgeBoostTime ?? 0.4))" + (vscroll ? " vscroll=1" : "") + (layer > 0 ? " layer=\(layer)" : "")
+            return "stick \(i) mode=\(mode) to=\(to) dz=\(n(s.deadzone)) outer=\(n(s.outer)) sens=\(n(sens)) power=\(n(s.curve)) flick360=\(n(s.countsPerTurn)) flicktime=\(n(s.flickTime)) keys=\(k.map(String.init).joined(separator: ",")) invy=\(s.invertY ? 1 : 0) xs=\(n(s.xScale ?? 1)) ys=\(n(s.yScale ?? 1)) ramp=\(n(s.edgeBoost ?? 0)) ramptime=\(n(s.edgeBoostTime ?? 0.4))" + (vscroll ? " vscroll=1" : "") + (s.ring.map { " ring=\(n($0))" } ?? "") + (layer > 0 ? " layer=\(layer)" : "")
         }
         lines.append(gyroLine(m.gyro, layer: 0))
         for (i, s) in [m.left, m.right].enumerated() { lines.append(stickLine(i, s, layer: 0)) }
@@ -932,6 +954,11 @@ public enum PadProfiles {
                 if let w = b.together, let s = outs(b.togetherOutputs) { parts.append("sim=\(w.rawValue)"); parts.append("simout=\(s)") }
                 if let h = b.holdTime { parts.append("holdtime=\(n(h))") }
                 if let d = b.doubleTime { parts.append("doubletime=\(n(d))") }
+                if let s = outs(b.release ?? []) { parts.append("release=\(s)") }
+                let sets = (b.cycle ?? []).compactMap { outs($0) }
+                if sets.count >= 2 { parts.append("cycle=" + sets.joined(separator: "|")) }
+                if let s = outs(b.longHold ?? []) { parts.append("longhold=\(s)"); parts.append("longtime=\(n(b.longTime ?? 0.8))") }
+                if b.instantTap == true, !b.tap.isEmpty { parts.append("instant=1") }
                 // A binding whose outputs all vanished (a removed layer) leaves the button as itself.
                 if parts.count > 1 { lines.append(parts.joined(separator: " ")) }
             }

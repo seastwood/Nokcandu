@@ -17,6 +17,7 @@ final class PadRecorder {
         sink.mouse_button = { c, b, d in PadRecorder.of(c).events.append("mouse \(b) \(d ? "down" : "up")") }
         sink.mouse_move = { c, x, y in let r = PadRecorder.of(c); r.mouse.x += Int(x); r.mouse.y += Int(y) }
         sink.wheel = { c, n in PadRecorder.of(c).events.append("wheel \(n)") }
+        sink.hwheel = { c, n in PadRecorder.of(c).events.append("hwheel \(n)") }
         engine = pe_create("nokpad 1\n" + profile, sink)
     }
     deinit { pe_destroy(engine) }

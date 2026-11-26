@@ -36,7 +36,9 @@ enum {
     // Headphone motion as a radial menu: the direction the head turns to, clockwise from up (the host holds one
     // at a time: pe_pad_zone).
     PE_HM1, PE_HM2, PE_HM3, PE_HM4, PE_HM5, PE_HM6, PE_HM7, PE_HM8,
-    PE_INPUTS                               // 98
+    // A stick pushed past its outer ring (the stick's `ring`), held like a button while it's out there.
+    PE_LS_RING, PE_RS_RING,
+    PE_INPUTS                               // 100
 };
 // Axes: SDL2's order. Sticks -32768…32767 (y down), triggers 0…32767.
 enum { PE_AXIS_LX, PE_AXIS_LY, PE_AXIS_RX, PE_AXIS_RY, PE_AXIS_LT, PE_AXIS_RT, PE_AXES };
@@ -61,6 +63,8 @@ typedef struct {
     /// and starts over. Automatic measurements report only their end, and only the first one or a correction
     /// of a degree per second or more. Optional.
     void (*calibration)(void *ctx, float progress);
+    /// Scrolling sideways: + right, − left. Optional.
+    void (*hwheel)(void *ctx, int clicks);
 } pe_sink;
 
 typedef struct pe_engine pe_engine;

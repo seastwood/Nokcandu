@@ -598,6 +598,7 @@ struct ControllerProfileEditor: View {
         case .pad(let p): return p.title(family)
         case .trigger(let r): return r ? "RT" : "LT"
         case .wheel(let up): return up ? "Wh↑" : "Wh↓"
+        case .hwheel(let r): return r ? "Wh→" : "Wh←"
         case .gyroOn, .gyroOff, .gyroToggle: return "Gyro"
         case .layerHold(let n), .layerToggle(let n): return n.count <= 8 ? n : String(n.prefix(7)) + "…"
         case .macro: return "Macro"
@@ -791,6 +792,13 @@ struct ControllerProfileEditor: View {
                 slider("Full at", st.outer, 0.5...1, "%.2f", info: "How far out the stick counts as fully pushed.")
                 Toggle("Invert up and down", isOn: st.invertY)
             }
+        }
+        Section {
+            slider("Outer ring at", Binding(get: { st.wrappedValue.ring ?? 0.9 }, set: { var v = st.wrappedValue; v.ring = abs($0 - 0.9) < 0.005 ? nil : $0; st.wrappedValue = v }),
+                   0.5...1, "%.0f%%", scale: 100, info: "How far out the stick goes before its outer ring counts. It lets go a little inside that, so it doesn't flicker at the edge.")
+            inputEditor(PadProfiles.Input.stickRing(s))
+        } header: { Text("Outer Ring") } footer: {
+            Text("Something extra while the stick is pushed near its edge, on top of what it already does: walk, and hold Shift to run at the edge.").font(.caption).foregroundStyle(.secondary)
         }
         Section {
             BindingEditor(binding: bindingFor(s == 0 ? .ls : .rs), input: s == 0 ? .ls : .rs, family: family,
@@ -991,9 +999,10 @@ struct BindingEditor: View {
     var sameTitle = "Itself"
     @State private var more = false
 
-    enum Kind: String, CaseIterable { case same, press, toggle, taps }
+    enum Kind: String, CaseIterable { case same, press, toggle, taps, cycle }
     var kind: Kind {
-        guard let b = binding, !(b.press.isEmpty && b.tap.isEmpty && b.hold.isEmpty && b.double.isEmpty) else { return .same }
+        if let c = binding?.cycle, !c.isEmpty { return .cycle }
+        guard let b = binding, !(b.press.isEmpty && b.tap.isEmpty && b.hold.isEmpty && b.double.isEmpty && (b.longHold ?? []).isEmpty) else { return .same }
         if !b.tap.isEmpty || !b.hold.isEmpty || !b.double.isEmpty { return .taps }
         return b.togglesOnPress ? .toggle : .press
     }
@@ -1004,6 +1013,7 @@ struct BindingEditor: View {
             Text("While held").tag(Kind.press)
             Text("Toggle").tag(Kind.toggle)
             Text("Tap / Hold").tag(Kind.taps)
+            Text("Cycle").tag(Kind.cycle)
         }
         .pickerStyle(.segmented)
         if kind == .same, let inherited {
@@ -1032,6 +1042,30 @@ struct BindingEditor: View {
                 LabeledContent("Hold after") {
                     Stepper("\(Int((b.holdTime ?? 0.2) * 1000)) ms", value: Binding(get: { b.holdTime ?? 0.2 }, set: { binding?.holdTime = $0 }), in: 0.08...1, step: 0.02)
                 }
+                OutputsEditor(title: "Long hold", outputs: optionalField(\.longHold), family: family, layers: layers)
+                if !(b.longHold ?? []).isEmpty {
+                    LabeledContent("Long hold after") {
+                        Stepper("\(Int((b.longTime ?? 0.8) * 1000)) ms", value: Binding(get: { b.longTime ?? 0.8 }, set: { binding?.longTime = $0 }),
+                                in: max(0.3, (b.holdTime ?? 0.2) + 0.1)...3, step: 0.05)
+                    }
+                    Text("Held past this, the long hold takes over from the hold (reload, then inspect).").font(.caption).foregroundStyle(.secondary)
+                }
+                Toggle("Tap fires at once", isOn: Binding(get: { b.instantTap == true }, set: { binding?.instantTap = $0 ? true : nil }))
+                Text("The tap happens the moment you press, instead of after it's clear it wasn't a hold or double tap. A hold or double tap still follows it.")
+                    .font(.caption).foregroundStyle(.secondary)
+            case .cycle:
+                Text("Each press does the next one in the list, then starts over (weapons 1, 2, 3; zoom levels).").font(.caption).foregroundStyle(.secondary)
+                let sets = b.cycle ?? []
+                ForEach(sets.indices, id: \.self) { i in
+                    HStack(alignment: .top) {
+                        OutputsEditor(title: "Press \(i + 1)", outputs: cycleField(i), family: family, layers: layers)
+                        if sets.count > 2 {
+                            Button { var c = sets; c.remove(at: i); binding?.cycle = c } label: { Image(systemName: "minus.circle") }
+                                .buttonStyle(.borderless).help("Remove this step")
+                        }
+                    }
+                }
+                if sets.count < 4 { Button("Add Step") { binding?.cycle = sets + [[.nothing]] } }
             case .same: EmptyView()
             }
         }
@@ -1050,6 +1084,8 @@ struct BindingEditor: View {
             if binding?.together != nil {
                 OutputsEditor(title: "Together", outputs: field(\.togetherOutputs), family: family, layers: layers)
             }
+            OutputsEditor(title: "When let go", outputs: optionalField(\.release), family: family, layers: layers)
+            Text("Happens as the button is released, whatever it did while held (throw on release).").font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -1061,8 +1097,37 @@ struct BindingEditor: View {
         })
     }
 
+    /// An optional list (release, long hold): empty clears it, and a binding left with nothing goes away.
+    func optionalField(_ k: WritableKeyPath<PadProfiles.Binding, [PadProfiles.Output]?>) -> Binding<[PadProfiles.Output]> {
+        Binding(get: { binding?[keyPath: k] ?? [] }, set: { v in
+            var b = binding ?? PadProfiles.Binding()
+            b[keyPath: k] = v.isEmpty ? nil : v
+            binding = b.isEmpty && b.together == nil ? nil : b
+        })
+    }
+    func cycleField(_ i: Int) -> Binding<[PadProfiles.Output]> {
+        Binding(get: { (binding?.cycle ?? []).indices.contains(i) ? binding!.cycle![i] : [] }, set: { v in
+            guard var c = binding?.cycle, c.indices.contains(i) else { return }
+            c[i] = v.isEmpty ? [.nothing] : v
+            binding?.cycle = c
+        })
+    }
+
     func setKind(_ k: Kind) {
         switch k {
+        case .cycle:
+            var b = binding ?? PadProfiles.Binding()
+            let first = !b.press.isEmpty ? b.press.map(\.heldOutput) : !b.tap.isEmpty ? b.tap : [.nothing]
+            b.cycle = [first, [.nothing]]
+            b.togglePress = nil; b.turbo = nil
+            b.press = []; b.tap = []; b.hold = []; b.double = []; b.longHold = nil
+            binding = b
+            return
+        default: break
+        }
+        if k != .cycle, binding?.cycle != nil { binding?.cycle = nil }
+        switch k {
+        case .cycle: break
         case .same:
             if let t = binding?.together, let o = binding?.togetherOutputs, !o.isEmpty { binding = PadProfiles.Binding(together: t, togetherOutputs: o) }
             else { binding = nil }
@@ -1072,13 +1137,13 @@ struct BindingEditor: View {
             b.press = source.compactMap(\.toggledOutput)
             if b.press.isEmpty { b.press = [.nothing] }
             b.togglePress = true; b.turbo = nil
-            b.tap = []; b.hold = []; b.double = []
+            b.tap = []; b.hold = []; b.double = []; b.longHold = nil; b.instantTap = nil
             binding = b
         case .press:
             var b = binding ?? PadProfiles.Binding()
             b.togglePress = nil; b.press = b.press.map(\.heldOutput)
             if b.press.isEmpty { b.press = b.tap.isEmpty ? [.nothing] : b.tap }
-            b.tap = []; b.hold = []; b.double = []
+            b.tap = []; b.hold = []; b.double = []; b.longHold = nil; b.instantTap = nil
             binding = b
         case .taps:
             var b = binding ?? PadProfiles.Binding()
@@ -1226,6 +1291,8 @@ struct OutputMenu: View {
             if !heldOnly {
                 Button("Scroll up") { pick(.wheel(up: true)) }
                 Button("Scroll down") { pick(.wheel(up: false)) }
+                Button("Scroll left") { pick(.hwheel(right: false)) }
+                Button("Scroll right") { pick(.hwheel(right: true)) }
             }
         }
         Menu("Controller") {

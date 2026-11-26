@@ -30,6 +30,7 @@ public enum PadLabel {
         case .pad(let p), .padToggle(let p): return abbreviate(p.title(family), limit: 3)
         case .trigger(let r), .triggerToggle(let r): return PadProfiles.Input(rawValue: r ? "rt" : "lt")!.title(family)
         case .wheel(let up): return up ? "⇡" : "⇣"
+        case .hwheel(let r): return r ? "⇢" : "⇠"
         case .gyroOn, .gyroOff, .gyroToggle: return "Gyro"
         case .layerHold(let n), .layerToggle(let n): return abbreviate(n)
         case .macro(let id): return abbreviate(macros[id] ?? "Macro")

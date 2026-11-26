@@ -914,6 +914,7 @@ import Metal
     }
     func mouseMove(_ dx: Int, _ dy: Int) { LiSendMouseMoveEvent(Int16(clamping: dx), Int16(clamping: dy)) }
     func wheel(_ clicks: Int) { LiSendHighResScrollEvent(Int16(clamping: clicks * 120)) }
+    func hwheel(_ clicks: Int) { LiSendHighResHScrollEvent(Int16(clamping: clicks * 120)) }
     func text(_ s: String) {
         let bytes = Array(s.utf8)
         bytes.withUnsafeBufferPointer { b in

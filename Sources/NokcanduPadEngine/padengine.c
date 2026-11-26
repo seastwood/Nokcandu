@@ -8,7 +8,7 @@
 //        flicktime=0.1 keys=<up>,<down>,<left>,<right> (Mac key codes) invy=0
 //   trigger 0|1 mode=pad|none soft=0.3 full=0.95
 //   bind <layer> <input> press=<outs> tap=<outs> hold=<outs> double=<outs> turbo=<ms> sim=<input> simout=<outs>
-//        holdtime=0.2 doubletime=0.22
+//        holdtime=0.2 doubletime=0.22 release=<outs> cycle=<outs>|<outs>… longhold=<outs> longtime=0.8 instant=1
 // <outs>: comma-separated: pad:<button> trig:l|r key:<code> mouse:left|right|middle|back|forward wheel:up|down
 //         gyro:on|off|toggle layer:hold:<n> layer:toggle:<n> none
 //   device <slot 1…4> vendor=<n> product=<n> nth=<n> kind=joystick|gamepad join=0|1
@@ -41,7 +41,9 @@
 #define MAX_MENUS 8
 
 enum { O_NONE, O_PAD, O_TRIG, O_KEY, O_MOUSE, O_WHEEL, O_GYRO_ON, O_GYRO_OFF, O_GYRO_TOGGLE, O_LAYER_HOLD, O_LAYER_TOGGLE,
-       O_MACRO, O_MENU, O_KEYBOARD, O_CALIBRATE, O_RUMBLE, O_KEY_TOGGLE, O_MOUSE_TOGGLE, O_PAD_TOGGLE, O_TRIG_TOGGLE, O_OVERLAY, O_HEAD_CENTER };
+       O_MACRO, O_MENU, O_KEYBOARD, O_CALIBRATE, O_RUMBLE, O_KEY_TOGGLE, O_MOUSE_TOGGLE, O_PAD_TOGGLE, O_TRIG_TOGGLE, O_OVERLAY, O_HEAD_CENTER,
+       O_HWHEEL };
+#define MAX_CYCLE 4
 typedef struct { unsigned char kind; short code; } out_t;
 typedef struct { out_t o[MAX_OUTS]; int n; } outs_t;
 typedef struct {
@@ -50,6 +52,11 @@ typedef struct {
     int sim_with;          // -1 none
     double turbo;          // seconds; 0 off
     double hold_time, double_time;
+    outs_t release;        // pulsed when the button is let go
+    outs_t cyc[MAX_CYCLE]; int ncyc;   // each press does the next of these (in place of press)
+    outs_t lhold;          // after a longer hold (long_time), in place of hold
+    double long_time;
+    bool instant;          // the tap fires the moment it's pressed (a hold or double tap still follows)
 } binding_t;
 
 enum { S_PAD, S_MOUSE, S_FLICK, S_KEYS, S_NONE, S_DIRS, S_SCROLL };
@@ -67,6 +74,7 @@ typedef struct {
     bool flicking; double flick_left, flick_rate, last_angle; bool in_flick;
     int keys_down[4];
     double rest_x, rest_y;
+    double ring;                 // pushed this far (0…1) holds its outer-ring input
 } stick_t;
 
 enum { G_OFF, G_MOUSE, G_LSTICK, G_RSTICK, G_SCROLL, G_WHEEL };
@@ -85,7 +93,7 @@ typedef struct {
 } device_t;
 
 typedef struct { double at; int kind; int a, b; } timer_t_;
-enum { T_RELEASE_OUTS, T_HOLD, T_DOUBLE_WAIT, T_TURBO, T_SIM_WAIT, T_MACRO };
+enum { T_RELEASE_OUTS, T_HOLD, T_DOUBLE_WAIT, T_TURBO, T_SIM_WAIT, T_MACRO, T_LONG };
 
 typedef struct {
     int out, yaw; bool def, invx, invy, autocal, euro;
@@ -101,7 +109,7 @@ typedef struct { bool set; int stick, layout; int n; outs_t slice[8]; } menu_t;
 enum { TM_OFF, TM_MOUSE, TM_SCROLL, TM_ZONES };
 
 // What a held input is doing (captured at press, so a layer change can't strand a key).
-enum { P_IDLE, P_PRESS, P_WAIT_HOLD, P_HOLDING, P_WAIT_DOUBLE, P_DOUBLE, P_SIM_PENDING, P_SIM, P_LATE };
+enum { P_IDLE, P_PRESS, P_WAIT_HOLD, P_HOLDING, P_WAIT_DOUBLE, P_DOUBLE, P_SIM_PENDING, P_SIM, P_LATE, P_LONG };
 typedef struct {
     int phase;
     const binding_t *b;
@@ -109,6 +117,7 @@ typedef struct {
     outs_t active;              // outputs held down for this input
     bool passthrough;
     bool turbo_off;             // active describes the binding, not an output held during this phase
+    const binding_t *rel;       // the binding whose release action fires when it's let go (even passed through)
 } press_t;
 
 struct pe_engine {
@@ -122,6 +131,7 @@ struct pe_engine {
     int layer_toggle_owner[MAX_LAYERS], gyro_toggle_owner, menu_owner;
     int layer_holds[MAX_LAYERS];
     press_t press[PE_ALL_INPUTS];
+    unsigned char cycle_pos[PE_ALL_INPUTS];   // the next of a cycle binding's sets
     bool physical[PE_ALL_INPUTS];
     device_t dev[PE_MAX_DEVICES + 1];    // 1…4
     int ndev;
@@ -196,7 +206,8 @@ static const char *input_names[PE_INPUTS] = {
     "rpt1", "rpt2", "rpt3", "rpt4", "rpt5", "rpc1", "rpc2", "rpc3", "rpc4", "rpc5",
     "rpclick", "lgrip", "rgrip", "lstouch", "rstouch",
     "lpg1", "lpg2", "lpg3", "lpg4", "rpg1", "rpg2", "rpg3", "rpg4",
-    "hm1", "hm2", "hm3", "hm4", "hm5", "hm6", "hm7", "hm8"
+    "hm1", "hm2", "hm3", "hm4", "hm5", "hm6", "hm7", "hm8",
+    "lsring", "rsring"
 };
 static int dev_in(int slot, int k) { return PE_INPUTS + (slot - 1) * PE_DEV_INPUTS + k; }
 enum { K_HAT = PE_DEV_BUTTONS, K_AXIS = PE_DEV_BUTTONS + 4 };
@@ -257,6 +268,7 @@ static bool parse_out(const char *s, out_t *o) {
         return false;
     }
     if (!strcmp(buf, "wheel")) { o->kind = O_WHEEL; o->code = strcmp(v, "down") ? 1 : -1; return true; }
+    if (!strcmp(buf, "hwheel")) { o->kind = O_HWHEEL; o->code = strcmp(v, "left") ? 1 : -1; return true; }
     if (!strcmp(buf, "gyro")) { o->kind = !strcmp(v, "on") ? O_GYRO_ON : !strcmp(v, "off") ? O_GYRO_OFF : O_GYRO_TOGGLE; return true; }
     if (!strcmp(buf, "layer")) {
         char *c2 = strchr(v, ':'); if (!c2) return false; *c2 = 0;
@@ -380,6 +392,7 @@ pe_engine *pe_create(const char *text, pe_sink sink) {
             k->xs = opt_d(OPT("xs"), 1); k->ys = opt_d(OPT("ys"), 1);
             k->ramp = opt_d(OPT("ramp"), 0); k->ramptime = opt_d(OPT("ramptime"), 0.4); k->edge = opt_d(OPT("edge"), 0.9);
             k->vscroll = opt_d(OPT("vscroll"), 0) != 0;
+            k->ring = fmax(0.3, fmin(1, opt_d(OPT("ring"), 0.9)));
             const char *ks = OPT("keys");
             if (ks) sscanf(ks, "%d,%d,%d,%d", &k->keys[0], &k->keys[1], &k->keys[2], &k->keys[3]);
         } else if (!strcmp(words[0], "trigger") && nw > 1) {
@@ -451,6 +464,15 @@ pe_engine *pe_create(const char *text, pe_sink sink) {
             if ((v = OPT("sim"))) b->sim_with = pe_input_named(v);
             b->turbo = opt_d(OPT("turbo"), 0) / 1000.0;
             b->hold_time = opt_d(OPT("holdtime"), b->hold_time); b->double_time = opt_d(OPT("doubletime"), b->double_time);
+            if ((v = OPT("release"))) parse_outs(v, &b->release);
+            if ((v = OPT("longhold"))) parse_outs(v, &b->lhold);
+            b->long_time = fmax(b->hold_time + 0.1, opt_d(OPT("longtime"), 0.8));
+            b->instant = opt_d(OPT("instant"), 0) != 0;
+            if ((v = OPT("cycle"))) {
+                char cb[256]; strncpy(cb, v, sizeof cb - 1); cb[sizeof cb - 1] = 0;
+                char *cs, *ct = strtok_r(cb, "|", &cs);
+                while (ct && b->ncyc < MAX_CYCLE) { parse_outs(ct, &b->cyc[b->ncyc]); if (b->cyc[b->ncyc].n) b->ncyc++; ct = strtok_r(NULL, "|", &cs); }
+            }
             // tap with nothing else behaves as press
             if (b->tap.n && !b->hold.n && !b->dbl.n && !b->press.n) { b->press = b->tap; b->tap.n = 0; }
         }
@@ -550,6 +572,7 @@ static void out_set(pe_engine *e, out_t o, bool down) {
         if (down) { e->mouse_toggle[o.code] = !e->mouse_toggle[o.code]; e->mouse_toggle_owner[o.code] = e->mouse_toggle[o.code] ? e->current_input : -1; out_set(e, (out_t){ O_MOUSE, o.code }, e->mouse_toggle[o.code]); }
         break;
     case O_WHEEL: if (down && e->sink.wheel) e->sink.wheel(e->sink.ctx, o.code); break;
+    case O_HWHEEL: if (down && e->sink.hwheel) e->sink.hwheel(e->sink.ctx, o.code); break;
     case O_GYRO_ON: e->gyro_on_holds += d; if (e->gyro_on_holds < 0) e->gyro_on_holds = 0; break;
     case O_GYRO_OFF: e->gyro_off_holds += d; if (e->gyro_off_holds < 0) e->gyro_off_holds = 0; break;
     case O_GYRO_TOGGLE: if (down) { e->gyro_toggled = !e->gyro_toggled; e->gyro_toggle_owner = e->gyro_toggled ? e->current_input : -1; } break;
@@ -628,7 +651,9 @@ static int pass_target(const pe_engine *e, int in) {
 static void begin_press(pe_engine *e, int in, const binding_t *b, double now) {
     press_t *p = &e->press[in];
     // A binding that only has a simultaneous-press part leaves the button as itself otherwise.
-    if (b && !b->press.n && !b->tap.n && !b->hold.n && !b->dbl.n) b = NULL;
+    p->rel = b && b->release.n ? b : NULL;
+    // Only a release action (or a together part): the button stays itself while held.
+    if (b && !b->press.n && !b->tap.n && !b->hold.n && !b->dbl.n && !b->ncyc && !b->lhold.n) b = NULL;
     p->b = b; p->since = now; p->passthrough = false; p->turbo_off = false;
     if (!b) {
         p->phase = P_PRESS; p->passthrough = true;
@@ -636,20 +661,25 @@ static void begin_press(pe_engine *e, int in, const binding_t *b, double now) {
         if (t >= 0) { out_t o = { O_PAD, (short)t }; out_set(e, o, true); }
         return;
     }
-    if (b->hold.n || (b->tap.n && b->press.n == 0 && b->dbl.n == 0)) {
+    // A tap set to fire at once does, and a hold or double tap can still follow.
+    if (b->instant && b->tap.n) pulse(e, &b->tap, now);
+    // A cycle: this press does the next set, in place of press.
+    const outs_t *pr = &b->press;
+    if (b->ncyc) { pr = &b->cyc[e->cycle_pos[in] % b->ncyc]; e->cycle_pos[in] = (unsigned char)((e->cycle_pos[in] + 1) % b->ncyc); }
+    if (b->hold.n || b->lhold.n || (b->tap.n && pr->n == 0 && b->dbl.n == 0)) {
         p->phase = P_WAIT_HOLD;
-        if (b->press.n) { outs_set(e, &b->press, true); p->active = b->press; } else p->active.n = 0;
+        if (pr->n) { outs_set(e, pr, true); p->active = *pr; } else p->active.n = 0;
         timer_add(e, now + b->hold_time, T_HOLD, in, 0);
         return;
     }
     if (b->dbl.n) {     // tap waits to see if a second press follows
         p->phase = P_WAIT_DOUBLE;
-        if (b->press.n) { outs_set(e, &b->press, true); p->active = b->press; } else p->active.n = 0;
+        if (pr->n) { outs_set(e, pr, true); p->active = *pr; } else p->active.n = 0;
         return;
     }
     p->phase = P_PRESS;
-    p->active = b->press;
-    outs_set(e, &b->press, true);
+    p->active = *pr;
+    outs_set(e, pr, true);
     if (b->turbo > 0) timer_add(e, now + b->turbo, T_TURBO, in, 1);
 }
 
@@ -685,7 +715,7 @@ static void input_down_impl(pe_engine *e, int in, double now) {
     }
     if (p->phase == P_WAIT_DOUBLE) {     // too late for a double: the pending tap fires first
         timers_cancel(e, T_DOUBLE_WAIT, in);
-        if (p->b && p->b->tap.n) pulse(e, &p->b->tap, now);
+        if (p->b && p->b->tap.n && !p->b->instant) pulse(e, &p->b->tap, now);
         p->phase = P_IDLE;
     }
     if (p->phase != P_IDLE) return;
@@ -725,7 +755,11 @@ static void input_down_impl(pe_engine *e, int in, double now) {
 static void input_up_impl(pe_engine *e, int in, double now);
 static void input_up(pe_engine *e, int in, double now) {
     int old = e->current_input; e->current_input = in;
-    input_up_impl(e, in, now); e->current_input = old;
+    // Its release action (if it has one) fires as it's let go, whatever it did while held.
+    const binding_t *rb = e->press[in].phase != P_IDLE ? e->press[in].rel : NULL;
+    input_up_impl(e, in, now);
+    if (rb && rb->release.n) pulse(e, &rb->release, now);
+    e->current_input = old;
 }
 static void input_up_impl(pe_engine *e, int in, double now) {
     press_t *p = &e->press[in];
@@ -741,7 +775,7 @@ static void input_up_impl(pe_engine *e, int in, double now) {
         timers_cancel(e, T_HOLD, in);
         outs_set(e, &p->active, false);
         if (p->b->dbl.n) { p->phase = P_WAIT_DOUBLE; p->since = now; p->active.n = 0; timer_add(e, now + p->b->double_time, T_DOUBLE_WAIT, in, 0); return; }
-        if (p->b->tap.n) pulse(e, &p->b->tap, now);
+        if (p->b->tap.n && !p->b->instant) pulse(e, &p->b->tap, now);
         p->phase = P_IDLE;
         return;
     case P_WAIT_DOUBLE:
@@ -750,7 +784,7 @@ static void input_up_impl(pe_engine *e, int in, double now) {
         timer_add(e, now + p->b->double_time, T_DOUBLE_WAIT, in, 0);
         return;                          // stays waiting
     default:
-        timers_cancel(e, T_TURBO, in);
+        timers_cancel(e, T_TURBO, in); timers_cancel(e, T_LONG, in);
         if (p->passthrough) { int t = pass_target(e, in); if (t >= 0) { out_t o = { O_PAD, (short)t }; out_set(e, o, false); } }
         else if (!p->turbo_off) outs_set(e, &p->active, false);
         p->active.n = 0; p->phase = P_IDLE; p->passthrough = false;
@@ -1007,6 +1041,13 @@ void pe_axis(pe_engine *e, int axis, int value, double now) {
     if (e->control_route[s] == 1 || e->control_route[s] == 3) { k->x = k->y = 0; update_pad_sticks(e); return; }
     k->x = e->raw_axis[s ? PE_AXIS_RX : PE_AXIS_LX] / 32767.0;
     k->y = -e->raw_axis[s ? PE_AXIS_RY : PE_AXIS_LY] / 32767.0;       // y up
+    // Its outer ring: held past `ring`, let go a little inside it (so it doesn't flicker at the edge).
+    {
+        int ring = s ? PE_RS_RING : PE_LS_RING;
+        double m = sqrt(k->x * k->x + k->y * k->y), at = k->ring > 0 ? k->ring : 0.9;
+        bool menu = e->menu_open >= 0 && e->menus[e->menu_open].stick == s;
+        set_input(e, ring, !menu && (m >= at || (e->physical[ring] && m >= at - 0.05)), now);
+    }
     // A radial menu is open on this stick: the stick points at a slice and does nothing else.
     if (e->menu_open >= 0 && e->menus[e->menu_open].stick == s) {
         const menu_t *mn = &e->menus[e->menu_open];
@@ -1331,13 +1372,22 @@ void pe_tick(pe_engine *e, double now) {
                     outs_set(e, &p->active, false);
                     p->active = p->b->hold;
                     outs_set(e, &p->b->hold, true);
+                    if (p->b->lhold.n) timer_add(e, p->since + p->b->long_time, T_LONG, t.a, 0);
+                }
+                break;
+            case T_LONG:      // held longer still: the long hold, in place of the hold
+                if (p->phase == P_HOLDING && p->b && p->b->lhold.n) {
+                    p->phase = P_LONG;
+                    outs_set(e, &p->active, false);
+                    p->active = p->b->lhold;
+                    outs_set(e, &p->b->lhold, true);
                 }
                 break;
             case T_DOUBLE_WAIT:
                 if (p->phase == P_WAIT_DOUBLE) {
                     p->phase = P_IDLE;
-                    if (p->b->tap.n) pulse(e, &p->b->tap, t.at);
-                    else if (!p->b->press.n && e->physical[t.a]) begin_press(e, t.a, NULL, t.at);
+                    if (p->b->tap.n && !p->b->instant) pulse(e, &p->b->tap, t.at);
+                    else if (!p->b->tap.n && !p->b->press.n && e->physical[t.a]) begin_press(e, t.a, NULL, t.at);
                 }
                 break;
             case T_TURBO:

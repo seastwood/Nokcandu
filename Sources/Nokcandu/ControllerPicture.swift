@@ -517,6 +517,7 @@ final class PadTester: ObservableObject {
         sink.mouse_button = { c, b, d in PadTester.of(c).out("mouse:\(["left", "right", "middle", "back", "forward"][Int(b)])", d) }
         sink.mouse_move = { c, x, y in PadTester.of(c).move(Int(x), Int(y)) }
         sink.wheel = { c, n in PadTester.of(c).flash("wheel:\(n > 0 ? "up" : "down")") }
+        sink.hwheel = { c, n in PadTester.of(c).flash("hwheel:\(n > 0 ? "right" : "left")") }
         sink.text = { c, t in let s = t.map { String(cString: $0) } ?? ""; PadTester.of(c).flash("text:" + s) }
         sink.menu = { c, m, sl in PadTester.of(c).menu(Int(m), Int(sl)) }
         sink.calibration = { c, p in MainActor.assumeIsolated { PadHUD.shared.calibration(p, manual: pe_calibration_is_manual(PadTester.of(c).engine)) } }
