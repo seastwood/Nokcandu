@@ -26,7 +26,9 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
         }
     }
     /// The on-screen overlay takes the pointer so it can be dragged into place.
-    @Published var arranging = false { didSet { if arranging != oldValue { applyArranging() } } }
+    @Published var arranging = false { didSet { if arranging != oldValue { applyArranging(); scheduleDraw() } } }
+    /// Settings views showing the overlay's settings: it's shown even without a controller while any is open.
+    var previewing = 0 { didSet { scheduleDraw() } }
     /// The controller being shown, by name ("" when none is connected).
     @Published private(set) var showing = ""
 
@@ -598,14 +600,15 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
         let labelsChanged = labels != shownLabels
         let wheel = DesktopPad.shared.wheelState()
         let wheelKey = wheel.map { "\(($0.angle * 2).rounded())|\($0.lock)|\($0.dead)" }
-        guard inputChanged || turned || labelsChanged || wheelKey != shownWheel else { return }
+        // Shown without a controller while it's being moved or its settings are open, to see what's edited.
+        let hidden = settings.hideWithoutController && sources.isEmpty && !arranging && previewing == 0
+        guard inputChanged || turned || labelsChanged || wheelKey != shownWheel || hidden != model.root.isHidden else { return }
         lastDraw = ProcessInfo.processInfo.systemUptime
         SCNTransaction.begin()
         SCNTransaction.disableActions = true
         if inputChanged { model.show(input); shownInput = input }
         if labelsChanged { model.showMappings(labels); shownLabels = labels }
         updateWheel(hidden: model.root.isHidden)
-        let hidden = settings.hideWithoutController && sources.isEmpty
         if model.root.isHidden != hidden { model.root.isHidden = hidden }
         if turned { model.root.simdOrientation = q; shownOrientation = q }
         SCNTransaction.commit()
@@ -746,6 +749,12 @@ struct ControllerOverlaySettingsView: View {
     @ObservedObject private var overlay = ControllerOverlay.shared
 
     var body: some View {
+        content
+            .onAppear { overlay.previewing += 1 }
+            .onDisappear { overlay.previewing = max(0, overlay.previewing - 1) }
+    }
+
+    @ViewBuilder private var content: some View {
         Section("Controller overlay") {
             Picker("Show", selection: $overlay.settings.mode) {
                 ForEach(ControllerOverlaySettings.Mode.allCases, id: \.self) { Text($0.title).tag($0) }
@@ -777,6 +786,7 @@ struct ControllerOverlaySettingsView: View {
                 }
                 if overlay.settings.background == .color { ColorPicker("Background colour", selection: color(\.backgroundColor), supportsOpacity: false) }
                 Toggle("Hide when no controller is connected", isOn: $overlay.settings.hideWithoutController)
+                Text("While these settings are open or the overlay is being moved, it shows anyway, so you can see what you're changing.").font(.caption).foregroundStyle(.secondary)
                 Picker("Show mappings", selection: $overlay.settings.mappings) {
                     ForEach(ControllerOverlaySettings.Mappings.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
