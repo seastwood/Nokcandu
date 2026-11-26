@@ -17,6 +17,7 @@ final class HeadMotionOverlay {
         var dead: Double
         var active: Bool
         var output: PadHeadMotionSettings.Output
+        var sectors: Int = 4
     }
 
     private var state: State?
@@ -68,7 +69,22 @@ final class HeadMotionOverlay {
         }
         // Which directions it presses, from the stick its motion stands in for.
         var around: [String]?, lit = [false, false, false, false]
-        if state.output != .mouse {
+        var radial: [(text: String, lit: Bool)]?
+        if state.output == .directions {
+            // Its own directions: each one's mapping round the circle, the one held lit.
+            let pad = DesktopPad.shared, held = pad.overlayLive().held
+            var items: [(String, Bool)] = []
+            for i in PadHeadDirections.inputs(state.sectors) {
+                var t = ""
+                if let p = pad.overlayProfile, !p.layers.isEmpty {
+                    let layer = min(max(0, pad.overlayLayer), p.layers.count - 1)
+                    if let b = p.layers[layer].bindings[i] ?? p.layers[0].bindings[i], !b.isEmpty { t = PadLabel.text(b, macros: p.macros, menus: p.menus)?.main ?? "" }
+                }
+                items.append((t, held.contains(i)))
+            }
+            radial = items
+            lit = items.map(\.1)
+        } else if state.output != .mouse {
             let side = state.output == .leftStick ? 0 : 1, pad = DesktopPad.shared
             if let p = pad.overlayProfile, !p.layers.isEmpty {
                 let layer = min(max(0, pad.overlayLayer), p.layers.count - 1)
@@ -88,10 +104,11 @@ final class HeadMotionOverlay {
                 lit = [state.y > 0.5, state.y < -0.5, state.x < -0.5, state.x > 0.5]
             }
         }
-        let title = state.output == .mouse ? "Head → mouse" : state.output == .leftStick ? "Head → left stick" : "Head → right stick"
+        let title = state.output == .mouse ? "Head → mouse" : state.output == .leftStick ? "Head → left stick" : state.output == .rightStick ? "Head → right stick" : "Head menu"
+        if let radial { around = radial.map(\.text) }
         if let s = shown, s.0 == state, s.1 == around, s.2 == lit, s.3 == title { return }
         shown = (state, around, lit, title)
-        guard let image = HeadMotionImage.draw(state, around: around, lit: lit, title: title, highlight: highlight, size: size) else { return }
+        guard let image = HeadMotionImage.draw(state, around: around, lit: lit, title: title, highlight: highlight, size: size, radial: radial != nil) else { return }
         if inStream {
             panel?.orderOut(nil)
             streamImage.set(image, device: streamImage.device)
@@ -124,7 +141,7 @@ final class HeadMotionOverlay {
 /// The head-motion picture.
 @MainActor
 enum HeadMotionImage {
-    static func draw(_ s: HeadMotionOverlay.State, around: [String]?, lit: [Bool], title: String, highlight: NSColor, size: CGSize) -> CGImage? {
+    static func draw(_ s: HeadMotionOverlay.State, around: [String]?, lit: [Bool], title: String, highlight: NSColor, size: CGSize, radial: Bool = false) -> CGImage? {
         let scale: CGFloat = 2, w = size.width * scale, h = size.height * scale
         guard let space = CGColorSpace(name: CGColorSpace.sRGB),
               let ctx = CGContext(data: nil, width: Int(w), height: Int(h), bitsPerComponent: 8, bytesPerRow: 0, space: space,
@@ -150,6 +167,29 @@ enum HeadMotionImage {
         let d = max(R * 0.04, R * s.dead)
         ctx.setFillColor(white.withAlphaComponent(0.16).cgColor)
         ctx.fillEllipse(in: CGRect(x: c.x - d, y: c.y - d, width: 2 * d, height: 2 * d))
+        if radial, let names = around, !names.isEmpty {
+            // A radial menu: a wedge per direction (clockwise from up), its mapping in it, the held one lit; the
+            // inner circle is how far to turn to pick one.
+            let n = names.count, width = 2 * Double.pi / Double(n), inner = R * CGFloat(s.dead)
+            for i in 0..<n {
+                let mid = Double.pi / 2 - Double(i) * width          // clockwise from up, in CG's counter-clockwise angles
+                let a0 = mid - width / 2, a1 = mid + width / 2
+                let path = CGMutablePath()
+                path.addArc(center: c, radius: R, startAngle: a0, endAngle: a1, clockwise: false)
+                path.addArc(center: c, radius: inner, startAngle: a1, endAngle: a0, clockwise: true)
+                path.closeSubpath()
+                let on = lit.indices.contains(i) && lit[i]
+                ctx.addPath(path); ctx.setFillColor((on ? highlight.withAlphaComponent(0.6) : white.withAlphaComponent(0.07)).cgColor); ctx.fillPath()
+                ctx.addPath(path); ctx.setStrokeColor(white.withAlphaComponent(0.3).cgColor); ctx.setLineWidth(1.5 * scale); ctx.strokePath()
+                let r = (R + inner) / 2, p = CGPoint(x: c.x + cos(mid) * r, y: c.y + sin(mid) * r)
+                let box = CGRect(x: p.x - w * 0.11, y: p.y - w * 0.06, width: w * 0.22, height: w * 0.12)
+                label(names[i].isEmpty ? "·" : names[i], in: box, size: w * (n == 8 ? 0.065 : 0.085), color: on ? white : white.withAlphaComponent(names[i].isEmpty ? 0.35 : 0.85))
+            }
+            let p = CGPoint(x: c.x + CGFloat(max(-1, min(1, s.x))) * R, y: c.y + CGFloat(max(-1, min(1, s.y))) * R), dot = w * 0.045
+            ctx.setFillColor((s.active ? white : white.withAlphaComponent(0.5)).cgColor)
+            ctx.fillEllipse(in: CGRect(x: p.x - dot, y: p.y - dot, width: 2 * dot, height: 2 * dot))
+            return ctx.makeImage()
+        }
         // Directions it presses, around the edge.
         let spots = [CGPoint(x: c.x, y: c.y + R + w * 0.07), CGPoint(x: c.x, y: c.y - R - w * 0.07),
                      CGPoint(x: c.x - R - w * 0.08, y: c.y), CGPoint(x: c.x + R + w * 0.08, y: c.y)]

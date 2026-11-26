@@ -601,6 +601,7 @@ final class DesktopPad: ObservableObject {
     func menuChanged(_ m: Int, _ slice: Int) {
         if m == Int(PE_RUMBLE_MENU) { rumbleMain(strong: true); return }
         if m == Int(PE_OVERLAY_MENU) { ControllerOverlay.shared.mappingsButton(down: slice == 1); return }
+        if m == Int(PE_HEAD_CENTER_MENU) { PadHeadTracking.shared.recenter(); return }
         if m == Int(PE_KEYBOARD_MENU) {
             let held = Set(lastButtons.filter(\.value).compactMap { PadProfiles.Input(rawValue: String(cString: pe_input_name(Int32($0.key)))) })
             OnScreenKeyboard.shared.type = { DesktopPad.shared.typeText($0) }
@@ -1036,6 +1037,7 @@ final class DesktopPad: ObservableObject {
         return settings.permitsMotion(held: held, layer: name)
     }
     func releaseHeadStick() {
+        headDirection(nil)
         guard headStickActive else { return }
         headStickActive = false
         consume(sourceState.update(source: "head-motion", buttons: [], axes: [:]))
@@ -1045,6 +1047,18 @@ final class DesktopPad: ObservableObject {
         headStickActive = true
         let a = right ? 2 : 0
         consume(sourceState.update(source: "head-motion", buttons: [], axes: [a:Int(max(-1,min(1,x))*32767),a+1:Int(max(-1,min(1,y))*32767)]))
+    }
+    /// Headphone motion as a radial menu: the direction held now (an index into the eight, clockwise from up), or
+    /// none. One at a time, through the mapping engine like any input.
+    private var headHeld: PadProfiles.Input?
+    func headDirection(_ i: Int?) {
+        let next = i.flatMap { PadProfiles.Input.headDirections.indices.contains($0) ? PadProfiles.Input.headDirections[$0] : nil }
+        let want = headMotionAllowed ? next : nil
+        guard want != headHeld, let engine else { return }
+        let now = Self.now()
+        if let old = headHeld { pe_pad_zone(engine, pe_input_named(old.rawValue), false, now) }
+        if let want { pe_pad_zone(engine, pe_input_named(want.rawValue), true, now) }
+        headHeld = want
     }
     func headMovement(_ dx: Int, _ dy: Int) {
         guard headMotionAllowed else { return }

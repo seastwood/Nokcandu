@@ -606,6 +606,7 @@ struct ControllerProfileEditor: View {
         case .calibrate: return "Calib"
         case .rumble: return "Rumble"
         case .overlayMappings: return "Map"
+        case .recenterHead: return "⊕"
         case .nothing: return "—"
         }
     }
@@ -629,7 +630,7 @@ struct ControllerProfileEditor: View {
         case .feedback: feedbackInspector
         case .headMotion:
             PadHeadProfileSettings(settings: headSettingsBinding, profileID: profile.id, layers: merged.layers.map(\.name), family: family,
-                remove: { headSourceBinding.wrappedValue = false }, editStick: { selection = .stick($0) })
+                remove: { headSourceBinding.wrappedValue = false }, editStick: { selection = .stick($0) }, editInput: { AnyView(inputEditor($0)) })
         }
     }
 
@@ -1250,6 +1251,7 @@ struct OutputMenu: View {
         }
         Button("On-screen keyboard") { pick(.keyboard) }
         Button("Show mappings on the overlay") { pick(.overlayMappings) }
+        Button("Recenter head motion") { pick(.recenterHead) }
         if !layers.isEmpty {
             Menu("Layer") {
                 ForEach(layers, id: \.self) { n in

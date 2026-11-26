@@ -33,7 +33,10 @@ enum {
     // sensors: Grip Sense on each grip and a thumb on each stick. Held by the host like buttons (pe_button).
     PE_RPAD_CLICK, PE_LGRIP, PE_RGRIP, PE_LS_TOUCH, PE_RS_TOUCH,
     PE_LPG1, PE_LPG2, PE_LPG3, PE_LPG4, PE_RPG1, PE_RPG2, PE_RPG3, PE_RPG4,
-    PE_INPUTS                               // 90
+    // Headphone motion as a radial menu: the direction the head turns to, clockwise from up (the host holds one
+    // at a time: pe_pad_zone).
+    PE_HM1, PE_HM2, PE_HM3, PE_HM4, PE_HM5, PE_HM6, PE_HM7, PE_HM8,
+    PE_INPUTS                               // 98
 };
 // Axes: SDL2's order. Sticks -32768…32767 (y down), triggers 0…32767.
 enum { PE_AXIS_LX, PE_AXIS_LY, PE_AXIS_RX, PE_AXIS_RY, PE_AXIS_LT, PE_AXIS_RT, PE_AXES };
@@ -107,7 +110,7 @@ double pe_next_deadline(const pe_engine *e);
 bool pe_uses_gyro(const pe_engine *e);
 /// Steering-wheel turn (degrees, right +) from which way is up in the controller's terms (SDL axes).
 double pe_wheel_angle(const double up[3]);
-enum { PE_KEYBOARD_MENU = 255, PE_RUMBLE_MENU = 254, PE_OVERLAY_MENU = 253 };   // PE_OVERLAY_MENU: slice 1 pressed, 0 let go   // sink.menu ids: the on-screen keyboard, a rumble
+enum { PE_KEYBOARD_MENU = 255, PE_RUMBLE_MENU = 254, PE_OVERLAY_MENU = 253, PE_HEAD_CENTER_MENU = 252 };   // PE_OVERLAY_MENU: slice 1 pressed, 0 let go   // sink.menu ids: the on-screen keyboard, a rumble
 /// The touchpad: finger 0 or 1 touching (or lifted), at x, y 0…1 (y down).
 void pe_touch(pe_engine *e, int finger, bool down, float x, float y, double now);
 // A trackpad direction, edge, tap or zone input (PE_LPAD_UP…PE_RPAD_ZC5) held or let go.

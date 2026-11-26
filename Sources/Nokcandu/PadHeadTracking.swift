@@ -39,6 +39,7 @@ final class PadHeadTracking: ObservableObject {
     private var stickTransform = PadHeadStick()
     /// Where the head points for the overlay's head-motion picture, active or not.
     private var shownTransform = PadHeadStick()
+    private var directions = PadHeadDirections()
     private var lastPID: pid_t?
     private func setEnabled(_ on: Bool) {
         sessionID = UUID()
@@ -69,6 +70,13 @@ final class PadHeadTracking: ObservableObject {
                     let (x, y) = self.transform.sample(yaw: motion.attitude.yaw, pitch: motion.attitude.pitch,
                         sensitivity: settings.sensitivity, deadZone: settings.deadZone, smoothing: settings.smoothing, active: active)
                     if x != 0 || y != 0 { DesktopPad.shared.headMovement(settings.invertX ? -x : x, settings.invertY ? -y : y) }
+                } else if settings.output == .directions {
+                    let (x, y) = self.stickTransform.sample(yaw: motion.attitude.yaw, pitch: motion.attitude.pitch,
+                        range: settings.stickRange, deadZone: settings.deadZone, smoothing: settings.smoothing, active: active)
+                    let pick = active ? self.directions.update(x: settings.invertX ? -x : x, y: settings.invertY ? y : -y,
+                                                               sectors: settings.sectors, selectAt: settings.selectAt) : nil
+                    if !active { self.directions.reset() }
+                    DesktopPad.shared.headDirection(pick)
                 } else {
                     let (x,y) = self.stickTransform.sample(yaw:motion.attitude.yaw,pitch:motion.attitude.pitch,
                         range:settings.stickRange,deadZone:settings.deadZone,smoothing:settings.smoothing,active:active)
@@ -79,15 +87,17 @@ final class PadHeadTracking: ObservableObject {
                     let range = settings.output == .mouse ? 0.35 : settings.stickRange
                     let (sx, sy) = self.shownTransform.sample(yaw: motion.attitude.yaw, pitch: motion.attitude.pitch,
                         range: range, deadZone: settings.deadZone, smoothing: 1, active: true)
-                    HeadMotionOverlay.shared.moved(.init(x: settings.invertX ? -sx : sx, y: settings.invertY ? -sy : sy,
-                        dead: min(1, settings.deadZone / max(0.001, range)), active: active, output: settings.output))
+                    // The picture's y is up; the stick's is down.
+                    HeadMotionOverlay.shared.moved(.init(x: settings.invertX ? -sx : sx, y: settings.invertY ? sy : -sy,
+                        dead: settings.output == .directions ? settings.selectAt : min(1, settings.deadZone / max(0.001, range)),
+                        active: active, output: settings.output, sectors: settings.sectors))
                 }
                 let status = self.motionActive ? "Headphone motion active" : "Headphone motion paused / waiting for activation"
                 if self.status != status { self.status = status }
             }
         }
     }
-    func recenter() { transform.recenter(); stickTransform.recenter(); shownTransform.recenter(); DesktopPad.shared.releaseHeadStick() }
+    func recenter() { transform.recenter(); stickTransform.recenter(); shownTransform.recenter(); directions.reset(); DesktopPad.shared.releaseHeadStick() }
 }
 
 struct PadHeadTrackingSettings: View {
@@ -108,17 +118,29 @@ struct PadHeadProfileSettings: View {
     let family: Controllers.Family?
     let remove: () -> Void
     let editStick: (Int) -> Void
+    var editInput: (PadProfiles.Input) -> AnyView = { _ in AnyView(EmptyView()) }
     @ObservedObject private var head = PadHeadTracking.shared
     var body: some View {
         Section("AirPods / Headphones") {
             Toggle("Use head motion in this profile", isOn: $settings.enabled)
-            Text("Head motion can move the mouse or feed this profile’s left/right stick mappings. Requires compatible motion-capable headphones selected by macOS and Motion permission. Adding this source opts this profile in; it starts when this profile becomes active. This does not create a Windows controller or change audio settings.")
+            Text("Head motion can move the mouse, feed this profile’s left/right stick mappings, or work as its own radial menu: each direction you turn to is an input you can set to anything (keys, mouse buttons, macros, layers, with tap, hold and toggle). Requires compatible motion-capable headphones selected by macOS and Motion permission. Adding this source opts this profile in; it starts when this profile becomes active. This does not create a Windows controller or change audio settings.")
                 .font(.caption).foregroundStyle(.secondary)
             if settings.enabled {
                 Picker("Head motion controls",selection:$settings.output) {
                     ForEach(PadHeadMotionSettings.Output.allCases,id: \.self) { Text($0.title).tag($0) }
                 }
-                if settings.output != .mouse {
+                if settings.output == .directions {
+                    Picker("Directions", selection: $settings.sectors) { Text("4").tag(4); Text("8").tag(8) }.pickerStyle(.segmented)
+                    Slider(value: $settings.stickRange, in: 0.05...1) { Text("Head turn for the edge") }
+                    Text(String(format: "Edge of the menu: %.0f°", settings.stickRange * 180 / Double.pi)).font(.caption)
+                    Slider(value: $settings.selectAt, in: 0.15...0.9) { Text("Turn to pick") }
+                    Text(String(format: "A direction is held once you turn %.0f° (%.0f%% of the way out), and let go when you come back.", settings.selectAt * settings.stickRange * 180 / Double.pi, settings.selectAt * 100))
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("Show it with the controller overlay: Settings → Controller overlay → Headphone motion picture.").font(.caption).foregroundStyle(.secondary)
+                    ForEach(PadHeadDirections.inputs(settings.sectors), id: \.self) { i in
+                        DisclosureGroup(i.title(family)) { editInput(i) }
+                    }
+                } else if settings.output != .mouse {
                     Text("Uses the selected stick’s settings and active layer: map its directions to WASD or other keys, macros and actions. For a held radial menu, choose the same stick in the menu, bind a controller button to open it while held, and turn your head to select. Physical stick input combines with head motion; the stronger deflection wins. This is input to Nokcandu’s mapping engine, not a new Windows gamepad.").font(.caption).foregroundStyle(.secondary)
                     Button("Edit \(settings.output == .rightStick ? "right" : "left") stick mappings") { editStick(settings.output == .rightStick ? 1 : 0) }
                     Slider(value:$settings.stickRange,in:0.05...1) { Text("Head turn for full stick") }

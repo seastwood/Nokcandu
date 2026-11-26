@@ -75,3 +75,30 @@ final class OverlayMappingLabelTests: XCTestCase {
         XCTAssertEqual(f.centre, "Mouse")
     }
 }
+
+final class PadHeadDirectionsTests: XCTestCase {
+    func testPicksTheDirectionOnceTurnedFarEnough() {
+        var d = PadHeadDirections()
+        XCTAssertNil(d.update(x: 0.3, y: 0, sectors: 4, selectAt: 0.5))
+        XCTAssertEqual(d.update(x: 0.7, y: 0, sectors: 4, selectAt: 0.5), 2)        // right
+        XCTAssertEqual(d.update(x: 0, y: -0.9, sectors: 4, selectAt: 0.5), 4)       // down
+        XCTAssertEqual(d.update(x: -0.6, y: 0.6, sectors: 8, selectAt: 0.5), 7)     // up left
+    }
+
+    func testHoldsSteadyNearTheEdges() {
+        var d = PadHeadDirections()
+        XCTAssertEqual(d.update(x: 0, y: 0.8, sectors: 4, selectAt: 0.5), 0)
+        // Just past the 45° edge toward the right: still up.
+        let a = 48.0 * .pi / 180
+        XCTAssertEqual(d.update(x: sin(a) * 0.8, y: cos(a) * 0.8, sectors: 4, selectAt: 0.5), 0)
+        // A little under the threshold: still held, then let go further in.
+        XCTAssertEqual(d.update(x: 0, y: 0.45, sectors: 4, selectAt: 0.5), 0)
+        XCTAssertNil(d.update(x: 0, y: 0.3, sectors: 4, selectAt: 0.5))
+    }
+
+    func testHeadDirectionsAreMappableInputs() {
+        XCTAssertTrue(PadProfiles.Input.hm3.isVirtual)
+        XCTAssertEqual(PadHeadDirections.inputs(4), [.hm1, .hm3, .hm5, .hm7])
+        XCTAssertEqual(PadProfiles.Input.hm8.title(nil), "Head up left")
+    }
+}

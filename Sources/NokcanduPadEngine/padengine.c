@@ -41,7 +41,7 @@
 #define MAX_MENUS 8
 
 enum { O_NONE, O_PAD, O_TRIG, O_KEY, O_MOUSE, O_WHEEL, O_GYRO_ON, O_GYRO_OFF, O_GYRO_TOGGLE, O_LAYER_HOLD, O_LAYER_TOGGLE,
-       O_MACRO, O_MENU, O_KEYBOARD, O_CALIBRATE, O_RUMBLE, O_KEY_TOGGLE, O_MOUSE_TOGGLE, O_PAD_TOGGLE, O_TRIG_TOGGLE, O_OVERLAY };
+       O_MACRO, O_MENU, O_KEYBOARD, O_CALIBRATE, O_RUMBLE, O_KEY_TOGGLE, O_MOUSE_TOGGLE, O_PAD_TOGGLE, O_TRIG_TOGGLE, O_OVERLAY, O_HEAD_CENTER };
 typedef struct { unsigned char kind; short code; } out_t;
 typedef struct { out_t o[MAX_OUTS]; int n; } outs_t;
 typedef struct {
@@ -195,7 +195,8 @@ static const char *input_names[PE_INPUTS] = {
     "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpc1", "lpc2", "lpc3", "lpc4", "lpc5",
     "rpt1", "rpt2", "rpt3", "rpt4", "rpt5", "rpc1", "rpc2", "rpc3", "rpc4", "rpc5",
     "rpclick", "lgrip", "rgrip", "lstouch", "rstouch",
-    "lpg1", "lpg2", "lpg3", "lpg4", "rpg1", "rpg2", "rpg3", "rpg4"
+    "lpg1", "lpg2", "lpg3", "lpg4", "rpg1", "rpg2", "rpg3", "rpg4",
+    "hm1", "hm2", "hm3", "hm4", "hm5", "hm6", "hm7", "hm8"
 };
 static int dev_in(int slot, int k) { return PE_INPUTS + (slot - 1) * PE_DEV_INPUTS + k; }
 enum { K_HAT = PE_DEV_BUTTONS, K_AXIS = PE_DEV_BUTTONS + 4 };
@@ -240,6 +241,7 @@ static bool parse_out(const char *s, out_t *o) {
     if (!strcmp(buf, "none")) { o->kind = O_NONE; return true; }
     if (!strcmp(buf, "keyboard")) { o->kind = O_KEYBOARD; return true; }
     if (!strcmp(buf, "overlay")) { o->kind = O_OVERLAY; return true; }
+    if (!strcmp(buf, "headcenter")) { o->kind = O_HEAD_CENTER; return true; }
     if (!strcmp(buf, "calibrate")) { o->kind = O_CALIBRATE; return true; }
     if (!strcmp(buf, "rumble")) { o->kind = O_RUMBLE; return true; }
     if (!v) return false;
@@ -561,6 +563,7 @@ static void out_set(pe_engine *e, out_t o, bool down) {
     case O_CALIBRATE: if (down) pe_calibrate(e, e->last_tick); break;
     case O_RUMBLE: if (down && e->sink.menu) e->sink.menu(e->sink.ctx, PE_RUMBLE_MENU, 1); break;
     case O_OVERLAY: if (e->sink.menu) e->sink.menu(e->sink.ctx, PE_OVERLAY_MENU, down ? 1 : 0); break;
+    case O_HEAD_CENTER: if (down && e->sink.menu) e->sink.menu(e->sink.ctx, PE_HEAD_CENTER_MENU, 1); break;
     default: break;
     }
     if (o.kind == O_LAYER_HOLD || o.kind == O_LAYER_TOGGLE) apply_layers(e);

@@ -38,6 +38,7 @@ public enum PadLabel {
         case .calibrate: return "◎"
         case .rumble: return "≋"
         case .overlayMappings: return "Map"
+        case .recenterHead: return "⊕"
         case .nothing: return "–"
         }
     }

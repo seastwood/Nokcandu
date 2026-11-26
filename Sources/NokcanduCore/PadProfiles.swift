@@ -29,10 +29,13 @@ public enum PadProfiles {
         /// and a thumb resting on each stick. Inputs to set, never controller buttons sent on to games.
         case rpclick, lgrip, rgrip, lstouch, rstouch
         case lpg1, lpg2, lpg3, lpg4, rpg1, rpg2, rpg3, rpg4
+        /// Headphone motion as a radial menu: where the head turns, clockwise from up (four use 1, 3, 5, 7).
+        case hm1, hm2, hm3, hm4, hm5, hm6, hm7, hm8
+        public static let headDirections: [Input] = [.hm1, .hm2, .hm3, .hm4, .hm5, .hm6, .hm7, .hm8]
         public static let touchSensors: Set<Input> = [.rpclick, .lgrip, .rgrip, .lstouch, .rstouch]
         public var id: String { rawValue }
         /// Not a button on the controller: a stick direction, a touchpad zone or a tilt.
-        public var isVirtual: Bool { isStickDirection || Self.touchZones.contains(self) || Self.tilts.contains(self) || Self.padZones.contains(self) || self == .lptap || self == .rptap || Self.padZoneInputs.contains(self) || Self.touchSensors.contains(self) || Self.gestureInputs.contains(self) }
+        public var isVirtual: Bool { isStickDirection || Self.touchZones.contains(self) || Self.tilts.contains(self) || Self.padZones.contains(self) || self == .lptap || self == .rptap || Self.padZoneInputs.contains(self) || Self.touchSensors.contains(self) || Self.gestureInputs.contains(self) || Self.headDirections.contains(self) }
         /// Zone `n` (0-based) of a pad: its tap, and its click.
         public static func padZoneTap(_ side: Int, _ n: Int) -> Input { (side == 0 ? [Input.lpt1, .lpt2, .lpt3, .lpt4, .lpt5] : [.rpt1, .rpt2, .rpt3, .rpt4, .rpt5])[min(4, max(0, n))] }
         public static func padZoneClick(_ side: Int, _ n: Int) -> Input { (side == 0 ? [Input.lpc1, .lpc2, .lpc3, .lpc4, .lpc5] : [.rpc1, .rpc2, .rpc3, .rpc4, .rpc5])[min(4, max(0, n))] }
@@ -72,6 +75,8 @@ public enum PadProfiles {
             case (.lpg3, _): "Left pad gesture 3"; case (.lpg4, _): "Left pad gesture 4"
             case (.rpg1, _): "Right pad gesture 1"; case (.rpg2, _): "Right pad gesture 2"
             case (.rpg3, _): "Right pad gesture 3"; case (.rpg4, _): "Right pad gesture 4"
+            case (.hm1, _): "Head up"; case (.hm2, _): "Head up right"; case (.hm3, _): "Head right"; case (.hm4, _): "Head down right"
+            case (.hm5, _): "Head down"; case (.hm6, _): "Head down left"; case (.hm7, _): "Head left"; case (.hm8, _): "Head up left"
             case (.rpclick, _): "Right trackpad click"
             case (.lgrip, _): "Left Grip Sense"; case (.rgrip, _): "Right Grip Sense"
             case (.lstouch, _): "Left stick touched"; case (.rstouch, _): "Right stick touched"
@@ -133,6 +138,7 @@ public enum PadProfiles {
         case calibrate                                  // measure the gyro's resting drift now
         case rumble                                     // buzz the controller
         case overlayMappings                            // the controller overlay shows what buttons do
+        case recenterHead                               // headphone motion: where the head points now is the centre
         case nothing
 
         /// Outputs that can remain down between two physical presses.
@@ -173,6 +179,7 @@ public enum PadProfiles {
             case .layerHold(let n): "layerhold:\(n)"; case .layerToggle(let n): "layertoggle:\(n)"
             case .macro(let id): "macro:\(id)"; case .menu(let id): "menu:\(id)"; case .keyboard: "keyboard"; case .calibrate: "calibrate"; case .rumble: "rumble"
             case .overlayMappings: "overlay"
+            case .recenterHead: "headcenter"
             case .nothing: "none"
             }
         }
@@ -187,6 +194,7 @@ public enum PadProfiles {
             case "calibrate": self = .calibrate
             case "rumble": self = .rumble
             case "overlay": self = .overlayMappings
+            case "headcenter": self = .recenterHead
             case "trig": self = .trigger(right: v == "r")
             case "padtoggle": guard let i = Input(rawValue: v), Input.padButtons.contains(i) else { return nil }; self = .padToggle(i)
             case "trigtoggle": guard v == "l" || v == "r" else { return nil }; self = .triggerToggle(right: v == "r")
@@ -237,6 +245,7 @@ public enum PadProfiles {
             case .layerHold(let n): "\(n) while held"; case .layerToggle(let n): "\(n) on/off"
             case .macro: "Macro"; case .menu: "On-screen menu"; case .keyboard: "On-screen keyboard"; case .calibrate: "Calibrate the gyro"; case .rumble: "Rumble"
             case .overlayMappings: "Show mappings on the overlay"
+            case .recenterHead: "Recenter head motion"
             case .nothing: "Nothing"
             }
         }
@@ -693,7 +702,7 @@ public enum PadProfiles {
         /// How strongly games' own rumble plays when Nokcandu plays it (controllers SDL can't rumble, like the original
         /// Steam Controller's trackpads): 0 off … 1 as the game asks. nil: `defaultGameRumble`.
         public var gameRumble: Double?
-        public static let defaultGameRumble = 0.6
+        public static let defaultGameRumble = 0.01
         public init(id: String = UUID().uuidString, name: String, buildsOn: [String] = [], layers: [Layer] = [Layer(id: "base", name: "Base")],
                     leftStick: Stick? = nil, rightStick: Stick? = nil, gyro: Gyro? = nil, triggers: Triggers? = nil) {
             self.id = id; self.name = name; self.buildsOn = buildsOn; self.layers = layers.isEmpty ? [Layer(id: "base", name: "Base")] : layers
