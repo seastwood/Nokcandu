@@ -821,7 +821,8 @@ final class DesktopPad: ObservableObject {
                       bound(PadProfiles.Input.padZoneTap(side, z)) else { return nil }
                 return 0.2
             }
-            switch steamTaps[side].update(down: touching && settings.mode != .gestures, x: Double(pad.x), y: Double(pad.y), at: now, holdAfter: holdZone) {
+            // Buttons mode holds the zone under the finger instead (steamPadZones): no taps on top of it.
+            switch steamTaps[side].update(down: touching && settings.mode != .gestures && settings.mode != .buttons, x: Double(pad.x), y: Double(pad.y), at: now, holdAfter: holdZone) {
             case .press:
                 let input = PadSteamZoneRouter.tap(side: side, x: steamTaps[side].startX, y: steamTaps[side].startY, settings: settings, bound: bound)
                 steamTapInputs[side] = input; pe_pad_zone(e, pe_input_named(input.rawValue), true, now)

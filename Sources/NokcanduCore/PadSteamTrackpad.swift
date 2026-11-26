@@ -2,11 +2,12 @@ import Foundation
 
 public struct PadSteamTrackpadSettings: Codable, Hashable, Sendable {
     public enum Mode: String, Codable, CaseIterable, Sendable {
-        case existing, mouse, trackball, directions, stick, velocityStick, dial, absolute, gestures
+        case existing, mouse, trackball, directions, stick, velocityStick, dial, absolute, gestures, buttons
         /// The pad moves the pointer itself (rather than acting as mappings or directions).
         public var movesPointer: Bool { self == .mouse || self == .trackball }
         public var title: String { switch self {
         case .directions: "Four directions"
+        case .buttons: "Buttons (zones you set)"
         case .stick: "Analog stick"
         case .velocityStick: "Mouse-like stick"
         case .absolute: "Absolute mouse region"
@@ -551,6 +552,10 @@ public struct PadSteamPadZones {
         var next: Set<PadProfiles.Input> = []
         let edgeInput = PadProfiles.Input.padEdge(side), edge = Self.edgeSize(settings)
         if edge > 0, radius >= 1 - edge - (held.contains(edgeInput) ? 0.04 : 0) { next.insert(edgeInput) }
+        if settings.mode == .buttons, let layout = settings.zoneLayout, let z = layout.zone(x: x, y: y, rotation: settings.rotation) {
+            // Buttons: the zone under the finger is held while it's there (a key, a mouse button, anything set).
+            next.insert(PadProfiles.Input.padZoneTap(side, z))
+        }
         if settings.mode == .directions {
             let d = PadProfiles.Input.padDirections(side), dead = Self.deadzone(settings)
             let moving = !held.isDisjoint(with: d)
@@ -633,11 +638,12 @@ public struct PadSteamTap {
 
 /// How a trackpad is divided for zone taps and clicks.
 public enum PadSteamZoneLayout: String, Codable, CaseIterable, Sendable {
-    case off, leftRight, topBottom, quadrants, cross
+    case off, leftRight, topBottom, quadrants, cross, ring4, ring6, ring8
     public var title: String {
         switch self {
         case .off: "No zones"; case .leftRight: "Left and right halves"; case .topBottom: "Top and bottom halves"
         case .quadrants: "Four corners"; case .cross: "Centre and four sides"
+        case .ring4: "Radial: four (up, right, down, left)"; case .ring6: "Radial: six"; case .ring8: "Radial: eight"
         }
     }
     public var names: [String] {
@@ -645,8 +651,15 @@ public enum PadSteamZoneLayout: String, Codable, CaseIterable, Sendable {
         case .off: []; case .leftRight: ["Left", "Right"]; case .topBottom: ["Top", "Bottom"]
         case .quadrants: ["Top left", "Top right", "Bottom left", "Bottom right"]
         case .cross: ["Centre", "Top", "Bottom", "Left", "Right"]
+        case .ring4: ["Up", "Right", "Down", "Left"]
+        case .ring6: ["Top", "Top right", "Bottom right", "Bottom", "Bottom left", "Top left"]
+        case .ring8: ["Up", "Up right", "Right", "Down right", "Down", "Down left", "Left", "Up left"]
         }
     }
+    /// Radial layouts: how many slices, clockwise from the top (nil for the others).
+    public var slices: Int? { switch self { case .ring4: 4; case .ring6: 6; case .ring8: 8; default: nil } }
+    /// Radial layouts leave the middle free, so resting a thumb there presses nothing.
+    public static let ringCentre = 0.3
     /// The zone (0-based) under a finger at the pad's −1…1 (y up), after the pad angle; nil off the pad.
     public func zone(x: Double, y: Double, rotation: Double? = nil) -> Int? {
         guard self != .off, x.isFinite, y.isFinite else { return nil }
@@ -663,6 +676,11 @@ public enum PadSteamZoneLayout: String, Codable, CaseIterable, Sendable {
         case .cross:
             if (px * px + py * py).squareRoot() < 0.35 { return 0 }
             return abs(py) >= abs(px) ? (py >= 0 ? 1 : 2) : (px < 0 ? 3 : 4)
+        case .ring4, .ring6, .ring8:
+            guard let n = slices, (px * px + py * py).squareRoot() >= Self.ringCentre else { return nil }
+            let a = (atan2(px, py) * 180 / Double.pi + 360).truncatingRemainder(dividingBy: 360)   // clockwise from up
+            let w = 360 / Double(n)
+            return Int(((a + w / 2) / w).rounded(.down)) % n
         }
     }
 }

@@ -53,6 +53,9 @@ public struct OverlayPadFace: Equatable, Sendable {
                                       (sector(225, half: 45, inner: 0), (225, 0.55)), (sector(315, half: 45, inner: 0), (315, 0.55))]
             case .cross: parts = [(.disc(radius: 0.35), (0, 0)), (sector(90, half: 45, inner: 0.35), (90, 0.66)), (sector(270, half: 45, inner: 0.35), (270, 0.66)),
                                   (sector(180, half: 45, inner: 0.35), (180, 0.66)), (sector(0, half: 45, inner: 0.35), (0, 0.66))]
+            case .ring4, .ring6, .ring8:
+                let n = layout.slices ?? 4, w = 360.0 / Double(n), inner = PadSteamZoneLayout.ringCentre
+                parts = (0..<n).map { k in let c = 90 - Double(k) * w; return (sector(c, half: w / 2, inner: inner), (c, 0.66)) }
             }
             for (n, p) in parts.enumerated() {
                 let tap = PadProfiles.Input.padZoneTap(side, n), click = PadProfiles.Input.padZoneClick(side, n)
@@ -78,7 +81,7 @@ public struct OverlayPadFace: Equatable, Sendable {
         case .dial: f.centre = "⟳ Scroll"
         case .absolute: f.centre = "Region"
         case .gestures: f.centre = "Draw"
-        case .directions, .existing: break
+        case .directions, .existing, .buttons: break
         }
         if f.regions.isEmpty, f.centre == nil, let tap = label(.padTap(side)) { f.centre = tap.main }
         f.click = label(clickInput)

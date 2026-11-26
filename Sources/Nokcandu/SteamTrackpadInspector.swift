@@ -39,6 +39,8 @@ extension ControllerProfileEditor {
                     // Into the layer being edited, so setting this up in a layer doesn't add keys to the base layer.
                     for (input, key) in zip(directions, side == 0 ? [13, 1, 0, 2] : [126, 125, 123, 124]) { profile.layers[layerIndex][input] = .as(.key(key)) }
                 }
+                // Buttons start as a four-way radial, like a D-pad, ready to set.
+                if mode == .buttons, (settings.wrappedValue.zoneLayout ?? .off) == .off { settings.wrappedValue.zoneLayout = .ring4 }
             })) {
                 Text(side == 0 ? "Existing touchpad settings" : family == .steam2026 ? "Right stick, as it is (alongside the joystick)" : "Joystick settings").tag(PadSteamTrackpadSettings.Mode.existing)
                 Text("Trackpad mouse").tag(PadSteamTrackpadSettings.Mode.mouse)
@@ -46,6 +48,7 @@ extension ControllerProfileEditor {
                 Text(side == 0 ? "Four directions (W A S D…)" : "Four directions (arrows…)").tag(PadSteamTrackpadSettings.Mode.directions)
                 Text(side == 0 ? "Analog stick (left stick)" : "Analog stick (right stick)").tag(PadSteamTrackpadSettings.Mode.stick)
                 Text(side == 0 ? "Mouse-like stick (left stick)" : "Mouse-like stick (right stick)").tag(PadSteamTrackpadSettings.Mode.velocityStick)
+                Text("Buttons (zones you set)").tag(PadSteamTrackpadSettings.Mode.buttons)
                 Text("Scroll wheel (circle)").tag(PadSteamTrackpadSettings.Mode.dial)
                 Text("Absolute mouse region").tag(PadSteamTrackpadSettings.Mode.absolute)
                 Text("Drawn gestures").tag(PadSteamTrackpadSettings.Mode.gestures)
@@ -184,8 +187,9 @@ extension ControllerProfileEditor {
             }
         }
         Section {
-            Picker("Zones", selection: Binding(get: { settings.wrappedValue.zoneLayout ?? .off }, set: { settings.wrappedValue.zoneLayout = $0 == .off ? nil : $0 })) {
-                ForEach(PadSteamZoneLayout.allCases, id: \.self) { Text($0.title).tag($0) }
+            let buttons = settings.wrappedValue.mode == .buttons
+            Picker(buttons ? "Layout" : "Zones", selection: Binding(get: { settings.wrappedValue.zoneLayout ?? .off }, set: { settings.wrappedValue.zoneLayout = $0 == .off ? nil : $0 })) {
+                ForEach(PadSteamZoneLayout.allCases.filter { !buttons || $0 != .off }, id: \.self) { Text($0.title).tag($0) }
             }
             let layout = settings.wrappedValue.zoneLayout ?? .off
             if layout != .off {
@@ -194,13 +198,17 @@ extension ControllerProfileEditor {
                 }
                 .pickerStyle(.segmented)
                 let n = min(padZoneShown, layout.names.count - 1)
-                LabeledContent("Tap") { EmptyView() }
+                LabeledContent(buttons ? "While touched" : "Tap") { EmptyView() }
                 inputEditor(PadProfiles.Input.padZoneTap(side, n))
                 LabeledContent("Click") { EmptyView() }
                 inputEditor(PadProfiles.Input.padZoneClick(side, n))
             }
-        } header: { Text("Zones") } footer: {
+        } header: { Text(settings.wrappedValue.mode == .buttons ? "Buttons" : "Zones") } footer: {
+            if settings.wrappedValue.mode == .buttons {
+                Text("The pad is only these buttons: the one under your thumb is held while it's there (slide to another and that one's held instead), and clicking presses its Click. Set each to a key, mouse button, controller button, layer, macro or anything else. Radial layouts leave the middle free.").font(.caption).foregroundStyle(.secondary)
+            } else {
             Text("Divide the pad so a tap, double tap or click in each part does something of its own, whatever the pad's behavior. A zone with nothing set uses the pad's ordinary tap or click. The zones turn with the pad angle and show on the picture.").font(.caption).foregroundStyle(.secondary)
+            }
         }
         if settings.wrappedValue.mode == .directions {
             ForEach(PadProfiles.Input.padDirections(side), id: \.self) { input in

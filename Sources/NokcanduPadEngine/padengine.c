@@ -207,7 +207,8 @@ static const char *input_names[PE_INPUTS] = {
     "rpclick", "lgrip", "rgrip", "lstouch", "rstouch",
     "lpg1", "lpg2", "lpg3", "lpg4", "rpg1", "rpg2", "rpg3", "rpg4",
     "hm1", "hm2", "hm3", "hm4", "hm5", "hm6", "hm7", "hm8",
-    "lsring", "rsring"
+    "lsring", "rsring",
+    "lpt6", "lpt7", "lpt8", "lpc6", "lpc7", "lpc8", "rpt6", "rpt7", "rpt8", "rpc6", "rpc7", "rpc8"
 };
 static int dev_in(int slot, int k) { return PE_INPUTS + (slot - 1) * PE_DEV_INPUTS + k; }
 enum { K_HAT = PE_DEV_BUTTONS, K_AXIS = PE_DEV_BUTTONS + 4 };

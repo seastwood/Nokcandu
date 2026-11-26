@@ -365,6 +365,15 @@ struct SteamPadZoneLines: View {
                         p.move(to: CGPoint(x: r + dx * c / 2.squareRoot(), y: r + dy * c / 2.squareRoot()))
                         p.addLine(to: CGPoint(x: r + dx * k, y: r + dy * k))
                     }
+                case .ring4, .ring6, .ring8:
+                    // A free middle, and spokes between the slices (clockwise from the top).
+                    let n = layout.slices ?? 4, c = r * CGFloat(PadSteamZoneLayout.ringCentre), w = 2 * Double.pi / Double(n)
+                    p.addEllipse(in: CGRect(x: r - c, y: r - c, width: c * 2, height: c * 2))
+                    for k in 0..<n {
+                        let a = Double(k) * w + w / 2          // a boundary, clockwise from up
+                        let dx = CGFloat(sin(a)), dy = CGFloat(-cos(a))
+                        p.move(to: CGPoint(x: r + dx * c, y: r + dy * c)); p.addLine(to: CGPoint(x: r + dx * r * 0.98, y: r + dy * r * 0.98))
+                    }
                 }
             }
             .stroke(Color.orange.opacity(0.7), style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
@@ -397,6 +406,9 @@ struct SteamPadZoneLines: View {
         case .topBottom: return CGSize(width: 0, height: n == 0 ? -d : d)
         case .quadrants: return CGSize(width: n % 2 == 0 ? -d * 0.75 : d * 0.75, height: n < 2 ? -d * 0.75 : d * 0.75)
         case .cross: return [CGSize.zero, CGSize(width: 0, height: -d * 1.1), CGSize(width: 0, height: d * 1.1), CGSize(width: -d * 1.1, height: 0), CGSize(width: d * 1.1, height: 0)][min(4, n)]
+        case .ring4, .ring6, .ring8:
+            let a = Double(n) * 2 * Double.pi / Double(layout.slices ?? 4), m = r * 0.66
+            return CGSize(width: CGFloat(sin(a)) * m, height: -CGFloat(cos(a)) * m)
         }
     }
 }

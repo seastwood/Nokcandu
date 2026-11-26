@@ -38,7 +38,10 @@ enum {
     PE_HM1, PE_HM2, PE_HM3, PE_HM4, PE_HM5, PE_HM6, PE_HM7, PE_HM8,
     // A stick pushed past its outer ring (the stick's `ring`), held like a button while it's out there.
     PE_LS_RING, PE_RS_RING,
-    PE_INPUTS                               // 100
+    // More pad zones (radial layouts of six and eight slices), taps then clicks, left pad then right.
+    PE_LPAD_ZT6, PE_LPAD_ZT7, PE_LPAD_ZT8, PE_LPAD_ZC6, PE_LPAD_ZC7, PE_LPAD_ZC8,
+    PE_RPAD_ZT6, PE_RPAD_ZT7, PE_RPAD_ZT8, PE_RPAD_ZC6, PE_RPAD_ZC7, PE_RPAD_ZC8,
+    PE_INPUTS                               // 112
 };
 // Axes: SDL2's order. Sticks -32768…32767 (y down), triggers 0…32767.
 enum { PE_AXIS_LX, PE_AXIS_LY, PE_AXIS_RX, PE_AXIS_RY, PE_AXIS_LT, PE_AXIS_RT, PE_AXES };

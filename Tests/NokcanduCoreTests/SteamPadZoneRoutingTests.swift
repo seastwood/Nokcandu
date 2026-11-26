@@ -10,7 +10,7 @@ final class SteamPadZoneRoutingTests: XCTestCase {
         XCTAssertEqual([(-0.5, 0.5), (0.5, 0.5), (-0.5, -0.5), (0.5, -0.5)].map { PadSteamZoneLayout.quadrants.zone(x: $0.0, y: $0.1) }, [0, 1, 2, 3])
         XCTAssertEqual([(0.1, 0.1), (0, 0.7), (0, -0.7), (-0.7, 0), (0.7, 0)].map { PadSteamZoneLayout.cross.zone(x: $0.0, y: $0.1) }, [0, 1, 2, 3, 4])
         XCTAssertNil(PadSteamZoneLayout.off.zone(x: 0, y: 0))
-        XCTAssertEqual(PadSteamZoneLayout.allCases.map { $0.names.count }, [0, 2, 2, 4, 5])
+        XCTAssertEqual(PadSteamZoneLayout.allCases.map { $0.names.count }, [0, 2, 2, 4, 5, 4, 6, 8])
         // Zones turn with the pad angle: just right of the top, turned 30°, lands left of the divider.
         XCTAssertEqual(PadSteamZoneLayout.leftRight.zone(x: 0.1, y: 0.8, rotation: 30), 0)
         XCTAssertEqual(PadSteamZoneLayout.leftRight.zone(x: 0.1, y: 0.8), 1)

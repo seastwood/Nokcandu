@@ -33,6 +33,8 @@ public enum PadProfiles {
         case hm1, hm2, hm3, hm4, hm5, hm6, hm7, hm8
         /// A stick pushed past its outer ring (Stick.ring), held while it's out there (walk, and run at the edge).
         case lsring, rsring
+        /// More pad zones (radial layouts of six and eight slices): taps (t) and clicks (c) 6 to 8.
+        case lpt6, lpt7, lpt8, lpc6, lpc7, lpc8, rpt6, rpt7, rpt8, rpc6, rpc7, rpc8
         public static func stickRing(_ s: Int) -> Input { s == 0 ? .lsring : .rsring }
         public static let headDirections: [Input] = [.hm1, .hm2, .hm3, .hm4, .hm5, .hm6, .hm7, .hm8]
         public static let touchSensors: Set<Input> = [.rpclick, .lgrip, .rgrip, .lstouch, .rstouch]
@@ -40,9 +42,14 @@ public enum PadProfiles {
         /// Not a button on the controller: a stick direction, a touchpad zone or a tilt.
         public var isVirtual: Bool { isStickDirection || Self.touchZones.contains(self) || Self.tilts.contains(self) || Self.padZones.contains(self) || self == .lptap || self == .rptap || Self.padZoneInputs.contains(self) || Self.touchSensors.contains(self) || Self.gestureInputs.contains(self) || Self.headDirections.contains(self) || self == .lsring || self == .rsring }
         /// Zone `n` (0-based) of a pad: its tap, and its click.
-        public static func padZoneTap(_ side: Int, _ n: Int) -> Input { (side == 0 ? [Input.lpt1, .lpt2, .lpt3, .lpt4, .lpt5] : [.rpt1, .rpt2, .rpt3, .rpt4, .rpt5])[min(4, max(0, n))] }
-        public static func padZoneClick(_ side: Int, _ n: Int) -> Input { (side == 0 ? [Input.lpc1, .lpc2, .lpc3, .lpc4, .lpc5] : [.rpc1, .rpc2, .rpc3, .rpc4, .rpc5])[min(4, max(0, n))] }
-        public static let padZoneInputs: Set<Input> = Set((0..<2).flatMap { s in (0..<5).flatMap { [padZoneTap(s, $0), padZoneClick(s, $0)] } })
+        public static let maxPadZones = 8
+        public static func padZoneTap(_ side: Int, _ n: Int) -> Input {
+            (side == 0 ? [Input.lpt1, .lpt2, .lpt3, .lpt4, .lpt5, .lpt6, .lpt7, .lpt8] : [.rpt1, .rpt2, .rpt3, .rpt4, .rpt5, .rpt6, .rpt7, .rpt8])[min(7, max(0, n))]
+        }
+        public static func padZoneClick(_ side: Int, _ n: Int) -> Input {
+            (side == 0 ? [Input.lpc1, .lpc2, .lpc3, .lpc4, .lpc5, .lpc6, .lpc7, .lpc8] : [.rpc1, .rpc2, .rpc3, .rpc4, .rpc5, .rpc6, .rpc7, .rpc8])[min(7, max(0, n))]
+        }
+        public static let padZoneInputs: Set<Input> = Set((0..<2).flatMap { s in (0..<maxPadZones).flatMap { [padZoneTap(s, $0), padZoneClick(s, $0)] } })
         public static func padGesture(_ side: Int, _ n: Int) -> Input { (side == 0 ? [Input.lpg1, .lpg2, .lpg3, .lpg4] : [.rpg1, .rpg2, .rpg3, .rpg4])[max(0, min(3, n))] }
         public static let gestureInputs = Set((0..<2).flatMap { side in (0..<4).map { padGesture(side, $0) } })
         public static func padTap(_ side: Int) -> Input { side == 0 ? .lptap : .rptap }
