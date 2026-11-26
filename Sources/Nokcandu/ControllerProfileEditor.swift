@@ -720,6 +720,12 @@ struct ControllerProfileEditor: View {
                 slider("Flick time", st.flickTime, 0...0.3, "%.2f s")
             case .scroll:
                 slider("Speed", Binding(get: { st.wrappedValue.scrollSpeed ?? 20 }, set: { var v = st.wrappedValue; v.scrollSpeed = $0; st.wrappedValue = v }), 2...80, "%.0f lines/s")
+            case .directions:
+                Toggle("Up and down scroll", isOn: Binding(get: { st.wrappedValue.directionsScroll == true }, set: { var v = st.wrappedValue; v.directionsScroll = $0 ? true : nil; st.wrappedValue = v }))
+                    .help("Pushing up or down scrolls smoothly, faster the further it's pushed; left and right stay set on their own below.")
+                if st.wrappedValue.directionsScroll == true {
+                    slider("Scrolling speed", Binding(get: { st.wrappedValue.scrollSpeed ?? 20 }, set: { var v = st.wrappedValue; v.scrollSpeed = $0; st.wrappedValue = v }), 2...80, "%.0f lines/s")
+                }
             case .keys:
                 ForEach(0..<4, id: \.self) { k in
                     let key = Binding(get: { st.wrappedValue.keys.indices.contains(k) ? st.wrappedValue.keys[k] : 13 },
@@ -743,11 +749,13 @@ struct ControllerProfileEditor: View {
             if st.wrappedValue.mode == .flick {
                 Text("Push the stick to the edge to turn to face that way; rotate it around the edge to keep turning. Pairs well with gyro aim.").font(.caption).foregroundStyle(.secondary)
             } else if st.wrappedValue.mode == .directions {
-                Text("Each direction works like a button: a key, a mouse button, a controller button, tap and hold, layers… Diagonals press both.").font(.caption).foregroundStyle(.secondary)
+                Text(st.wrappedValue.directionsScroll == true ? "Up and down scroll; left and right each work like a button (a key, a mouse button, tap and hold, layers…) while the stick is pushed mostly sideways." : "Each direction works like a button: a key, a mouse button, a controller button, scrolling, tap and hold, layers… Diagonals press both.").font(.caption).foregroundStyle(.secondary)
+            } else if st.wrappedValue.mode == .keys {
+                Text("For anything other than keys (scrolling, mouse buttons, different things per direction), choose \"Four directions, each set on its own\".").font(.caption).foregroundStyle(.secondary)
             }
         }
         if st.wrappedValue.mode == .directions {
-            ForEach(PadProfiles.Input.stickDirections(s), id: \.self) { d in
+            ForEach(PadProfiles.Input.stickDirections(s).filter { st.wrappedValue.directionsScroll != true || [PadProfiles.Input.lsleft, .lsright, .rsleft, .rsright].contains($0) }, id: \.self) { d in
                 Section(["Up", "Down", "Left", "Right"][PadProfiles.Input.stickDirections(s).firstIndex(of: d) ?? 0]) {
                     BindingEditor(binding: bindingFor(d), input: d, family: family, layers: profile.layers.dropFirst().map(\.name),
                                   inLayer: layerIndex > 0, inherited: profile.layers[layerIndex][d] == nil ? inherited(d).map(describe) : nil, sameTitle: "Nothing")

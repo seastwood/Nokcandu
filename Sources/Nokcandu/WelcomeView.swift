@@ -159,7 +159,13 @@ struct FeatureChoices: View {
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: feature.symbol).frame(width: 24).foregroundStyle(.tint)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(feature.title).font(.body.weight(.semibold))
+                        HStack(spacing: 6) {
+                            Text(feature.title).font(.body.weight(.semibold))
+                            Text(feature.stability).font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 6).padding(.vertical, 1)
+                                .foregroundStyle(feature.isExperimental ? Color.orange : Color.green)
+                                .background(Capsule().fill((feature.isExperimental ? Color.orange : Color.green).opacity(0.15)))
+                        }
                         Text(feature.detail).font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }.frame(maxWidth: .infinity, alignment: .leading)

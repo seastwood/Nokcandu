@@ -9,6 +9,7 @@ public struct PadVelocityStick: Sendable {
     public static let defaultFullSpeed = 1.5
     /// How quickly the speed reading follows the finger (seconds).
     static let response = 0.02
+    public static let responseMS = 20.0
     private var lastX = 0.0, lastY = 0.0
     private var lastReport: Double?, lastTick: Double?
     private var touching = false, coasting = false
@@ -41,7 +42,7 @@ public struct PadVelocityStick: Sendable {
         let step = min(dt, 0.05)
         // The pad is 2 units across: half the change is in pad widths.
         let ix = (p.x - lastX) / 2 / step, iy = (p.y - lastY) / 2 / step
-        let a = 1 - exp(-step / Self.response)
+        let a = 1 - exp(-step / Self.response(settings))
         vx += (ix - vx) * a; vy += (iy - vy) * a
         lastX = p.x; lastY = p.y; lastReport = now
     }
@@ -55,13 +56,22 @@ public struct PadVelocityStick: Sendable {
         let dt = min(now - previous, 0.1)
         if touching {
             guard let r = lastReport, now - r > 0.012 else { return false }
-            let a = exp(-dt / Self.response); vx *= a; vy *= a
+            let a = exp(-dt / Self.returnTime(settings)); vx *= a; vy *= a
         } else if coasting {
             let h = settings.halfLife.isFinite ? min(1, max(0.02, settings.halfLife)) : 0.16
             let a = pow(0.5, dt / h); vx *= a; vy *= a
         } else { return false }
         if hypot(vx, vy) < 0.01 * Self.fullSpeed(settings) { vx = 0; vy = 0; coasting = false }
         return true
+    }
+
+    static func response(_ s: PadSteamTrackpadSettings) -> Double {
+        guard let ms = s.velocityResponseMS, ms.isFinite else { return response }
+        return min(0.2, max(0.002, ms / 1000))
+    }
+    static func returnTime(_ s: PadSteamTrackpadSettings) -> Double {
+        guard let ms = s.velocityReturnMS, ms.isFinite else { return response }
+        return min(0.5, max(0.005, ms / 1000))
     }
 
     public static func fullSpeed(_ s: PadSteamTrackpadSettings) -> Double {
@@ -72,10 +82,14 @@ public struct PadVelocityStick: Sendable {
     /// The stick, -1…1 each way (y up).
     public func vector(_ settings: PadSteamTrackpadSettings) -> (x: Double, y: Double) {
         let full = Self.fullSpeed(settings)
-        var x = vx / full, y = vy / full
-        let m = hypot(x, y)
+        var x = vx / full * (settings.velocityXScale ?? 1), y = vy / full * (settings.velocityYScale ?? 1)
+        var m = hypot(x, y)
         if m < 0.02 { return (0, 0) }
-        if m > 1 { x /= m; y /= m }
+        if m > 1 { x /= m; y /= m; m = 1 }
+        // The curve shapes the tilt (direction kept); the least tilt lifts any movement past a game's dead zone.
+        let curve = min(4, max(0.25, settings.velocityCurve ?? 1)), least = min(0.6, max(0, settings.velocityMinimum ?? 0))
+        let shaped = least + (1 - least) * pow(m, curve)
+        x = x / m * shaped; y = y / m * shaped
         if settings.invertY { y = -y }
         return (x, y)
     }

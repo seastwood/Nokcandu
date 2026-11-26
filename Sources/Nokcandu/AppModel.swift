@@ -69,7 +69,7 @@ final class AppModel: ObservableObject {
     var gamesEnabled: Bool { featureServicesReady && features.contains(.games) }
     var remappingEnabled: Bool { featureServicesReady && features.contains(.profiles) }
     var streamsEnabled: Bool { featureServicesReady && features.contains(.streams) }
-    @Published var sidebarTab: SidebarTab = SidebarTab(rawValue: UserDefaults.standard.string(forKey: "sidebarTab") ?? "") ?? .games {
+    @Published var sidebarTab: SidebarTab = SidebarTab(rawValue: UserDefaults.standard.string(forKey: "sidebarTab") ?? "") ?? .profiles {
         didSet {
             if let visible = features.selection(sidebarTab), visible != sidebarTab { sidebarTab = visible }
             UserDefaults.standard.set(sidebarTab.rawValue, forKey: "sidebarTab")

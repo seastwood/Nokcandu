@@ -22,6 +22,18 @@ public struct PadSteamTrackpadSettings: Codable, Hashable, Sendable {
     /// after the finger lifts (eased off by `halfLife`).
     public var velocityFullSpeed: Double?
     public var velocityInertia: Bool?
+    /// Directions and edge: a haptic pulse as the finger moves onto a key and as it moves off one (0 none … 1).
+    public var keyEnterHaptic: Double?
+    public var keyLeaveHaptic: Double?
+    /// Mouse-like stick tuning: left/right and up/down sensitivity (1 = as set), the response curve (1 straight;
+    /// higher is finer for slow movement), the least tilt once moving (to step past a game's own dead zone), how
+    /// long the speed reading is averaged (ms), and how quickly the stick returns to centre when the finger stops (ms).
+    public var velocityXScale: Double?
+    public var velocityYScale: Double?
+    public var velocityCurve: Double?
+    public var velocityMinimum: Double?
+    public var velocityResponseMS: Double?
+    public var velocityReturnMS: Double?
     public var gesturePatterns: [String]?
     public var gestureTolerance: Double?
     public var gestureStroke: Double?
@@ -592,13 +604,21 @@ public struct PadSteamTap {
     public init() {}
     public mutating func reset() { self = Self() }
     public enum Change: Equatable { case none, press, release }
-    public mutating func update(down: Bool, x: Double, y: Double, at now: Double) -> Change {
+    /// A touch kept still on a zone holds it: pressed once the touch has outlasted a tap, let go when the finger
+    /// lifts (so a zone set to a key held down holds it, as a click would).
+    public private(set) var holding = false
+    /// `holdAfter`: whether, and after how long (seconds), a touch that stays still is held (nil: taps only).
+    public mutating func update(down: Bool, x: Double, y: Double, at now: Double, holdAfter: ((Double, Double) -> Double?)? = nil) -> Change {
         if let r = releaseAt, now >= r || now < r - 1 { releaseAt = nil; return .release }
         if down {
             if start == nil { start = now; startX = x; startY = y; moved = 0 }
             else if x.isFinite, y.isFinite { moved = max(moved, ((x - startX) * (x - startX) + (y - startY) * (y - startY)).squareRoot()) }
+            if !holding, releaseAt == nil, let s = start, moved < 0.15, let after = holdAfter?(startX, startY), now - s >= after {
+                holding = true; return .press
+            }
             return .none
         }
+        if holding { holding = false; start = nil; return .release }
         guard let s = start else { return .none }
         start = nil
         if releaseAt == nil, now - s >= 0, now - s <= 0.2, moved < 0.15 { releaseAt = now + 0.05; return .press }

@@ -60,6 +60,7 @@ typedef struct {
     bool invy;
     double xs, ys;               // left/right and up/down speed (1 = as set)
     double ramp, ramptime, edge;   // mouse: speed up the longer it's held at the edge
+    bool vscroll;                // four directions: up and down scroll instead (lines a second: sens)
     // state
     double x, y;                 // −1…1, y up
     double ramp_t;
@@ -375,6 +376,7 @@ pe_engine *pe_create(const char *text, pe_sink sink) {
             k->invy = opt_d(OPT("invy"), 0) != 0;
             k->xs = opt_d(OPT("xs"), 1); k->ys = opt_d(OPT("ys"), 1);
             k->ramp = opt_d(OPT("ramp"), 0); k->ramptime = opt_d(OPT("ramptime"), 0.4); k->edge = opt_d(OPT("edge"), 0.9);
+            k->vscroll = opt_d(OPT("vscroll"), 0) != 0;
             const char *ks = OPT("keys");
             if (ks) sscanf(ks, "%d,%d,%d,%d", &k->keys[0], &k->keys[1], &k->keys[2], &k->keys[3]);
         } else if (!strcmp(words[0], "trigger") && nw > 1) {
@@ -920,7 +922,12 @@ static void stick_dirs(pe_engine *e, int s, double now) {
     bool want[4] = { false, false, false, false };       // up, down, left, right
     if (m > fmax(k->dz, 0.4)) {
         double a = atan2(k->x, k->y) * 180 / M_PI;
-        want[0] = fabs(a) < 67.5; want[1] = fabs(a) > 112.5; want[3] = a > 22.5 && a < 157.5; want[2] = a < -22.5 && a > -157.5;
+        if (k->vscroll) {
+            // Up and down scroll (in sticks_continuous): left and right only when pushed mostly sideways.
+            want[3] = a > 45 && a < 135; want[2] = a < -45 && a > -135;
+        } else {
+            want[0] = fabs(a) < 67.5; want[1] = fabs(a) > 112.5; want[3] = a > 22.5 && a < 157.5; want[2] = a < -22.5 && a > -157.5;
+        }
     }
     for (int i = 0; i < 4; i++) {
         int in = PE_LS_UP + 4 * s + i;
@@ -967,8 +974,10 @@ static void sticks_continuous(pe_engine *e, double dt) {
                 double speed = k->sens * pow(m, k->power) * boost * dt;
                 mouse_out(e, x / m * speed * k->xs, -(k->invy ? -y : y) / m * speed * k->ys);
             }
-        } else if (k->mode == S_SCROLL) {
+        } else if (k->mode == S_SCROLL || (k->mode == S_DIRS && k->vscroll)) {
             double x, y, m; stick_shape(k, k->x, k->y, &x, &y, &m);
+            // Four directions with up and down scrolling: only while pushed mostly up or down.
+            if (k->mode == S_DIRS && fabs(y) < fabs(x)) m = 0;
             if (m > 0) {
                 e->scroll_rest += (k->invy ? -y : y) / m * k->sens * pow(m, k->power) * dt;
                 int n = (int)e->scroll_rest;
@@ -1357,7 +1366,7 @@ double pe_next_deadline(const pe_engine *e) {
         const stick_t *k = &e->stick[s];
         if (k->mode == S_MOUSE && sqrt(k->x * k->x + k->y * k->y) > k->dz) continuous = true;
         if (k->mode == S_FLICK && k->flicking) continuous = true;
-        if (k->mode == S_SCROLL && sqrt(k->x * k->x + k->y * k->y) > k->dz) continuous = true;
+        if ((k->mode == S_SCROLL || (k->mode == S_DIRS && k->vscroll)) && sqrt(k->x * k->x + k->y * k->y) > k->dz) continuous = true;
     }
     for (int dv = 1; dv <= e->ndev; dv++) for (int n = 0; n < PE_DEV_AXES; n++)
         if (e->dev[dv].ax[n].mode == A_MOUSE && e->dev[dv].ax[n].v != 0) continuous = true;

@@ -218,6 +218,7 @@ struct StreamProfileEditor: View {
     @ObservedObject var m = StreamsModel.shared
     @State private var padProfiles: [PadProfiles.Profile] = []
     @State private var customResolution = false
+    @State private var customFPS = false
 
     private var running: Bool { m.running?.profileID == profile.id }
     private var status: StreamsModel.HostStatus? { m.status[host.id] }
@@ -398,11 +399,18 @@ struct StreamProfileEditor: View {
                     PixelField(title: "Height", value: profile.video.height ?? 1080, range: 200...4320) { profile.video.height = $0 }
                 }
             }
-            SettingRow(title: "Frame rate") {
-                Picker("Frame rate", selection: $profile.video.fps) {
-                    ForEach([30, 60, 90, 120, 144, 165, 240], id: \.self) { Text("\($0) fps").tag($0) }
+            SettingRow(title: "Frame rate", info: "Frames per second the host sends. Custom takes any whole number from 10 to 360: the streaming protocol (Sunshine, Apollo, GameStream) only carries whole frame rates, so 59.95 can't be asked for; 60 is the nearest.") {
+                Picker("Frame rate", selection: Binding(get: { StreamProfile.frameRates.contains(profile.video.fps) && !customFPS ? profile.video.fps : -1 },
+                                                         set: { v in if v < 0 { customFPS = true } else { customFPS = false; profile.video.fps = v } })) {
+                    ForEach(StreamProfile.frameRates, id: \.self) { Text("\($0) fps").tag($0) }
+                    Divider()
+                    Text("Custom…").tag(-1)
                 }
                 .labelsHidden().frame(maxWidth: 140)
+                if customFPS || !StreamProfile.frameRates.contains(profile.video.fps) {
+                    PixelField(title: "fps", value: profile.video.fps, range: 10...360, even: false) { profile.video.fps = $0 }
+                    Text("fps").foregroundStyle(.secondary)
+                }
             }
             SettingRow(title: "Bitrate", info: "How much data the host sends. More is sharper but needs a faster network; streaming over the internet usually needs less (10–30 Mbit/s).") {
                 let auto = StreamProfile.Video.defaultBitrate(width: profile.video.width ?? 2940, height: profile.video.height ?? 1838, fps: profile.video.fps, yuv444: profile.video.yuv444)
@@ -882,6 +890,7 @@ struct PixelField: View {
     let title: String
     let value: Int
     let range: ClosedRange<Int>
+    var even = true
     let apply: (Int) -> Void
     @State private var text = ""
     @FocusState private var focused: Bool
@@ -899,7 +908,7 @@ struct PixelField: View {
 
     private func commit() {
         guard let n = Int(text.filter(\.isNumber)) else { text = String(value); return }
-        let v = min(range.upperBound, max(range.lowerBound, n)) / 2 * 2
+        let clamped = min(range.upperBound, max(range.lowerBound, n)), v = even ? clamped / 2 * 2 : clamped
         text = String(v)
         if v != value { apply(v) }
     }

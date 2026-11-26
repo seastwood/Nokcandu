@@ -455,6 +455,8 @@ public enum PadProfiles {
         public var edgeBoostTime: Double?
         /// Scrolling: lines per second at full push.
         public var scrollSpeed: Double?
+        /// Four directions: up and down scroll (at `scrollSpeed`) while left and right stay set on their own.
+        public var directionsScroll: Bool?
         public init(mode: StickMode = .stick) { self.mode = mode }
     }
 
@@ -823,8 +825,9 @@ public enum PadProfiles {
             case .off: mode = "none"; to = i
             }
             let k = s.keys.count == 4 ? s.keys : [13, 1, 0, 2]
-            let sens = s.mode == .scroll ? (s.scrollSpeed ?? 20) : s.speed
-            return "stick \(i) mode=\(mode) to=\(to) dz=\(n(s.deadzone)) outer=\(n(s.outer)) sens=\(n(sens)) power=\(n(s.curve)) flick360=\(n(s.countsPerTurn)) flicktime=\(n(s.flickTime)) keys=\(k.map(String.init).joined(separator: ",")) invy=\(s.invertY ? 1 : 0) xs=\(n(s.xScale ?? 1)) ys=\(n(s.yScale ?? 1)) ramp=\(n(s.edgeBoost ?? 0)) ramptime=\(n(s.edgeBoostTime ?? 0.4))" + (layer > 0 ? " layer=\(layer)" : "")
+            let vscroll = s.mode == .directions && s.directionsScroll == true
+            let sens = s.mode == .scroll || vscroll ? (s.scrollSpeed ?? 20) : s.speed
+            return "stick \(i) mode=\(mode) to=\(to) dz=\(n(s.deadzone)) outer=\(n(s.outer)) sens=\(n(sens)) power=\(n(s.curve)) flick360=\(n(s.countsPerTurn)) flicktime=\(n(s.flickTime)) keys=\(k.map(String.init).joined(separator: ",")) invy=\(s.invertY ? 1 : 0) xs=\(n(s.xScale ?? 1)) ys=\(n(s.yScale ?? 1)) ramp=\(n(s.edgeBoost ?? 0)) ramptime=\(n(s.edgeBoostTime ?? 0.4))" + (vscroll ? " vscroll=1" : "") + (layer > 0 ? " layer=\(layer)" : "")
         }
         lines.append(gyroLine(m.gyro, layer: 0))
         for (i, s) in [m.left, m.right].enumerated() { lines.append(stickLine(i, s, layer: 0)) }

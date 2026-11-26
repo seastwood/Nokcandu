@@ -182,6 +182,16 @@ final class PadEngineTests: XCTestCase {
         XCTAssertGreaterThan(Double(r.axes[0]), 0.4 * 32767)
     }
 
+    /// Four directions with up and down scrolling: pushed up it scrolls; pushed sideways it presses that side's key.
+    func testStickDirectionsWithScrolling() {
+        let r = PadRecorder("stick 0 mode=dirs vscroll=1 sens=20 dz=0.1 outer=0.95 power=1\nbind 0 lsright press=key:17\nbind 0 lsleft press=key:9")
+        pe_axis(r.engine, Int32(PE_AXIS_LY), -32767, 1)
+        for i in 1...50 { pe_tick(r.engine, 1 + Double(i) * 0.01) }
+        XCTAssertTrue(r.take().contains { $0.hasPrefix("wheel ") }, "up scrolls")
+        pe_axis(r.engine, Int32(PE_AXIS_LY), 0, 2); pe_axis(r.engine, Int32(PE_AXIS_LX), 32767, 2.01)
+        XCTAssertTrue(r.take().contains("key 17 down"), "right presses its key")
+    }
+
     func testReleaseAllLetsGo() {
         let r = PadRecorder("bind 0 a press=key:13\nbind 0 b press=pad:x")
         r.press("a", true, 1); r.press("b", true, 1)

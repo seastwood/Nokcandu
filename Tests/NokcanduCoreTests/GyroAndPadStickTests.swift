@@ -79,6 +79,22 @@ final class GyroAndPadStickTests: XCTestCase {
         XCTAssertEqual(move.touch(down: true, x: 0.8, y: 0.5, at: 1.004, settings: s), PadSteamTrackpad.Motion(), "a stick pad doesn't move the pointer")
     }
 
+    /// A touch kept still on a zone that has something set holds it until the finger lifts; elsewhere, only taps.
+    func testStillTouchOnAZoneHoldsIt() {
+        var t = PadSteamTap()
+        let zone: (Double, Double) -> Double? = { x, _ in x > 0 ? 0.2 : nil }
+        XCTAssertEqual(t.update(down: true, x: 0.5, y: 0, at: 0, holdAfter: zone), PadSteamTap.Change.none)
+        XCTAssertEqual(t.update(down: true, x: 0.5, y: 0, at: 0.1, holdAfter: zone), PadSteamTap.Change.none)
+        XCTAssertEqual(t.update(down: true, x: 0.52, y: 0, at: 0.25, holdAfter: zone), .press)
+        XCTAssertEqual(t.update(down: true, x: 0.52, y: 0, at: 2, holdAfter: zone), PadSteamTap.Change.none, "still held")
+        XCTAssertEqual(t.update(down: false, x: 0.52, y: 0, at: 2.1, holdAfter: zone), .release)
+        // Off a zone: a long touch does nothing.
+        var u = PadSteamTap()
+        _ = u.update(down: true, x: -0.5, y: 0, at: 0, holdAfter: zone)
+        XCTAssertEqual(u.update(down: true, x: -0.5, y: 0, at: 1, holdAfter: zone), PadSteamTap.Change.none)
+        XCTAssertEqual(u.update(down: false, x: -0.5, y: 0, at: 1.1, holdAfter: zone), PadSteamTap.Change.none)
+    }
+
     func testTapsAreQuickTouchesHeldForAMoment() {
         var t = PadSteamTap()
         XCTAssertEqual(t.update(down: true, x: 0, y: 0, at: 1), .none)

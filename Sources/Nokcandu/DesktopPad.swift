@@ -281,6 +281,12 @@ final class DesktopPad: ObservableObject {
         let before = steamZones[side].held
         let after = steamZones[side].update(side: side, down: down, x: Double(pad.x), y: Double(pad.y), settings: settings)
         for input in before.symmetricDifference(after) { pe_pad_zone(e, pe_input_named(input.rawValue), after.contains(input), now) }
+        // A pulse as the finger moves onto a key or off one (not when it lifts): one per report, the stronger wins.
+        guard down else { return }
+        let onto = after.subtracting(before).isEmpty ? 0 : settings.keyEnterHaptic ?? 0
+        let off = before.subtracting(after).isEmpty ? 0 : settings.keyLeaveHaptic ?? 0
+        let strength = max(onto, off)
+        if strength > 0 { SteamControllerUSB.shared.tick(side: side, strength: strength) }
     }
     private var headStickActive = false
 
@@ -522,7 +528,13 @@ final class DesktopPad: ObservableObject {
         else { MacVirtualControllers.shared.axis(a, v) }
     }
     /// Rumbles the profile's own controller (the Steam Controller or the macOS controllers it maps).
-    func rumbleProfileController(strength: Double, seconds: Double) { rumbleMain(strength: strength, seconds: seconds) }
+    /// Rumble a game asked for (a stream's host, a Mac game through the virtual controller), scaled by the profile's
+    /// Game rumble setting (0: none). Streams called this without the setting, so 1% or 0% still rumbled fully.
+    func rumbleProfileController(strength: Double, seconds: Double) {
+        let level = strength * gameRumble
+        guard level > 0.01 else { return }
+        rumbleMain(strength: level, seconds: seconds)
+    }
 
     func typeText(_ s: String) {
         if streaming { stream?.text(s); return }
@@ -750,7 +762,13 @@ final class DesktopPad: ObservableObject {
             let pad = side == 0 ? state.leftPad : state.rightPad, touching = side == 0 ? state.leftTouch : state.rightTouch
             let settings = side == 0 ? steamLeftSettings : steamRightSettings
             let bound: (PadProfiles.Input) -> Bool = { pe_input_bound(e, pe_input_named($0.rawValue)) }
-            switch steamTaps[side].update(down: touching && settings.mode != .gestures, x: Double(pad.x), y: Double(pad.y), at: now) {
+            // A touch kept still on a zone that has something set holds that zone (a tap alone is a quick press).
+            let holdZone: (Double, Double) -> Double? = { x, y in
+                guard let layout = settings.zoneLayout, let z = layout.zone(x: x, y: y, rotation: settings.rotation),
+                      bound(PadProfiles.Input.padZoneTap(side, z)) else { return nil }
+                return 0.2
+            }
+            switch steamTaps[side].update(down: touching && settings.mode != .gestures, x: Double(pad.x), y: Double(pad.y), at: now, holdAfter: holdZone) {
             case .press:
                 let input = PadSteamZoneRouter.tap(side: side, x: steamTaps[side].startX, y: steamTaps[side].startY, settings: settings, bound: bound)
                 steamTapInputs[side] = input; pe_pad_zone(e, pe_input_named(input.rawValue), true, now)

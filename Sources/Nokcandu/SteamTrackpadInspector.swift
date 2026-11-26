@@ -78,6 +78,12 @@ extension ControllerProfileEditor {
             }
             if settings.wrappedValue.mode == .velocityStick {
                 slider("Full tilt at", Binding(get: { PadVelocityStick.fullSpeed(settings.wrappedValue) }, set: { settings.wrappedValue.velocityFullSpeed = $0 }), 0.2...6, "%.1f /s", info: "How fast your finger moves, in pad widths a second, to push the stick all the way. Lower is more sensitive.")
+                slider("Left and right", Binding(get: { settings.wrappedValue.velocityXScale ?? 1 }, set: { settings.wrappedValue.velocityXScale = abs($0 - 1) < 0.01 ? nil : $0 }), 0.25...3, "%.2f×", info: "Sensitivity across. Above 1 tilts further for the same finger speed.")
+                slider("Up and down", Binding(get: { settings.wrappedValue.velocityYScale ?? 1 }, set: { settings.wrappedValue.velocityYScale = abs($0 - 1) < 0.01 ? nil : $0 }), 0.25...3, "%.2f×", info: "Sensitivity up and down. Many games turn slower vertically; raise or lower this to match.")
+                slider("Response curve", Binding(get: { settings.wrappedValue.velocityCurve ?? 1 }, set: { settings.wrappedValue.velocityCurve = abs($0 - 1) < 0.01 ? nil : $0 }), 0.5...3, "%.2f", info: "1 is straight. Higher keeps slow finger movement small, for fine aim, and still reaches full tilt on fast swipes; below 1 is quicker off the centre.")
+                slider("Least tilt", Binding(get: { settings.wrappedValue.velocityMinimum ?? 0 }, set: { settings.wrappedValue.velocityMinimum = $0 < 0.005 ? nil : $0 }), 0...0.5, "%.0f%%", scale: 100, info: "Any movement tilts the stick at least this much, to step past a game's own stick dead zone so slow movement isn't lost. Set it just above where the game starts to respond.")
+                slider("Speed averaging", Binding(get: { settings.wrappedValue.velocityResponseMS ?? PadVelocityStick.responseMS }, set: { settings.wrappedValue.velocityResponseMS = abs($0 - PadVelocityStick.responseMS) < 0.5 ? nil : $0 }), 2...80, "%.0f ms", info: "How long finger speed is averaged. Lower follows the finger more tightly but shows the pad's jitter; higher is smoother.")
+                slider("Back to centre", Binding(get: { settings.wrappedValue.velocityReturnMS ?? PadVelocityStick.responseMS }, set: { settings.wrappedValue.velocityReturnMS = abs($0 - PadVelocityStick.responseMS) < 0.5 ? nil : $0 }), 5...300, "%.0f ms", info: "How quickly the stick returns to centre once your finger stops moving. Higher keeps turning a moment longer.")
                 Toggle("Invert up and down", isOn: settings.invertY)
                 Toggle("Keep moving after a flick (inertia)", isOn: Binding(get: { settings.wrappedValue.velocityInertia == true }, set: { settings.wrappedValue.velocityInertia = $0 ? true : nil }))
                     .help("After a flick and lift, the stick stays tilted and eases back to centre. Touch the pad again to stop at once.")
@@ -88,6 +94,10 @@ extension ControllerProfileEditor {
             }
             if settings.wrappedValue.mode == .directions {
                 slider("Centre dead zone", Binding(get: { PadSteamPadZones.deadzone(settings.wrappedValue) }, set: { settings.wrappedValue.deadzone = $0 }), 0.05...0.8, "%.0f%%", scale: 100, info: "How far from the middle of the pad a direction starts. Between two directions, both are held.")
+            }
+            if settings.wrappedValue.mode == .directions || PadSteamPadZones.edgeSize(settings.wrappedValue) > 0 {
+                slider("Feel moving onto a key", Binding(get: { settings.wrappedValue.keyEnterHaptic ?? 0 }, set: { settings.wrappedValue.keyEnterHaptic = $0 < 0.01 ? nil : $0 }), 0...1, "%.0f%%", scale: 100, info: "A click in the pad as your finger moves onto a direction or the edge. 0 is off.")
+                slider("Feel moving off a key", Binding(get: { settings.wrappedValue.keyLeaveHaptic ?? 0 }, set: { settings.wrappedValue.keyLeaveHaptic = $0 < 0.01 ? nil : $0 }), 0...1, "%.0f%%", scale: 100, info: "A click as your finger moves off a direction or the edge (not when you lift it). Set it lighter than moving onto a key to tell them apart. 0 is off.")
             }
             if settings.wrappedValue.mode.movesPointer {
                 slider("X sensitivity", Binding(get: { settings.wrappedValue.sensitivityX ?? settings.wrappedValue.sensitivity }, set: { settings.wrappedValue.sensitivityX = $0 }), 200...5000, "%.0f", info: "Horizontal movement across the whole pad.")

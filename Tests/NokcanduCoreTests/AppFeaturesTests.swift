@@ -20,6 +20,14 @@ final class AppFeaturesTests: XCTestCase {
         }
     }
 
+    func testFreshInstallationStartsWithTheStableFeaturesInTabOrder() throws {
+        try withDefaults { defaults in
+            XCTAssertEqual(AppFeatures(defaults: defaults).visible, [.profiles, .streams])
+            XCTAssertEqual(AppFeature.allCases, [.profiles, .streams, .games])
+            XCTAssertTrue(AppFeature.games.isExperimental); XCTAssertFalse(AppFeature.streams.isExperimental)
+        }
+    }
+
     func testEveryCombinationPersistsAndChoosesOnlyVisibleTabs() throws {
         try withDefaults { defaults in
             for bits in 0..<8 {
