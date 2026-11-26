@@ -58,6 +58,8 @@ jobs:
         env:
           DEVID_P12: ${{ secrets.DEVELOPER_ID_P12 }}
           DEVID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_PASSWORD }}
+          # Optional: the Developer ID provisioning profile (base64) once Apple grants virtual controllers.
+          DEVID_PROFILE: ${{ secrets.DEVELOPER_ID_PROVISIONING_PROFILE }}
         run: |
           if [ -z "$DEVID_P12" ]; then echo "No Developer ID: not notarized"; exit 0; fi
           KC="$RUNNER_TEMP/devid.keychain-db"
@@ -70,6 +72,10 @@ jobs:
           ID="$(security find-identity -v -p codesigning "$KC" | awk -F'"' '/Developer ID Application/ { print $2; exit }')"
           echo "NOKCANDU_SIGN_IDENTITY=$ID" >> "$GITHUB_ENV"
           echo "NOKCANDU_HARDENED=1" >> "$GITHUB_ENV"
+          if [ -n "$DEVID_PROFILE" ]; then
+            echo "$DEVID_PROFILE" | base64 --decode > "$RUNNER_TEMP/nokcandu.provisionprofile"
+            echo "NOKCANDU_PROVISIONING_PROFILE=$RUNNER_TEMP/nokcandu.provisionprofile" >> "$GITHUB_ENV"
+          fi
       - name: Nokcandu's Wine Mac driver, as built by the "Wine Mac driver" workflow
         id: driver
         uses: actions/cache@v6

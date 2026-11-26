@@ -218,24 +218,26 @@ PLIST
 # Signed with the identity chosen above (not notarized).
 codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/screen-size"
 codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} --sign "$SIGN_ID" "$APP/Contents/Resources/nokcandu-settings"
+# The app's entitlements. With the hardened runtime (Developer ID, needed for notarization), macOS denies the
+# microphone unless the app declares it: games started from Nokcandu and streams use it for voice chat.
 # Virtual controllers on the Mac (CoreHID) need Apple's com.apple.developer.hid.virtual.device entitlement, which only
 # works with an Apple-issued provisioning profile that grants it. Without one macOS kills an app that claims it, so
-# it's added only when NOKCANDU_PROVISIONING_PROFILE points at such a profile (Developer ID signing). See
-# docs/controller-capabilities.md.
+# it's added only when NOKCANDU_PROVISIONING_PROFILE points at such a profile (Developer ID signing). A restricted
+# entitlement is only honoured when the signature also names the profile's App ID and team, so those are copied
+# from the profile too. See docs/controller-capabilities.md.
 APP_ENTITLEMENTS=()
-if [ -n "${NOKCANDU_PROVISIONING_PROFILE:-}" ]; then
-  [ -f "$NOKCANDU_PROVISIONING_PROFILE" ] || { echo "NOKCANDU_PROVISIONING_PROFILE doesn't exist."; exit 1; }
-  security cms -D -i "$NOKCANDU_PROVISIONING_PROFILE" 2>/dev/null | grep -q 'com.apple.developer.hid.virtual.device' \
-    || { echo "The provisioning profile doesn't grant com.apple.developer.hid.virtual.device."; exit 1; }
-  cp "$NOKCANDU_PROVISIONING_PROFILE" "$APP/Contents/embedded.provisionprofile"
+if [ "${NOKCANDU_HARDENED:-0}" = 1 ] || [ -n "${NOKCANDU_PROVISIONING_PROFILE:-}" ]; then
   ENT="$(mktemp -t nokcandu-entitlements).plist"
-  cat > "$ENT" <<ENTITLEMENTS
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict><key>com.apple.developer.hid.virtual.device</key><true/></dict></plist>
-ENTITLEMENTS
+  PROFILE_PLIST=""
+  if [ -n "${NOKCANDU_PROVISIONING_PROFILE:-}" ]; then
+    [ -f "$NOKCANDU_PROVISIONING_PROFILE" ] || { echo "NOKCANDU_PROVISIONING_PROFILE doesn't exist."; exit 1; }
+    PROFILE_PLIST="$(mktemp -t nokcandu-profile).plist"
+    security cms -D -i "$NOKCANDU_PROVISIONING_PROFILE" > "$PROFILE_PLIST" 2>/dev/null \
+      || { echo "NOKCANDU_PROVISIONING_PROFILE isn't a provisioning profile."; exit 1; }
+    cp "$NOKCANDU_PROVISIONING_PROFILE" "$APP/Contents/embedded.provisionprofile"
+  fi
+  python3 Tools/signing/entitlements.py "$ENT" "$PROFILE_PLIST" io.github.seastwood.nokcandu || exit 1
   APP_ENTITLEMENTS=(--entitlements "$ENT")
-  echo "Virtual controllers on the Mac: entitlement granted by the provisioning profile"
 fi
 codesign --force ${HARDEN[@]+"${HARDEN[@]}"} ${SIGN_KC[@]+"${SIGN_KC[@]}"} ${APP_ENTITLEMENTS[@]+"${APP_ENTITLEMENTS[@]}"} --sign "$SIGN_ID" "$APP"
 echo "Built $(pwd)/$APP"
