@@ -73,11 +73,15 @@ public struct PadHeadMotionSettings: Codable, Hashable, Sendable {
         func bound(_ v: Double, _ range: ClosedRange<Double>, _ fallback: Double) -> Double {
             v.isFinite ? min(range.upperBound, max(range.lowerBound, v)) : fallback
         }
-        return Self(included: included, enabled: enabled, sensitivity: bound(sensitivity, 100...5000, 1200),
+        var s = Self(included: included, enabled: enabled, sensitivity: bound(sensitivity, 100...5000, 1200),
                     smoothing: bound(smoothing, 0.05...1, 0.5), deadZone: bound(deadZone, 0...0.01, 0.001),
                     invertX: invertX, invertY: invertY, activation: activation,
                     activationButton: activationButton, activationLayer: activationLayer, output: output,
                     stickRange: bound(stickRange, 0.05...1, 0.25))
+        s.sectors = sectors == 8 ? 8 : 4
+        s.selectAt = bound(selectAt, 0.1...0.95, 0.5)
+        s.settleTime = settleTime.map { bound($0, 0.5...20, 3) }
+        return s
     }
 }
 

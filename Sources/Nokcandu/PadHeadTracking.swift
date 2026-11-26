@@ -118,10 +118,10 @@ struct PadHeadTrackingSettings: View {
 struct PadHeadProfileSettings: View {
     /// Optional: the centre slowly follows the head while it stays inside, so only deliberate turns count.
     @ViewBuilder var settleControls: some View {
-        Toggle("Recentre slowly while inside", isOn: Binding(get: { settings.settleTime != nil }, set: { settings.settleTime = $0 ? 3 : nil }))
+        Toggle("Recentre slowly while in the dead zone", isOn: Binding(get: { settings.settleTime != nil }, set: { settings.settleTime = $0 ? 3 : nil }))
         if let t = settings.settleTime {
             Slider(value: Binding(get: { t }, set: { settings.settleTime = $0 }), in: 0.5...10, step: 0.5) { Text("Follows within") }
-            Text(String(format: "While your head stays inside %@, the centre follows it over about %.1f s: slow drift and shifting how you sit fade away, and only a quicker, deliberate turn reaches the edge.", settings.output == .directions ? "the inner circle" : "the middle", t))
+            Text(String(format: "While your head stays in %@, the centre follows it over about %.1f s: slow drift and shifting how you sit fade away, and only a quicker, deliberate turn reaches the edge.", settings.output == .directions ? "the dead zone (the inner circle, inside \"Turn to pick\")" : "the dead zone (the middle)", t))
                 .font(.caption).foregroundStyle(.secondary)
         }
     }

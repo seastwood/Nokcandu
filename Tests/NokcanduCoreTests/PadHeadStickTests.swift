@@ -73,3 +73,15 @@ final class PadHeadSettleTests: XCTestCase {
         XCTAssertEqual(x, -0.2, accuracy: 0.001)
     }
 }
+
+final class PadHeadSettingsKeepTests: XCTestCase {
+    func testTidyingKeepsTheRadialAndSettleChoices() throws {
+        var s = PadHeadMotionSettings(output: .directions)
+        s.sectors = 8; s.selectAt = 0.6; s.settleTime = 4
+        XCTAssertEqual(s.normalized.sectors, 8)
+        XCTAssertEqual(s.normalized.selectAt, 0.6)
+        XCTAssertEqual(s.normalized.settleTime, 4)
+        let back = try JSONDecoder().decode(PadHeadMotionSettings.self, from: JSONEncoder().encode(s))
+        XCTAssertEqual(back, s)
+    }
+}

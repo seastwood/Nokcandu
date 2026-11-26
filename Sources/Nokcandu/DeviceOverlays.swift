@@ -188,16 +188,16 @@ enum HeadMotionImage {
         NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
         defer { NSGraphicsContext.restoreGraphicsState() }
         let white = NSColor.white
-        // A clean circle: a soft disc behind so it reads over any game, its reach, dead zone and cross.
+        // A clean circle: its reach, dead zone and (unless it is a radial menu) a cross.
         let c = CGPoint(x: w / 2, y: h / 2), R = w * 0.33
-        let back = R + w * 0.15
-        ctx.setFillColor(NSColor(white: 0.08, alpha: 0.45).cgColor)
-        ctx.fillEllipse(in: CGRect(x: c.x - back, y: c.y - back, width: 2 * back, height: 2 * back))
+
         ctx.setStrokeColor(white.withAlphaComponent(0.35).cgColor); ctx.setLineWidth(2 * scale)
         ctx.strokeEllipse(in: CGRect(x: c.x - R, y: c.y - R, width: 2 * R, height: 2 * R))
-        ctx.setLineWidth(1 * scale)
-        ctx.move(to: CGPoint(x: c.x - R, y: c.y)); ctx.addLine(to: CGPoint(x: c.x + R, y: c.y))
-        ctx.move(to: CGPoint(x: c.x, y: c.y - R)); ctx.addLine(to: CGPoint(x: c.x, y: c.y + R)); ctx.strokePath()
+        if !radial {
+            ctx.setLineWidth(1 * scale)
+            ctx.move(to: CGPoint(x: c.x - R, y: c.y)); ctx.addLine(to: CGPoint(x: c.x + R, y: c.y))
+            ctx.move(to: CGPoint(x: c.x, y: c.y - R)); ctx.addLine(to: CGPoint(x: c.x, y: c.y + R)); ctx.strokePath()
+        }
         let d = max(R * 0.04, R * s.dead)
         ctx.setFillColor(white.withAlphaComponent(0.16).cgColor)
         ctx.fillEllipse(in: CGRect(x: c.x - d, y: c.y - d, width: 2 * d, height: 2 * d))
