@@ -201,7 +201,8 @@ extension ControllerProfileEditor {
                 }
             }
             if let rumbleNote { Text(rumbleNote).font(.caption).foregroundStyle(.secondary) }
-            let gameRumble = Binding(get: { profile.gameRumble ?? PadProfiles.top(profile, all: everything, \.gameRumble) ?? PadProfiles.Profile.defaultGameRumble },
+            let original = inputSource == .steamUSB && (SteamControllerUSB.shared.model.map { $0 != .steam2026 } ?? (family != .steam2026))
+            let gameRumble = Binding(get: { profile.gameRumble ?? PadProfiles.top(profile, all: everything, \.gameRumble) ?? PadProfiles.Profile.defaultGameRumble(originalSteamController: original) },
                                      set: { profile.gameRumble = $0 })
             slider("Game rumble", gameRumble, 0...1, "%.0f%%", scale: 100)
                 .help("How strongly a game's own vibration plays when Nokcandu plays it — on the Steam Controller's trackpads, for example. 0% turns it off.")
@@ -243,7 +244,7 @@ extension ControllerProfileEditor {
                 }
             }
         } header: {
-            InspectorTitle(title: "Feedback", subtitle: nil, symbol: "waveform")
+            InspectorTitle(title: "Rumble", subtitle: nil, symbol: "waveform.path")
         } footer: {
             Text(inputSource == .steamUSB && family == .steam2026
                  ? "The Steam Controller (2026) rumbles through the motors in its grips and taps its trackpads, while this profile is reading it. Give a button “Rumble” to buzz on purpose."

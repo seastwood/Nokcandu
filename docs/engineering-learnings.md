@@ -1004,3 +1004,7 @@ DesktopPad timer re-sends the axes between reports so a resting finger or a coas
 Optional inertia keeps a flick going after lift, halving over the pad's momentum half-life; touching stops it. The
 left pad shares the left stick with the joystick and the 2026 controller's real right stick still wins when pushed
 further. Applies wherever the profile's axes go (Wine games, streams, Mac). Needs hands-on tuning with a real pad.
+
+## Taking controllers from macOS for Mac games (November 26, 2026)
+
+macOS has no way to hide a controller from other apps except opening it exclusively (`kIOHIDOptionsTypeSeizeDevice`), which also stops GameController's copy in Nokcandu itself, so a taken controller must be read from its raw reports. `ControllerTakeover` does that only while a Mac app has a profile whose output fully replaces the controller (mappings only, or the emulated controller), and never for Nokcandu's Windows games, whose Wine driver reads the controller. Decoders are checked against the virtual controller's own report builder (`virtualpad.c`), so the two directions can't drift. Hardware acceptance is pending: see [Controller capabilities](controller-capabilities.md#taking-controllers-from-macos-november-26-2026).

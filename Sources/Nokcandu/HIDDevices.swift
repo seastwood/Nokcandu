@@ -231,7 +231,9 @@ final class DeviceFeed {
     /// The controllers that are the main controller (not one of the profile's devices).
     func mainControllers() -> [GCController] {
         let taken = Set(gamepadSlots().map { ObjectIdentifier($0.0) })
-        return GCController.controllers().filter { $0.extendedGamepad != nil && !taken.contains(ObjectIdentifier($0)) }
+        // A controller Nokcandu has taken from macOS (ControllerTakeover) is read from its own reports instead.
+        return GCController.controllers().filter { $0.extendedGamepad != nil && !taken.contains(ObjectIdentifier($0))
+            && !ControllerTakeover.shared.isTakenOver(category: $0.productCategory) }
     }
     func sampleGamepads() {
         reconcile()

@@ -23,7 +23,8 @@ final class PadFeedProfileTests: XCTestCase {
     func testGameRumbleDefaultsGentlerAndIsSavedPerProfile() throws {
         var p = PadProfiles.Profile(id: "s", name: "S")
         XCTAssertNil(p.gameRumble)
-        XCTAssertLessThan(PadProfiles.Profile.defaultGameRumble, 1)
+        XCTAssertEqual(PadProfiles.Profile.defaultGameRumble(originalSteamController: true), 0.07)
+        XCTAssertEqual(PadProfiles.Profile.defaultGameRumble(originalSteamController: false), 1, "every other controller, the 2026 Steam Controller included")
         p.gameRumble = 0.25
         let back = try JSONDecoder().decode(PadProfiles.Profile.self, from: JSONEncoder().encode(p))
         XCTAssertEqual(back.gameRumble, 0.25)

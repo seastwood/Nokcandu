@@ -731,9 +731,11 @@ public enum PadProfiles {
         public var layerRumbleLength: Double?
         public static let defaultLayerRumble = (strength: 0.35, length: 0.12)
         /// How strongly games' own rumble plays when Nokcandu plays it (controllers SDL can't rumble, like the original
-        /// Steam Controller's trackpads): 0 off … 1 as the game asks. nil: `defaultGameRumble`.
+        /// Steam Controller's trackpads): 0 off … 1 as the game asks. nil: `defaultGameRumble(originalSteamController:)`.
         public var gameRumble: Double?
-        public static let defaultGameRumble = 0.01
+        /// Unset game rumble: 7% on the original Steam Controller, whose trackpad haptics are harsh at full strength;
+        /// as the game asks on every other controller (the 2026 Steam Controller has real rumble motors).
+        public static func defaultGameRumble(originalSteamController: Bool) -> Double { originalSteamController ? 0.07 : 1 }
         public init(id: String = UUID().uuidString, name: String, buildsOn: [String] = [], layers: [Layer] = [Layer(id: "base", name: "Base")],
                     leftStick: Stick? = nil, rightStick: Stick? = nil, gyro: Gyro? = nil, triggers: Triggers? = nil) {
             self.id = id; self.name = name; self.buildsOn = buildsOn; self.layers = layers.isEmpty ? [Layer(id: "base", name: "Base")] : layers

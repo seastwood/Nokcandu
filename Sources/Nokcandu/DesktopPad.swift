@@ -194,7 +194,11 @@ final class DesktopPad: ObservableObject {
     /// Picks the profile for the app in front (or none) and (re)builds the engine when it changes.
     private var steamSource = false
     /// The profile in use's Game rumble strength (0…1).
-    private(set) var gameRumble = PadProfiles.Profile.defaultGameRumble
+    /// The profile's own game rumble, nil for the default (which depends on the controller).
+    private var gameRumbleSetting: Double?
+    var gameRumble: Double {
+        gameRumbleSetting ?? PadProfiles.Profile.defaultGameRumble(originalSteamController: steamSource && SteamControllerUSB.shared.model != .steam2026)
+    }
     var suppliesSteamHaptics: Bool { steamSource && engine != nil }
     private let steamReaderID = UUID()
     /// Each layer's pad settings, [left, right], by the engine's layer number (0: base).
@@ -391,6 +395,16 @@ final class DesktopPad: ObservableObject {
             return PadProfiles.top(p, all: all, \.presentAs)
         }
         MacVirtualControllers.shared.configure(macIdentity)
+        // The real controller is taken from macOS (no double input) while a Mac app in front gets the profile's
+        // virtual controller, or a profile that sends only its own mappings. Never for Nokcandu's Windows games (their
+        // Wine driver reads the controller), streams, Nokcandu itself (the editor tests the controller) or a profile
+        // reading the Steam Controller directly.
+        let takeOver = chosen.map { p -> Bool in
+            guard trusted, !streaming, g == nil || g?.native != nil, front?.processIdentifier != getpid(),
+                  PadProfiles.top(p, all: all, \.controllerSource) != .steamUSB else { return false }
+            return MacVirtualControllers.shared.active || PadProfiles.top(p, all: all, \.routingMode) == .remappingAll
+        } ?? false
+        ControllerTakeover.shared.want(takeOver)
         if activeWhere != wherePlaying { activeWhere = wherePlaying }
         PadHeadTracking.shared.configure(profileID: trusted ? chosen?.id : nil,
             settings: chosen.flatMap { trusted ? PadProfiles.headMotion($0, all: all) : nil })
@@ -436,7 +450,7 @@ final class DesktopPad: ObservableObject {
         layerColors = layerNames.enumerated().map { i, n in settings[i == 0 ? "base" : n.lowercased()]?.color }
         rumble = chosen.flatMap { PadProfiles.top($0, all: all, \.rumbleOnLayer) } ?? false
         gyroRumble = chosen.flatMap { PadProfiles.top($0, all: all, \.rumbleOnGyro) } ?? false
-        gameRumble = chosen.flatMap { PadProfiles.top($0, all: all, \.gameRumble) } ?? PadProfiles.Profile.defaultGameRumble
+        gameRumbleSetting = chosen.flatMap { PadProfiles.top($0, all: all, \.gameRumble) }
         layerRumble = (chosen.flatMap { PadProfiles.top($0, all: all, \.layerRumbleStrength) } ?? PadProfiles.Profile.defaultLayerRumble.strength,
                        chosen.flatMap { PadProfiles.top($0, all: all, \.layerRumbleLength) } ?? PadProfiles.Profile.defaultLayerRumble.length)
         menus = chosen.map { Array(PadProfiles.collected($0, all: all, \.menus).prefix(8)) } ?? []
@@ -672,6 +686,8 @@ final class DesktopPad: ObservableObject {
                     guard !runtime.steamSource, let e = runtime.engine else { return }
                     if runtime.streaming, runtime.stream?.otherControllersAsPlayers == true, StreamGamepads.profileController().mapped != source { return }
                     pe_gyro(e, g[0], g[1], g[2], DesktopPad.now()); pe_accel(e, a[0], a[1], a[2], DesktopPad.now())
+                    // The virtual controller takes GameController's axes (the inverse of GameControllerMotion).
+                    MacVirtualControllers.shared.motion(gyro: (Double(g[0]), Double(-g[2]), Double(g[1])), accel: (Double(-a[0]), Double(a[2]), Double(-a[1])))
                 }
             }
         }

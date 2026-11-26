@@ -86,7 +86,7 @@ final class ReportPadsHID {
         MappedGamepads.shared.refresh()
     }
     private func report(_ bytes: [UInt8], id: UInt64) {
-        guard !left.contains(id), var pad = pads[id] else { return }
+        guard !left.contains(id), !ControllerTakeover.shared.owned.contains(id), var pad = pads[id] else { return }
         let s = pad.decoder.decode(bytes)
         let replies = pad.decoder.takeOutputs()
         pads[id] = pad

@@ -51,6 +51,7 @@ final class MappedGamepads {
             switch parts[0] {
             case "xinput": XInputUSB.shared.rumble(id, strength: strength, seconds: seconds)
             case "report": ReportPadsHID.shared.rumble(id, strength: strength, seconds: seconds)
+            case "owned": ControllerTakeover.shared.rumble(id, strength: strength, seconds: seconds)
             case "gamecube": if parts.count == 3, let port = Int(parts[2]) { GameCubeAdapterHID.shared.rumble(id, port: port, strength: strength, seconds: seconds) }
             case "switch2": Switch2USB.shared.rumble(id, strength: strength, seconds: seconds)
             default: break
@@ -88,6 +89,7 @@ final class MappedGamepads {
                 && info.vendorID != 0x28DE           // Steam Controllers: read by SteamControllerUSB
                 && !(info.vendorID == GameCubeAdapter.vendor && info.productID == GameCubeAdapter.product)
                 && !ReportPadsHID.shared.claimed.contains(info.id)
+                && !ControllerTakeover.shared.owned.contains(info.id)
                 && Self.mapping(info) != nil
         }
         let ids = Set(now.map(\.id))
