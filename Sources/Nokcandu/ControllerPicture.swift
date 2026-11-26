@@ -102,6 +102,7 @@ struct ControllerPicture: View {
             case .steamPad(let side): return .trackpad(side)
             case .touchpad: return .trackpad(0)
             case .gyro: return .gyro
+            case .feedback: return .rumble
             default: return nil
             }
         }()
@@ -120,6 +121,7 @@ struct ControllerPicture: View {
             case .stick(let side): selection = .stick(side)
             case .trackpad(let side): selection = .steamPad(side)
             case .gyro: selection = .gyro
+            case .rumble: selection = .feedback
             }
         })
     }
@@ -185,16 +187,24 @@ struct ControllerPicture: View {
                 }
                 ForEach(shown, id: \.self) { i in spot(i, k).position(at(place(i))) }
                 ForEach(0..<2, id: \.self) { s in stick(s, k).position(at(stickPlaces[s])) }
-                Button { selection = .gyro } label: {
-                    Label("Gyro", systemImage: "gyroscope").font(.callout)
-                        .padding(.horizontal, 10 * k).padding(.vertical, 5 * k)
-                        .background(Capsule().fill(selection == .gyro ? tint.opacity(0.35) : Color.primary.opacity(0.08)))
-                        .overlay(Capsule().stroke(selection == .gyro ? tint : .clear, lineWidth: 2))
+                // Gyro and Rumble between the handles, Rumble right below Gyro.
+                VStack(spacing: 6 * k) {
+                    pictureButton("Gyro", "gyroscope", .gyro, k).accessibilityLabel("Gyro settings")
+                    pictureButton("Rumble", "waveform.path", .feedback, k).accessibilityLabel("Rumble settings")
                 }
-                .buttonStyle(.plain).position(at(steamLayout ? Steam2015Outline.place(0, -1.25) : CGPoint(x: 0.5, y: 0.93)))
-                .accessibilityLabel("Gyro settings")
+                .position(at(steamLayout ? Steam2015Outline.place(0, -1.25) : CGPoint(x: 0.5, y: 0.86)))
+                .offset(y: 17 * k)
             }
         }
+    }
+
+    private func pictureButton(_ title: String, _ symbol: String, _ part: ControllerProfileEditor.Part, _ k: CGFloat) -> some View {
+        Button { selection = part } label: {
+            Label(title, systemImage: symbol).font(.callout)
+                .padding(.horizontal, 10 * k).padding(.vertical, 5 * k)
+                .background(Capsule().fill(selection == part ? tint.opacity(0.35) : Color.primary.opacity(0.08)))
+                .overlay(Capsule().stroke(selection == part ? tint : .clear, lineWidth: 2))
+        }.buttonStyle(.plain)
     }
 
     func spot(_ i: I, _ k: CGFloat = 1) -> some View {

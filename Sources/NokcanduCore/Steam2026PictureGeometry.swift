@@ -17,7 +17,7 @@ public struct Steam2026PictureGeometry {
             }
         }
     }
-    public enum Part: Hashable, Sendable { case button(Control), stick(Int), trackpad(Int), gyro }
+    public enum Part: Hashable, Sendable { case button(Control), stick(Int), trackpad(Int), gyro, rumble }
     public let body: CGRect
     public let scale: CGFloat
     public static func height(for width: CGFloat) -> CGFloat { width * 0.9 }
@@ -120,9 +120,13 @@ public struct Steam2026PictureGeometry {
         let p = padBounds(side), height = body.width * 0.105
         return rect(CGPoint(x: p.midX, y: p.maxY + 5 * scale + height / 2), body.width * 0.265, height)
     }
+    /// Between the handles, under the inner cutout (0.774 of the body) and the trackpads' captions, with Rumble right
+    /// below it. Both the same size, like the other controllers' pair.
     public var gyro: CGRect {
-        rect(CGPoint(x: body.midX, y: body.maxY + body.width * 0.07), 80 * scale, 28 * scale)
+        let top = max(body.minY + body.height * 0.774 + 8 * scale, max(padCaptionRect(0).maxY, padCaptionRect(1).maxY) + 4 * scale)
+        return CGRect(x: body.midX - 46 * scale, y: top, width: 92 * scale, height: 28 * scale)
     }
+    public var rumble: CGRect { gyro.offsetBy(dx: 0, dy: gyro.height + 6 * scale) }
 
     /// Shared by the renderer and containment checks, including the shallow, nearly flat inner cutout.
     public static func shellPath(in r: CGRect) -> CGPath {

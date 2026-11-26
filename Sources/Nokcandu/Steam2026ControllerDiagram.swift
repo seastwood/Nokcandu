@@ -54,11 +54,18 @@ struct Steam2026ControllerDiagram: View {
                 }
                 Button { select(.gyro) } label: {
                     Label("Gyro", systemImage: "gyroscope")
-                        .font(.system(size: max(7, 11 * g.scale)))
+                        .font(.system(size: max(7, 11 * g.scale))).lineLimit(1).minimumScaleFactor(0.7)
                         .frame(width: g.gyro.width, height: g.gyro.height)
                         .background(Capsule().fill(selected == .gyro ? tint.opacity(0.35) : Color.primary.opacity(0.08)))
                         .overlay(Capsule().stroke(selected == .gyro ? tint : Color.secondary.opacity(0.3), lineWidth: selected == .gyro ? 2 : 0.5))
                 }.buttonStyle(.plain).position(x: g.gyro.midX, y: g.gyro.midY).accessibilityLabel("Gyro settings")
+                Button { select(.rumble) } label: {
+                    Label("Rumble", systemImage: "waveform.path")
+                        .font(.system(size: max(7, 11 * g.scale))).lineLimit(1).minimumScaleFactor(0.7)
+                        .frame(width: g.rumble.width, height: g.rumble.height)
+                        .background(Capsule().fill(selected == .rumble ? tint.opacity(0.35) : Color.primary.opacity(0.08)))
+                        .overlay(Capsule().stroke(selected == .rumble ? tint : Color.secondary.opacity(0.3), lineWidth: selected == .rumble ? 2 : 0.5))
+                }.buttonStyle(.plain).position(x: g.rumble.midX, y: g.rumble.midY).accessibilityLabel("Rumble settings")
             }.frame(width: geo.size.width, height: geo.size.height)
         }
     }

@@ -21,7 +21,7 @@ final class Steam2026PictureGeometryTests: XCTestCase {
             let g = G(width: width), canvas = CGRect(x: 0, y: 0, width: width, height: G.height(for: width))
             let controls = G.Control.allCases.map { ("button \($0)", g.controlRect($0)) }
                 + (0..<2).map { ("stick \($0)", g.stickRect($0)) }
-                + (0..<2).map { ("pad \($0)", g.padBounds($0)) } + [("gyro", g.gyro)]
+                + (0..<2).map { ("pad \($0)", g.padBounds($0)) } + [("gyro", g.gyro), ("rumble", g.rumble)]
             let captions = G.Control.allCases.map { ("caption \($0)", g.captionRect($0)) }
                 + (0..<2).map { ("stick caption \($0)", g.stickCaptionRect($0)) }
                 + (0..<2).map { ("pad caption \($0)", g.padCaptionRect($0)) }
@@ -34,12 +34,16 @@ final class Steam2026PictureGeometryTests: XCTestCase {
             }
         }
     }
-    func testPadAnglesAreMirroredAndGyroIsBelowBody() {
+    func testPadAnglesAreMirroredAndGyroIsBetweenTheHandles() {
         let g = G(width: 560)
         XCTAssertEqual(G.padAngle(0), -G.padAngle(1)); XCTAssertGreaterThan(G.padAngle(0), 0)
         XCTAssertEqual(g.padBounds(0).width, g.padBounds(1).width, accuracy: 0.001)
         XCTAssertGreaterThan(g.padBounds(0).width, g.padRect(0).width)
-        XCTAssertGreaterThan(g.gyro.minY, g.body.maxY)
+        // Under the cutout, between the handles, with Rumble right below and clear of it.
+        XCTAssertGreaterThan(g.gyro.minY, g.body.minY + g.body.height * 0.774)
+        XCTAssertLessThan(g.gyro.minY, g.body.maxY)
+        XCTAssertGreaterThan(g.rumble.minY, g.gyro.maxY); XCTAssertEqual(g.rumble.midX, g.gyro.midX, accuracy: 0.001)
+        XCTAssertGreaterThan(g.gyro.minX, g.body.minX + g.body.width * 0.31); XCTAssertLessThan(g.rumble.maxX, g.body.minX + g.body.width * 0.69)
         XCTAssertLessThan(g.stickCaptionRect(0).midX, g.stickRect(0).minX)
         XCTAssertGreaterThan(g.stickCaptionRect(1).midX, g.stickRect(1).maxX)
     }

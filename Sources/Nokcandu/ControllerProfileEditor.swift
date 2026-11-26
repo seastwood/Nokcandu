@@ -1380,7 +1380,7 @@ struct ExtraButtons: View {
             }
             Button { selection = .triggers } label: { Text("Trigger pull").font(.caption) }.buttonStyle(.link)
             ForEach([("Touchpad", ControllerProfileEditor.Part.touchpad), ("Tilt", .tilt), ("Macros", .macros), ("Sequences", .sequences),
-                     ("On-screen menus", .menus), ("Feedback", .feedback)], id: \.0) { t, part in
+                     ("On-screen menus", .menus)], id: \.0) { t, part in
                 Button { selection = part } label: { Text(t).font(.caption).fontWeight(selection == part ? .bold : .regular) }.buttonStyle(.link)
             }
         }
