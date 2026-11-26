@@ -6,6 +6,12 @@
 
 <table>
   <tr>
+    <td colspan="2"><img width="100%" src="docs/gallery/controller-overlay.gif" alt="The controller overlay in a game stream, showing each button's mapping, with the head-motion radial beside it"></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><em>The controller overlay in a stream: live mappings on the controller, and the head-motion radial</em></td>
+  </tr>
+  <tr>
     <td width="50%"><a href="docs/gallery/steam-controller-profile.png"><img width="100%" src="docs/gallery/steam-controller-profile.png" alt="A Steam Controller profile: the controller picture with every mapping, and the right trackpad set to Mouse-like stick"></a></td>
     <td width="50%"><a href="docs/gallery/steam-controller-2026-profile.png"><img width="100%" src="docs/gallery/steam-controller-2026-profile.png" alt="A Steam Controller 2026 profile"></a></td>
   </tr>
