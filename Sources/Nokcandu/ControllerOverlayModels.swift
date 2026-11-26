@@ -101,7 +101,7 @@ final class OverlayControllerModel {
                 let p = SIMD3(at.x + d.x * (arm / 2 + w * 0.1), top + 0.03, at.y + d.y * (arm / 2 + w * 0.1)), m = material()
                 let n = node(g, m, at: p)
                 buttons[input, default: []].append(Button(node: n, material: m, rest: p, travel: SIMD3(0, -0.02, 0)))
-                capLabels[input, default: []].append(labelPlane(d.x == 0 ? w : arm, d.x == 0 ? arm : w, on: n, y: 0.033))
+                if !moved.contains(input) { capLabels[input, default: []].append(labelPlane(d.x == 0 ? w : arm, d.x == 0 ? arm : w, on: n, y: 0.033)) }
             }
             let hub = SCNBox(width: CGFloat(w), height: 0.06, length: CGFloat(w), chamferRadius: 0.01)
             _ = node(hub, material(), at: SIMD3(at.x, top + 0.03, at.y))
@@ -426,7 +426,22 @@ struct OverlayLayout {
             .grip(.paddle1, edge(at(0.945, 0.66)), length: 0.42, turn: 0.2),
             .grip(.paddle4, edge(at(0.12, 0.91)), length: 0.38, turn: -0.55),
             .grip(.paddle3, edge(at(0.88, 0.91)), length: 0.38, turn: 0.55),
-        ])
+            // Labels beside the small parts: bumpers on the upper corners, View and Menu beside, QAM below.
+            .label(.lb, [at(0.2, 0.06).x, 0.004, at(0.2, 0.06).y], width: 0.6, length: 0.17),
+            .label(.rb, [at(0.8, 0.06).x, 0.004, at(0.8, 0.06).y], width: 0.6, length: 0.17),
+            .label(.back, [at(0.32, 0.087).x + 0.24, 0.004, at(0.32, 0.087).y], width: 0.26, length: 0.14),
+            .label(.start, [at(0.68, 0.087).x - 0.24, 0.004, at(0.68, 0.087).y], width: 0.26, length: 0.14),
+            .label(.misc, [0, 0.004, at(0.5, 0.55).y + 0.16], width: 0.3, length: 0.14),
+            .label(.paddle2, [at(0.1, 0.66).x + 0.12, 0.004, at(0.1, 0.66).y], width: 0.3, length: 0.14),
+            .label(.paddle1, [at(0.9, 0.66).x - 0.12, 0.004, at(0.9, 0.66).y], width: 0.3, length: 0.14),
+        ] + dpadLabels(d, size: reach * 2.3))
+    }
+
+    /// A D-pad's labels just outside its arms (the arms are too narrow to write on).
+    static func dpadLabels(_ c: SIMD2<Float>, size: Float) -> [Part] {
+        let d = size * 0.86, w = size * 0.5, l = size * 0.32
+        return [.label(.up, [c.x, 0.02, c.y - d], width: w, length: l), .label(.down, [c.x, 0.02, c.y + d], width: w, length: l),
+                .label(.left, [c.x - d, 0.02, c.y], width: w, length: l), .label(.right, [c.x + d, 0.02, c.y], width: w, length: l)]
     }
 
     // MARK: Xbox
@@ -446,13 +461,18 @@ struct OverlayLayout {
             .button(.y, .round(0.11), [1.18, -0.62]), .button(.a, .round(0.11), [1.18, -0.14]),
             .button(.x, .round(0.11), [0.94, -0.38]), .button(.b, .round(0.11), [1.42, -0.38]),
             .button(.guide, .round(0.17), [0, -0.68]),
-            .button(.back, .round(0.07), [-0.36, -0.3]), .button(.start, .round(0.07), [0.36, -0.3]),
-            .button(.misc, .pill(0.13, 0.07), [0, -0.1]),
+            .button(.back, .round(0.075), [-0.36, -0.3]), .button(.start, .round(0.075), [0.36, -0.3]),
+            .button(.misc, .pill(0.14, 0.075), [0, -0.1]),
             .bumper(.lb, [-1.25, -1.08], width: 1.0), .bumper(.rb, [1.25, -1.08], width: 1.0),
             .trigger(0, [-1.25, -1.26], width: 0.8), .trigger(1, [1.25, -1.26], width: 0.8),
-            // Elite back paddles, where a controller has them.
-            .grip(.paddle2, [-1.86, -0.02, 0.55], length: 0.5, turn: -0.3), .grip(.paddle1, [1.86, -0.02, 0.55], length: 0.5, turn: 0.3),
-        ])
+            // Elite back paddles, where a controller has them: out past the handles so they show.
+            .grip(.paddle2, [-1.99, 0.06, 0.6], length: 0.5, turn: -0.3), .grip(.paddle1, [1.99, 0.06, 0.6], length: 0.5, turn: 0.3),
+            // Labels beside the small parts: bumpers on the upper corners, View and Menu above, Share below.
+            .label(.lb, [-1.22, 0.004, -0.86], width: 0.62, length: 0.19), .label(.rb, [1.22, 0.004, -0.86], width: 0.62, length: 0.19),
+            .label(.back, [-0.38, 0.004, -0.45], width: 0.3, length: 0.16), .label(.start, [0.38, 0.004, -0.45], width: 0.3, length: 0.16),
+            .label(.misc, [0, 0.004, 0.05], width: 0.32, length: 0.15),
+            .label(.paddle2, [-1.55, 0.004, 0.78], width: 0.36, length: 0.15), .label(.paddle1, [1.55, 0.004, 0.78], width: 0.36, length: 0.15),
+        ] + dpadLabels([-0.62, 0.25], size: 0.46))
 
     // MARK: Switch Pro Controller
 
@@ -472,11 +492,15 @@ struct OverlayLayout {
             // Positions, not letters: top, bottom, left, right as the remapper names them.
             .button(.y, .round(0.11), [1.18, -0.6]), .button(.a, .round(0.11), [1.18, -0.1]),
             .button(.x, .round(0.11), [0.93, -0.35]), .button(.b, .round(0.11), [1.43, -0.35]),
-            .button(.back, .pill(0.13, 0.05), [-0.42, -0.72]), .button(.start, .round(0.065), [0.42, -0.72]),
-            .button(.misc, .square(0.1), [-0.32, -0.4]), .button(.guide, .round(0.09), [0.32, -0.4]),
+            .button(.back, .pill(0.14, 0.055), [-0.42, -0.72]), .button(.start, .round(0.07), [0.42, -0.72]),
+            .button(.misc, .square(0.11), [-0.32, -0.4]), .button(.guide, .round(0.1), [0.32, -0.4]),
             .bumper(.lb, [-1.22, -1.06], width: 1.0), .bumper(.rb, [1.22, -1.06], width: 1.0),
             .trigger(0, [-1.22, -1.24], width: 0.8), .trigger(1, [1.22, -1.24], width: 0.8),
-        ])
+            // Labels beside the small parts: bumpers on the upper corners, − and + beside, Capture and Home below.
+            .label(.lb, [-1.2, 0.004, -0.84], width: 0.62, length: 0.19), .label(.rb, [1.2, 0.004, -0.84], width: 0.62, length: 0.19),
+            .label(.back, [-0.42, 0.004, -0.58], width: 0.3, length: 0.15), .label(.start, [0.42, 0.004, -0.58], width: 0.3, length: 0.15),
+            .label(.misc, [-0.32, 0.004, -0.24], width: 0.3, length: 0.15), .label(.guide, [0.32, 0.004, -0.24], width: 0.3, length: 0.15),
+        ] + dpadLabels([-0.6, 0.28], size: 0.44))
 
     // MARK: DualShock 4 / DualSense
 
@@ -497,10 +521,16 @@ struct OverlayLayout {
             .button(.x, .round(0.105), [1.07, -0.3]), .button(.b, .round(0.105), [1.53, -0.3]),
             .stick(0, [-0.6, 0.35], radius: 0.22), .stick(1, [0.6, 0.35], radius: 0.22),
             .pad(0, [0, -0.42], .rect(1.5, 0.6), click: .touchpad),
-            .button(.back, .pill(0.07, 0.15), [-0.9, -0.62]), .button(.start, .pill(0.07, 0.15), [0.9, -0.62]),
+            .button(.back, .pill(0.075, 0.16), [-0.9, -0.62]), .button(.start, .pill(0.075, 0.16), [0.9, -0.62]),
             .button(.guide, .round(0.1), [0, 0.25]),
             .bumper(.lb, [-1.5, -1.08], width: 0.8), .bumper(.rb, [1.5, -1.08], width: 0.8),
             .trigger(0, [-1.5, -1.26], width: 0.7), .trigger(1, [1.5, -1.26], width: 0.7),
-            .grip(.paddle2, [-1.95, -0.02, 0.6], length: 0.45, turn: -0.2), .grip(.paddle1, [1.95, -0.02, 0.6], length: 0.45, turn: 0.2),
-        ])
+            // DualSense Edge back buttons: out past the handles so they show.
+            .grip(.paddle2, [-2.07, 0.06, 0.6], length: 0.45, turn: -0.2), .grip(.paddle1, [2.07, 0.06, 0.6], length: 0.45, turn: 0.2),
+            // Labels beside the small parts: bumpers on the upper corners, Create and Options below, PS below.
+            .label(.lb, [-1.5, 0.004, -0.86], width: 0.56, length: 0.18), .label(.rb, [1.5, 0.004, -0.86], width: 0.56, length: 0.18),
+            .label(.back, [-0.92, 0.004, -0.42], width: 0.24, length: 0.14), .label(.start, [0.92, 0.004, -0.42], width: 0.24, length: 0.14),
+            .label(.guide, [0, 0.004, 0.42], width: 0.3, length: 0.14),
+            .label(.paddle2, [-1.62, 0.004, 0.78], width: 0.34, length: 0.15), .label(.paddle1, [1.62, 0.004, 0.78], width: 0.34, length: 0.15),
+        ] + dpadLabels([-1.3, -0.3], size: 0.46))
 }

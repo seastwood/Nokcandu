@@ -531,6 +531,23 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
         }
     }
 
+    /// A part's own name, short, for when it does what it's called (drawn dimmed).
+    static func ownName(_ i: PadProfiles.Input, _ f: Controllers.Family?) -> String {
+        switch (i, f) {
+        case (.up, _): "↑"; case (.down, _): "↓"; case (.left, _): "←"; case (.right, _): "→"
+        case (.guide, _): "⌂"
+        case (.back, .nintendo): "−"; case (.start, .nintendo): "+"; case (.misc, .nintendo): "◉"
+        case (.back, .playstation): "Create"; case (.start, .playstation): "Opt"; case (.misc, .playstation): "Mute"
+        case (.back, .valve): "◀"; case (.start, .valve): "▶"
+        case (.back, _): "View"; case (.start, _): "Menu"
+        case (.misc, .steam2026): "QAM"; case (.misc, _): "Share"
+        case (.paddle1, .steam2026): "R4"; case (.paddle2, .steam2026): "L4"; case (.paddle3, .steam2026): "R5"; case (.paddle4, .steam2026): "L5"
+        case (.paddle1, .valve): "R Grip"; case (.paddle2, .valve): "L Grip"
+        case (.paddle1, _): "P1"; case (.paddle2, _): "P2"; case (.paddle3, _): "P3"; case (.paddle4, _): "P4"
+        default: PadLabel.abbreviate(i.title(f), limit: 3)
+        }
+    }
+
     /// What every part does in the layer that's on, with what's held and toggled now.
     private func currentMappings(_ model: OverlayControllerModel) -> OverlayMappings? {
         let pad = DesktopPad.shared
@@ -545,7 +562,7 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
         var m = OverlayMappings()
         for i in PadProfiles.Input.allCases where !i.isVirtual {
             // Beside a button its own name would only add clutter for a stick click; the Steam/guide button reads as ⌂.
-            let own = i == .guide ? "⌂" : (model.moved.contains(i) && (i == .ls || i == .rs)) ? "" : PadLabel.abbreviate(i.title(fam), limit: 3)
+            let own = (model.moved.contains(i) && (i == .ls || i == .rs)) ? "" : Self.ownName(i, fam)
             m.buttons[i] = .init(text: text(i), own: own, toggled: live.toggled.contains(i))
         }
         let input = active.flatMap { sources[$0]?.input } ?? ControllerOverlayInput()

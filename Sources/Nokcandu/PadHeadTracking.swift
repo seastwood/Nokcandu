@@ -41,9 +41,26 @@ final class PadHeadTracking: ObservableObject {
     private var shownTransform = PadHeadStick()
     private var directions = PadHeadDirections()
     private var lastPID: pid_t?
+    /// Headphones going away (disconnected, out of the ear, taken off): nothing held stays held. macOS tells us when
+    /// they disconnect; if updates just stop, the watchdog lets go after half a second.
+    private let link = HeadphoneLink()
+    private var watchdog: Timer?
+    private var lastSample = 0.0, lostSince: Double?
+    static let silence = 0.5
+
+    private func lose(_ why: String) {
+        guard lostSince == nil else { return }
+        lostSince = CACurrentMediaTime()
+        transform.recenter(); stickTransform.recenter(); shownTransform.recenter(); directions.reset()
+        DesktopPad.shared.releaseHeadStick()
+        HeadMotionOverlay.shared.moved(nil)
+        status = why
+    }
+
     private func setEnabled(_ on: Bool) {
         sessionID = UUID()
-        manager?.stopDeviceMotionUpdates(); manager = nil
+        watchdog?.invalidate(); watchdog = nil; lostSince = nil; lastSample = 0
+        manager?.stopDeviceMotionUpdates(); manager?.delegate = nil; manager = nil
         enabled = false; motionActive = false; transform.recenter(); stickTransform.recenter(); shownTransform.recenter(); DesktopPad.shared.releaseHeadStick(); lastPID = nil
         HeadMotionOverlay.shared.moved(nil)
         guard on else { status = "Off"; return }
@@ -56,12 +73,26 @@ final class PadHeadTracking: ObservableObject {
         guard manager.isDeviceMotionAvailable else { status = "No compatible headphone motion available"; return }
         enabled = true; status = "Waiting for headphone motion"
         let session = sessionID
+        link.disconnected = { [weak self] in
+            guard let self, self.sessionID == session else { return }
+            self.lose("Headphones disconnected: waiting for them")
+        }
+        manager.delegate = link
+        watchdog = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.sessionID == session, self.lastSample > 0,
+                      CACurrentMediaTime() - self.lastSample > Self.silence else { return }
+                self.lose("Headphone motion stopped: waiting for it")
+            }
+        }
         manager.startDeviceMotionUpdates(to: .main) { [weak self] motion, error in
             MainActor.assumeIsolated {
                 guard let self, self.enabled, self.sessionID == session else { return }
                 guard let motion, error == nil else {
                     self.setEnabled(false); self.status = "Headphone motion stopped or permission unavailable"; return
                 }
+                self.lastSample = CACurrentMediaTime()
+                if self.lostSince != nil { self.lostSince = nil }
                 guard let settings = self.settings, settings.enabled else { return }
                 let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
                 if self.lastPID != pid { self.transform.recenter(); self.stickTransform.recenter(); self.shownTransform.recenter(); DesktopPad.shared.releaseHeadStick(); self.lastPID = pid }
@@ -197,4 +228,13 @@ struct PadHeadProfileSettings: View {
             Button("Remove Headphone Source", role: .destructive, action: remove)
         }
     }
+}
+
+/// Tells the head tracker when macOS reports the headphones disconnected.
+final class HeadphoneLink: NSObject, CMHeadphoneMotionManagerDelegate, @unchecked Sendable {
+    @MainActor var disconnected: (() -> Void)?
+    nonisolated func headphoneMotionManagerDidDisconnect(_ manager: CMHeadphoneMotionManager) {
+        DispatchQueue.main.async { MainActor.assumeIsolated { self.disconnected?() } }
+    }
+    nonisolated func headphoneMotionManagerDidConnect(_ manager: CMHeadphoneMotionManager) {}
 }
