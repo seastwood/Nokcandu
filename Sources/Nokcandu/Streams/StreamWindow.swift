@@ -332,6 +332,12 @@ import Metal
         refreshStatsPicture()
         if let hz = window?.screen?.maximumFramesPerSecond { connection.video.metalRenderer?.setRefreshRate(Float(hz)) }
         if let problem = r.problem { flash("Metal isn't available on this Mac (\(problem)). Using the display layer.") }
+        if connection.video.metalRenderer == nil {
+            let shown = StreamPictureExtras.onScreen(profile)
+            if !shown.isEmpty {
+                StreamLog.shared.add("Latency: with the display layer, \(StreamPictureExtras.list(shown)) are shown over the picture, so macOS composites the screen each frame (adds delay); Metal draws them into the picture")
+            }
+        }
     }
 
     private func updateOverlayVisibility() {

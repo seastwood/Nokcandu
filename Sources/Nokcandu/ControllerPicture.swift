@@ -40,12 +40,13 @@ struct ControllerPicture: View {
     /// Xbox and Nintendo: left stick high, d-pad low. PlayStation: d-pad high, both sticks low.
     var dpadCenter: CGPoint { psLayout ? CGPoint(x: 0.24, y: 0.36) : CGPoint(x: 0.37, y: 0.585) }
     var stickPlaces: [CGPoint] {
-        return steamLayout ? [CGPoint(x:0.37,y:0.66),CGPoint(x:0.75,y:0.33)] : [psLayout ? CGPoint(x: 0.37, y: 0.585) : CGPoint(x: 0.24, y: 0.36), CGPoint(x: 0.63, y: 0.585)]
+        return steamLayout ? [Steam2015Outline.place(-0.442, -0.386), Steam2015Outline.place(1.117, 0.242)] : [psLayout ? CGPoint(x: 0.37, y: 0.585) : CGPoint(x: 0.24, y: 0.36), CGPoint(x: 0.63, y: 0.585)]
     }
 
     func place(_ i: I) -> CGPoint {
-        let d = dpadCenter, face = steamLayout ? CGPoint(x:0.63,y:0.67) : CGPoint(x: 0.76, y: 0.36)
-        let dx: CGFloat = steamLayout ? 0.048 : 0.058, dy: CGFloat = steamLayout ? 0.075 : 0.09
+        // Steam Controller (2015): where the real controller has them (the overlay's outline, from PadSight).
+        let d = dpadCenter, face = steamLayout ? Steam2015Outline.place(0.456, -0.358) : CGPoint(x: 0.76, y: 0.36)
+        let dx: CGFloat = steamLayout ? 0.064 : 0.058, dy: CGFloat = steamLayout ? 0.092 : 0.09
         switch i {
         case .up: return CGPoint(x: d.x, y: d.y - dy)
         case .down: return CGPoint(x: d.x, y: d.y + dy)
@@ -56,11 +57,11 @@ struct ControllerPicture: View {
         case .a: return family == .nintendo ? CGPoint(x: face.x + dx, y: face.y) : CGPoint(x: face.x, y: face.y + dy)
         case .x: return family == .nintendo ? CGPoint(x: face.x, y: face.y - dy) : CGPoint(x: face.x - dx, y: face.y)
         case .b: return family == .nintendo ? CGPoint(x: face.x, y: face.y + dy) : CGPoint(x: face.x + dx, y: face.y)
-        case .back: return steamLayout ? CGPoint(x: 0.42, y: 0.25) : CGPoint(x: 0.42, y: 0.33)
-        case .start: return steamLayout ? CGPoint(x: 0.58, y: 0.25) : CGPoint(x: 0.58, y: 0.33)
-        case .guide: return CGPoint(x: 0.5, y: steamLayout ? 0.25 : psLayout ? 0.47 : 0.19)
-        case .paddle1: return CGPoint(x:0.79,y:0.86)
-        case .paddle2: return CGPoint(x:0.21,y:0.86)
+        case .back: return steamLayout ? Steam2015Outline.place(-0.38, 0.266) : CGPoint(x: 0.42, y: 0.33)
+        case .start: return steamLayout ? Steam2015Outline.place(0.38, 0.266) : CGPoint(x: 0.58, y: 0.33)
+        case .guide: return steamLayout ? Steam2015Outline.place(0, 0.33) : CGPoint(x: 0.5, y: psLayout ? 0.47 : 0.19)
+        case .paddle1: return steamLayout ? Steam2015Outline.place(1.55, -1.12) : CGPoint(x:0.79,y:0.86)
+        case .paddle2: return steamLayout ? Steam2015Outline.place(-1.55, -1.12) : CGPoint(x:0.21,y:0.86)
         case .lb: return CGPoint(x: 0.22, y: -0.07)
         case .rb: return CGPoint(x: 0.78, y: -0.07)
         case .lt: return CGPoint(x: 0.22, y: -0.24)
@@ -120,15 +121,25 @@ struct ControllerPicture: View {
             let x0 = (geo.size.width - sw) / 2, y0 = geo.size.height - sh - 2
             // Controls keep their size down to a point, then shrink with the body so they never run into each other.
             let k = max(0.62, min(1, sw / 420))
-            let at = { (p: CGPoint) in CGPoint(x: x0 + p.x * sw, y: y0 + (steamLayout && p.y >= 0 ? p.y - 0.06 : p.y) * sh) }
+            let at = { (p: CGPoint) in CGPoint(x: x0 + p.x * sw, y: y0 + p.y * sh) }
+            let body: AnyShape = steamLayout ? AnyShape(Steam2015Outline(points: OverlayLayout.steam2015Body)) : AnyShape(ControllerShape())
             ZStack {
-                ControllerShape()
+                body
                     .fill(LinearGradient(colors: [Color.primary.opacity(0.16), Color.primary.opacity(0.07)], startPoint: .top, endPoint: .bottom))
-                    .overlay(ControllerShape().stroke(Color.primary.opacity(0.18), lineWidth: 1))
+                    .overlay(body.stroke(Color.primary.opacity(0.18), lineWidth: 1))
                     .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
                     .frame(width: sw, height: sh)
                     .position(x: x0 + sw / 2, y: y0 + sh / 2)
                     .accessibilityHidden(true)
+                if steamLayout {
+                    // Its lighter centre panel.
+                    Steam2015Outline(points: OverlayLayout.steam2015Panel)
+                        .fill(Color.primary.opacity(0.07))
+                        .overlay(Steam2015Outline(points: OverlayLayout.steam2015Panel).stroke(Color.primary.opacity(0.12), lineWidth: 1))
+                        .frame(width: sw, height: sh)
+                        .position(x: x0 + sw / 2, y: y0 + sh / 2)
+                        .accessibilityHidden(true)
+                }
                 // the d-pad's cross, under its four buttons
                 if steamLayout {
                     Button { selection = .touchpad } label: {
@@ -141,7 +152,7 @@ struct ControllerPicture: View {
                             Text("Left trackpad").font(.caption2).lineLimit(1).fixedSize().offset(x:-Self.steamPadSize*0.2*k,y:Self.steamPadSize/2*k+9)
                         }
                     }.buttonStyle(.plain).accessibilityLabel("Left trackpad settings")
-                        .position(at(CGPoint(x:0.25,y:0.33)))
+                        .position(at(Steam2015Outline.place(-1.117, 0.242)))
                 } else { DPadWell().fill(Color.primary.opacity(0.08))
                     .frame(width: sw * 0.17, height: sh * 0.265)
                     .position(at(dpadCenter))
@@ -154,7 +165,7 @@ struct ControllerPicture: View {
                         .background(Capsule().fill(selection == .gyro ? tint.opacity(0.35) : Color.primary.opacity(0.08)))
                         .overlay(Capsule().stroke(selection == .gyro ? tint : .clear, lineWidth: 2))
                 }
-                .buttonStyle(.plain).position(at(CGPoint(x: 0.5, y: 0.93)))
+                .buttonStyle(.plain).position(at(steamLayout ? Steam2015Outline.place(0, -1.25) : CGPoint(x: 0.5, y: 0.93)))
                 .accessibilityLabel("Gyro settings")
             }
         }
@@ -166,6 +177,8 @@ struct ControllerPicture: View {
         let tint = targetTint(i) ?? self.tint
         let round = ![.lb, .rb, .lt, .rt, .ltfull, .rtfull].contains(i)
         let outwardLabel = steamLayout && [.y, .a, .x, .b].contains(i)
+        // Steam Controller (2015): Back's and Start's captions go above them, leaving room for Y's above Y.
+        let captionAbove = steamLayout && [.back, .start].contains(i)
         let captionOffset: CGSize = i == .y ? CGSize(width: 0, height: -14 * k - 8) : i == .a ? CGSize(width: 0, height: 14 * k + 8) : CGSize(width: i == .x ? -12 * k - 32 : 12 * k + 32, height: 0)
         let short: String = {
             switch i {
@@ -181,13 +194,14 @@ struct ControllerPicture: View {
         }()
         return Button { selection = .input(i) } label: {
             VStack(spacing: 1) {
+                if captionAbove, let l = label(i), l != "—" { Text(l).font(.system(size: 10, weight: .medium)).foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.7).frame(maxWidth: 64).help(l) }
                 Text(short).font(.system(size: max(9, 11 * k), weight: .semibold)).lineLimit(1)
                     .frame(minWidth: (steamLayout && [.guide, .paddle1, .paddle2].contains(i) ? 44 : round ? (steamLayout ? 24 : 28) : 46) * k, minHeight: 28 * k)
                     .background(Capsule().fill(on ? tint : mapped(i) ? tint.opacity(0.35) : Color(nsColor: .controlBackgroundColor)))
                     .overlay(Capsule().stroke(selected ? tint : Color.secondary.opacity(0.35), lineWidth: selected ? 2 : 0.5))
                     .shadow(color: .black.opacity(0.12), radius: 1, y: 0.5)
                     .overlay(alignment: .topTrailing) { if changed(i) { ChangeDot(color: self.tint) } }
-                if !outwardLabel, let l = label(i), l != "—" { Text(l).font(.system(size: 10, weight: .medium)).foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.7).frame(maxWidth: 64).help(l) }
+                if !outwardLabel, !captionAbove, let l = label(i), l != "—" { Text(l).font(.system(size: 10, weight: .medium)).foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.7).frame(maxWidth: 64).help(l) }
             }
             .overlay {
                 if outwardLabel, let l = label(i), l != "—" {
@@ -853,6 +867,27 @@ struct PadTestView: View {
 
 
 /// A controller body: a wide top with rounded shoulders and two grips, no holes.
+/// The Steam Controller (2015) seen from the front: the overlay's outline (from PadSight), x −2.02…2.02 right and
+/// y −1.8…1 up, stretched to the picture's box.
+struct Steam2015Outline: Shape {
+    let points: [(CGFloat, CGFloat)]
+    static let xRange: ClosedRange<CGFloat> = -2.02...2.02, yRange: ClosedRange<CGFloat> = -1.8...1.0
+    /// A point in the outline's units as a fraction of the picture (y down).
+    static func place(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+        CGPoint(x: (x - xRange.lowerBound) / (xRange.upperBound - xRange.lowerBound),
+                y: (yRange.upperBound - y) / (yRange.upperBound - yRange.lowerBound))
+    }
+    func path(in r: CGRect) -> Path {
+        var path = Path()
+        for (i, q) in points.enumerated() {
+            let f = Self.place(q.0, q.1), p = CGPoint(x: r.minX + f.x * r.width, y: r.minY + f.y * r.height)
+            if i == 0 { path.move(to: p) } else { path.addLine(to: p) }
+        }
+        path.closeSubpath()
+        return path
+    }
+}
+
 struct ControllerShape: Shape {
     func path(in r: CGRect) -> Path {
         func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: r.minX + x * r.width, y: r.minY + y * r.height) }

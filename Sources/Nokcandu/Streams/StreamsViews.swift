@@ -433,6 +433,13 @@ struct StreamProfileEditor: View {
                 Picker("Renderer", selection: $profile.video.renderer) { ForEach(StreamProfile.Video.Renderer.allCases, id: \.self) { Text($0.title).tag($0) } }
                     .labelsHidden().frame(maxWidth: 300)
             }
+            if profile.video.renderer == .displayLayer {
+                let shown = StreamPictureExtras.onScreen(profile)
+                if !shown.isEmpty {
+                    SettingNote("With the display layer, \(StreamPictureExtras.list(shown)) can only be shown over the picture, and anything over a full-screen stream makes macOS combine the screen for every frame: about a frame or more of extra delay. Metal draws them into the picture itself, adding none.", warning: true)
+                    Button("Use Metal") { profile.video.renderer = .metal }
+                }
+            }
             if profile.video.renderer == .metal {
                 SettingToggle(title: "V-sync", info: "On waits for the display's refresh, so frames never tear. Off shows each frame the moment it's drawn: up to one refresh less delay (about 8 ms at 120 Hz, 16 ms at 60 Hz), with occasional tearing. Off works best in full screen with the statistics hidden, where macOS can send the picture straight to the display.",
                               isOn: $profile.video.vsync)
@@ -911,5 +918,32 @@ struct PixelField: View {
         let clamped = min(range.upperBound, max(range.lowerBound, n)), v = even ? clamped / 2 * 2 : clamped
         text = String(v)
         if v != value { apply(v) }
+    }
+}
+
+/// What's drawn over a stream besides the picture. With Metal each is drawn into the frames; with the display
+/// layer it has to be a view or window above them, which makes macOS composite the screen and adds delay.
+@MainActor
+enum StreamPictureExtras {
+    static func onScreen(_ p: StreamProfile) -> [String] {
+        var out: [String] = []
+        if p.window.statistics != .off || p.window.graphs { out.append("statistics and graphs") }
+        let overlay = ControllerOverlay.shared.settings
+        if overlay.mode == .onScreen, AppFeatures.current.contains(.profiles) {
+            out.append("the controller overlay")
+            if overlay.headMotion.shown { out.append("the head-motion picture") }
+        }
+        if AppFeatures.current.contains(.profiles), PadHUD.enabled || PadHUD.automaticCalibration,
+           !PadNotificationPreferences.holdWhilePlaying() {
+            out.append("layer, gyro and calibration notes")
+        }
+        return out
+    }
+    static func list(_ items: [String]) -> String {
+        switch items.count {
+        case 0: ""
+        case 1: items[0]
+        default: items.dropLast().joined(separator: ", ") + " and " + items.last!
+        }
     }
 }
