@@ -354,6 +354,7 @@ struct ControllerProfileEditor: View {
             tester.start(profile: PadProfiles.compile(profile, all: everything), devices: PadProfiles.devices(profile, all: everything))
         }
         .onChange(of: layerIndex) { _, _ in configureTesterPads(profile) }
+        .onChange(of: family, initial: true) { _, f in tester.steamLabels = f }
 
         .onDisappear {
             PadProfileEdits.shared.flush(PadProfileEdits.scope(profileID: profile.id, contents: own ? editingContents : nil))

@@ -498,6 +498,8 @@ final class PadTester: ObservableObject {
     private var tapsShown: Set<PadProfiles.Input> = []
     private var tapInputs: [PadProfiles.Input?] = [nil, nil]
     private var zoneClicks = [PadSteamZoneRouter(), PadSteamZoneRouter()]
+    /// The profile's labels, which name the Steam Controller's inputs (see `State.labeled(as:)`).
+    var steamLabels: Controllers.Family?
     func configureSteamPads(left: PadSteamTrackpadSettings?, right: PadSteamTrackpadSettings?) {
         let next = [left ?? PadSteamTrackpadSettings(), right ?? PadSteamTrackpadSettings()]
         if next != steamPadSettings { steamPadMotion = [PadSteamTrackpad(), PadSteamTrackpad()] }
@@ -714,7 +716,8 @@ final class PadTester: ObservableObject {
         return p
     }
     private var wasPaused = false
-    private func readSteam(_ state: SteamControllerReport.State?) {
+    private func readSteam(_ report: SteamControllerReport.State?) {
+        let state = report?.labeled(as: steamLabels)
         guard steamSource, let e = engine, !paused else { return }
         let name = SteamControllerUSB.shared.controllerName
         if controllerName != name { controllerName = name }       // setting it at all redraws the editor

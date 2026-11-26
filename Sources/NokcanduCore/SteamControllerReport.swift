@@ -77,6 +77,16 @@ public struct SteamControllerReport {
             }
             return result
         }
+        /// The report as the profile's labels name its inputs. The original controller under the 2026
+        /// controller's labels: its right pad is that controller's right trackpad, so its click is the right
+        /// trackpad click (not the right stick click), and there's no right stick of its own to share with.
+        public func labeled(as family: Controllers.Family?) -> State {
+            guard kind == .original, family == .steam2026 else { return self }
+            var s = self
+            s.kind = .steam2026; s.rightStick = Point()
+            if s.buttons.remove(.rs) != nil { s.buttons.insert(.rpclick) }
+            return s
+        }
         private static func axis(_ v: Float) -> Int { Int(max(-32768, min(32767, v * 32767))) }
     }
     private var left: [Int16] = [0, 0], stick: [Int16] = [0, 0]

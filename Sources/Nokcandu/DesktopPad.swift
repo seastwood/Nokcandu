@@ -198,6 +198,8 @@ final class DesktopPad: ObservableObject {
     var suppliesSteamHaptics: Bool { steamSource && engine != nil }
     private let steamReaderID = UUID()
     /// Each layer's pad settings, [left, right], by the engine's layer number (0: base).
+    /// The running profile's labels, which name the Steam Controller's inputs (see `State.labeled(as:)`).
+    private var steamLabels: Controllers.Family?
     private var steamPads: [[PadSteamTrackpadSettings]] = [[PadSteamTrackpadSettings(), PadSteamTrackpadSettings()]]
     private var steamPadLayer = 0
 
@@ -399,6 +401,7 @@ final class DesktopPad: ObservableObject {
         if sourceChanged || nextPads != steamPads || force { resetVelocity(); resetAdvancedTouch(); steamRightMotion.reset(); steamLeftMotion.reset() }
         steamPads = nextPads.isEmpty ? [[PadSteamTrackpadSettings(), PadSteamTrackpadSettings()]] : nextPads
         steamSource = nextSteamSource
+        steamLabels = chosen.flatMap { PadProfiles.controllerLabelFamily($0, all: all, connected: SteamControllerUSB.shared.model == .steam2026 ? .steam2026 : .valve) }
         // A profile reading the controller itself feeds the Windows game in front (its Wine driver drops the raw one).
         PadFeed.shared.target(nextSteamSource && !streaming && g != nil && g?.native == nil ? g.flatMap { WineTools.hostContents(for: $0) } : nil)
         if !steamSource { SteamControllerUSB.shared.remove(steamReaderID) }
@@ -768,8 +771,9 @@ final class DesktopPad: ObservableObject {
         let values = Dictionary(uniqueKeysWithValues: axes.map { (Int($0.0), Int(max(-32768, min(32767, $0.1 * 32767)))) })
         consume(sourceState.update(source: source, buttons: held, axes: values))
     }
-    private func readSteam(_ state: SteamControllerReport.State?) {
+    private func readSteam(_ report: SteamControllerReport.State?) {
         guard steamSource, let e = engine else { return }
+        let state = report?.labeled(as: steamLabels)
         guard gestureRecorder == nil else { return }
         guard runtimePID == frontPID else { evaluate(); return }
         guard let state else {
