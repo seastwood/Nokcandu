@@ -328,6 +328,10 @@ public enum PadProfiles {
         public var steamRightTrackpad: PadSteamTrackpadSettings?
         /// The controller's light while this layer is on (DualSense, DualShock 4), "#RRGGBB".
         public var color: String?
+        /// What the game receives while this layer is on (nil: the profile's routing). Lets a layer switch the
+        /// game's own controller controls on or off. Only the whole-controller choices: Standard, Only what this
+        /// profile maps, Mappings and the controller itself, The controller itself.
+        public var routingMode: RoutingMode?
         public init(id: String = UUID().uuidString, name: String, bindings: [String: Binding] = [:]) { self.id = id; self.name = name; self.bindings = bindings }
         public subscript(_ i: Input) -> Binding? {
             get { bindings[i.rawValue] }
@@ -796,6 +800,26 @@ public enum PadProfiles {
         }
         return out
     }
+    /// Layers' own routing across the stack, by layer name (lowercased); the profile on top wins. Not the base layer.
+    public static func layerRoutings(_ p: Profile, all: [Profile]) -> [String: RoutingMode] {
+        var out: [String: RoutingMode] = [:]
+        for q in stack(p, all: all) {
+            for (i, layer) in q.layers.enumerated() where i > 0 {
+                if let r = layer.routingMode { out[layer.name.lowercased()] = r }
+            }
+        }
+        return out
+    }
+    /// The routing that applies with this merged layer index on top: the layer's own, else the profile's.
+    public static func routing(_ p: Profile, all: [Profile], layer: Int) -> RoutingMode {
+        let base = top(p, all: all, \.routingMode) ?? .legacy
+        let m = merged(p, all: all)
+        guard layer > 0, m.layers.indices.contains(layer) else { return base }
+        return layerRoutings(p, all: all)[m.layers[layer].name.lowercased()] ?? base
+    }
+    /// Choices a layer can have (whole-controller ones), simplest first.
+    public static let layerRoutingChoices: [RoutingMode] = [.legacy, .remappingAll, .hybridAll, .native]
+
     /// The top setting of the stack that has one.
     public static func top<T>(_ p: Profile, all: [Profile], _ k: KeyPath<Profile, T?>) -> T? {
         stack(p, all: all).reversed().lazy.compactMap { $0[keyPath: k] }.first
@@ -834,7 +858,8 @@ public enum PadProfiles {
         // "source steam": Nokcandu reads the controller itself and feeds Wine's driver the result (padmap.m).
         let source = top(p, all: all, \.controllerSource) == .steamUSB ? "source steam\n" : ""
         let present = (top(p, all: all, \.presentAs).map { "present \($0.rawValue)\n" } ?? "") + source
-        if routing == .native { return "nokpad 1\n" + present }
+        // The controller itself with no mappings: nothing to compile, unless a layer routes otherwise.
+        if routing == .native && layerRoutings(p, all: all).isEmpty { return "nokpad 1\n" + present }
         let m = merged(p, all: all)
         let layerIndex = Dictionary(m.layers.enumerated().map { ($0.element.name.lowercased(), $0.offset) }, uniquingKeysWith: { a, _ in a })
         let macros = Array(collected(p, all: all, \.macros).prefix(16)), menus = Array(collected(p, all: all, \.menus).prefix(8))
@@ -995,6 +1020,37 @@ public enum PadProfiles {
         if routing == .hybridAll || routing == .remappingAll {
             let route = routing == .hybridAll ? "both" : "mapped"
             for key in ["lstick", "rstick", "lt", "rt", "gyro", "touch", "tilt"] { lines.append("route \(key) \(route)") }
+        }
+        // Layers with routing of their own: a whole route table each, used while that layer is on top. In a layer that
+        // hands the game the controller itself, the buttons that change layers anywhere in the profile still do, or
+        // there'd be no way back.
+        let ownRouting = layerRoutings(p, all: all)
+        let switchesLayers = Set(Input.padButtons.filter { i in
+            m.layers.contains { layer in
+                guard let b = layer.bindings[i] else { return false }
+                let o = b.press + b.tap + b.hold + b.double + b.togetherOutputs + (b.release ?? []) + (b.longHold ?? []) + (b.cycle ?? []).flatMap { $0 }
+                return o.contains { if case .layerHold = $0 { return true }; if case .layerToggle = $0 { return true }; return false }
+            }
+        })
+        if routing == .native {
+            // Only reached with a layer that routes otherwise: the base layer hands over the controller itself.
+            for i in Input.padButtons { lines.append("route \(i.rawValue) \(switchesLayers.contains(i) ? "standard" : "native")") }
+            for key in ["lstick", "rstick", "lt", "rt", "gyro", "touch", "tilt"] { lines.append("route \(key) native") }
+        }
+        for (L, layer) in m.layers.enumerated() where L > 0 {
+            guard let r = ownRouting[layer.name.lowercased()] else { continue }
+            let (button, control): (String, String) = {
+                switch r {
+                case .remappingAll, .remapping: ("mapped", "mapped")
+                case .hybridAll, .hybrid: ("both", "both")
+                case .native: ("native", "native")
+                default: ("standard", "standard")
+                }
+            }()
+            for i in Input.padButtons {
+                lines.append("route \(i.rawValue) \(r == .native && switchesLayers.contains(i) ? "standard" : button) layer=\(L)")
+            }
+            for key in ["lstick", "rstick", "lt", "rt", "gyro", "touch", "tilt"] { lines.append("route \(key) \(control) layer=\(L)") }
         }
         return lines.joined(separator: "\n") + "\n" + present
     }

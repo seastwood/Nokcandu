@@ -139,7 +139,7 @@ struct ControllerProfileEditor: View {
             if PadProfiles.top(profile, all: everything, \.presentAs) != nil, let why = MacVirtualControllers.unavailableReason {
                 Text("Windows games and streams see it now. Mac apps: \(why)").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
-            sourceRow("Routing", info: "What the game or app receives. Standard: your mappings, and anything you left alone works as usual. “Only what this profile maps” hides the controller’s own input from Windows games; “Mappings and the controller itself” sends both, which can make a button act twice. “The controller itself” switches mappings off. The Buttons choices do the same for buttons only, and “Choose for each control” lets you decide control by control: select a button, stick, trigger or the gyro to set it.\n\nThe controller stays visible to macOS either way; hiding applies to Windows games through Nokcandu. Windows games see an Xbox-style controller.") {
+            sourceRow("Routing", info: "What the game or app receives. Standard: your mappings, and anything you left alone works as usual. “Only what this profile maps” hides the controller’s own input from Windows games; “Mappings and the controller itself” sends both, which can make a button act twice. “The controller itself” switches mappings off. The Buttons choices do the same for buttons only, and “Choose for each control” lets you decide control by control: select a button, stick, trigger or the gyro to set it.\n\nWindows games in Nokcandu see an Xbox-style controller (or the Emulated controller). Mac apps and CrossOver games: with “Only what this profile maps”, Nokcandu hides a DualShock 4, DualSense, Xbox or Switch Pro controller from the game (Controller Settings → Controller ownership), so only your mappings reach it; otherwise the game also reads the controller itself. A layer can route differently: select the layer to set its own.") {
                 Picker("Routing", selection: Binding(get: { effectiveRouting }, set: { profile.routingMode = $0 })) {
                     ForEach(PadProfiles.RoutingMode.shown, id: \.self) { Text($0.title).tag($0) }
                 }
@@ -167,6 +167,14 @@ struct ControllerProfileEditor: View {
                 }
             }
             layerBar
+            if layerIndex > 0, profile.layers.indices.contains(layerIndex) {
+                sourceRow("\(layerName) routing", info: "What the game receives while this layer is on, so a layer can switch the game's own controller controls on or off: for example the base layer on “Only what this profile maps” (your keys and mouse) and a layer on “The controller itself” (the game's controller controls), switched with a button set to hold or toggle that layer. Buttons that change layers keep doing that in every layer, so there's always a way back.\n\nWindows games in Nokcandu and streams switch instantly. Mac apps and CrossOver games: Nokcandu gives the controller back to macOS while a layer passes it on and hides it again after; the game may take a moment to notice it. With the Emulated controller as a Mac virtual controller (once Apple allows it), the switch is instant there too.") {
+                    Picker("\(layerName) routing", selection: Binding(get: { profile.layers[layerIndex].routingMode }, set: { profile.layers[layerIndex].routingMode = $0 })) {
+                        Text("As the profile (\(effectiveRouting.title))").tag(PadProfiles.RoutingMode?.none)
+                        ForEach(PadProfiles.layerRoutingChoices, id: \.self) { Text($0.title).tag(Optional($0)) }
+                    }
+                }
+            }
             DeviceStrip(mainTitle: inputSource == .steamUSB ? "Steam Controller" : "Controller", devices: devicesBinding, hasHead: headSourceBinding, shown: $shownDevice, selection: $selection)
             if selection == .headMotion {
                 VStack(spacing: 12) {

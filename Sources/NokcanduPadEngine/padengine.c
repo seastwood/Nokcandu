@@ -125,6 +125,9 @@ struct pe_engine {
     bool releasing;
     int control_route[7];        // left/right sticks, left/right triggers, gyro, touch, tilt
     int route[PE_PAD_BUTTONS]; bool route_down[PE_PAD_BUTTONS];
+    int route_press[PE_PAD_BUTTONS];   // the route a button's press started under, which its release keeps
+    // Route tables by layer (0: the profile's); the top active layer with one of its own applies.
+    int route_cfg[MAX_LAYERS][PE_PAD_BUTTONS], control_route_cfg[MAX_LAYERS][7]; bool route_has[MAX_LAYERS]; int route_layer;
     pe_sink sink;
     binding_t bind[MAX_LAYERS][PE_ALL_INPUTS];
     bool layer_toggled[MAX_LAYERS];
@@ -328,9 +331,17 @@ pe_engine *pe_create(const char *text, pe_sink sink) {
             int in = pe_input_named(words[1]);
             const char *v = words[2];
             int route = !strcmp(v, "native") ? 1 : !strcmp(v, "both") ? 2 : !strcmp(v, "disabled") ? 3 : !strcmp(v, "mapped") ? 4 : 0;
+            int L = 0;
+            if (nw >= 4 && !strncmp(words[3], "layer=", 6)) { L = atoi(words[3] + 6); if (L < 1 || L >= MAX_LAYERS) continue; e->route_has[L] = true; }
             static const char *names[] = { "lstick", "rstick", "lt", "rt", "gyro", "touch", "tilt" };
-            for (int c = 0; c < 7; c++) if (!strcmp(words[1], names[c])) e->control_route[c] = route;
-            if (in >= 0 && in < PE_PAD_BUTTONS) e->route[in] = route;
+            for (int c = 0; c < 7; c++) if (!strcmp(words[1], names[c])) {
+                e->control_route_cfg[L][c] = route;
+                if (L == 0) e->control_route[c] = route;
+            }
+            if (in >= 0 && in < PE_PAD_BUTTONS) {
+                e->route_cfg[L][in] = route;
+                if (L == 0) e->route[in] = route;
+            }
             continue;
         }
         // A macro's steps are words of their own ("down:key:13"), not options.
@@ -825,12 +836,16 @@ void pe_button(pe_engine *e, int button, bool down, double now) {
             menu_end(e); e->current_input = old_origin; return;
         }
     }
-    if (e->route[button]) {
+    // A release follows the route its press started under, so changing layers while it's held can't strand it
+    // (a layer-hold button pressed in a mapped layer still ends the hold in a layer that passes the controller on).
+    int route = down ? e->route[button] : e->route_press[button];
+    if (down) e->route_press[button] = route;
+    if (route) {
         if (e->route_down[button] == down) return;
         e->route_down[button] = down;
-        if (e->route[button] == 1 || e->route[button] == 2)
+        if (route == 1 || route == 2)
             out_set(e, (out_t){ O_PAD, (short)button }, down);
-        if (e->route[button] != 2 && e->route[button] != 4) return;
+        if (route != 2 && route != 4) return;
     }
     // With touchpad zones, a click counts as a click in the zone under the finger (when that's set to something).
     if (button == PE_TOUCHPAD && e->touch_mode == TM_ZONES) {
@@ -1579,6 +1594,15 @@ static void apply_layers(pe_engine *e) {
         *k = n; e->stick_layer[s] = L;
         stick_mode_update(e, s);
     }
+    int R = 0;
+    for (int l = MAX_LAYERS - 1; l > 0; l--) if (layer_active(e, l) && e->route_has[l]) { R = l; break; }
+    if (R != e->route_layer) {
+        // Held buttons keep their press's route (route_press); sticks, triggers and gyro follow the new table now.
+        memcpy(e->route, e->route_cfg[R], sizeof e->route);
+        memcpy(e->control_route, e->control_route_cfg[R], sizeof e->control_route);
+        e->route_layer = R;
+        update_triggers(e);
+    }
     int G = 0;
     for (int l = MAX_LAYERS - 1; l > 0; l--) if (layer_active(e, l) && e->gyro_has[l]) { G = l; break; }
     if (G != e->gyro_layer) { load_gyro(e, &e->gyro_cfg[G]); e->gyro_layer = G; e->gyro_stick_x = e->gyro_stick_y = 0; e->eu_init = false; }
@@ -2026,7 +2050,7 @@ void pe_release_main(pe_engine *e, double now) {
     e->gyro_touched = false;
     (void)now;
     for (int b = 0; b < PE_PAD_BUTTONS; b++) if (e->route_down[b]) {
-        if (e->route[b] == 1 || e->route[b] == 2) out_set(e, (out_t){ O_PAD, (short)b }, false);
+        if (e->route_press[b] == 1 || e->route_press[b] == 2) out_set(e, (out_t){ O_PAD, (short)b }, false);
         e->route_down[b] = false;
     }
     for (int s = 0; s < 2; s++) {

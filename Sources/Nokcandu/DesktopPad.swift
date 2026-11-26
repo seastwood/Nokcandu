@@ -399,12 +399,12 @@ final class DesktopPad: ObservableObject {
         // virtual controller, or a profile that sends only its own mappings. Never for Nokcandu's Windows games (their
         // Wine driver reads the controller), streams, Nokcandu itself (the editor tests the controller) or a profile
         // reading the Steam Controller directly.
-        let takeOver = chosen.map { p -> Bool in
+        takeoverRoutings = chosen.flatMap { p -> [PadProfiles.RoutingMode]? in
             guard trusted, !streaming, g == nil || g?.native != nil, front?.processIdentifier != getpid(),
-                  PadProfiles.top(p, all: all, \.controllerSource) != .steamUSB else { return false }
-            return MacVirtualControllers.shared.active || PadProfiles.top(p, all: all, \.routingMode) == .remappingAll
-        } ?? false
-        ControllerTakeover.shared.want(takeOver)
+                  PadProfiles.top(p, all: all, \.controllerSource) != .steamUSB else { return nil }
+            return PadProfiles.merged(p, all: all).layers.indices.map { PadProfiles.routing(p, all: all, layer: $0) }
+        }
+        updateTakeover()
         if activeWhere != wherePlaying { activeWhere = wherePlaying }
         PadHeadTracking.shared.configure(profileID: trusted ? chosen?.id : nil,
             settings: chosen.flatMap { trusted ? PadProfiles.headMotion($0, all: all) : nil })
@@ -517,8 +517,21 @@ final class DesktopPad: ObservableObject {
     private var layerColors: [String?] = []
     private var rumble = false
     private var menus: [PadProfiles.RadialMenu] = []
+    /// Each layer's routing while a Mac app in front could have its controller taken from macOS (nil: it can't).
+    private var takeoverRoutings: [PadProfiles.RoutingMode]?
+    /// The controller is taken from macOS while the layer on top sends only its mappings, or always with the virtual
+    /// controller up (which then carries the controller's own input for layers that pass it on, so switching is
+    /// instant). Without one, a layer that passes the controller on gives it back to macOS so the game reads it.
+    private func updateTakeover() {
+        guard let routings = takeoverRoutings else { ControllerTakeover.shared.want(false); return }
+        let layer = engine.map { Int(pe_active_layer($0)) } ?? 0
+        let routing = routings.indices.contains(layer) ? routings[layer] : routings.first ?? .legacy
+        ControllerTakeover.shared.want(MacVirtualControllers.shared.active || routing == .remappingAll)
+    }
+
     func stateChanged(layer: Int, gyro: Int) {
         if layer != overlayLayer { overlayLayer = layer }
+        if layer != shownLayer { updateTakeover() }
         if layer != shownLayer {
             if rumble { rumbleMain(strength: layerRumble.strength, seconds: layerRumble.length) }
             PadFeedback.shared.light((layerColors.indices.contains(layer) ? layerColors[layer] : nil) ?? layerColors.first ?? nil, feed.mainControllers())
