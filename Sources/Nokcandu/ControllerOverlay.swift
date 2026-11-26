@@ -128,6 +128,7 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
         if let w = window { w.delegate = nil; w.orderOut(nil) }; window = nil
         host = nil; model = nil; modelKind = nil; shownInput = nil; shownOrientation = nil
         wheelNode = nil; shownWheel = nil; shownLabels = nil
+        zoomTimer?.invalidate(); zoomTimer = nil; zoom = 0; zoomTarget = 0; zoomHeld = false
         sources = [:]; active = nil; showing = ""
         motion.reset()
     }
@@ -160,7 +161,7 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
         let f = s.frame, size = self.size
         var origin = CGPoint(x: f.minX + f.width * settings.positionX - size.width / 2, y: f.minY + f.height * settings.positionY - size.height / 2)
         origin.x = min(max(origin.x, f.minX), f.maxX - size.width); origin.y = min(max(origin.y, f.minY), f.maxY - size.height)
-        p.setFrame(NSRect(origin: origin, size: size), display: true)
+        p.setFrame(zoomed(NSRect(origin: origin, size: size), in: f), display: true)
     }
 
     private func savePanelPosition() {
@@ -177,6 +178,7 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
         if arranging { leaveStream() } else if settings.mode == .onScreen { updateStream() }
         panel?.ignoresMouseEvents = !arranging
         host?.arranging = arranging && panel != nil
+        HeadMotionOverlay.shared.arrange(arranging && panel != nil)
     }
 
     // MARK: Inside a full-screen stream
@@ -200,7 +202,10 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
         let f = screen.frame, size = self.size
         var origin = CGPoint(x: f.width * settings.positionX - size.width / 2, y: f.height * settings.positionY - size.height / 2)
         origin.x = min(max(origin.x, 0), f.width - size.width); origin.y = min(max(origin.y, 0), f.height - size.height)
-        let rect = CGRect(x: origin.x, y: f.height - origin.y - size.height, width: size.width, height: size.height)
+        let normal = CGRect(x: origin.x, y: f.height - origin.y - size.height, width: size.width, height: size.height)
+        let rect = zoomed(normal, in: CGRect(origin: .zero, size: f.size))
+        // While it's big or moving, it's rendered once at the big size and only drawn smaller or larger.
+        let render = zoom > 0 ? bigSize(in: f.size) : size
         if inStream !== renderer {
             leaveStream()
             let d = StreamOverlayDrawer(device: renderer.metalDevice, scene: host.scene, camera: host.camera)
@@ -214,7 +219,7 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
             StreamLog.shared.add("Controller overlay: drawn into the stream's frames")
         }
 
-        streamDrawer?.place(rect, screenWidth: f.width, scale: screen.backingScaleFactor, opacity: settings.opacity)
+        streamDrawer?.place(rect, render: render, screenWidth: f.width, scale: screen.backingScaleFactor, opacity: settings.opacity)
         HeadMotionOverlay.shared.streamImage.place(HeadMotionOverlay.shared.streamRect(screenFrame: f), screenWidth: f.width, opacity: settings.opacity)
     }
 
@@ -456,9 +461,55 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
         switch settings.mappings {
         case .whileHeld: mappingsHeld = down
         case .toggle: if down { mappingsOn.toggle() }
-        case .off, .always: return
+        case .always: zoomHeld = down
+        case .off: return
         }
+        setZoom(settings.zoomWithMappings && (settings.mappings == .always ? zoomHeld : mappingsShown))
         scheduleDraw()
+    }
+
+    // MARK: Zooming in to read the mappings
+
+    private var zoomHeld = false
+    /// 0 at its place … 1 big in the middle; eased while it moves.
+    private var zoom = 0.0, zoomTarget = 0.0
+    private var zoomTimer: Timer?, zoomLast = 0.0
+    static let zoomTime = 0.24
+
+    private func setZoom(_ on: Bool) {
+        zoomTarget = on ? 1 : 0
+        guard zoom != zoomTarget, zoomTimer == nil else { return }
+        zoomLast = CACurrentMediaTime()
+        zoomTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 120, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.zoomStep() }
+        }
+    }
+
+    private func zoomStep() {
+        let now = CACurrentMediaTime(), dt = now - zoomLast; zoomLast = now
+        let step = dt / Self.zoomTime
+        zoom = zoomTarget > zoom ? min(zoomTarget, zoom + step) : max(zoomTarget, zoom - step)
+        if zoom == zoomTarget { zoomTimer?.invalidate(); zoomTimer = nil }
+        if inStream != nil { updateStream() } else if let panel { placePanel(panel) }
+    }
+
+    /// The zoom's eased amount.
+    private var zoomEased: CGFloat { let z = CGFloat(zoom); return z * z * (3 - 2 * z) }
+
+    /// Big in the middle of a screen this size: most of its height or width.
+    private func bigSize(in f: CGSize) -> CGSize {
+        let w = min(f.width * 0.72, f.height * 0.8 / aspect)
+        return CGSize(width: w.rounded(), height: (w * aspect).rounded())
+    }
+
+    /// Its frame now: from `normal` toward big in the middle of `screen`, by the zoom.
+    private func zoomed(_ normal: CGRect, in screen: CGRect) -> CGRect {
+        let e = zoomEased
+        guard e > 0 else { return normal }
+        let b = bigSize(in: screen.size)
+        let big = CGRect(x: screen.midX - b.width / 2, y: screen.midY - b.height / 2, width: b.width, height: b.height)
+        return CGRect(x: normal.minX + (big.minX - normal.minX) * e, y: normal.minY + (big.minY - normal.minY) * e,
+                      width: normal.width + (big.width - normal.width) * e, height: normal.height + (big.height - normal.height) * e).integral
     }
 
     /// Redraws when the profile or its layer changes.
@@ -716,6 +767,9 @@ struct ControllerOverlaySettingsView: View {
                      : overlay.settings.mappings == .always ? "Shown all the time, for the layer that's on."
                      : "Give a button \"Show mappings on the overlay\" in your controller profile (it can share a button with something else through a layer or a hold). \(overlay.settings.mappings == .whileHeld ? "Mappings show while it's held." : "Each press shows or hides them.")")
                     .font(.caption).foregroundStyle(.secondary)
+                Toggle("Zoom in with the mappings button", isOn: $overlay.settings.zoomWithMappings)
+                Text("The \"Show mappings on the overlay\" button grows the controller big in the middle of the screen to read its mappings, and shrinks it back to its place after. With mappings shown always, it zooms while the button is held. In a stream it's drawn once at the big size, so zooming adds nothing to the frames.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Toggle("Headphone motion picture", isOn: $overlay.settings.headMotion.shown)
                 if overlay.settings.headMotion.shown {
                     LabeledContent("Across") {
@@ -798,6 +852,7 @@ final class StreamOverlayDrawer: @unchecked Sendable {
     private let sampler: MTLSamplerState?
     private var lock = os_unfair_lock()
     private var rect = CGRect.zero, screenWidth: CGFloat = 1, opacity: Double = 1   // guarded by `lock`
+    private var renderSize = CGSize.zero                                            // main thread
     private var scale: CGFloat = 2                                                  // main thread
 
     init(device: MTLDevice, scene: SCNScene, camera: SCNNode?) {
@@ -813,19 +868,19 @@ final class StreamOverlayDrawer: @unchecked Sendable {
     }
 
     /// Main thread: where it goes (points from the screen's top left), the screen's scale, and how opaque it is.
-    func place(_ r: CGRect, screenWidth w: CGFloat, scale s: CGFloat, opacity o: Double) {
+    func place(_ r: CGRect, render: CGSize, screenWidth w: CGFloat, scale s: CGFloat, opacity o: Double) {
         os_unfair_lock_lock(&lock)
-        let moved = rect.size != r.size
         rect = r; screenWidth = max(1, w); opacity = o
         os_unfair_lock_unlock(&lock)
-        if moved || s != scale || front == nil { scale = s; changed() }
+        // A new picture only when the size it's rendered at changes; moving or zooming just draws it elsewhere.
+        if render != renderSize || s != scale || front == nil { renderSize = render; scale = s; changed() }
     }
 
     /// Main thread: the drawing changed (buttons, sticks, the gyro's turn, colours, the controller drawn). Renders it
     /// now, or right after the render in progress (never more than one behind).
     func changed() {
         guard !inFlight else { pending = true; return }
-        os_unfair_lock_lock(&lock); let r = rect; os_unfair_lock_unlock(&lock)
+        let r = CGRect(origin: .zero, size: renderSize)
         // Twice the screen's pixels, for smooth edges when it's drawn down onto the frame.
         let tw = max(1, Int(r.width * scale * 2)), th = max(1, Int(r.height * scale * 2))
         guard r.width > 0, let queue, let buffer = queue.makeCommandBuffer() else { return }

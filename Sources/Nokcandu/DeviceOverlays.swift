@@ -30,6 +30,9 @@ final class HeadMotionOverlay {
     private var on = false
     private var highlight = NSColor.systemBlue
     private var screen: NSScreen?
+    /// Shown and draggable while the controller overlay is being moved, even without head motion.
+    private var arranging = false
+    var dragging = false
 
     /// Whether anyone's looking: the head-motion tracker skips the work otherwise.
     var wanted: Bool { on }
@@ -49,10 +52,26 @@ final class HeadMotionOverlay {
         refresh()
     }
 
+    /// The controller overlay is being moved: show this one too, and let it be dragged.
+    func arrange(_ on: Bool) {
+        arranging = on; shown = nil
+        panel?.ignoresMouseEvents = !on
+        refresh()
+    }
+
+    /// Dragged to a new place: saved with the overlay's settings.
+    fileprivate func dragged() {
+        guard let p = panel, let s = NSScreen.screens.first(where: { $0.frame.contains(CGPoint(x: p.frame.midX, y: p.frame.midY)) }) ?? p.screen else { return }
+        var next = ControllerOverlay.shared.settings
+        next.headMotion.positionX = (p.frame.midX - s.frame.minX) / s.frame.width
+        next.headMotion.positionY = (p.frame.midY - s.frame.minY) / s.frame.height
+        ControllerOverlay.shared.settings = next
+    }
+
     /// The controller overlay went into a stream's frames (true) or back over the screen (false).
     func streaming(_ yes: Bool) { inStream = yes; refresh() }
 
-    var size: CGSize { CGSize(width: settings.size.rounded(), height: (settings.size * 1.18).rounded()) }
+    var size: CGSize { CGSize(width: settings.size.rounded(), height: settings.size.rounded()) }
 
     /// Where it goes in a stream: points from the screen's top left.
     func streamRect(screenFrame f: CGRect) -> CGRect {
@@ -64,7 +83,7 @@ final class HeadMotionOverlay {
 
     private func refresh() {
         let headOn = on && PadHeadTracking.shared.enabled && state != nil
-        guard headOn, let state else {
+        guard headOn || (arranging && settings.shown), let state = state ?? (arranging ? State(x: 0, y: 0, dead: 0.3, active: false, output: .mouse) : nil) else {
             panel?.orderOut(nil); streamImage.set(nil, device: nil); return
         }
         // Which directions it presses, from the stick its motion stands in for.
@@ -109,7 +128,7 @@ final class HeadMotionOverlay {
         if let s = shown, s.0 == state, s.1 == around, s.2 == lit, s.3 == title { return }
         shown = (state, around, lit, title)
         guard let image = HeadMotionImage.draw(state, around: around, lit: lit, title: title, highlight: highlight, size: size, radial: radial != nil) else { return }
-        if inStream {
+        if inStream && !arranging {
             panel?.orderOut(nil)
             streamImage.set(image, device: streamImage.device)
         } else {
@@ -121,16 +140,18 @@ final class HeadMotionOverlay {
     private func showPanel(_ image: CGImage) {
         let p = panel ?? padOverlayPanel()
         if panel == nil {
-            let v = NSImageView(frame: .zero); v.imageScaling = .scaleProportionallyUpOrDown
+            let v = HeadPanelView(frame: .zero); v.imageScaling = .scaleProportionallyUpOrDown
+            v.onDragEnd = { [weak self] in self?.dragged() }
             p.contentView = v; panel = p; imageView = v
         }
+        p.ignoresMouseEvents = !arranging
         imageView?.image = NSImage(cgImage: image, size: size)
         if let s = screen ?? NSScreen.main {
             let f = s.frame, sz = size
             var o = CGPoint(x: f.minX + f.width * settings.positionX - sz.width / 2, y: f.minY + f.height * settings.positionY - sz.height / 2)
             o.x = min(max(o.x, f.minX), f.maxX - sz.width); o.y = min(max(o.y, f.minY), f.maxY - sz.height)
             let r = NSRect(origin: o, size: sz)
-            if p.frame != r { p.setFrame(r, display: true) }
+            if p.frame.size != r.size || (!dragging && p.frame != r) { p.setFrame(r, display: true) }
         }
         if !p.isVisible { p.orderFrontRegardless() }
     }
@@ -139,6 +160,23 @@ final class HeadMotionOverlay {
 }
 
 /// The head-motion picture.
+/// The head-motion picture's view: draggable while the overlay is being moved.
+final class HeadPanelView: NSImageView {
+    var onDragEnd: (() -> Void)?
+    private var start: (mouse: CGPoint, origin: CGPoint)?
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseDown(with e: NSEvent) { if let w = window { start = (NSEvent.mouseLocation, w.frame.origin); HeadMotionOverlay.shared.dragging = true } }
+    override func mouseDragged(with e: NSEvent) {
+        guard let start, let w = window else { return }
+        let now = NSEvent.mouseLocation
+        w.setFrameOrigin(CGPoint(x: start.origin.x + now.x - start.mouse.x, y: start.origin.y + now.y - start.mouse.y))
+    }
+    override func mouseUp(with e: NSEvent) {
+        if start != nil { onDragEnd?() }
+        start = nil; HeadMotionOverlay.shared.dragging = false
+    }
+}
+
 @MainActor
 enum HeadMotionImage {
     static func draw(_ s: HeadMotionOverlay.State, around: [String]?, lit: [Bool], title: String, highlight: NSColor, size: CGSize, radial: Bool = false) -> CGImage? {
@@ -150,15 +188,11 @@ enum HeadMotionImage {
         NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
         defer { NSGraphicsContext.restoreGraphicsState() }
         let white = NSColor.white
-        // Card.
-        let card = CGRect(x: 0, y: 0, width: w, height: h).insetBy(dx: 2, dy: 2)
-        ctx.addPath(CGPath(roundedRect: card, cornerWidth: w * 0.1, cornerHeight: w * 0.1, transform: nil))
-        ctx.setFillColor(NSColor(white: 0.1, alpha: 0.62).cgColor); ctx.fillPath()
-        // Title.
-        let titleH = h - w
-        label(title, in: CGRect(x: w * 0.06, y: w, width: w * 0.88, height: titleH * 0.9), size: titleH * 0.42, color: white.withAlphaComponent(s.active ? 0.95 : 0.55))
-        // Reach (full stick), dead zone, cross.
-        let c = CGPoint(x: w / 2, y: w / 2), R = w * 0.33
+        // A clean circle: a soft disc behind so it reads over any game, its reach, dead zone and cross.
+        let c = CGPoint(x: w / 2, y: h / 2), R = w * 0.33
+        let back = R + w * 0.15
+        ctx.setFillColor(NSColor(white: 0.08, alpha: 0.45).cgColor)
+        ctx.fillEllipse(in: CGRect(x: c.x - back, y: c.y - back, width: 2 * back, height: 2 * back))
         ctx.setStrokeColor(white.withAlphaComponent(0.35).cgColor); ctx.setLineWidth(2 * scale)
         ctx.strokeEllipse(in: CGRect(x: c.x - R, y: c.y - R, width: 2 * R, height: 2 * R))
         ctx.setLineWidth(1 * scale)

@@ -75,6 +75,9 @@ public struct ControllerOverlaySettings: Codable, Equatable, Sendable {
         }
     }
     public var mappings: Mappings = .off
+    /// The "Show mappings on the overlay" button also grows the controller big in the middle of the screen while
+    /// mappings show (with "Always", while it's held), and shrinks it back to its place after.
+    public var zoomWithMappings = true
     /// A small picture of its own for another device a profile uses (headphone motion: where the head points,
     /// its dead zone and the directions it's pressing), placed and shown separately from the controller.
     public struct DevicePanel: Codable, Hashable, Sendable {
@@ -130,6 +133,7 @@ public struct ControllerOverlaySettings: Codable, Equatable, Sendable {
         hideWithoutController = (try? c.decode(Bool.self, forKey: .hideWithoutController)) ?? base.hideWithoutController
         mappings = (try? c.decode(Mappings.self, forKey: .mappings)) ?? base.mappings
         headMotion = (try? c.decode(DevicePanel.self, forKey: .headMotion)) ?? base.headMotion
+        zoomWithMappings = (try? c.decode(Bool.self, forKey: .zoomWithMappings)) ?? base.zoomWithMappings
         // The first colours (November 19) were too dark to read on a dark screen.
         if bodyColor == "#2B2D31" && buttonColor == "#4A4D55" { bodyColor = base.bodyColor; buttonColor = base.buttonColor }
         clamp()
