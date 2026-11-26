@@ -47,6 +47,24 @@ final class PadHeadTracking: ObservableObject {
     private var watchdog: Timer?
     private var lastSample = 0.0, lostSince: Double?
     static let silence = 0.5
+    /// Settling after a start, a restart or the headphones coming back: the centre is taken once the head has been
+    /// still for a moment (putting earbuds in, the head is usually turned or tipped), up to a few seconds; nothing
+    /// is pressed or moved until then.
+    private var settlingSince: Double?, stillSince: Double?
+    static let stillFor = 0.4, settleAtMost = 3.0, stillRate = 0.35   // seconds, seconds, radians a second
+
+    /// True while settling: the sample only keeps the centre unset.
+    private func settling(_ motion: CMDeviceMotion, now: Double) -> Bool {
+        guard let since = settlingSince else { return false }
+        let r = motion.rotationRate, rate = (r.x * r.x + r.y * r.y + r.z * r.z).squareRoot()
+        if rate < Self.stillRate { stillSince = stillSince ?? now } else { stillSince = nil }
+        transform.recenter(); stickTransform.recenter(); shownTransform.recenter(); directions.reset()
+        DesktopPad.shared.releaseHeadStick()
+        if now - since > Self.settleAtMost || (stillSince.map { now - $0 >= Self.stillFor } ?? false) {
+            settlingSince = nil; stillSince = nil          // the next sample is the centre
+        }
+        return true
+    }
 
     private func lose(_ why: String) {
         guard lostSince == nil else { return }
@@ -60,6 +78,7 @@ final class PadHeadTracking: ObservableObject {
     private func setEnabled(_ on: Bool) {
         sessionID = UUID()
         watchdog?.invalidate(); watchdog = nil; lostSince = nil; lastSample = 0
+        settlingSince = on ? CACurrentMediaTime() : nil; stillSince = nil
         manager?.stopDeviceMotionUpdates(); manager?.delegate = nil; manager = nil
         enabled = false; motionActive = false; transform.recenter(); stickTransform.recenter(); shownTransform.recenter(); DesktopPad.shared.releaseHeadStick(); lastPID = nil
         HeadMotionOverlay.shared.moved(nil)
@@ -91,8 +110,10 @@ final class PadHeadTracking: ObservableObject {
                 guard let motion, error == nil else {
                     self.setEnabled(false); self.status = "Headphone motion stopped or permission unavailable"; return
                 }
-                self.lastSample = CACurrentMediaTime()
-                if self.lostSince != nil { self.lostSince = nil }
+                let now = CACurrentMediaTime()
+                self.lastSample = now
+                if self.lostSince != nil { self.lostSince = nil; self.settlingSince = now; self.stillSince = nil }
+                if self.settling(motion, now: now) { return }
                 guard let settings = self.settings, settings.enabled else { return }
                 let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
                 if self.lastPID != pid { self.transform.recenter(); self.stickTransform.recenter(); self.shownTransform.recenter(); DesktopPad.shared.releaseHeadStick(); self.lastPID = pid }

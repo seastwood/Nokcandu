@@ -57,8 +57,8 @@ struct ControllerPicture: View {
         case .a: return family == .nintendo ? CGPoint(x: face.x + dx, y: face.y) : CGPoint(x: face.x, y: face.y + dy)
         case .x: return family == .nintendo ? CGPoint(x: face.x, y: face.y - dy) : CGPoint(x: face.x - dx, y: face.y)
         case .b: return family == .nintendo ? CGPoint(x: face.x, y: face.y + dy) : CGPoint(x: face.x + dx, y: face.y)
-        case .back: return steamLayout ? Steam2015Outline.place(-0.38, 0.266) : CGPoint(x: 0.42, y: 0.33)
-        case .start: return steamLayout ? Steam2015Outline.place(0.38, 0.266) : CGPoint(x: 0.58, y: 0.33)
+        case .back: return steamLayout ? Steam2015Outline.place(-0.38, 0.33) : CGPoint(x: 0.42, y: 0.33)
+        case .start: return steamLayout ? Steam2015Outline.place(0.38, 0.33) : CGPoint(x: 0.58, y: 0.33)
         case .guide: return steamLayout ? Steam2015Outline.place(0, 0.33) : CGPoint(x: 0.5, y: psLayout ? 0.47 : 0.19)
         case .paddle1: return steamLayout ? Steam2015Outline.place(1.55, -1.12) : CGPoint(x:0.79,y:0.86)
         case .paddle2: return steamLayout ? Steam2015Outline.place(-1.55, -1.12) : CGPoint(x:0.21,y:0.86)
@@ -194,7 +194,6 @@ struct ControllerPicture: View {
         }()
         return Button { selection = .input(i) } label: {
             VStack(spacing: 1) {
-                if captionAbove, let l = label(i), l != "—" { Text(l).font(.system(size: 10, weight: .medium)).foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.7).frame(maxWidth: 64).help(l) }
                 Text(short).font(.system(size: max(9, 11 * k), weight: .semibold)).lineLimit(1)
                     .frame(minWidth: (steamLayout && [.guide, .paddle1, .paddle2].contains(i) ? 44 : round ? (steamLayout ? 24 : 28) : 46) * k, minHeight: 28 * k)
                     .background(Capsule().fill(on ? tint : mapped(i) ? tint.opacity(0.35) : Color(nsColor: .controlBackgroundColor)))
@@ -204,6 +203,11 @@ struct ControllerPicture: View {
                 if !outwardLabel, !captionAbove, let l = label(i), l != "—" { Text(l).font(.system(size: 10, weight: .medium)).foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.7).frame(maxWidth: 64).help(l) }
             }
             .overlay {
+                // Floated above, so the button keeps its place.
+                if captionAbove, let l = label(i), l != "—" {
+                    Text(l).font(.system(size: 10, weight: .medium)).foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.7)
+                        .frame(width: 64).help(l).offset(y: -14 * k - 9).allowsHitTesting(false)
+                }
                 if outwardLabel, let l = label(i), l != "—" {
                     Text(l).font(.system(size: 9, weight: .medium)).foregroundStyle(tint)
                         .lineLimit(1).minimumScaleFactor(0.7).frame(width: 58, alignment: i == .x ? .trailing : i == .b ? .leading : .center).help(l)
