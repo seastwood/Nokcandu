@@ -432,6 +432,7 @@ final class DesktopPad: ObservableObject {
         let settings = chosen.map { PadProfiles.layerSettings($0, all: all) } ?? [:]
         layerColors = layerNames.enumerated().map { i, n in settings[i == 0 ? "base" : n.lowercased()]?.color }
         rumble = chosen.flatMap { PadProfiles.top($0, all: all, \.rumbleOnLayer) } ?? false
+        gyroRumble = chosen.flatMap { PadProfiles.top($0, all: all, \.rumbleOnGyro) } ?? false
         gameRumble = chosen.flatMap { PadProfiles.top($0, all: all, \.gameRumble) } ?? PadProfiles.Profile.defaultGameRumble
         layerRumble = (chosen.flatMap { PadProfiles.top($0, all: all, \.layerRumbleStrength) } ?? PadProfiles.Profile.defaultLayerRumble.strength,
                        chosen.flatMap { PadProfiles.top($0, all: all, \.layerRumbleLength) } ?? PadProfiles.Profile.defaultLayerRumble.length)
@@ -508,6 +509,8 @@ final class DesktopPad: ObservableObject {
             PadHUD.shared.show(layer == 0 ? "Base layer" : name, symbol: layer == 0 ? "square.stack" : "square.stack.3d.up.fill")
         } else if gyro != shownGyro, gyro >= 0, shownGyro >= 0 {
             PadHUD.shared.gyroChanged(gyro == 1)
+            // Felt, so it's known without looking: one pulse on, two off.
+            if gyroRumble { pulses(gyro == 1 ? 1 : 2) }
         }
         shownLayer = layer; shownGyro = gyro
         steamPadLayerChanged(layer)
@@ -567,6 +570,13 @@ final class DesktopPad: ObservableObject {
         }
     }
     private var layerRumble = PadProfiles.Profile.defaultLayerRumble
+    private var gyroRumble = false
+    private func pulses(_ n: Int) {
+        let (s, l) = layerRumble
+        for k in 0..<n {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(k) * (l + 0.09)) { [weak self] in self?.rumbleMain(strength: s, seconds: l) }
+        }
+    }
 
     private func padOut(button b: Int, _ down: Bool) {
         if streaming { stream?.padButton(b, down) }

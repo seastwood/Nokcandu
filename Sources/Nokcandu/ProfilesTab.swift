@@ -122,6 +122,11 @@ struct ProfilesSidebar: View {
         if pad.profileID == p.id { parts.append("Mac") }
         let n = usage[p.id]?.count ?? 0
         if n > 0 { parts.append(n == 1 ? usage[p.id]![0] : "\(n) games") }
+        // Mac apps set to use it.
+        let apps = pad.rules.filter { $0.value == p.id }.keys.sorted()
+        if apps.count == 1, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: apps[0]) {
+            parts.append(FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: ""))
+        } else if apps.count > 1 { parts.append("\(apps.count) apps") }
         return parts.isEmpty ? "Not in use" : parts.joined(separator: " · ")
     }
 
@@ -246,6 +251,27 @@ enum ProfileActions {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(PadProfiles.exportText(p, all: PadProfiles.profiles()), forType: .string)
         model.say("Copied \(p.name). Paste it into a message; the other person chooses New Controller Profile → Paste Shared Profile.")
+    }
+    /// A link that carries the whole profile: whoever opens it on a Mac with Nokcandu is asked to add it.
+    @MainActor static func copyLink(_ p: PadProfiles.Profile, model: AppModel) {
+        PadProfileEdits.shared.flushAll()
+        let p = PadProfiles.profiles().first { $0.id == p.id } ?? p
+        guard let url = PadProfileLink.make(PadProfiles.exportText(p, all: PadProfiles.profiles())) else { model.say("Couldn't make a link for \(p.name)."); return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(url.absoluteString, forType: .string)
+        model.say("Copied a link to \(p.name). Opening it on a Mac with Nokcandu offers to add the profile; nothing is uploaded.")
+    }
+    /// A profile link was opened: ask, then add it as a copy.
+    @MainActor static func openLink(_ url: URL, model: AppModel) {
+        guard let text = PadProfileLink.text(url), let list = try? PadProfiles.parseShared(text), let first = list.first else {
+            model.say("That profile link is damaged or isn't a Nokcandu controller profile."); return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Add the controller profile “\(first.name)”?"
+        alert.informativeText = list.count > 1 ? "It comes with \(list.count - 1) profile\(list.count == 2 ? "" : "s") it builds on. They're added as new profiles; nothing here is changed." : "It's added as a new profile; nothing here is changed."
+        alert.addButton(withTitle: "Add Profile"); alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        importText(text, model: model)
     }
     @MainActor static func export(_ p: PadProfiles.Profile, model: AppModel) {
         PadProfileEdits.shared.flushAll()
@@ -393,6 +419,7 @@ struct PadProfilePage: View {
     @ViewBuilder var shareItems: some View {
         Button("Copy to Clipboard") { ProfileActions.copy(profile, model: model) }
         Button("Save as File…") { ProfileActions.export(profile, model: model) }
+        Button("Copy Link") { ProfileActions.copyLink(profile, model: model) }
     }
     var moreMenu: some View {
         Menu {

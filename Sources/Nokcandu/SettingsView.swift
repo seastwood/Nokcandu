@@ -388,26 +388,51 @@ struct DesktopPadSettings: View {
                         Button("Pointer and Clicks") { adopt(PadProfiles.desktopStarter()) }
                     }.fixedSize()
                 }
-                ForEach(pad.rules.keys.sorted(), id: \.self) { bundle in
-                    LabeledContent(appName(bundle)) {
-                        HStack {
-                            Picker("", selection: Binding(get: { pad.rules[bundle] ?? "off" }, set: { pad.rules[bundle] = $0 })) {
-                                Text("Off").tag("off")
-                                ForEach(profiles) { p in Text(p.name).tag(p.id) }
-                            }.labelsHidden().frame(width: 180)
-                            Button { pad.rules[bundle] = nil } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless).accessibilityLabel("Remove")
-                        }
+                ControllerLinks(pad: pad, profiles: profiles)
+            }
+        }
+        Section("Profiles for Mac Apps") {
+            Text("A profile of its own for any Mac app — a browser, Blender, a video editor — switched to whenever that app is in front, whether or not a profile is used on the Mac otherwise. Off leaves the controller as it is in that app.")
+                .font(.caption).foregroundStyle(.secondary)
+            ForEach(pad.rules.keys.sorted(), id: \.self) { bundle in
+                LabeledContent {
+                    HStack {
+                        Picker("", selection: Binding(get: { pad.rules[bundle] ?? "off" }, set: { pad.rules[bundle] = $0 })) {
+                            Text("Off").tag("off")
+                            ForEach(profiles) { p in Text(p.name).tag(p.id) }
+                        }.labelsHidden().frame(width: 180)
+                        Button { pad.rules[bundle] = nil } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless).accessibilityLabel("Remove")
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        if let icon = appIcon(bundle) { Image(nsImage: icon).resizable().frame(width: 18, height: 18) }
+                        Text(appName(bundle))
                     }
                 }
-                ControllerLinks(pad: pad, profiles: profiles)
+            }
+            HStack {
+                Menu("Add a Running App") {
+                    ForEach(runningApps(), id: \.0) { app in
+                        Button(app.1) { pad.rules[app.0] = pad.profileID ?? profiles.first?.id ?? "off" }
+                    }
+                }.fixedSize()
                 Button("Add an App…") { addApp() }
-
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .padProfilesChanged)) { _ in profiles = PadProfiles.profiles() }
         .onAppear { profiles = PadProfiles.profiles(); DesktopPad.shared.start() }
     }
 
+    func appIcon(_ bundle: String) -> NSImage? {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle).map { NSWorkspace.shared.icon(forFile: $0.path) }
+    }
+    /// Apps open now that have a window (not Nokcandu, not ones already listed), by name.
+    func runningApps() -> [(String, String)] {
+        NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular && $0.bundleIdentifier != Bundle.main.bundleIdentifier }
+            .compactMap { a in a.bundleIdentifier.flatMap { id in pad.rules[id] == nil ? (id, a.localizedName ?? id) : nil } }
+            .sorted { $0.1.localizedCaseInsensitiveCompare($1.1) == .orderedAscending }
+    }
     func appName(_ bundle: String) -> String {
         NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle).map { FileManager.default.displayName(atPath: $0.path).replacingOccurrences(of: ".app", with: "") } ?? bundle
     }

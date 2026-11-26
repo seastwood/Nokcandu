@@ -211,7 +211,10 @@ extension ControllerProfileEditor {
                 } else { rumbleNote = nil; PadFeedback.shared.rumble(GCController.controllers(), strength: gameRumble.wrappedValue, seconds: 0.4) }
             }.disabled(gameRumble.wrappedValue <= 0)
             Toggle("Rumble when the layer changes", isOn: Binding(get: { profile.rumbleOnLayer ?? PadProfiles.top(profile, all: everything, \.rumbleOnLayer) ?? false }, set: { profile.rumbleOnLayer = $0 }))
-            if profile.rumbleOnLayer ?? PadProfiles.top(profile, all: everything, \.rumbleOnLayer) ?? false {
+            Toggle("Rumble when the gyro turns on or off", isOn: Binding(get: { profile.rumbleOnGyro ?? PadProfiles.top(profile, all: everything, \.rumbleOnGyro) ?? false }, set: { profile.rumbleOnGyro = $0 }))
+                .help("One pulse when it turns on, two when it turns off: you know without looking. Uses the strength and length below.")
+            if (profile.rumbleOnLayer ?? PadProfiles.top(profile, all: everything, \.rumbleOnLayer) ?? false)
+                || (profile.rumbleOnGyro ?? PadProfiles.top(profile, all: everything, \.rumbleOnGyro) ?? false) {
                 let d = PadProfiles.Profile.defaultLayerRumble
                 slider("Strength", Binding(get: { profile.layerRumbleStrength ?? PadProfiles.top(profile, all: everything, \.layerRumbleStrength) ?? d.strength },
                                            set: { profile.layerRumbleStrength = $0 }), 0.05...1, "%.0f%%", scale: 100)

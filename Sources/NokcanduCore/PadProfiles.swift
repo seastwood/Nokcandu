@@ -724,6 +724,8 @@ public enum PadProfiles {
         public var buttonRoutes: [String: ButtonRoute]?
         public var controlRoutes: [String: ButtonRoute]?
         public var rumbleOnLayer: Bool?
+        /// A rumble as the gyro turns on (one pulse) or off (two), with the layer rumble's strength and length.
+        public var rumbleOnGyro: Bool?
         /// The layer-change rumble: strength 0…1 and length in seconds (nil: 0.35 and 0.12 s).
         public var layerRumbleStrength: Double?
         public var layerRumbleLength: Double?

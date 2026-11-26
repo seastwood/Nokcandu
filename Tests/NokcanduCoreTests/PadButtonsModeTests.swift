@@ -31,3 +31,18 @@ final class PadButtonsModeTests: XCTestCase {
         XCTAssertEqual(PadProfiles.Input.padZoneInputs.count, 32)
     }
 }
+
+final class PadProfileLinkTests: XCTestCase {
+    func testALinkCarriesTheProfileAndComesBack() throws {
+        var p = PadProfiles.Profile(name: "Shared")
+        p.layers[0][.a] = .as(.key(49))
+        let text = PadProfiles.exportText(p, all: [p])
+        let url = try XCTUnwrap(PadProfileLink.make(text))
+        XCTAssertEqual(url.scheme, "nokcandu"); XCTAssertEqual(url.host, "pad")
+        XCTAssertFalse(url.absoluteString.contains("+") || url.absoluteString.contains("/p="))
+        let back = try XCTUnwrap(PadProfileLink.text(url))
+        XCTAssertEqual(try PadProfiles.parseShared(back).first?.name, "Shared")
+        XCTAssertNil(PadProfileLink.text(URL(string: "nokcandu://pad?p=not-valid")!))
+        XCTAssertNil(PadProfileLink.text(URL(string: "nokcandu://profile/12")!))
+    }
+}

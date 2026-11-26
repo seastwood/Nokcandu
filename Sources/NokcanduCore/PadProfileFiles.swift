@@ -165,3 +165,27 @@ extension PadProfiles {
         return (added, alreadyHere)
     }
 }
+
+/// A profile as a link: nokcandu://pad?p=<the shared text, compressed, URL-safe base64>. Opening it on a Mac with
+/// Nokcandu offers to add the profile (with what it builds on, its macros, menus and layers). Nothing is uploaded.
+public enum PadProfileLink {
+    public static let host = "pad"
+    public static func make(_ text: String) -> URL? {
+        guard let packed = try? (Data(text.utf8) as NSData).compressed(using: .zlib) as Data else { return nil }
+        let b64 = packed.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        var c = URLComponents(); c.scheme = "nokcandu"; c.host = host; c.queryItems = [URLQueryItem(name: "p", value: b64)]
+        return c.url
+    }
+    /// The shared text in a link, or nil when it isn't one (or is damaged).
+    public static func text(_ url: URL) -> String? {
+        guard url.scheme == "nokcandu", url.host == host,
+              let v = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "p" })?.value else { return nil }
+        var b64 = v.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        while b64.count % 4 != 0 { b64 += "=" }
+        guard let packed = Data(base64Encoded: b64), packed.count < 4_000_000,
+              let data = try? (packed as NSData).decompressed(using: .zlib) as Data, data.count < 16_000_000 else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+}
+

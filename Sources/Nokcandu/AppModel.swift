@@ -911,6 +911,8 @@ final class AppModel: ObservableObject {
     func openURL(_ url: URL) {
         // nokcandu://profile/123 from the profiles website
         if url.scheme == "nokcandu", url.host == "stores" { openStores(); return }
+        // A shared controller profile (Share → Copy Link).
+        if url.scheme == "nokcandu", url.host == PadProfileLink.host { ProfileActions.openLink(url, model: self); return }
         if url.scheme == "nokcandu" {
             guard gamesEnabled else { say("Enable Games in Settings → General to browse game recipes."); return }
             if url.host == "profile", let n = Int(url.lastPathComponent) { profileFocus = n } else { profileFocus = nil }
