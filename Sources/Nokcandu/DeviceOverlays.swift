@@ -190,6 +190,9 @@ enum HeadMotionImage {
         let white = NSColor.white
         // A clean circle: its reach, dead zone and (unless it is a radial menu) a cross.
         let c = CGPoint(x: w / 2, y: h / 2), R = w * 0.33
+        // Semi-transparent inside the dial only, so it reads over any game without a ring around it.
+        ctx.setFillColor(NSColor(white: 0.06, alpha: 0.45).cgColor)
+        ctx.fillEllipse(in: CGRect(x: c.x - R, y: c.y - R, width: 2 * R, height: 2 * R))
 
         ctx.setStrokeColor(white.withAlphaComponent(0.35).cgColor); ctx.setLineWidth(2 * scale)
         ctx.strokeEllipse(in: CGRect(x: c.x - R, y: c.y - R, width: 2 * R, height: 2 * R))
