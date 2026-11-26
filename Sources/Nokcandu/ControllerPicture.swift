@@ -38,12 +38,17 @@ struct ControllerPicture: View {
     var steam2026Layout: Bool { family == .steam2026 }
     var psLayout: Bool { family == .playstation }
     /// Xbox and Nintendo: left stick high, d-pad low. PlayStation: d-pad high, both sticks low.
-    var dpadCenter: CGPoint { psLayout ? CGPoint(x: 0.24, y: 0.36) : CGPoint(x: 0.37, y: 0.585) }
+    /// Xbox, Switch Pro, DualShock/DualSense: the overlay's drawing of the controller, so the editor shows the same
+    /// outline with every part in the same place.
+    var picture: ControllerPictureLayout? { steamLayout || steam2026Layout ? nil : ControllerPictureLayout.of(family) }
+    var dpadCenter: CGPoint { picture?.dpad?.centre ?? (psLayout ? CGPoint(x: 0.24, y: 0.36) : CGPoint(x: 0.37, y: 0.585)) }
     var stickPlaces: [CGPoint] {
+        if let p = picture, p.sticks.count == 2 { return p.sticks }
         return steamLayout ? [Steam2015Outline.place(-0.442, -0.386), Steam2015Outline.place(1.117, 0.242)] : [psLayout ? CGPoint(x: 0.37, y: 0.585) : CGPoint(x: 0.24, y: 0.36), CGPoint(x: 0.63, y: 0.585)]
     }
 
     func place(_ i: I) -> CGPoint {
+        if let p = picture, let at = p.place(i) { return at }
         // Steam Controller (2015): where the real controller has them (the overlay's outline, from PadSight).
         let d = dpadCenter, face = steamLayout ? Steam2015Outline.place(0.456, -0.358) : CGPoint(x: 0.76, y: 0.36)
         let dx: CGFloat = steamLayout ? 0.064 : 0.058, dy: CGFloat = steamLayout ? 0.092 : 0.09
@@ -71,7 +76,12 @@ struct ControllerPicture: View {
         default: return CGPoint(x: -1, y: -1)
         }
     }
-    var shown: [I] { steamLayout ? [.lt, .rt, .ltfull, .rtfull, .lb, .rb, .y, .a, .x, .b, .back, .start, .guide, .paddle1, .paddle2] : [.lt, .rt, .ltfull, .rtfull, .lb, .rb, .up, .down, .left, .right, .y, .a, .x, .b, .back, .start, .guide] }
+    var shown: [I] {
+        if steamLayout { return [.lt, .rt, .ltfull, .rtfull, .lb, .rb, .y, .a, .x, .b, .back, .start, .guide, .paddle1, .paddle2] }
+        // The controller's own small buttons too (Share, Capture, Mute), where its drawing has them.
+        let misc: [I] = picture?.place(.misc) != nil ? [.misc] : []
+        return [.lt, .rt, .ltfull, .rtfull, .lb, .rb, .up, .down, .left, .right, .y, .a, .x, .b, .back, .start, .guide] + misc
+    }
 
     var body: some View {
         if steam2026Layout { steam2026Diagram } else { legacyDiagram }
@@ -122,7 +132,8 @@ struct ControllerPicture: View {
             // Controls keep their size down to a point, then shrink with the body so they never run into each other.
             let k = max(0.62, min(1, sw / 420))
             let at = { (p: CGPoint) in CGPoint(x: x0 + p.x * sw, y: y0 + p.y * sh) }
-            let body: AnyShape = steamLayout ? AnyShape(Steam2015Outline(points: OverlayLayout.steam2015Body)) : AnyShape(ControllerShape())
+            let body: AnyShape = steamLayout ? AnyShape(Steam2015Outline(points: OverlayLayout.steam2015Body))
+                : picture.map { AnyShape(LayoutOutlineShape(layout: $0)) } ?? AnyShape(ControllerShape())
             ZStack {
                 body
                     .fill(LinearGradient(colors: [Color.primary.opacity(0.16), Color.primary.opacity(0.07)], startPoint: .top, endPoint: .bottom))
@@ -153,10 +164,25 @@ struct ControllerPicture: View {
                         }
                     }.buttonStyle(.plain).accessibilityLabel("Left trackpad settings")
                         .position(at(Steam2015Outline.place(-1.117, 0.242)))
-                } else { DPadWell().fill(Color.primary.opacity(0.08))
-                    .frame(width: sw * 0.17, height: sh * 0.265)
-                    .position(at(dpadCenter))
-                    .accessibilityHidden(true) }
+                } else {
+                    let well = picture?.dpad?.size ?? CGSize(width: 0.17, height: 0.265)
+                    DPadWell().fill(Color.primary.opacity(0.08))
+                        .frame(width: sw * well.width, height: sh * well.height)
+                        .position(at(dpadCenter))
+                        .accessibilityHidden(true)
+                    if let pad = picture?.touchpad {
+                        // DualShock/DualSense: its touchpad, where it is.
+                        Button { selection = .touchpad } label: {
+                            RoundedRectangle(cornerRadius: 8 * k)
+                                .fill(tint.opacity(selection == .touchpad ? 0.3 : 0.12))
+                                .overlay(RoundedRectangle(cornerRadius: 8 * k).stroke(selection == .touchpad ? tint : Color.secondary.opacity(0.35), lineWidth: 1.5))
+                                .overlay(Text("Touchpad").font(.caption2).foregroundStyle(.secondary))
+                        }
+                        .buttonStyle(.plain).accessibilityLabel("Touchpad settings")
+                        .frame(width: sw * pad.width, height: sh * pad.height)
+                        .position(at(CGPoint(x: pad.midX, y: pad.midY)))
+                    }
+                }
                 ForEach(shown, id: \.self) { i in spot(i, k).position(at(place(i))) }
                 ForEach(0..<2, id: \.self) { s in stick(s, k).position(at(stickPlaces[s])) }
                 Button { selection = .gyro } label: {
@@ -176,15 +202,21 @@ struct ControllerPicture: View {
         let on = pressed.contains(i)
         let tint = targetTint(i) ?? self.tint
         let round = ![.lb, .rb, .lt, .rt, .ltfull, .rtfull].contains(i)
-        let outwardLabel = steamLayout && [.y, .a, .x, .b].contains(i)
+        // Steam's face buttons, and every D-pad: captions outward, so neighbours' captions never meet.
+        let dpadArm = [.up, .down, .left, .right].contains(i)
+        let outwardLabel = (steamLayout && [.y, .a, .x, .b].contains(i)) || (picture != nil && dpadArm)
         // Steam Controller (2015): Back's and Start's captions go above them, leaving room for Y's above Y.
         let captionAbove = steamLayout && [.back, .start].contains(i)
-        let captionOffset: CGSize = i == .y ? CGSize(width: 0, height: -14 * k - 8) : i == .a ? CGSize(width: 0, height: 14 * k + 8) : CGSize(width: i == .x ? -12 * k - 32 : 12 * k + 32, height: 0)
+        let captionOffset: CGSize = i == .up ? CGSize(width: 0, height: -14 * k - 8) : i == .down ? CGSize(width: 0, height: 14 * k + 8)
+            : i == .left ? CGSize(width: -12 * k - 32, height: 0) : i == .right ? CGSize(width: 12 * k + 32, height: 0) : i == .y ? CGSize(width: 0, height: -14 * k - 8) : i == .a ? CGSize(width: 0, height: 14 * k + 8) : CGSize(width: i == .x ? -12 * k - 32 : 12 * k + 32, height: 0)
         let short: String = {
             switch i {
             case .up: "▲"; case .down: "▼"; case .left: "◀"; case .right: "▶"
             case .ltfull, .rtfull: "full"
             case .guide where steamLayout: "Steam"
+            // PlayStation: its face buttons' shapes, and Create and Options in words.
+            case .a where psLayout: "✕"; case .b where psLayout: "○"; case .x where psLayout: "□"; case .y where psLayout: "△"
+            case .back where psLayout: "Create"; case .start where psLayout: "Opt"; case .misc where psLayout: "Mute"
             case .back where steamLayout: "◀"
             case .start where steamLayout: "▶"
             case .paddle1 where steamLayout: "R Grip"
@@ -210,7 +242,7 @@ struct ControllerPicture: View {
                 }
                 if outwardLabel, let l = label(i), l != "—" {
                     Text(l).font(.system(size: 9, weight: .medium)).foregroundStyle(tint)
-                        .lineLimit(1).minimumScaleFactor(0.7).frame(width: 58, alignment: i == .x ? .trailing : i == .b ? .leading : .center).help(l)
+                        .lineLimit(1).minimumScaleFactor(0.7).frame(width: 58, alignment: i == .x || i == .left ? .trailing : i == .b || i == .right ? .leading : .center).help(l)
                         .offset(captionOffset)
                         .allowsHitTesting(false)
                 }
@@ -902,6 +934,76 @@ struct Steam2015Outline: Shape {
         }
         path.closeSubpath()
         return path
+    }
+}
+
+/// The overlay's layout of a controller as fractions of the editor picture's box (x right, y down).
+struct ControllerPictureLayout {
+    let layout: OverlayLayout
+    let bounds: CGRect                 // the outline's own units (y away from the player)
+    var dpad: (centre: CGPoint, size: CGSize, arm: CGSize)?
+    var sticks: [CGPoint] = []
+    var touchpad: CGRect?
+    private var places: [PadProfiles.Input: CGPoint] = [:]
+
+    @MainActor private static var cache: [String: ControllerPictureLayout] = [:]
+    @MainActor static func of(_ family: Controllers.Family?) -> ControllerPictureLayout {
+        let model: ControllerOverlaySettings.Model = family == .playstation ? .dualShock4 : family == .nintendo ? .switchPro : .xbox
+        if let c = cache[model.rawValue] { return c }
+        let c = ControllerPictureLayout(OverlayLayout.make(model), letters: family == .nintendo)
+        cache[model.rawValue] = c
+        return c
+    }
+
+    /// A point in the layout's units (x, and z toward the player) as a fraction of the picture.
+    func frac(_ x: Float, _ z: Float) -> CGPoint {
+        CGPoint(x: (CGFloat(x) - bounds.minX) / bounds.width, y: (bounds.maxY + CGFloat(z)) / bounds.height)
+    }
+
+    init(_ l: OverlayLayout, letters: Bool) {
+        layout = l; bounds = l.outline.bounds
+        var sideSticks: [Int: CGPoint] = [:]
+        for part in l.parts {
+            switch part {
+            case let .button(i, _, at, _): places[i] = frac(at.x, at.y)
+            case let .dpad(at, size):
+                // Out at the arm tips: the picture's buttons are bigger than the drawing's arms.
+                let off = size * 0.42
+                let c = frac(at.x, at.y)
+                dpad = (c, CGSize(width: CGFloat(size * 1.3) / bounds.width, height: CGFloat(size * 1.3) / bounds.height),
+                        CGSize(width: CGFloat(off) / bounds.width, height: CGFloat(off) / bounds.height))
+                places[.up] = frac(at.x, at.y - off); places[.down] = frac(at.x, at.y + off)
+                places[.left] = frac(at.x - off, at.y); places[.right] = frac(at.x + off, at.y)
+            case let .stick(side, at, _): sideSticks[side] = frac(at.x, at.y)
+            case let .pad(_, at, shape, _, _):
+                if case let .rect(w, h) = shape {
+                    let c = frac(at.x, at.y)
+                    let fw = CGFloat(w) / bounds.width, fh = CGFloat(h) / bounds.height
+                    touchpad = CGRect(x: c.x - fw / 2, y: c.y - fh / 2, width: fw, height: fh)
+                }
+            case let .grip(i, at, _, _): places[i] = frac(at.x, at.z)
+            default: break
+            }
+        }
+        sticks = [sideSticks[0], sideSticks[1]].compactMap { $0 }
+        // Nintendo controllers report buttons by the letter printed on them: A right, B bottom, X top, Y left.
+        if letters, let top = places[.y], let bottom = places[.a], let left = places[.x], let right = places[.b] {
+            places[.a] = right; places[.b] = bottom; places[.x] = top; places[.y] = left
+        }
+    }
+
+    func place(_ i: PadProfiles.Input) -> CGPoint? { places[i] }
+}
+
+/// A controller's outline from the overlay's layout, stretched to the picture's box.
+struct LayoutOutlineShape: Shape {
+    let layout: ControllerPictureLayout
+    func path(in r: CGRect) -> Path {
+        let b = layout.bounds
+        let sx = r.width / b.width, sy = r.height / b.height
+        // Its y is away from the player (up); the picture's is down.
+        let t = CGAffineTransform(a: sx, b: 0, c: 0, d: -sy, tx: r.minX - b.minX * sx, ty: r.minY + b.maxY * sy)
+        return Path(layout.layout.outline.cgPath).applying(t)
     }
 }
 

@@ -37,7 +37,8 @@ struct ProfilesSidebar: View {
                     Text("None yet").foregroundStyle(.secondary).selectionDisabled()
                 }
                 ForEach(pads) { p in
-                    row(title: p.name, subtitle: padSubtitle(p), symbol: "gamecontroller", active: pad.activeID == p.id && pad.enabled)
+                    row(title: p.name, subtitle: padSubtitle(p), symbol: "gamecontroller", active: pad.activeID == p.id && pad.enabled,
+                        icon: ControllerIcon.chosen(p).map { AnyView(ControllerIcon(family: $0)) })
                         .tag("pad:" + p.id)
                 }
             }
@@ -96,9 +97,12 @@ struct ProfilesSidebar: View {
         .onChange(of: model.libraryRevision) { _, _ in load() }
     }
 
-    func row(title: String, subtitle: String, symbol: String, active: Bool = false) -> some View {
+    func row(title: String, subtitle: String, symbol: String, active: Bool = false, icon: AnyView? = nil) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: symbol).font(.title2).foregroundStyle(Color.accentColor).frame(width: 32, height: 32)
+            Group {
+                if let icon { icon } else { Image(systemName: symbol).font(.title2).foregroundStyle(Color.accentColor) }
+            }
+            .frame(width: 32, height: 32)
                 .overlay(alignment: .bottomTrailing) {
                     if active { Circle().fill(.green).frame(width: 10, height: 10).overlay(Circle().stroke(Color(nsColor: .windowBackgroundColor), lineWidth: 2)).offset(x: 2, y: 2) }
                 }
@@ -498,4 +502,69 @@ struct KeyLayoutPage: View {
             NotificationCenter.default.post(name: .padProfilesChanged, object: nil)
         }
     }
+}
+
+/// A profile's controller, small: the outline of the controller its labels are set to (the same outlines as the
+/// overlay and the editor), with its sticks or trackpads as dots.
+struct ControllerIcon: View {
+    let family: Controllers.Family?
+    var body: some View {
+        let body: AnyShape = {
+            switch family {
+            case .valve: return AnyShape(Steam2015Outline(points: OverlayLayout.steam2015Body))
+            case .steam2026: return AnyShape(Steam2026IconShape())
+            default: return AnyShape(LayoutOutlineShape(layout: ControllerPictureLayout.of(family)))
+            }
+        }()
+        let w: CGFloat = 30, h: CGFloat = 21
+        ZStack {
+            body.fill(Color.accentColor.opacity(0.22))
+            body.stroke(Color.accentColor, lineWidth: 1.2)
+            // What tells them apart at this size: the pads, the touchpad, where the sticks sit.
+            ForEach(Array(marks.enumerated()), id: \.offset) { _, m in
+                Group {
+                    if m.square { RoundedRectangle(cornerRadius: 1).fill(Color.accentColor) }
+                    else { Circle().fill(Color.accentColor) }
+                }
+                .frame(width: m.rect.width * w, height: m.rect.height * h)
+                .position(x: m.rect.midX * w, y: m.rect.midY * h)
+            }
+        }
+        .frame(width: w, height: h)
+        .accessibilityHidden(true)
+    }
+}
+
+extension ControllerIcon {
+    /// The controller a profile's labels are set to; nil when none is chosen (the list then shows a generic
+    /// controller). "xbox" is stored for Xbox, which the labels otherwise treat as no family.
+    static func chosen(_ p: PadProfiles.Profile) -> Controllers.Family?? {
+        guard let saved = p.controllerLabels, !saved.isEmpty else { return nil }
+        if saved == "xbox" { return .some(nil) }
+        guard let f = Controllers.Family(rawValue: saved) else { return nil }
+        return .some(f)
+    }
+
+    struct Mark { var rect: CGRect; var square = false }
+    /// Fractions of the icon's box (y down).
+    var marks: [Mark] {
+        func dot(_ c: CGPoint, _ d: CGFloat) -> Mark { Mark(rect: CGRect(x: c.x - d / 2, y: c.y - d * 0.72, width: d, height: d * 1.43)) }
+        switch family {
+        case .valve:
+            return [dot(Steam2015Outline.place(-1.117, 0.242), 0.2), dot(Steam2015Outline.place(1.117, 0.242), 0.2)]
+        case .steam2026:
+            return [Mark(rect: CGRect(x: 0.23, y: 0.47, width: 0.15, height: 0.2), square: true), Mark(rect: CGRect(x: 0.62, y: 0.47, width: 0.15, height: 0.2), square: true),
+                    dot(CGPoint(x: 0.35, y: 0.27), 0.1), dot(CGPoint(x: 0.65, y: 0.27), 0.1)]
+        default:
+            let l = ControllerPictureLayout.of(family)
+            var m = l.sticks.map { dot($0, 0.13) }
+            if let t = l.touchpad { m.append(Mark(rect: t.insetBy(dx: 0.03, dy: 0.04), square: true)) }
+            return m
+        }
+    }
+}
+
+/// The Steam Controller (2026)'s outline from the editor's picture, fitted to the box.
+struct Steam2026IconShape: Shape {
+    func path(in r: CGRect) -> Path { Path(Steam2026PictureGeometry.shellPath(in: r)) }
 }

@@ -538,6 +538,7 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
         switch (i, f) {
         case (.up, _): "↑"; case (.down, _): "↓"; case (.left, _): "←"; case (.right, _): "→"
         case (.guide, _): "⌂"
+        case (.a, .playstation): "✕"; case (.b, .playstation): "○"; case (.x, .playstation): "□"; case (.y, .playstation): "△"
         case (.back, .nintendo): "−"; case (.start, .nintendo): "+"; case (.misc, .nintendo): "◉"
         case (.back, .playstation): "Create"; case (.start, .playstation): "Opt"; case (.misc, .playstation): "Mute"
         case (.back, .valve): "◀"; case (.start, .valve): "▶"
