@@ -73,6 +73,7 @@ struct ProfilesSidebar: View {
                     Divider()
                     Button("Import from File…") { ProfileActions.importFile(model: model) }
                     Button("Paste Shared Profile") { ProfileActions.importText(NSPasteboard.general.string(forType: .string) ?? "", model: model) }
+                    Button("Import Steam Input Layout…") { ProfileActions.importSteamInput(model: model) }
                     Divider()
                     Button("Export All Controller Profiles…") { ProfileActions.exportAll(model: model) }.disabled(pads.isEmpty)
                 } label: { Label("New Controller Profile", systemImage: "plus.circle") }
@@ -316,6 +317,32 @@ enum ProfileActions {
         do {
             let merged = PadProfiles.merge([try PadProfiles.parseShared(text)], existing: PadProfiles.profiles(), skipIdentical: true)
             finishImport(PadProfiles.Imported(added: merged.added, alreadyHere: merged.alreadyHere), model: model)
+        } catch { model.fail(error) }
+    }
+    /// A Steam Input layout (.vdf) as a new profile: Steam keeps each game's in Steam Controller Configs, and
+    /// community layouts too. What couldn't come across is listed afterwards.
+    @MainActor static func importSteamInput(model: AppModel) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "vdf") ?? .data]
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose a Steam Input layout (.vdf). Steam keeps each game's in Steam Controller Configs, in a folder named for the game's number."
+        let configs = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Steam/steamapps/common/Steam Controller Configs")
+        if FileManager.default.fileExists(atPath: configs.path) { panel.directoryURL = configs }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let text = try String(contentsOf: url, encoding: .utf8)
+            // A game's layout sits in a folder named for its Steam app number.
+            let folder = url.deletingLastPathComponent().lastPathComponent
+            let fallback = Int(folder) != nil ? "Steam layout (app \(folder))" : url.deletingPathExtension().lastPathComponent
+            let r = try SteamInputImport.profile(fromVDF: text, fallbackName: fallback)
+            let merged = PadProfiles.merge([[r.profile]], existing: PadProfiles.profiles(), skipIdentical: false)
+            finishImport(PadProfiles.Imported(added: merged.added, alreadyHere: merged.alreadyHere), model: model)
+            if !r.notes.isEmpty {
+                let alert = NSAlert()
+                alert.messageText = "Imported “\(r.profile.name)”"
+                alert.informativeText = "Some of the layout works differently here or couldn't come across:\n\n• " + r.notes.joined(separator: "\n• ")
+                alert.runModal()
+            }
         } catch { model.fail(error) }
     }
     @MainActor private static func finishImport(_ result: PadProfiles.Imported, model: AppModel) {
