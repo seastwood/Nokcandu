@@ -283,11 +283,20 @@ final class StreamImageDrawer: @unchecked Sendable {
     func set(_ image: CGImage?, device d: MTLDevice?) {
         var t: MTLTexture?
         if let image, let d = d ?? device {
-            let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: image.width, height: image.height, mipmapped: false)
+            // Into premultiplied BGRA (whatever the image's own layout), then up to the GPU.
+            let w = image.width, h = image.height
+            let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: false)
             desc.usage = .shaderRead
-            if let tex = d.makeTexture(descriptor: desc), let data = image.dataProvider?.data, let bytes = CFDataGetBytePtr(data) {
-                tex.replace(region: MTLRegionMake2D(0, 0, image.width, image.height), mipmapLevel: 0, withBytes: bytes, bytesPerRow: image.bytesPerRow)
-                t = tex
+            if let space = CGColorSpace(name: CGColorSpace.sRGB),
+               let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4, space: space,
+                                   bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue),
+               let tex = d.makeTexture(descriptor: desc) {
+                ctx.clear(CGRect(x: 0, y: 0, width: w, height: h))
+                ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+                if let bytes = ctx.data {
+                    tex.replace(region: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0, withBytes: bytes, bytesPerRow: w * 4)
+                    t = tex
+                }
             }
         }
         os_unfair_lock_lock(&lock); texture = t; os_unfair_lock_unlock(&lock)

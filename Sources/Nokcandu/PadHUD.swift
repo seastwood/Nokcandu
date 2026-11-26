@@ -46,6 +46,9 @@ final class PadHUD {
 
     func show(_ text: String, symbol: String, progress: Double? = nil, stay: Double = 1.2, force: Bool = false) {
         guard force || Self.enabled else { return }
+        // Over a full-screen stream the note is drawn into the stream's frames (like the controller overlay and the
+        // statistics): no window over the stream, so nothing is composited and no delay is added.
+        if showInStream(text, symbol: symbol, progress: progress, stay: stay) { return }
         // Over a game or stream, a note makes macOS compose the screen again (more delay): held, unless asked for.
         guard force || !(DesktopPad.shared.playing && PadNotificationPreferences.holdWhilePlaying()) else { return }
         lastWasGyro = false
@@ -78,6 +81,77 @@ final class PadHUD {
         }
         hide = work
         DispatchQueue.main.asyncAfter(deadline: .now() + stay, execute: work)
+    }
+
+    // MARK: Inside a full-screen stream
+
+    private let streamImage = StreamImageDrawer()
+    private weak var streamRenderer: StreamMetalRenderer?
+    private var streamShown = "", streamSize = CGSize.zero, streamFade: Timer?, streamOpacity = 1.0
+
+    /// The Metal renderer of a stream shown full screen, if there is one.
+    private func fullScreenStream() -> (StreamMetalRenderer, NSScreen)? {
+        guard let s = DesktopPad.shared.stream as? StreamWindowController, let w = s.window, w.isVisible, let screen = w.screen,
+              w.styleMask.contains(.fullScreen) || w.frame.equalTo(screen.frame),
+              let r = s.connection.video.metalRenderer else { return nil }
+        return (r, screen)
+    }
+
+    private func showInStream(_ text: String, symbol: String, progress: Double?, stay: Double) -> Bool {
+        guard let (r, screen) = fullScreenStream() else { leaveStream(); return false }
+        panel?.orderOut(nil)
+        if streamRenderer !== r {
+            leaveStream()
+            streamImage.use(r.metalDevice)
+            let img = streamImage
+            r.setOverlay({ buffer, target in img.draw(buffer, target) }, key: "notes")
+            streamRenderer = r
+        }
+        // Drawn only when the note changes (a calibration bar: when its value does), never in a frame.
+        let key = "\(text)|\(symbol)|\(progress.map { String(Int($0 * 100)) } ?? "")"
+        if key != streamShown {
+            let renderer = ImageRenderer(content: HUDView(text: text, symbol: symbol, progress: progress))
+            renderer.scale = screen.backingScaleFactor
+            if let image = renderer.cgImage {
+                streamImage.set(image, device: r.metalDevice)
+                streamSize = CGSize(width: CGFloat(image.width) / renderer.scale, height: CGFloat(image.height) / renderer.scale)
+                streamShown = key
+            }
+        }
+        // Where the window would be: centred, 90 points above the bottom (points from the screen's top left).
+        let f = screen.frame
+        let rect = CGRect(x: (f.width - streamSize.width) / 2, y: f.height - 90 - streamSize.height, width: streamSize.width, height: streamSize.height)
+        streamFade?.invalidate(); streamOpacity = 1
+        streamImage.place(rect, screenWidth: f.width, opacity: 1)
+        hide?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.fadeInStream() }
+        hide = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + stay, execute: work)
+        return true
+    }
+
+    /// Fades by its opacity alone (the picture isn't drawn again), then takes it off the frames.
+    private func fadeInStream() {
+        streamFade?.invalidate()
+        let start = CACurrentMediaTime()
+        streamFade = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] t in
+            MainActor.assumeIsolated {
+                guard let self, let r = self.streamRenderer, let screen = self.fullScreenStream()?.1 else { t.invalidate(); self?.leaveStream(); return }
+                _ = r
+                let k = min(1, (CACurrentMediaTime() - start) / 0.35)
+                self.streamOpacity = 1 - k
+                let f = screen.frame
+                self.streamImage.place(CGRect(x: (f.width - self.streamSize.width) / 2, y: f.height - 90 - self.streamSize.height,
+                                              width: self.streamSize.width, height: self.streamSize.height), screenWidth: f.width, opacity: self.streamOpacity)
+                if k >= 1 { t.invalidate(); self.streamImage.set(nil, device: nil); self.streamShown = "" }
+            }
+        }
+    }
+
+    private func leaveStream() {
+        streamFade?.invalidate(); streamFade = nil
+        streamRenderer?.setOverlay(nil, key: "notes"); streamRenderer = nil
+        streamImage.set(nil, device: nil); streamShown = ""
     }
 
     private func make() -> NSPanel {

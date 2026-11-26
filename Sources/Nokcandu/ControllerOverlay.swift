@@ -567,6 +567,17 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
             let own = (model.moved.contains(i) && (i == .ls || i == .rs)) ? "" : Self.ownName(i, fam)
             m.buttons[i] = .init(text: text(i), own: own, toggled: live.toggled.contains(i))
         }
+        // A trigger's full pull has no part of its own: it goes on the trigger, underneath (⇊), and a toggle of
+        // either rings the trigger.
+        for (t, full) in [(PadProfiles.Input.lt, PadProfiles.Input.ltfull), (.rt, .rtfull)] {
+            guard var cap = m.buttons[t] else { continue }
+            if let f = text(full) {
+                if var main = cap.text { main.second = "⇊" + f.main; cap.text = main }
+                else { cap.text = PadLabel.Text(main: "⇊" + f.main, toggles: f.toggles) }
+            }
+            cap.toggled = live.toggled.contains(t) || live.toggled.contains(full)
+            m.buttons[t] = cap
+        }
         let input = active.flatMap { sources[$0]?.input } ?? ControllerOverlayInput()
         let pads = pad.overlayPads(layer: layer)
         for (side, click) in model.padClicks {
