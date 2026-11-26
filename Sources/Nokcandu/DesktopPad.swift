@@ -686,7 +686,7 @@ final class DesktopPad: ObservableObject {
                     guard !runtime.steamSource, let e = runtime.engine else { return }
                     if runtime.streaming, runtime.stream?.otherControllersAsPlayers == true, StreamGamepads.profileController().mapped != source { return }
                     pe_gyro(e, g[0], g[1], g[2], DesktopPad.now()); pe_accel(e, a[0], a[1], a[2], DesktopPad.now())
-                    // The virtual controller takes GameController's axes (the inverse of GameControllerMotion).
+                    // The virtual controller takes GameController's axes (SDL's, the inverse of GameControllerMotion).
                     MacVirtualControllers.shared.motion(gyro: (Double(g[0]), Double(-g[2]), Double(g[1])), accel: (Double(-a[0]), Double(a[2]), Double(-a[1])))
                 }
             }

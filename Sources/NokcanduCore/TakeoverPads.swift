@@ -50,6 +50,27 @@ public struct TakeoverPadDecoder: Sendable {
 
     public init(_ kind: TakeoverPad, bluetooth: Bool) { self.kind = kind; self.bluetooth = bluetooth }
 
+    private var lastMotion: Double?, firstFull: Double?, lastRepair = -Double.infinity
+    /// Switch Pro: commands that put it back the way Nokcandu set it up, when a report shows something else changed it.
+    /// Other programs that open the controller (SDL in a game, which turns motion off unless the game asks for it)
+    /// can switch its motion off or its reports back to simple ones; without this the gyro just stops.
+    /// At most once a second.
+    public mutating func repairs(after r: [UInt8], at now: Double) -> [[UInt8]] {
+        guard kind == .switchPro, let id = r.first else { return [] }
+        var broken = false, motionOff = false
+        if id == 0x3F { broken = true }
+        else if id == 0x30 {
+            // At rest the accelerometer still reads gravity, so a motion block of zeros means motion is off.
+            if r.count >= 49, r[13..<49].contains(where: { $0 != 0 }) { lastMotion = now; return [] }
+            if firstFull == nil { firstFull = now }
+            motionOff = now - (lastMotion ?? firstFull ?? now) > 0.5
+        }
+        guard broken || motionOff, now - lastRepair >= 1 else { return [] }
+        let out = broken ? [proSubcommand(0x03, [0x30]), proSubcommand(0x40, [0x01])] : [proSubcommand(0x40, [0x01])]
+        if !out.isEmpty { lastRepair = now }
+        return out
+    }
+
     /// Reports to send at start, in order, a little apart.
     public mutating func start() -> [[UInt8]] {
         guard kind == .switchPro else { return [] }
@@ -122,7 +143,8 @@ public enum XboxBluetoothPad {
 }
 
 /// Nintendo Switch Pro Controller full report 0x30 (or a subcommand reply 0x21, which carries the same state).
-/// Buttons are positional, as everywhere in Nokcandu: B (bottom) is south (`.a`), A east (`.b`), Y west (`.x`), X north (`.y`).
+/// Buttons by the letters printed on them, as macOS's own controller support reports Nintendo controllers (and
+/// Switch2Controller does), so a profile made with the controller shared works the same once it's taken over.
 public enum SwitchProPad {
     public struct Calibration: Equatable, Sendable {
         /// Per axis (lx, ly, rx, ry): centre, reach below, reach above (raw 12-bit units).
@@ -156,7 +178,7 @@ public enum SwitchProPad {
 
     public static func decode(_ d: [UInt8], calibration c: Calibration = .default) -> ReportPadState? {
         guard d.count >= 13, d[0] == 0x30 || d[0] == 0x21 else { return nil }
-        var held = ReportPadDecoder.bits(d[3], [(0x01, .x), (0x02, .y), (0x04, .a), (0x08, .b), (0x40, .rb)])
+        var held = ReportPadDecoder.bits(d[3], [(0x01, .y), (0x02, .x), (0x04, .b), (0x08, .a), (0x40, .rb)])
         held.formUnion(ReportPadDecoder.bits(d[4], [(0x01, .back), (0x02, .start), (0x04, .rs), (0x08, .ls), (0x10, .guide), (0x20, .misc)]))
         held.formUnion(ReportPadDecoder.bits(d[5], [(0x01, .down), (0x02, .up), (0x04, .right), (0x08, .left), (0x40, .lb)]))
         let zl = d[5] & 0x80 != 0, zr = d[3] & 0x80 != 0

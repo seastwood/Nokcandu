@@ -71,8 +71,9 @@ import NokcanduStreamCore
         mappedMotionToken = MappedGamepads.shared.listenMotion { [weak self] source, g, a in
             MainActor.assumeIsolated {
                 guard let self, let n = self.mappedNumbers[source], !(self.usesProfile && n == 0) else { return }
-                self.motion(n, gyro: GCRotationRate(x: Double(g[0]), y: Double(g[1]), z: Double(g[2])),
-                            accel: GCAcceleration(x: Double(a[0]), y: Double(a[1]), z: Double(a[2])))
+                // SDL's axes back to GameController's, as macOS's own controllers send theirs (GameControllerMotion inverted).
+                self.motion(n, gyro: GCRotationRate(x: Double(g[0]), y: Double(-g[2]), z: Double(g[1])),
+                            accel: GCAcceleration(x: Double(-a[0]), y: Double(a[2]), z: Double(-a[1])))
             }
         }
         let nc = NotificationCenter.default

@@ -11,3 +11,11 @@ public enum GameControllerMotion {
     public static func gyro(_ x: Double, _ y: Double, _ z: Double) -> [Float] { [Float(x), Float(z), Float(-y)] }
     public static func acceleration(_ x: Double, _ y: Double, _ z: Double) -> [Float] { [Float(-x), Float(-z), Float(y)] }
 }
+
+/// Nokcandu's motion axes (the original Steam Controller's own: SDL's x, z, y), which controller decoders produce,
+/// to SDL's (x pitch, y yaw, z roll), which the pad engine and the overlay take.
+public enum MotionAxes {
+    public static func sdl(gyro g: [Float], acceleration a: [Float]) -> ([Float], [Float]) {
+        (g.count == 3 ? [g[0], g[2], g[1]] : g, a.count == 3 ? [a[0], a[2], a[1]] : a)
+    }
+}

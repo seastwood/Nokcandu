@@ -130,7 +130,17 @@ final class ControllerTakeover {
     private func report(_ bytes: [UInt8], id: UInt64) {
         guard var pad = pads[id] else { return }
         let s = pad.decoder.decode(bytes)
+        let repairs = pad.decoder.repairs(after: bytes, at: ProcessInfo.processInfo.systemUptime)
         pads[id] = pad
+        if !repairs.isEmpty {
+            for (n, out) in repairs.enumerated() {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.06 * Double(n)) { HIDOutput.send(out, to: pad.device) }
+            }
+            repairCount += 1
+            if repairCount <= 3 || repairCount % 20 == 0 {
+                ControllerLog.add("Controller takeover: \(pad.decoder.kind.name) had its \(bytes.first == 0x3F ? "full reports" : "motion") switched off by another program; turned back on (\(repairCount) time\(repairCount == 1 ? "" : "s"))")
+            }
+        }
         guard let s else { return }
         if let g = s.gyro, let a = s.acceleration { MappedGamepads.shared.publishMotion("owned:\(id)", gyro: g, acceleration: a) }
         MappedGamepads.shared.publish("owned:\(id)", name: pad.decoder.kind.name, buttons: s.buttons, axes: s.axes)
@@ -149,6 +159,7 @@ final class ControllerTakeover {
         }
     }
     private var rumbleEnds: [UInt64: Date] = [:]
+    private var repairCount = 0
     private func send(_ id: UInt64, _ strength: Double) {
         guard var p = pads[id] else { return }
         let r = p.decoder.rumble(low: strength, high: strength)

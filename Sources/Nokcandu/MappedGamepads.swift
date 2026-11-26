@@ -32,11 +32,14 @@ final class MappedGamepads {
         if let buttons { native[source] = Native(name: name, buttons: buttons, axes: axes) } else { native[source] = nil; motionSources.remove(source) }
         for f in listeners.values { f(source, buttons, axes) }
     }
-    /// A controller's motion: gyro in rad/s and acceleration in g, in Nokcandu's axes.
+    /// A controller's motion: gyro in rad/s and acceleration in g, in Nokcandu's axes (the original Steam Controller's
+    /// own: SDL's x, z, y). Listeners get it in SDL's axes (x pitch, y yaw, z roll), which the pad engine and the overlay
+    /// use, as the Steam Controller's `sdlGyro` is. Passing Nokcandu's axes straight on made turning read as rolling.
     func publishMotion(_ source: String, gyro: [Float], acceleration: [Float]) {
         PadDSUBridge.shared.publish(source:source,gyro:gyro,acceleration:acceleration)
         motionSources.insert(source)
-        for f in motionListeners.values { f(source, gyro, acceleration) }
+        let (g, a) = MotionAxes.sdl(gyro: gyro, acceleration: acceleration)
+        for f in motionListeners.values { f(source, g, a) }
     }
     /// Controllers that have sent motion (drivers publish it before a report's buttons, so it's known at once).
     private(set) var motionSources: Set<String> = []
@@ -90,6 +93,10 @@ final class MappedGamepads {
                 && !(info.vendorID == GameCubeAdapter.vendor && info.productID == GameCubeAdapter.product)
                 && !ReportPadsHID.shared.claimed.contains(info.id)
                 && !ControllerTakeover.shared.owned.contains(info.id)
+                // macOS's own controllers (DualShock 4, DualSense, Xbox, Switch Pro): never the community mapping, even for
+                // the moment after Nokcandu gives one back and before macOS has picked it up again. Read with a generic
+                // mapping, a Switch Pro still sending the full reports Nokcandu set up comes out as random presses.
+                && TakeoverPad.find(vendor: info.vendorID, product: info.productID) == nil
                 && Self.mapping(info) != nil
         }
         let ids = Set(now.map(\.id))

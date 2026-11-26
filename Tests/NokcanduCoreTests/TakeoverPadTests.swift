@@ -43,11 +43,12 @@ final class TakeoverPadTests: XCTestCase {
         XCTAssertNil(XboxBluetoothPad.decode([0x02, 0x01]))
     }
 
-    func testSwitchProReportIsPositional() throws {
+    func testSwitchProReportByPrintedLetters() throws {
         let r = report(Int32(VP_SWITCH_PRO), state([Int32(PE_A), Int32(PE_X), Int32(PE_BACK), Int32(PE_GUIDE), Int32(PE_DOWN), Int32(PE_LB)],
                                                    axes: [0: 32767, 1: 16384, 4: 32767]), pro: true)
         let s = try XCTUnwrap(SwitchProPad.decode(r, calibration: .init(centre: [2048, 2048, 2048, 2048], below: [1792, 1792, 1792, 1792], above: [1792, 1792, 1792, 1792])))
-        XCTAssertEqual(s.buttons, [.a, .x, .back, .guide, .down, .lb])
+        // The virtual Pro is positional (south = its B, west = its Y); read back by the letters, as macOS reads a Pro.
+        XCTAssertEqual(s.buttons, [.b, .y, .back, .guide, .down, .lb])
         XCTAssertEqual(Double(s.axes[0]!), 32767, accuracy: 40); XCTAssertEqual(Double(s.axes[1]!), 16384, accuracy: 40, "y down, as the engine's")
         XCTAssertEqual(s.axes[4], 32767, "ZL"); XCTAssertEqual(s.axes[5], 0)
         let a = try XCTUnwrap(s.acceleration)
@@ -77,6 +78,23 @@ final class TakeoverPadTests: XCTestCase {
         XCTAssertEqual(Array(u.prefix(4)), [[0x80, 0x02], [0x80, 0x03], [0x80, 0x02], [0x80, 0x04]])
         XCTAssertTrue(u.dropFirst(4).allSatisfy { $0.count == 64 })
         XCTAssertEqual(Set(b.map { $0[1] }).count, 4, "each command its own counter")
+    }
+
+    func testSwitchProMotionTurnedBackOnWhenSomethingElseTurnsItOff() {
+        var d = TakeoverPadDecoder(.switchPro, bluetooth: false)
+        var moving = [UInt8](repeating: 0, count: 64); moving[0] = 0x30; moving[17] = 0x10
+        var still = [UInt8](repeating: 0, count: 64); still[0] = 0x30
+        XCTAssertTrue(d.repairs(after: moving, at: 0).isEmpty)
+        XCTAssertTrue(d.repairs(after: still, at: 0.3).isEmpty, "a moment of zeros isn't enough")
+        let fix = d.repairs(after: still, at: 0.6)
+        XCTAssertEqual(fix.map { [$0[10], $0[11]] }, [[0x40, 0x01]])
+        XCTAssertTrue(d.repairs(after: still, at: 1.0).isEmpty, "at most once a second")
+        XCTAssertEqual(d.repairs(after: still, at: 1.7).count, 1)
+        XCTAssertTrue(d.repairs(after: moving, at: 1.8).isEmpty)
+        var simple = [UInt8](repeating: 0, count: 12); simple[0] = 0x3F
+        XCTAssertEqual(d.repairs(after: simple, at: 3).map { $0[10] }, [0x03, 0x40], "simple reports: full reports and motion again")
+        var ps4 = TakeoverPadDecoder(.ps4, bluetooth: true)
+        XCTAssertTrue(ps4.repairs(after: still, at: 10).isEmpty)
     }
 
     func testRumbleReports() {

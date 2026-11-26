@@ -43,4 +43,10 @@ final class GameControllerMotionTests: XCTestCase {
         PadNotificationPreferences.setHoldWhilePlaying(false, defaults: d)
         XCTAssertFalse(PadNotificationPreferences.holdWhilePlaying(d))
     }
+
+    func testNokcanduAxesReachListenersAsSDLs() {
+        // A Switch Pro lying still and turned left: Nokcandu's axes (SDL's x, z, y) to SDL's (yaw on y, gravity up on y).
+        let (g, a) = MotionAxes.sdl(gyro: [0, 0, 2], acceleration: [0, 0, 1])
+        XCTAssertEqual(g, [0, 2, 0]); XCTAssertEqual(a, [0, 1, 0])
+    }
 }
