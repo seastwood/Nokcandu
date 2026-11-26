@@ -41,7 +41,7 @@
 #define MAX_MENUS 8
 
 enum { O_NONE, O_PAD, O_TRIG, O_KEY, O_MOUSE, O_WHEEL, O_GYRO_ON, O_GYRO_OFF, O_GYRO_TOGGLE, O_LAYER_HOLD, O_LAYER_TOGGLE,
-       O_MACRO, O_MENU, O_KEYBOARD, O_CALIBRATE, O_RUMBLE, O_KEY_TOGGLE, O_MOUSE_TOGGLE, O_PAD_TOGGLE, O_TRIG_TOGGLE };
+       O_MACRO, O_MENU, O_KEYBOARD, O_CALIBRATE, O_RUMBLE, O_KEY_TOGGLE, O_MOUSE_TOGGLE, O_PAD_TOGGLE, O_TRIG_TOGGLE, O_OVERLAY };
 typedef struct { unsigned char kind; short code; } out_t;
 typedef struct { out_t o[MAX_OUTS]; int n; } outs_t;
 typedef struct {
@@ -239,6 +239,7 @@ static bool parse_out(const char *s, out_t *o) {
     memset(o, 0, sizeof *o);
     if (!strcmp(buf, "none")) { o->kind = O_NONE; return true; }
     if (!strcmp(buf, "keyboard")) { o->kind = O_KEYBOARD; return true; }
+    if (!strcmp(buf, "overlay")) { o->kind = O_OVERLAY; return true; }
     if (!strcmp(buf, "calibrate")) { o->kind = O_CALIBRATE; return true; }
     if (!strcmp(buf, "rumble")) { o->kind = O_RUMBLE; return true; }
     if (!v) return false;
@@ -559,6 +560,7 @@ static void out_set(pe_engine *e, out_t o, bool down) {
     case O_KEYBOARD: if (down && e->sink.menu) e->sink.menu(e->sink.ctx, PE_KEYBOARD_MENU, 1); break;
     case O_CALIBRATE: if (down) pe_calibrate(e, e->last_tick); break;
     case O_RUMBLE: if (down && e->sink.menu) e->sink.menu(e->sink.ctx, PE_RUMBLE_MENU, 1); break;
+    case O_OVERLAY: if (e->sink.menu) e->sink.menu(e->sink.ctx, PE_OVERLAY_MENU, down ? 1 : 0); break;
     default: break;
     }
     if (o.kind == O_LAYER_HOLD || o.kind == O_LAYER_TOGGLE) apply_layers(e);
@@ -1799,6 +1801,32 @@ void pe_calibration_set(pe_engine *e, const double bias[3]) {
 bool pe_motion_paused(const pe_engine *e) { return e && e->gyro_off_holds > 0; }
 
 int pe_active_layer(const pe_engine *e) { return e ? top_layer(e) : 0; }
+/// The steering wheel: how far it's turned (degrees, right +, inverted when set), its full lock and the straight
+/// range. Returns false when the gyro isn't a wheel.
+bool pe_wheel_state(const pe_engine *e, double *angle, double *lock, double *dead) {
+    if (!e || e->gyro_out != G_WHEEL) return false;
+    double a = e->wh_init ? pe_wheel_angle(e->wh_up) : 0;
+    if (e->g_invx) a = -a;
+    if (angle) *angle = a;
+    if (lock) *lock = e->g_wheel;
+    if (dead) *dead = e->g_wheeldead;
+    return true;
+}
+bool pe_input_held(const pe_engine *e, int input) { return e && input >= 0 && input < PE_ALL_INPUTS && e->physical[input]; }
+/// Inputs whose press switched something on that's still on (a toggled key, button, layer or the gyro).
+int pe_toggled_inputs(const pe_engine *e, int *out, int max) {
+    if (!e || !out || max <= 0) return 0;
+    int n = 0;
+    #define ADD(owner) do { int o_ = (owner); if (o_ >= 0 && o_ < PE_ALL_INPUTS && n < max) { bool seen_ = false; for (int j_ = 0; j_ < n; j_++) if (out[j_] == o_) seen_ = true; if (!seen_) out[n++] = o_; } } while (0)
+    for (int k = 0; k < KEYS; k++) if (e->key_toggle[k]) ADD(e->key_toggle_owner[k]);
+    for (int b = 0; b < PE_MOUSE_BUTTONS; b++) if (e->mouse_toggle[b]) ADD(e->mouse_toggle_owner[b]);
+    for (int b = 0; b < PE_PAD_BUTTONS; b++) if (e->pad_toggle[b]) ADD(e->pad_toggle_owner[b]);
+    for (int t = 0; t < 2; t++) if (e->trig_toggle[t]) ADD(e->trig_toggle_owner[t]);
+    for (int l = 1; l < MAX_LAYERS; l++) if (e->layer_toggled[l]) ADD(e->layer_toggle_owner[l]);
+    if (e->gyro_toggled) ADD(e->gyro_toggle_owner);
+    #undef ADD
+    return n;
+}
 int pe_active_gyro(const pe_engine *e) { return !e || !e->gyro_out ? -1 : gyro_enabled(e) ? 1 : 0; }
 
 // Tuning-only swaps retain every runtime owner; structural output changes still rebuild.

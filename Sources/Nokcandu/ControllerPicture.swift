@@ -174,8 +174,8 @@ struct ControllerPicture: View {
             case .guide where steamLayout: "Steam"
             case .back where steamLayout: "◀"
             case .start where steamLayout: "▶"
-            case .paddle1 where steamLayout: "Rear R"
-            case .paddle2 where steamLayout: "Rear L"
+            case .paddle1 where steamLayout: "R Grip"
+            case .paddle2 where steamLayout: "L Grip"
             default: i.title(family).count <= 3 ? i.title(family) : String(i.title(family).prefix(1))
             }
         }()

@@ -16,6 +16,12 @@ final class OverlayControllerModel {
     var aspect: Double { layout.aspect }
 
     private let bodyMaterial = SCNMaterial()
+    private let panelMaterial = SCNMaterial()
+    /// Mapping labels lying on the parts (hidden until mappings are shown), and what they show now.
+    private var capLabels: [PadProfiles.Input: [(node: SCNNode, aspect: CGFloat)]] = [:]
+    private var padLabels: [Int: SCNNode] = [:]
+    private var stickLabels: [Int: (node: SCNNode, aspect: CGFloat)] = [:]
+    private var shownMappings: OverlayMappings?
     private var buttonMaterials: [SCNMaterial] = []
     private var buttons: [PadProfiles.Input: [Button]] = [:]
     private var sticks: [Stick] = []
@@ -40,11 +46,25 @@ final class OverlayControllerModel {
         let bodyNode = SCNNode(geometry: body)
         bodyNode.eulerAngles.x = -.pi / 2
         root.addChildNode(bodyNode)
+        if let panel = layout.panel {
+            panelMaterial.lightingModel = .blinn
+            panelMaterial.specular.contents = NSColor(white: 0.2, alpha: 1)
+            let slab = SCNShape(path: panel, extrusionDepth: 0.03)
+            slab.chamferRadius = 0.012; slab.chamferMode = .front
+            slab.materials = [panelMaterial]
+            let n = SCNNode(geometry: slab)
+            n.eulerAngles.x = -.pi / 2
+            n.simdPosition = SIMD3(0, layout.depth / 2 + 0.006, 0)
+            root.addChildNode(n)
+        }
+        moved = Set(layout.parts.compactMap { if case let .label(i, _, _, _) = $0 { return i }; return nil })
         for part in layout.parts { add(part) }
         root.pivot = SCNMatrix4MakeTranslation(0, 0, CGFloat(layout.middle))
     }
 
     private var top: Float { layout.depth / 2 }
+    /// Inputs whose mapping is written beside their button rather than on it.
+    private(set) var moved: Set<PadProfiles.Input> = []
 
     private func material() -> SCNMaterial {
         let m = SCNMaterial()
@@ -68,7 +88,9 @@ final class OverlayControllerModel {
         case let .button(input, cap, at, turn):
             let (g, h) = geometry(cap)
             let p = SIMD3(at.x, top + h / 2, at.y), m = material()
-            buttons[input, default: []].append(Button(node: node(g, m, at: p, turn: turn), material: m, rest: p, travel: SIMD3(0, -min(0.025, h * 0.4), 0)))
+            let n = node(g, m, at: p, turn: turn), size = capSize(cap)
+            buttons[input, default: []].append(Button(node: n, material: m, rest: p, travel: SIMD3(0, -min(0.025, h * 0.4), 0)))
+            if !moved.contains(input) { capLabels[input, default: []].append(labelPlane(size.x * 0.96, size.y * 0.96, on: n, y: h / 2 + 0.003)) }
         case let .dpad(at, size):
             // A cross of four arms, each its own button.
             let arm = size * 0.36, w = size * 0.3
@@ -77,7 +99,9 @@ final class OverlayControllerModel {
             for (input, d) in [(PadProfiles.Input.up, SIMD2<Float>(0, -1)), (.down, [0, 1]), (.left, [-1, 0]), (.right, [1, 0])] {
                 let g = SCNBox(width: CGFloat(d.x == 0 ? w : arm), height: 0.06, length: CGFloat(d.x == 0 ? arm : w), chamferRadius: 0.02)
                 let p = SIMD3(at.x + d.x * (arm / 2 + w * 0.1), top + 0.03, at.y + d.y * (arm / 2 + w * 0.1)), m = material()
-                buttons[input, default: []].append(Button(node: node(g, m, at: p), material: m, rest: p, travel: SIMD3(0, -0.02, 0)))
+                let n = node(g, m, at: p)
+                buttons[input, default: []].append(Button(node: n, material: m, rest: p, travel: SIMD3(0, -0.02, 0)))
+                capLabels[input, default: []].append(labelPlane(d.x == 0 ? w : arm, d.x == 0 ? arm : w, on: n, y: 0.033))
             }
             let hub = SCNBox(width: CGFloat(w), height: 0.06, length: CGFloat(w), chamferRadius: 0.01)
             _ = node(hub, material(), at: SIMD3(at.x, top + 0.03, at.y))
@@ -91,6 +115,7 @@ final class OverlayControllerModel {
             let s = SCNNode(geometry: shaft); s.simdPosition = SIMD3(0, 0.07, 0); pivot.addChildNode(s)
             let cap = SCNCylinder(radius: CGFloat(radius), height: 0.07); cap.radialSegmentCount = 40; cap.materials = [m]
             let c = SCNNode(geometry: cap); c.simdPosition = SIMD3(0, 0.16, 0); pivot.addChildNode(c)
+            stickLabels[side] = labelPlane(radius * 1.7, radius * 1.7, on: c, y: 0.038)
             let rim = SCNTorus(ringRadius: CGFloat(radius * 0.92), pipeRadius: CGFloat(radius * 0.1)); rim.materials = [m]
             let r = SCNNode(geometry: rim); r.simdPosition = SIMD3(0, 0.2, 0); pivot.addChildNode(r)
             sticks.append(Stick(side: side, pivot: pivot, material: m, rest: pivot.simdPosition))
@@ -107,17 +132,23 @@ final class OverlayControllerModel {
                 g = SCNBox(width: CGFloat(w), height: 0.03, length: CGFloat(l), chamferRadius: CGFloat(min(w, l) * 0.12))
                 well = SCNBox(width: CGFloat(w * 1.08), height: 0.02, length: CGFloat(l + w * 0.08), chamferRadius: CGFloat(min(w, l) * 0.14))
             }
-            _ = node(well, bodyMaterial, at: SIMD3(at.x, top + 0.005, at.y), turn: turn)
-            let p = SIMD3(at.x, top + 0.02, at.y)
+            // Above the centre panel where they overlap it, so a press never sinks the face into it.
+            let lift: Float = layout.panel == nil ? 0 : 0.016
+            _ = node(well, bodyMaterial, at: SIMD3(at.x, top + 0.005 + lift, at.y), turn: turn)
+            let p = SIMD3(at.x, top + 0.02 + lift, at.y)
             let disc = node(g, m, at: p, turn: turn)
             let dot = SCNSphere(radius: CGFloat(min(reach.x, reach.y) * 0.16 + 0.02)); dot.segmentCount = 16
             let dm = SCNMaterial(); dm.lightingModel = .constant; dot.materials = [dm]
             let dn = SCNNode(geometry: dot); dn.isHidden = true; disc.addChildNode(dn)
+            let face: SIMD2<Float> = { switch shape { case .round(let r): SIMD2(r * 2, r * 2); case .rect(let w, let l): SIMD2(w, l) } }()
+            padLabels[side] = labelPlane(face.x, face.y, on: disc, y: 0.017).node
             pads.append(Pad(side: side, click: click, disc: disc, dot: dn, material: m, rest: p, reach: reach, round: round, turn: turn))
         case let .bumper(input, at, width):
             let g = SCNBox(width: CGFloat(width), height: 0.13, length: 0.2, chamferRadius: 0.06)
             let p = SIMD3(at.x, 0.08, at.y), m = material()
-            buttons[input, default: []].append(Button(node: node(g, m, at: p), material: m, rest: p, travel: SIMD3(0, 0, 0.03)))
+            let n = node(g, m, at: p)
+            buttons[input, default: []].append(Button(node: n, material: m, rest: p, travel: SIMD3(0, 0, 0.03)))
+            if !moved.contains(input) { capLabels[input, default: []].append(labelPlane(width * 0.7, 0.17, on: n, y: 0.068)) }
         case let .trigger(side, at, width):
             // Raised behind the bumpers so they show from the front; a bar on top fills as they're pulled.
             let m = material()
@@ -133,13 +164,56 @@ final class OverlayControllerModel {
             b.isHidden = true
             n.addChildNode(b)
             triggers.append(Trigger(side: side, node: n, material: m, rest: p, bar: b, barMaterial: bm))
+            capLabels[side == 0 ? .lt : .rt, default: []].append(labelPlane(width * 0.62, 0.16, on: n, y: 0.137, z: -0.07))
         case let .grip(input, at, length, turn):
             // A grip or back button, on the outside edge where it can be seen from the front.
-            let g = SCNBox(width: 0.08, height: 0.14, length: CGFloat(length), chamferRadius: 0.035)
+            let g = SCNBox(width: 0.13, height: 0.16, length: CGFloat(length), chamferRadius: 0.05)
             let m = material()
             let n = node(g, m, at: at, turn: turn)
             buttons[input, default: []].append(Button(node: n, material: m, rest: at, travel: SIMD3(at.x < 0 ? 0.03 : -0.03, 0, 0)))
+            if !moved.contains(input) { capLabels[input, default: []].append(labelPlane(0.34, max(0.2, length * 0.8), on: n, y: 0.074)) }
+        case let .label(input, at, width, length):
+            let n = SCNNode(); n.simdPosition = SIMD3(at.x, top + at.y, at.z)
+            root.addChildNode(n)
+            capLabels[input, default: []].append(labelPlane(width, length, on: n, y: 0))
         }
+    }
+
+    /// A flat label lying on a part's top (texture up = away from the player), drawn over it and unlit.
+    private func labelPlane(_ width: Float, _ length: Float, on parent: SCNNode, y: Float, z: Float = 0) -> (node: SCNNode, aspect: CGFloat) {
+        let plane = SCNPlane(width: CGFloat(width), height: CGFloat(length))
+        let m = SCNMaterial(); m.lightingModel = .constant; m.writesToDepthBuffer = false; m.blendMode = .alpha
+        m.diffuse.contents = NSColor.clear
+        plane.materials = [m]
+        let n = SCNNode(geometry: plane)
+        n.simdEulerAngles.x = -.pi / 2
+        n.simdPosition = SIMD3(0, y, z)
+        n.renderingOrder = 20
+        n.isHidden = true
+        parent.addChildNode(n)
+        return (n, CGFloat(width / max(0.001, length)))
+    }
+    private func capSize(_ cap: OverlayLayout.Cap) -> SIMD2<Float> {
+        switch cap { case .round(let r): SIMD2(r * 2, r * 2); case .pill(let w, let l): SIMD2(w, l); case .square(let s): SIMD2(s, s) }
+    }
+
+    /// Each trackpad's click input, by side.
+    var padClicks: [(Int, PadProfiles.Input)] { pads.map { ($0.side, $0.click) } }
+
+    /// Shows what each part does (nil hides the labels). Only labels that changed are redrawn.
+    func showMappings(_ m: OverlayMappings?) {
+        guard m != shownMappings else { return }
+        shownMappings = m
+        func set(_ n: SCNNode, _ image: CGImage?) {
+            n.isHidden = image == nil
+            if let image { n.geometry?.firstMaterial?.diffuse.contents = image }
+        }
+        for (input, list) in capLabels {
+            let cap = m?.buttons[input]
+            for l in list { set(l.node, cap.flatMap { OverlayLabelImages.cap($0, aspect: l.aspect, highlight: highlight) }) }
+        }
+        for (side, n) in padLabels { set(n, m?.pads[side].flatMap { OverlayLabelImages.pad($0, highlight: highlight) }) }
+        for (side, l) in stickLabels { set(l.node, m?.sticks[side].flatMap { OverlayLabelImages.cap($0, aspect: l.aspect, highlight: highlight) }) }
     }
 
     private func geometry(_ cap: OverlayLayout.Cap) -> (SCNGeometry, Float) {
@@ -152,7 +226,10 @@ final class OverlayControllerModel {
 
     func colors(body: NSColor, buttons: NSColor, highlight: NSColor) {
         bodyMaterial.diffuse.contents = body
+        panelMaterial.diffuse.contents = body.blended(withFraction: 0.12, of: .white) ?? body
+        let highlightChanged = self.highlight != highlight
         buttonColor = buttons; self.highlight = highlight
+        if highlightChanged, let m = shownMappings { shownMappings = nil; showMappings(m) }
         for m in buttonMaterials { m.diffuse.contents = buttons; m.emission.contents = NSColor.black }
         for p in pads { p.dot.geometry?.firstMaterial?.diffuse.contents = highlight }
     }
@@ -183,7 +260,7 @@ final class OverlayControllerModel {
             }
             let click = i.buttons.contains(p.click)
             light(p.material, click ? 1 : touched ? 0.25 : 0)
-            p.disc.simdPosition = p.rest - SIMD3(0, click ? 0.02 : 0, 0)
+            p.disc.simdPosition = p.rest - SIMD3(0, click ? 0.008 : 0, 0)
         }
         // Triggers: part pulled, a soft colour and a bar filling across; fully pulled, solid and bright.
         for t in triggers {
@@ -218,9 +295,14 @@ struct OverlayLayout {
         case trigger(Int, SIMD2<Float>, width: Float)
         /// x, y, z: on the body's edge.
         case grip(PadProfiles.Input, SIMD3<Float>, length: Float, turn: Float)
+        /// Where an input's mapping is written when its button is too small or hidden to hold it: on the body
+        /// (x, height above the face, z), width by length. The button itself then carries no label.
+        case label(PadProfiles.Input, SIMD3<Float>, width: Float, length: Float)
     }
     /// The body seen from above, x to the right and y away from the player.
     var outline: NSBezierPath
+    /// A lighter panel raised a little on the face (the original Steam Controller's centre), same coordinates.
+    var panel: NSBezierPath? = nil
     var depth: Float = 0.36, chamfer: Float = 0.09
     /// Where it turns about (z), its middle.
     var middle: Float = 0.26
@@ -257,26 +339,62 @@ struct OverlayLayout {
 
     // MARK: Steam Controller (2015)
 
+    /// The original Steam Controller's silhouette seen from the front (x right, y away from the player), and its
+    /// lighter centre panel. Shape from PadSight's 2015 theme generator (github.com/80sFauxstalgia/padsight, MIT,
+    /// itself based on VSCView by John Klein): its picture coordinates scaled to the overlay's units.
+    static let steam2015Body: [(CGFloat, CGFloat)] = [
+        (-0.262, 0.999), (-0.596, 0.997), (-0.873, 0.991), (-1.092, 0.983), (-1.258, 0.972), (-1.377, 0.955), (-1.471, 0.927), (-1.541, 0.885),
+        (-1.595, 0.828), (-1.637, 0.750), (-1.679, 0.643), (-1.722, 0.508), (-1.766, 0.354), (-1.812, 0.184), (-1.856, 0.002), (-1.897, -0.189),
+        (-1.933, -0.377), (-1.964, -0.562), (-1.991, -0.745), (-2.011, -0.922), (-2.020, -1.077), (-2.016, -1.215), (-1.996, -1.346), (-1.958, -1.467),
+        (-1.902, -1.573), (-1.829, -1.661), (-1.742, -1.727), (-1.644, -1.773), (-1.543, -1.795), (-1.443, -1.794), (-1.356, -1.773), (-1.279, -1.732),
+        (-1.211, -1.674), (-1.151, -1.601), (-1.094, -1.513), (-1.038, -1.415), (-0.982, -1.314), (-0.927, -1.214), (-0.874, -1.124), (-0.822, -1.044),
+        (-0.768, -0.984), (-0.705, -0.941), (-0.611, -0.912), (-0.480, -0.895), (-0.291, -0.885), (-0.058, -0.882), (0.175, -0.883), (0.393, -0.889),
+        (0.553, -0.902), (0.662, -0.925), (0.740, -0.961), (0.795, -1.012), (0.848, -1.082), (0.900, -1.168), (0.954, -1.263), (1.010, -1.365),
+        (1.066, -1.464), (1.122, -1.559), (1.181, -1.639), (1.244, -1.705), (1.316, -1.754), (1.398, -1.786), (1.492, -1.797), (1.594, -1.787),
+        (1.693, -1.753), (1.787, -1.697), (1.868, -1.619), (1.933, -1.522), (1.979, -1.409), (2.008, -1.281), (2.020, -1.147), (2.017, -1.002),
+        (2.003, -0.836), (1.978, -0.654), (1.949, -0.470), (1.915, -0.283), (1.877, -0.094), (1.834, 0.094), (1.790, 0.270), (1.744, 0.433),
+        (1.700, 0.578), (1.658, 0.700), (1.616, 0.793), (1.570, 0.859), (1.508, 0.908), (1.427, 0.942), (1.321, 0.965), (1.182, 0.978),
+        (0.989, 0.988), (0.742, 0.994), (0.436, 0.998), (0.087, 1.000)
+    ]
+    static let steam2015Panel: [(CGFloat, CGFloat)] = [
+        (-0.279, 0.601), (-0.631, 0.598), (-0.902, 0.583), (-1.101, 0.543), (-1.258, 0.436), (-1.355, 0.274), (-1.338, 0.098), (-1.231, -0.087),
+        (-1.105, -0.271), (-0.972, -0.443), (-0.865, -0.581), (-0.778, -0.684), (-0.698, -0.749), (-0.595, -0.782), (-0.378, -0.799), (-0.076, -0.802),
+        (0.227, -0.801), (0.501, -0.793), (0.661, -0.768), (0.737, -0.721), (0.820, -0.637), (0.915, -0.517), (1.036, -0.361), (1.171, -0.179),
+        (1.287, 0.005), (1.361, 0.188), (1.321, 0.357), (1.185, 0.498), (1.007, 0.572), (0.777, 0.592), (0.465, 0.601), (0.093, 0.601)
+    ]
+
+    /// A closed outline through points (x, y away from the player).
+    static func polygon(_ pts: [(CGFloat, CGFloat)]) -> NSBezierPath {
+        let p = NSBezierPath(); p.flatness = 0.02
+        guard let first = pts.first else { return p }
+        p.move(to: pt(first.0, first.1))
+        for q in pts.dropFirst() { p.line(to: pt(q.0, q.1)) }
+        p.close()
+        return p
+    }
+
+    /// Proportions from the real controller (the PadSight outline): big recessed pads in the upper corners, the
+    /// Steam button between them with the two arrow keys, the stick lower left and ABXY lower right on the lighter
+    /// centre panel, handles flaring out around a broad arch, grips (back paddles) on the handles' outsides.
     static let steam2015 = OverlayLayout(
-        outline: symmetric(from: pt(0, 1.0), [
-            (pt(1.5, 1.0), pt(0.5, 1.0), pt(1.0, 1.0)),
-            (pt(2.02, 0.5), pt(1.88, 1.0), pt(2.02, 0.78)),
-            (pt(1.86, -1.2), pt(2.06, -0.05), pt(2.04, -0.78)),
-            (pt(1.34, -1.52), pt(1.76, -1.44), pt(1.56, -1.58)),
-            (pt(0.9, -0.82), pt(1.1, -1.46), pt(0.98, -1.08)),
-            (pt(0, -0.66), pt(0.74, -0.68), pt(0.36, -0.66)),
-        ]),
+        outline: polygon(steam2015Body), panel: polygon(steam2015Panel), middle: 0.42, aspect: 0.74,
         parts: [
-            .pad(0, [-1.18, -0.34], .round(0.58), click: .touchpad),
-            .pad(1, [1.18, -0.34], .round(0.58), click: .rs),        // its right pad's click is the right stick click
-            .stick(0, [-0.66, 0.34], radius: 0.2),
-            .button(.y, .round(0.095), [0.66, 0.12]), .button(.a, .round(0.095), [0.66, 0.56]),
-            .button(.x, .round(0.095), [0.44, 0.34]), .button(.b, .round(0.095), [0.88, 0.34]),
-            .button(.back, .round(0.06), [-0.3, 0.02]), .button(.start, .round(0.06), [0.3, 0.02]),
-            .button(.guide, .round(0.15), [0, -0.3]),
-            .bumper(.lb, [-1.28, -1.02], width: 0.95), .bumper(.rb, [1.28, -1.02], width: 0.95),
-            .trigger(0, [-1.28, -1.2], width: 0.8), .trigger(1, [1.28, -1.2], width: 0.8),
-            .grip(.paddle2, [-1.92, -0.02, 0.62], length: 0.6, turn: -0.32), .grip(.paddle1, [1.92, -0.02, 0.62], length: 0.6, turn: 0.32),
+            .pad(0, [-1.117, -0.242], .round(0.456), click: .touchpad),
+            .pad(1, [1.117, -0.242], .round(0.456), click: .rs),        // its right pad's click is the right stick click
+            .stick(0, [-0.442, 0.386], radius: 0.2),
+            .button(.y, .round(0.1), [0.456, 0.13]), .button(.a, .round(0.1), [0.456, 0.586]),
+            .button(.x, .round(0.1), [0.228, 0.358]), .button(.b, .round(0.1), [0.684, 0.358]),
+            .button(.back, .pill(0.21, 0.115), [-0.354, -0.266]), .button(.start, .pill(0.21, 0.115), [0.354, -0.266]),
+            .button(.guide, .round(0.15), [0, -0.35]),
+            .bumper(.lb, [-1.2, -1.0], width: 1.0), .bumper(.rb, [1.2, -1.0], width: 1.0),
+            .trigger(0, [-1.13, -1.16], width: 0.82), .trigger(1, [1.13, -1.16], width: 0.82),
+            .grip(.paddle2, [-2.04, 0.06, 1.0], length: 0.55, turn: -0.07), .grip(.paddle1, [2.04, 0.06, 1.0], length: 0.55, turn: 0.07),
+            // Mappings written where they read: the bumpers' on the face's upper corners, Back and Start above
+            // their buttons, the stick click below the stick, the grips beside the handles.
+            .label(.lb, [-1.2, 0.004, -0.84], width: 0.7, length: 0.19), .label(.rb, [1.2, 0.004, -0.84], width: 0.7, length: 0.19),
+            .label(.back, [-0.37, 0.026, -0.44], width: 0.36, length: 0.18), .label(.start, [0.37, 0.026, -0.44], width: 0.36, length: 0.18),
+            .label(.ls, [-0.442, 0.026, 0.67], width: 0.5, length: 0.18),
+            .label(.paddle2, [-1.72, 0.004, 1.02], width: 0.36, length: 0.14), .label(.paddle1, [1.72, 0.004, 1.02], width: 0.36, length: 0.14),
         ])
 
     // MARK: Steam Controller (2026)

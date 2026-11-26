@@ -72,6 +72,12 @@ bool pe_update_bindings(pe_engine *e, const char *profile_text);
 /// Binding edits or compatible stick/gyro tuning, preserving unrelated runtime state.
 bool pe_update_profile(pe_engine *e, const char *profile_text);
 int pe_active_layer(const pe_engine *e);
+/// An input held now (buttons, trackpad zones and directions, stick directions, tilt).
+bool pe_input_held(const pe_engine *e, int input);
+/// Gyro as a steering wheel: its turn (degrees, right +), full lock and straight range; false when not a wheel.
+bool pe_wheel_state(const pe_engine *e, double *angle, double *lock, double *dead);
+/// Inputs whose press turned something on that's still on; returns how many were written.
+int pe_toggled_inputs(const pe_engine *e, int *out, int max);
 int pe_active_gyro(const pe_engine *e);
 /// Explicit Gyro off holds pause other motion sources independently of controller gyro output mode.
 bool pe_motion_paused(const pe_engine *e);
@@ -101,7 +107,7 @@ double pe_next_deadline(const pe_engine *e);
 bool pe_uses_gyro(const pe_engine *e);
 /// Steering-wheel turn (degrees, right +) from which way is up in the controller's terms (SDL axes).
 double pe_wheel_angle(const double up[3]);
-enum { PE_KEYBOARD_MENU = 255, PE_RUMBLE_MENU = 254 };   // sink.menu ids: the on-screen keyboard, a rumble
+enum { PE_KEYBOARD_MENU = 255, PE_RUMBLE_MENU = 254, PE_OVERLAY_MENU = 253 };   // PE_OVERLAY_MENU: slice 1 pressed, 0 let go   // sink.menu ids: the on-screen keyboard, a rumble
 /// The touchpad: finger 0 or 1 touching (or lifted), at x, y 0…1 (y down).
 void pe_touch(pe_engine *e, int finger, bool down, float x, float y, double now);
 // A trackpad direction, edge, tap or zone input (PE_LPAD_UP…PE_RPAD_ZC5) held or let go.

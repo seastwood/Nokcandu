@@ -66,6 +66,40 @@ public struct ControllerOverlaySettings: Codable, Equatable, Sendable {
     public var screen: String?
     /// Draw nothing while no controller is connected.
     public var hideWithoutController = true
+    /// What each button, pad and stick does in the layer that's on, written on the drawing: never, always, while a
+    /// button set to "Show mappings on the overlay" is held, or switched on and off by that button.
+    public enum Mappings: String, Codable, CaseIterable, Sendable {
+        case off, always, whileHeld, toggle
+        public var title: String {
+            switch self { case .off: "Off"; case .always: "Always"; case .whileHeld: "While its button is held"; case .toggle: "On and off with its button" }
+        }
+    }
+    public var mappings: Mappings = .off
+    /// A small picture of its own for another device a profile uses (headphone motion: where the head points,
+    /// its dead zone and the directions it's pressing), placed and shown separately from the controller.
+    public struct DevicePanel: Codable, Hashable, Sendable {
+        public var shown = false
+        /// Its centre as a fraction of the screen (0…1, from the bottom left), and its width in points.
+        public var positionX: Double = 0.12
+        public var positionY: Double = 0.2
+        public var size: Double = 150
+        public static let sizes: ClosedRange<Double> = 80...400
+        public init() {}
+        public init(from d: Decoder) throws {
+            let c = try d.container(keyedBy: CodingKeys.self), base = DevicePanel()
+            shown = (try? c.decode(Bool.self, forKey: .shown)) ?? base.shown
+            positionX = (try? c.decode(Double.self, forKey: .positionX)) ?? base.positionX
+            positionY = (try? c.decode(Double.self, forKey: .positionY)) ?? base.positionY
+            size = (try? c.decode(Double.self, forKey: .size)) ?? base.size
+            clamp()
+        }
+        public mutating func clamp() {
+            positionX = min(1, max(0, positionX.isFinite ? positionX : 0.12))
+            positionY = min(1, max(0, positionY.isFinite ? positionY : 0.2))
+            size = min(Self.sizes.upperBound, max(Self.sizes.lowerBound, size.isFinite ? size : 150))
+        }
+    }
+    public var headMotion = DevicePanel()
     /// Holding Back and Start (View and Menu, Share and Options, − and +) for a second recentres the gyro.
     public static let recenterHold = 1.0
 
@@ -94,6 +128,8 @@ public struct ControllerOverlaySettings: Codable, Equatable, Sendable {
         positionY = (try? c.decode(Double.self, forKey: .positionY)) ?? base.positionY
         screen = try? c.decodeIfPresent(String.self, forKey: .screen)
         hideWithoutController = (try? c.decode(Bool.self, forKey: .hideWithoutController)) ?? base.hideWithoutController
+        mappings = (try? c.decode(Mappings.self, forKey: .mappings)) ?? base.mappings
+        headMotion = (try? c.decode(DevicePanel.self, forKey: .headMotion)) ?? base.headMotion
         // The first colours (November 19) were too dark to read on a dark screen.
         if bodyColor == "#2B2D31" && buttonColor == "#4A4D55" { bodyColor = base.bodyColor; buttonColor = base.buttonColor }
         clamp()
@@ -106,6 +142,7 @@ public struct ControllerOverlaySettings: Codable, Equatable, Sendable {
         viewAngle = min(Self.viewAngles.upperBound, max(Self.viewAngles.lowerBound, viewAngle.isFinite ? viewAngle : 54))
         positionX = min(1, max(0, positionX.isFinite ? positionX : 0.85))
         positionY = min(1, max(0, positionY.isFinite ? positionY : 0.15))
+        headMotion.clamp()
     }
 
     public static let key = "controllerOverlay"

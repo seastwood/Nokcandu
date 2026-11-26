@@ -77,7 +77,9 @@ public enum PadProfiles {
             case (.lstouch, _): "Left stick touched"; case (.rstouch, _): "Right stick touched"
             case (.rs, .valve): "Right trackpad click"
             case (.guide, .valve): "Steam"
-            case (.back, .valve): "Back"; case (.start, .valve): "Start"
+            case (.back, .valve): "Back ◀"; case (.start, .valve): "Start ▶"
+            case (.ls, .valve): "Joystick click"
+            case (.lsup, .valve): "Joystick up"; case (.lsdown, .valve): "Joystick down"; case (.lsleft, .valve): "Joystick left"; case (.lsright, .valve): "Joystick right"
             case (.misc, .playstation): "Mute"; case (.touchpad, _): "Touchpad click"
             case (.lb, .nintendo): "L"; case (.rb, .nintendo): "R"; case (.lt, .nintendo): "ZL"; case (.rt, .nintendo): "ZR"
             case (.ltfull, .nintendo): "ZL (full pull)"; case (.rtfull, .nintendo): "ZR (full pull)"
@@ -89,8 +91,8 @@ public enum PadProfiles {
             case (.ls, _): "Left stick click"; case (.rs, _): "Right stick click"
             case (.back, _): "View"; case (.start, _): "Menu"; case (.guide, _): "Guide"; case (.misc, _): "Share"
             case (.up, _): "D-pad up"; case (.down, _): "D-pad down"; case (.left, _): "D-pad left"; case (.right, _): "D-pad right"
-            case (.paddle1, .valve): "Right back grip"; case (.paddle2, .valve): "Left back grip"
-            case (.paddle3, .valve): "Right inner grip"; case (.paddle4, .valve): "Left inner grip"
+            case (.paddle1, .valve): "Right grip"; case (.paddle2, .valve): "Left grip"
+            case (.paddle3, .valve): "Right grip (extra)"; case (.paddle4, .valve): "Left grip (extra)"
             case (.paddle1, _): "Paddle P1"; case (.paddle2, _): "Paddle P2"; case (.paddle3, _): "Paddle P3"; case (.paddle4, _): "Paddle P4"
             case (.lsup, _): "Left stick up"; case (.lsdown, _): "Left stick down"; case (.lsleft, _): "Left stick left"; case (.lsright, _): "Left stick right"
             case (.rsup, _): "Right stick up"; case (.rsdown, _): "Right stick down"; case (.rsleft, _): "Right stick left"; case (.rsright, _): "Right stick right"
@@ -130,6 +132,7 @@ public enum PadProfiles {
         case keyboard                                   // the on-screen keyboard
         case calibrate                                  // measure the gyro's resting drift now
         case rumble                                     // buzz the controller
+        case overlayMappings                            // the controller overlay shows what buttons do
         case nothing
 
         /// Outputs that can remain down between two physical presses.
@@ -169,6 +172,7 @@ public enum PadProfiles {
             case .gyroOn: "gyro:on"; case .gyroOff: "gyro:off"; case .gyroToggle: "gyro:toggle"
             case .layerHold(let n): "layerhold:\(n)"; case .layerToggle(let n): "layertoggle:\(n)"
             case .macro(let id): "macro:\(id)"; case .menu(let id): "menu:\(id)"; case .keyboard: "keyboard"; case .calibrate: "calibrate"; case .rumble: "rumble"
+            case .overlayMappings: "overlay"
             case .nothing: "none"
             }
         }
@@ -182,6 +186,7 @@ public enum PadProfiles {
             case "keyboard": self = .keyboard
             case "calibrate": self = .calibrate
             case "rumble": self = .rumble
+            case "overlay": self = .overlayMappings
             case "trig": self = .trigger(right: v == "r")
             case "padtoggle": guard let i = Input(rawValue: v), Input.padButtons.contains(i) else { return nil }; self = .padToggle(i)
             case "trigtoggle": guard v == "l" || v == "r" else { return nil }; self = .triggerToggle(right: v == "r")
@@ -231,6 +236,7 @@ public enum PadProfiles {
             case .gyroOn: "Gyro on while held"; case .gyroOff: "Gyro off while held"; case .gyroToggle: "Gyro on/off"
             case .layerHold(let n): "\(n) while held"; case .layerToggle(let n): "\(n) on/off"
             case .macro: "Macro"; case .menu: "On-screen menu"; case .keyboard: "On-screen keyboard"; case .calibrate: "Calibrate the gyro"; case .rumble: "Rumble"
+            case .overlayMappings: "Show mappings on the overlay"
             case .nothing: "Nothing"
             }
         }

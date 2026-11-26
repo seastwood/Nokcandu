@@ -37,11 +37,14 @@ final class PadHeadTracking: ObservableObject {
     private var sessionID = UUID()
     private var transform = PadHeadMotion()
     private var stickTransform = PadHeadStick()
+    /// Where the head points for the overlay's head-motion picture, active or not.
+    private var shownTransform = PadHeadStick()
     private var lastPID: pid_t?
     private func setEnabled(_ on: Bool) {
         sessionID = UUID()
         manager?.stopDeviceMotionUpdates(); manager = nil
-        enabled = false; motionActive = false; transform.recenter(); stickTransform.recenter(); DesktopPad.shared.releaseHeadStick(); lastPID = nil
+        enabled = false; motionActive = false; transform.recenter(); stickTransform.recenter(); shownTransform.recenter(); DesktopPad.shared.releaseHeadStick(); lastPID = nil
+        HeadMotionOverlay.shared.moved(nil)
         guard on else { status = "Off"; return }
         guard Bundle.main.object(forInfoDictionaryKey: "NSMotionUsageDescription") != nil else {
             status = "Requires a packaged build with a motion permission description"; return
@@ -60,7 +63,7 @@ final class PadHeadTracking: ObservableObject {
                 }
                 guard let settings = self.settings, settings.enabled else { return }
                 let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
-                if self.lastPID != pid { self.transform.recenter(); self.stickTransform.recenter(); DesktopPad.shared.releaseHeadStick(); self.lastPID = pid }
+                if self.lastPID != pid { self.transform.recenter(); self.stickTransform.recenter(); self.shownTransform.recenter(); DesktopPad.shared.releaseHeadStick(); self.lastPID = pid }
                 let active = self.refreshActivation()
                 if settings.output == .mouse {
                     let (x, y) = self.transform.sample(yaw: motion.attitude.yaw, pitch: motion.attitude.pitch,
@@ -72,12 +75,19 @@ final class PadHeadTracking: ObservableObject {
                     if active { DesktopPad.shared.headStick(settings.invertX ? -x:x,settings.invertY ? -y:y,right:settings.output == .rightStick) }
                     else { DesktopPad.shared.releaseHeadStick() }
                 }
+                if HeadMotionOverlay.shared.wanted {
+                    let range = settings.output == .mouse ? 0.35 : settings.stickRange
+                    let (sx, sy) = self.shownTransform.sample(yaw: motion.attitude.yaw, pitch: motion.attitude.pitch,
+                        range: range, deadZone: settings.deadZone, smoothing: 1, active: true)
+                    HeadMotionOverlay.shared.moved(.init(x: settings.invertX ? -sx : sx, y: settings.invertY ? -sy : sy,
+                        dead: min(1, settings.deadZone / max(0.001, range)), active: active, output: settings.output))
+                }
                 let status = self.motionActive ? "Headphone motion active" : "Headphone motion paused / waiting for activation"
                 if self.status != status { self.status = status }
             }
         }
     }
-    func recenter() { transform.recenter(); stickTransform.recenter(); DesktopPad.shared.releaseHeadStick() }
+    func recenter() { transform.recenter(); stickTransform.recenter(); shownTransform.recenter(); DesktopPad.shared.releaseHeadStick() }
 }
 
 struct PadHeadTrackingSettings: View {

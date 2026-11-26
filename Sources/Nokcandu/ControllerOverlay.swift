@@ -5,6 +5,7 @@ import simd
 import NokcanduCore
 import GameController
 import Metal
+import Combine
 import os
 
 /// The 3D controller overlay (Controllers → Settings → Controller overlay): over everything, or in a window of its
@@ -79,6 +80,7 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
         } else {
             resize()
         }
+        HeadMotionOverlay.shared.configure(settings, overlayOn: settings.mode == .onScreen, screen: targetScreen, highlight: Self.color(settings.highlightColor))
         watchStreams()
         if settings.mode != .onScreen { arranging = false }
         listen()
@@ -121,9 +123,11 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
             listening = false
         }
         streamCheck?.invalidate(); streamCheck = nil; leaveStream()
+        HeadMotionOverlay.shared.tearDown()
         panel?.orderOut(nil); panel = nil
         if let w = window { w.delegate = nil; w.orderOut(nil) }; window = nil
         host = nil; model = nil; modelKind = nil; shownInput = nil; shownOrientation = nil
+        wheelNode = nil; shownWheel = nil; shownLabels = nil
         sources = [:]; active = nil; showing = ""
         motion.reset()
     }
@@ -200,7 +204,10 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
         if inStream !== renderer {
             leaveStream()
             let d = StreamOverlayDrawer(device: renderer.metalDevice, scene: host.scene, camera: host.camera)
-            renderer.setOverlay { buffer, target in d.draw(buffer, target) }
+            let head = HeadMotionOverlay.shared.streamImage
+            head.use(renderer.metalDevice)
+            renderer.setOverlay { buffer, target in d.draw(buffer, target); head.draw(buffer, target) }
+            HeadMotionOverlay.shared.streaming(true)
             inStream = renderer; streamDrawer = d
             panel?.orderOut(nil)
             host.viewPaused = true
@@ -208,11 +215,13 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
         }
 
         streamDrawer?.place(rect, screenWidth: f.width, scale: screen.backingScaleFactor, opacity: settings.opacity)
+        HeadMotionOverlay.shared.streamImage.place(HeadMotionOverlay.shared.streamRect(screenFrame: f), screenWidth: f.width, opacity: settings.opacity)
     }
 
     private func leaveStream() {
         guard let r = inStream else { return }
         r.setOverlay(nil); inStream = nil; streamDrawer = nil
+        HeadMotionOverlay.shared.streaming(false)
         host?.viewPaused = false
         if settings.mode == .onScreen, let panel { panel.orderFrontRegardless() }
         StreamLog.shared.add("Controller overlay: over the screen again (a window above the stream)")
@@ -254,6 +263,7 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
     private func listen() {
         guard !listening else { return }
         listening = true
+        watchMappings()
         SteamControllerUSB.shared.listen(steamID) { [weak self] state in self?.readSteam(state) }
         mappedToken = MappedGamepads.shared.listen { [weak self] source, buttons, axes in
             MainActor.assumeIsolated { self?.readMapped(source, buttons, axes) }
@@ -376,6 +386,8 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
     /// Motion from the controller shown. Gravity's sign differs between sources: up, out of the face, should read
     /// positive while it's held, so a source reading it negative at first is turned round.
     private func move(_ gyro: [Float], _ accel: [Float], source: String? = nil) {
+        // The steering bar follows the controller even when the drawing doesn't turn.
+        if !settings.gyro, wheelNode?.isHidden == false { scheduleDraw() }
         guard settings.gyro, gyro.count == 3, accel.count == 3 else { return }
         var a = accel
         if let key = source ?? active, var s = sources[key] {
@@ -399,6 +411,114 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
 
     private func drawNow() { shownInput = nil; shownOrientation = nil; draw() }
 
+    // MARK: Steering bar
+
+    /// Above the drawing while the gyro is a steering wheel: how far it's turned, the straight range, full lock.
+    private var wheelNode: SCNNode?
+    private var shownWheel: String?
+    private func updateWheel(hidden: Bool) {
+        let w = DesktopPad.shared.wheelState()
+        let key = w.map { "\(($0.angle * 2).rounded())|\($0.lock)|\($0.dead)" }
+        guard key != shownWheel || (wheelNode?.isHidden ?? true) != (w == nil || hidden) else { return }
+        shownWheel = key
+        guard let w, !hidden, let camera = host?.camera else { wheelNode?.isHidden = true; return }
+        let node = wheelNode ?? {
+            let plane = SCNPlane(width: 1.7, height: 0.17)
+            let m = SCNMaterial(); m.lightingModel = .constant; m.writesToDepthBuffer = false; m.readsFromDepthBuffer = false; m.blendMode = .alpha
+            plane.materials = [m]
+            let n = SCNNode(geometry: plane)
+            n.simdPosition = SIMD3(0, 0.74, -4)          // in front of the camera, near the top of the view
+            n.renderingOrder = 30
+            camera.addChildNode(n)
+            wheelNode = n
+            return n
+        }()
+        node.isHidden = false
+        node.geometry?.firstMaterial?.diffuse.contents = WheelBarImage.draw(angle: w.angle, lock: w.lock, dead: w.dead, highlight: Self.color(settings.highlightColor))
+    }
+
+    // MARK: Mappings on the drawing
+
+    private var shownLabels: OverlayMappings?
+    private var mappingsHeld = false, mappingsOn = false
+    private var mappingWatch: [AnyCancellable] = []
+    private var mappingsShown: Bool {
+        switch settings.mappings {
+        case .off: false
+        case .always: true
+        case .whileHeld: mappingsHeld
+        case .toggle: mappingsOn
+        }
+    }
+
+    /// A button set to "Show mappings on the overlay" was pressed or let go.
+    func mappingsButton(down: Bool) {
+        switch settings.mappings {
+        case .whileHeld: mappingsHeld = down
+        case .toggle: if down { mappingsOn.toggle() }
+        case .off, .always: return
+        }
+        scheduleDraw()
+    }
+
+    /// Redraws when the profile or its layer changes.
+    private func watchMappings() {
+        guard mappingWatch.isEmpty else { return }
+        mappingWatch = [
+            DesktopPad.shared.$overlayProfile.dropFirst().sink { [weak self] _ in DispatchQueue.main.async { self?.scheduleDraw() } },
+            DesktopPad.shared.$overlayLayer.dropFirst().sink { [weak self] _ in DispatchQueue.main.async { self?.scheduleDraw() } },
+        ]
+    }
+
+    private var family: Controllers.Family? {
+        switch modelKind ?? wantedKind {
+        case .steam2015, .automatic: .valve
+        case .steam2026: .steam2026
+        case .switchPro: .nintendo
+        case .dualShock4: .playstation
+        case .xbox: nil
+        }
+    }
+
+    /// What every part does in the layer that's on, with what's held and toggled now.
+    private func currentMappings(_ model: OverlayControllerModel) -> OverlayMappings? {
+        let pad = DesktopPad.shared
+        guard let p = pad.overlayProfile, !p.layers.isEmpty else { return nil }
+        let layer = min(max(0, pad.overlayLayer), p.layers.count - 1)
+        let live = pad.overlayLive(), fam = family
+        func binding(_ i: PadProfiles.Input) -> PadProfiles.Binding? { p.layers[layer].bindings[i] ?? (layer > 0 ? p.layers[0].bindings[i] : nil) }
+        func text(_ i: PadProfiles.Input) -> PadLabel.Text? {
+            guard let b = binding(i), !b.isEmpty, !OverlayMappingRules.isItself(b, i) else { return nil }
+            return PadLabel.text(b, family: fam, macros: p.macros, menus: p.menus)
+        }
+        var m = OverlayMappings()
+        for i in PadProfiles.Input.allCases where !i.isVirtual {
+            // Beside a button its own name would only add clutter for a stick click; the Steam/guide button reads as ⌂.
+            let own = i == .guide ? "⌂" : (model.moved.contains(i) && (i == .ls || i == .rs)) ? "" : PadLabel.abbreviate(i.title(fam), limit: 3)
+            m.buttons[i] = .init(text: text(i), own: own, toggled: live.toggled.contains(i))
+        }
+        let input = active.flatMap { sources[$0]?.input } ?? ControllerOverlayInput()
+        let pads = pad.overlayPads(layer: layer)
+        for (side, click) in model.padClicks {
+            m.pads[side] = OverlayPadFace.steamPad(side: side, settings: pads.indices.contains(side) ? pads[side] : PadSteamTrackpadSettings(),
+                                                   label: text, held: live.held, toggled: live.toggled, clickInput: click, clicked: input.buttons.contains(click))
+        }
+        let sticks = p.sticks.indices.contains(layer) ? p.sticks[layer] : (p.sticks.first ?? [])
+        for side in 0..<2 where sticks.indices.contains(side) {
+            let st = sticks[side], click: PadProfiles.Input = side == 0 ? .ls : .rs
+            var t = OverlayMappingRules.stick(st, side: side, label: text)
+            if model.moved.contains(click) {
+                // The click is written below the stick.
+            } else if let c = text(click) {
+                // The click goes in the middle when the directions are around the edge, else underneath.
+                if let a = t?.around { t = PadLabel.Text(main: "⏎" + c.main, around: a) }
+                else { t = PadLabel.Text(main: t?.main ?? (side == 0 ? "L" : "R"), second: "⏎" + c.main) }
+            }
+            m.sticks[side] = .init(text: t, own: side == 0 ? "L" : "R", toggled: live.toggled.contains(click))
+        }
+        return m
+    }
+
     private func draw() {
         guard let model else { return }
         let input = active.flatMap { sources[$0]?.input } ?? ControllerOverlayInput()
@@ -406,11 +526,17 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
         let inputChanged = shownInput.map { !$0.looksLike(input) } ?? true
         // A fifth of a degree: smaller turns can't be seen at overlay sizes.
         let turned = shownOrientation.map { 2 * acos(min(1, abs(simd_dot($0.vector, q.vector)))) > 0.0035 } ?? true
-        guard inputChanged || turned else { return }
+        let labels = mappingsShown ? currentMappings(model) : nil
+        let labelsChanged = labels != shownLabels
+        let wheel = DesktopPad.shared.wheelState()
+        let wheelKey = wheel.map { "\(($0.angle * 2).rounded())|\($0.lock)|\($0.dead)" }
+        guard inputChanged || turned || labelsChanged || wheelKey != shownWheel else { return }
         lastDraw = ProcessInfo.processInfo.systemUptime
         SCNTransaction.begin()
         SCNTransaction.disableActions = true
         if inputChanged { model.show(input); shownInput = input }
+        if labelsChanged { model.showMappings(labels); shownLabels = labels }
+        updateWheel(hidden: model.root.isHidden)
         let hidden = settings.hideWithoutController && sources.isEmpty
         if model.root.isHidden != hidden { model.root.isHidden = hidden }
         if turned { model.root.simdOrientation = q; shownOrientation = q }
@@ -583,6 +709,30 @@ struct ControllerOverlaySettingsView: View {
                 }
                 if overlay.settings.background == .color { ColorPicker("Background colour", selection: color(\.backgroundColor), supportsOpacity: false) }
                 Toggle("Hide when no controller is connected", isOn: $overlay.settings.hideWithoutController)
+                Picker("Show mappings", selection: $overlay.settings.mappings) {
+                    ForEach(ControllerOverlaySettings.Mappings.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                Text(overlay.settings.mappings == .off ? "Writes what each button, trackpad region and stick does on the controller itself, for the layer that's on: a key's symbol (⇧ ⌃ ␣ ↩ …) or a short name, a hold or double tap underneath, a ring on anything toggled on, and the trackpad region your thumb is on lit up."
+                     : overlay.settings.mappings == .always ? "Shown all the time, for the layer that's on."
+                     : "Give a button \"Show mappings on the overlay\" in your controller profile (it can share a button with something else through a layer or a hold). \(overlay.settings.mappings == .whileHeld ? "Mappings show while it's held." : "Each press shows or hides them.")")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("Headphone motion picture", isOn: $overlay.settings.headMotion.shown)
+                if overlay.settings.headMotion.shown {
+                    LabeledContent("Across") {
+                        Slider(value: $overlay.settings.headMotion.positionX, in: 0...1).frame(width: 180)
+                    }
+                    LabeledContent("Up") {
+                        Slider(value: $overlay.settings.headMotion.positionY, in: 0...1).frame(width: 180)
+                    }
+                    LabeledContent("Size") {
+                        HStack {
+                            Slider(value: $overlay.settings.headMotion.size, in: ControllerOverlaySettings.DevicePanel.sizes, step: 5).frame(width: 180)
+                            Text(verbatim: "\(Int(overlay.settings.headMotion.size)) pt").monospacedDigit().frame(width: 52, alignment: .trailing)
+                        }
+                    }
+                }
+                Text("A small picture of its own, placed separately, while a profile with headphone motion (AirPods) is in use: where your head points, the dead zone, how far it reaches, and the directions it's pressing. Shown with the overlay over games and streams.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Toggle("Turn with the gyro", isOn: $overlay.settings.gyro)
                 if overlay.settings.gyro {
                     LabeledContent("Movement shown") {

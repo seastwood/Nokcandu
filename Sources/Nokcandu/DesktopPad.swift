@@ -200,6 +200,44 @@ final class DesktopPad: ObservableObject {
     /// Each layer's pad settings, [left, right], by the engine's layer number (0: base).
     private var steamPads: [[PadSteamTrackpadSettings]] = [[PadSteamTrackpadSettings(), PadSteamTrackpadSettings()]]
     private var steamPadLayer = 0
+
+    // MARK: For the controller overlay
+
+    /// The profile mapping the controller, for the overlay's labels (merged layers, by the engine's numbering).
+    struct OverlayProfile {
+        let name: String
+        let layers: [(name: String, bindings: [PadProfiles.Input: PadProfiles.Binding])]
+        let gyro: [PadProfiles.Gyro]
+        let sticks: [[PadProfiles.Stick]]
+        let macros: [String: String], menus: [String: String]
+    }
+    @Published private(set) var overlayProfile: OverlayProfile?
+    @Published private(set) var overlayLayer = 0
+    /// The gyro steering wheel now: turn (degrees, right +), full lock and straight range; nil when not a wheel.
+    func wheelState() -> (angle: Double, lock: Double, dead: Double)? {
+        guard let e = engine else { return nil }
+        var a = 0.0, l = 45.0, d = 2.0
+        return pe_wheel_state(e, &a, &l, &d) ? (a, l, d) : nil
+    }
+    /// The trackpads' settings in a layer (zones, edge, directions).
+    func overlayPads(layer: Int) -> [PadSteamTrackpadSettings] { steamPads[min(max(0, layer), steamPads.count - 1)] }
+    /// What's held right now among the inputs that aren't physical buttons (trackpad zones, directions and edges,
+    /// stick directions, tilt), and what's toggled on.
+    func overlayLive() -> (held: Set<PadProfiles.Input>, toggled: Set<PadProfiles.Input>) {
+        guard let e = engine else { return ([], []) }
+        var held = Set<PadProfiles.Input>()
+        for i in PadProfiles.Input.allCases where i.isVirtual || Self.overlayZoneInputs.contains(i) {
+            if pe_input_held(e, pe_input_named(i.rawValue)) { held.insert(i) }
+        }
+        var buf = [Int32](repeating: 0, count: 64)
+        let n = Int(pe_toggled_inputs(e, &buf, 64))
+        let toggled = Set(buf.prefix(n).compactMap { PadProfiles.Input(rawValue: String(cString: pe_input_name($0))) })
+        return (held, toggled)
+    }
+    private static let overlayZoneInputs: Set<PadProfiles.Input> = Set(PadProfiles.Input.allCases.filter { i in
+        let r = i.rawValue
+        return r.hasPrefix("lp") || r.hasPrefix("rp") || r.hasPrefix("ls") && r.count > 2 || r.hasPrefix("rs") && r.count > 2 || r.hasPrefix("tilt") || r.hasPrefix("tz") || r.hasPrefix("tc")
+    })
     private var steamLeftSettings: PadSteamTrackpadSettings { steamPads[min(steamPadLayer, steamPads.count - 1)][0] }
     private var steamRightSettings: PadSteamTrackpadSettings { steamPads[min(steamPadLayer, steamPads.count - 1)][1] }
     /// A layer with pad settings of its own took over (or gave them back): start the pads afresh.
@@ -380,6 +418,17 @@ final class DesktopPad: ObservableObject {
             return
         }
         layerNames = chosen.map { PadProfiles.merged($0, all: all).layers.map(\.name) } ?? []
+        overlayProfile = chosen.map { p in
+            let m = PadProfiles.merged(p, all: all), ls = PadProfiles.layerSettings(p, all: all)
+            return OverlayProfile(name: p.name, layers: m.layers,
+                                  gyro: m.layers.enumerated().map { i, l in (i == 0 ? nil : ls[l.name.lowercased()]?.gyro) ?? m.gyro },
+                                  sticks: m.layers.enumerated().map { i, l in
+                                      let set = i == 0 ? nil : ls[l.name.lowercased()]
+                                      return [set?.left ?? m.left, set?.right ?? m.right]
+                                  },
+                                  macros: Dictionary(PadProfiles.collected(p, all: all, \.macros).map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a }),
+                                  menus: Dictionary(PadProfiles.collected(p, all: all, \.menus).map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a }))
+        }
         let settings = chosen.map { PadProfiles.layerSettings($0, all: all) } ?? [:]
         layerColors = layerNames.enumerated().map { i, n in settings[i == 0 ? "base" : n.lowercased()]?.color }
         rumble = chosen.flatMap { PadProfiles.top($0, all: all, \.rumbleOnLayer) } ?? false
@@ -450,6 +499,7 @@ final class DesktopPad: ObservableObject {
     private var rumble = false
     private var menus: [PadProfiles.RadialMenu] = []
     func stateChanged(layer: Int, gyro: Int) {
+        if layer != overlayLayer { overlayLayer = layer }
         if layer != shownLayer {
             if rumble { rumbleMain(strength: layerRumble.strength, seconds: layerRumble.length) }
             PadFeedback.shared.light((layerColors.indices.contains(layer) ? layerColors[layer] : nil) ?? layerColors.first ?? nil, feed.mainControllers())
@@ -550,6 +600,7 @@ final class DesktopPad: ObservableObject {
     func tapKey(_ k: Int) { key(k, true); key(k, false) }
     func menuChanged(_ m: Int, _ slice: Int) {
         if m == Int(PE_RUMBLE_MENU) { rumbleMain(strong: true); return }
+        if m == Int(PE_OVERLAY_MENU) { ControllerOverlay.shared.mappingsButton(down: slice == 1); return }
         if m == Int(PE_KEYBOARD_MENU) {
             let held = Set(lastButtons.filter(\.value).compactMap { PadProfiles.Input(rawValue: String(cString: pe_input_name(Int32($0.key)))) })
             OnScreenKeyboard.shared.type = { DesktopPad.shared.typeText($0) }

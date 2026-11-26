@@ -605,6 +605,7 @@ struct ControllerProfileEditor: View {
         case .keyboard: return "Kbd"
         case .calibrate: return "Calib"
         case .rumble: return "Rumble"
+        case .overlayMappings: return "Map"
         case .nothing: return "—"
         }
     }
@@ -855,6 +856,7 @@ struct ControllerProfileEditor: View {
                 slider("Straight within", Binding(get: { g.wrappedValue.wheelDeadzone ?? 2 }, set: { var v = g.wrappedValue; v.wheelDeadzone = ($0 * 2).rounded() / 2; g.wrappedValue = v }),
                        0...15, "%.1f°", info: "Turns smaller than this steer straight, so holding it nearly level doesn't drift.")
                 Toggle("Invert left and right", isOn: g.invertX)
+                WheelLiveBar()
             } header: { Text("Steering") } footer: {
                 Text("Turn the controller like a wheel to steer with the left stick: level is straight ahead, the right side down steers right. Hold it however is comfortable (flat, tipped up towards you, or upright like a wheel); the gyro and the controller's sense of gravity work out the turn. The left stick's own movement still adds to it.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -1247,6 +1249,7 @@ struct OutputMenu: View {
             Menu("On-screen menu") { ForEach(extras.menus, id: \.0) { m in Button(m.1) { pick(.menu(m.0)) } } }
         }
         Button("On-screen keyboard") { pick(.keyboard) }
+        Button("Show mappings on the overlay") { pick(.overlayMappings) }
         if !layers.isEmpty {
             Menu("Layer") {
                 ForEach(layers, id: \.self) { n in
@@ -1554,5 +1557,22 @@ struct KeyRecordButton: View {
     func stop() {
         if let m = monitor { NSEvent.removeMonitor(m) }
         monitor = nil
+    }
+}
+
+
+/// The steering wheel as the controller is turned now (the profile mapping it), with the straight range and full lock.
+struct WheelLiveBar: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { _ in
+            if let w = DesktopPad.shared.wheelState(), let image = WheelBarImage.draw(angle: w.angle, lock: w.lock, dead: w.dead, highlight: .controlAccentColor) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Image(decorative: image, scale: 2).resizable().frame(height: 28)
+                    Text(String(format: "%+.0f° of ±%.0f°", w.angle, w.lock)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }
+            } else {
+                Text("Turn the controller to see the wheel here while this profile is mapping it.").font(.caption).foregroundStyle(.secondary)
+            }
+        }
     }
 }
