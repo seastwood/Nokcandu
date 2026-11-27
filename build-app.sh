@@ -211,6 +211,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSDownloadsFolderUsageDescription</key><string>Nokcandu installs games from installers and disc images you choose in Downloads.</string>
   <key>NSRemovableVolumesUsageDescription</key><string>Nokcandu keeps games and game files on drives you choose, like an external SSD.</string>
   <key>NSNetworkVolumesUsageDescription</key><string>Nokcandu can install games from a network drive you choose.</string>
+${NOKCANDU_TEAM_ID:+  <key>NokcanduTrustedTeamID</key><string>${NOKCANDU_TEAM_ID}</string>}
 </dict>
 </plist>
 PLIST

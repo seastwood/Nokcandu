@@ -26,8 +26,30 @@ public enum AppSigner {
         return current == update ? .sameSigner : .differentSigner
     }
 
+    /// The Apple Developer team whose Developer ID builds may update this app (Info.plist NokcanduTrustedTeamID,
+    /// written at build time from NOKCANDU_TEAM_ID). A self-signed release that names it lets the first Developer ID
+    /// release update it in place, and Developer ID releases keep updating across certificate renewals.
+    public static var trustedTeamID: String? {
+        (Bundle.main.object(forInfoDictionaryKey: "NokcanduTrustedTeamID") as? String).flatMap(validTeam)
+    }
+    static func validTeam(_ s: String) -> String? {
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.count == 10 && t.allSatisfy { $0.isASCII && ($0.isUppercase || $0.isNumber) } ? t : nil
+    }
+    /// Signed with Developer ID by `team` and notarized by Apple.
+    public static func requirement(team: String) -> String {
+        "anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = \"\(team)\" and notarized"
+    }
+    public static func isTrustedDeveloperID(_ app: URL, team: String) -> Bool {
+        var code: SecStaticCode?, req: SecRequirement?
+        guard SecStaticCodeCreateWithPath(app as CFURL, [], &code) == errSecSuccess, let code,
+              SecRequirementCreateWithString(requirement(team: team) as CFString, [], &req) == errSecSuccess, let req else { return false }
+        return SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSStrictValidate), req) == errSecSuccess
+    }
+
     /// Throws unless `update` may replace `current`.
     public static func check(update: URL, current: URL) throws {
+        if let team = trustedTeamID, isTrustedDeveloperID(update, team: team) { return }
         switch verdict(current: certificate(of: current), update: certificate(of: update)) {
         case .sameSigner, .developmentBuild: return
         case .unsigned:

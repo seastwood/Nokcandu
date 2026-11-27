@@ -54,6 +54,10 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k ci "$KC" >/dev/null
           security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
           rm -f "$RUNNER_TEMP/id.p12"
+      - name: Trusted Developer ID team (lets Developer ID releases update this build in place)
+        env:
+          TEAM: ${{ secrets.NOTARY_TEAM_ID }}
+        run: if [ -n "$TEAM" ]; then echo "NOKCANDU_TEAM_ID=$TEAM" >> "$GITHUB_ENV"; fi
       - name: Developer ID (optional — only when the Apple secrets exist)
         env:
           DEVID_P12: ${{ secrets.DEVELOPER_ID_P12 }}
