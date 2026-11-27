@@ -167,6 +167,8 @@ static char pad_players_text[16384];
 static time_t pad_players_mtime; static long pad_players_ns;
 
 static bool pad_changed(const char *path, time_t *mt, long *ns);
+static void pad_report_players(void);
+static bool pad_is_fed_device(int32_t which);
 static void pad_norm_serial(const char *in, char *out, size_t n) {
     size_t k = 0;
     for (const char *c = in ? in : ""; *c && k + 1 < n; c++) if (isalnum((unsigned char)*c) && (unsigned char)*c < 128) out[k++] = (char)tolower((unsigned char)*c);
@@ -200,14 +202,14 @@ static void pad_read_players(bool force) {
     if (strncmp(pad_players_text, "nokplayers ", 11)) pad_players_text[0] = 0;
     for (int i = 0; i < pad_ids_n; i++) pad_match(i);
 }
-/// Notes an opened controller: who it is, from SDL.
-static void pad_identify(void *controller) {
-    if (!controller || !real_joystick || !real_instance) return;
-    void *j = real_joystick(controller);
-    if (!j) return;
+/// Notes a controller: who it is, from SDL. Called the first time Wine asks about it (its maker, model or name,
+/// as it creates the Windows device) and when it's opened: Wine builds differ in which of those happen.
+static void pad_identify_joystick(void *j) {
+    if (!j || !real_instance) return;
     int32_t which = real_instance(j);
-    int i = pad_id_index(which);
-    if (i < 0) { if (pad_ids_n >= PAD_IDS) return; i = pad_ids_n++; memset(&pad_ids[i], 0, sizeof pad_ids[i]); pad_ids[i].which = which; }
+    if (pad_id_index(which) >= 0) return;
+    if (pad_ids_n >= PAD_IDS) return;
+    int i = pad_ids_n++; memset(&pad_ids[i], 0, sizeof pad_ids[i]); pad_ids[i].which = which;
     const char *p = id_path ? id_path(j) : NULL;
     const char *dev = p ? strstr(p, "DevSrvsID:") : NULL;
     pad_ids[i].registry = dev ? strtoull(dev + 10, NULL, 10) : 0;
@@ -218,6 +220,10 @@ static void pad_identify(void *controller) {
     pad_read_players(true);
     fprintf(stderr, "nokcandu: controller %04x:%04x (registry %llu, serial %s) is %s, %s\n", pad_ids[i].vid, pad_ids[i].pid, pad_ids[i].registry,
             pad_ids[i].serial[0] ? "known" : "none", pad_ids[i].key[0] ? pad_ids[i].key : "not in Nokcandu's list", pad_ids[i].seat ? "set to a player" : "Auto");
+    pad_report_players();
+}
+static void pad_identify(void *controller) {
+    if (controller && real_joystick) pad_identify_joystick(real_joystick(controller));
 }
 static void pad_forget_identity(int32_t which) {
     int i = pad_id_index(which);
@@ -237,12 +243,15 @@ static int pad_player_of(int32_t which) {
     bool taken[PAD_MAX + 2] = { false };
     for (int i = 0; i < pad_seen_n; i++) { int s = pad_seat_of(pad_seen[i]); if (s > 0 && s <= PAD_MAX) taken[s] = true; }
     int next = 1;
-    for (int i = 0; i < pad_seen_n; i++) {
-        if (pad_seat_of(pad_seen[i]) > 0) continue;
-        while (next <= PAD_MAX && taken[next]) next++;
-        if (pad_seen[i] == which) return next > PAD_MAX ? PAD_MAX : next;
-        taken[next < PAD_MAX + 2 ? next : PAD_MAX + 1] = true;
-    }
+    // A profile that reads the Steam Controller itself is that controller's: under Auto it's player 1, whichever
+    // controller Wine happened to notice first.
+    for (int pass = 0; pass < 2; pass++)
+        for (int i = 0; i < pad_seen_n; i++) {
+            if (pad_seat_of(pad_seen[i]) > 0 || pad_is_fed_device(pad_seen[i]) != (pass == 0)) continue;
+            while (next <= PAD_MAX && taken[next]) next++;
+            if (pad_seen[i] == which) return next > PAD_MAX ? PAD_MAX : next;
+            taken[next < PAD_MAX + 2 ? next : PAD_MAX + 1] = true;
+        }
     return PAD_MAX;
 }
 static void pad_forget_player(int32_t which) {
@@ -516,6 +525,7 @@ static int nok_wait(nok_sdl_event *ev, int timeout) {
     }
     if (r) {
         if (ev->type == NOK_SDL_CREMOVED || ev->type == NOK_SDL_JREMOVED) {
+            if (ev->type == NOK_SDL_JREMOVED) { pad_forget_player(ev->cbutton.which); pad_forget_identity(ev->cbutton.which); pad_report_players(); }
             for (int slot = 1; slot <= PE_MAX_DEVICES; slot++) if (slot_source_valid[slot] && slot_sources[slot] == ev->cbutton.which) {
                 pe_engine *main = pad_main_engine();
                 if (main) pe_release_device(main, slot, now);
@@ -624,6 +634,7 @@ static int (*real_js_type)(void *);
 static void pad_load_identity(void);
 /// Only gamepads take the identity (SDL_JOYSTICK_TYPE_GAMECONTROLLER); wheels, sticks and others stay as they are.
 static bool pad_presents(void *j) {
+    pad_identify_joystick(j);
     pad_load_identity();
     if (!pad_identity.on || !j || (real_js_type && real_js_type(j) != 1)) return false;
     if (!real_instance) return true;
