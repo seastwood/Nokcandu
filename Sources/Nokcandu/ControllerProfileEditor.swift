@@ -523,6 +523,15 @@ struct ControllerProfileEditor: View {
                 Button(swapped(.a, .b) ? "Unswap A and B" : "Swap A and B") { swap(.a, .b) }
                 Button(swapped(.x, .y) ? "Unswap X and Y" : "Swap X and Y") { swap(.x, .y) }
                 Divider()
+                Section("Accessibility") {
+                    Button("Every Hold Becomes a Toggle (\(layerIndex == 0 ? "Base" : layerName))") {
+                        profile.layers[layerIndex] = PadAccessibility.holdsAsToggles(profile.layers[layerIndex], base: layerIndex == 0)
+                    }
+                    .help("Press once to hold, press again to let go: for keys, mouse buttons, controller buttons and layer holds.")
+                    Button("One Hand: Left (Hold L for the Right Side)") { profile = PadAccessibility.oneHanded(profile, left: true); layerIndex = 0 }
+                    Button("One Hand: Right (Hold R for the Left Side)") { profile = PadAccessibility.oneHanded(profile, left: false); layerIndex = 0 }
+                }
+                Divider()
                 Button("Clear \(layerIndex == 0 ? "the Base Layer" : layerName)") { profile.layers[layerIndex].bindings = [:] }
             }
             .fixedSize()
