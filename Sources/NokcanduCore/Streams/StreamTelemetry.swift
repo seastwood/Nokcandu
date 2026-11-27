@@ -176,3 +176,39 @@ public struct StreamTelemetryHistory: Sendable {
         if samples.count > 120 { samples.removeFirst(samples.count - 120) }
     }
 }
+
+/// A plain verdict on the last stretch of a stream: where late or dropped frames came from, so the network isn't
+/// blamed for a slow Mac or the other way round ("random short jitters": the LAN stalled every few seconds, November
+/// 26, 2026). Nil while nothing stands out.
+public enum StreamHealth {
+    public struct Verdict: Equatable, Sendable { public var title: String; public var detail: String }
+
+    public static func verdict(_ samples: [StreamTelemetry.Sample], seconds: Int = 60) -> Verdict? {
+        let recent = Array(samples.suffix(seconds))
+        guard recent.count >= 10 else { return nil }
+        let fps = recent.map(\.receivedFPS).filter { $0 > 1 }.sorted()
+        let frame = fps.isEmpty ? 16.7 : 1000 / fps[fps.count / 2]
+        // A frame arriving this late is a visible hitch.
+        let late = max(40, frame * 2.5)
+        let stalls = recent.filter { ($0.arrivalGapMaxMs ?? 0) > late }
+        let drops = recent.reduce(0) { $0 + $1.networkDropped }
+        let slowDecode = recent.filter { ($0.decodeMaxMs ?? 0) > max(25, frame * 1.5) }
+        let slowHost = recent.filter { ($0.hostMaxMs ?? 0) > max(30, frame * 2) }
+        let rttSpikes = recent.filter { ($0.networkVariationMs ?? 0) > 15 }
+        let worst = Int(stalls.compactMap(\.arrivalGapMaxMs).max() ?? 0)
+        if !slowDecode.isEmpty, slowDecode.count >= stalls.count {
+            return Verdict(title: "This Mac fell behind",
+                           detail: "Decoding took up to \(Int(slowDecode.compactMap(\.decodeMaxMs).max() ?? 0)) ms in \(slowDecode.count) of the last \(recent.count) seconds. The network kept up. Close heavy apps, or try a lower resolution or frame rate.")
+        }
+        if !slowHost.isEmpty, slowHost.count >= stalls.count / 2 + 1 {
+            return Verdict(title: "The host fell behind",
+                           detail: "The streaming PC took up to \(Int(slowHost.compactMap(\.hostMaxMs).max() ?? 0)) ms to encode in \(slowHost.count) of the last \(recent.count) seconds. The game or the host is busy: cap the game's frame rate to the stream's.")
+        }
+        if stalls.count >= 2 || drops > 0 {
+            let spikes = rttSpikes.count
+            return Verdict(title: "The network stalled",
+                           detail: "Frames arrived late \(stalls.count) time\(stalls.count == 1 ? "" : "s") in the last \(recent.count) seconds (up to \(worst) ms)\(drops > 0 ? ", \(drops) lost" : "")\(spikes > 0 ? ", with delay spikes" : ""). This Mac and the host were keeping up, so the hold-up is between them: Wi-Fi, the router or a switch. A cable, or the 5 GHz or 6 GHz band, usually helps.")
+        }
+        return nil
+    }
+}

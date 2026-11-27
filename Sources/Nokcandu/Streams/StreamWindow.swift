@@ -1158,6 +1158,14 @@ private struct StreamStatsGraphs: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
+            if let v = StreamHealth.verdict(samples) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Label(v.title, systemImage: "exclamationmark.triangle.fill").font(.system(size: 10, weight: .semibold)).foregroundStyle(.yellow)
+                    Text(v.detail).font(.system(size: 9)).fixedSize(horizontal: false, vertical: true)
+                }.padding(.bottom, 3)
+            } else if samples.count >= 10 {
+                Label("Smooth: no hitches in the last minute", systemImage: "checkmark.circle.fill").font(.system(size: 10)).foregroundStyle(.green).padding(.bottom, 3)
+            }
             Text("Network RTT and RTT variation · ms").font(.system(size: 9))
             Chart(samples) { s in
                 if let y = s.networkMs { LineMark(x: .value("Time", s.time), y: .value("ms", y)).foregroundStyle(by: .value("Signal", "RTT")) }
