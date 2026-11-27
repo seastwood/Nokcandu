@@ -104,7 +104,7 @@ final class PadHUD {
             leaveStream()
             streamImage.use(r.metalDevice)
             let img = streamImage
-            r.setOverlay({ buffer, target in img.draw(buffer, target) }, key: "notes")
+            r.setOverlay({ enc, target in img.draw(enc, target) }, key: "notes")
             streamRenderer = r
         }
         // Drawn only when the note changes (a calibration bar: when its value does), never in a frame.

@@ -213,7 +213,7 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
             let d = StreamOverlayDrawer(device: renderer.metalDevice, scene: host.scene, camera: host.camera)
             let head = HeadMotionOverlay.shared.streamImage
             head.use(renderer.metalDevice)
-            renderer.setOverlay { buffer, target in d.draw(buffer, target); head.draw(buffer, target) }
+            renderer.setOverlay { enc, target in d.draw(enc, target); head.draw(enc, target) }
             HeadMotionOverlay.shared.streaming(true)
             inStream = renderer; streamDrawer = d
             panel?.orderOut(nil)
@@ -1007,17 +1007,12 @@ final class StreamOverlayDrawer: @unchecked Sendable {
     }
 
     /// Render queue: the newest finished drawing onto the frame (a copy; nothing waits for SceneKit).
-    func draw(_ buffer: MTLCommandBuffer, _ target: MTLTexture) {
+    func draw(_ enc: MTLRenderCommandEncoder, _ target: MTLTexture) {
         os_unfair_lock_lock(&lock); let r = rect, w = screenWidth, o = Float(opacity), t = front; os_unfair_lock_unlock(&lock)
         guard let t, r.width > 0, let pipeline = pipeline(target.pixelFormat), let sampler else { return }
         let s = CGFloat(target.width) / w
         // An 8-bit frame holds sRGB-encoded values (read the drawing undecoded), a floating-point (EDR) one linear values.
         let source = target.pixelFormat == .bgra8Unorm || target.pixelFormat == .rgba8Unorm ? t.encoded : t.color
-        let over = MTLRenderPassDescriptor()
-        over.colorAttachments[0].texture = target
-        over.colorAttachments[0].loadAction = .load
-        over.colorAttachments[0].storeAction = .store
-        guard let enc = buffer.makeRenderCommandEncoder(descriptor: over) else { return }
         enc.setRenderPipelineState(pipeline)
         enc.setViewport(MTLViewport(originX: Double(r.minX * s), originY: Double(r.minY * s), width: Double(r.width * s), height: Double(r.height * s), znear: 0, zfar: 1))
         enc.setFragmentTexture(source, index: 0)
@@ -1025,7 +1020,6 @@ final class StreamOverlayDrawer: @unchecked Sendable {
         var opacity = o
         enc.setFragmentBytes(&opacity, length: MemoryLayout<Float>.size, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-        enc.endEncoding()
     }
 }
 

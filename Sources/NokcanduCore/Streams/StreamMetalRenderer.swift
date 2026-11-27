@@ -67,8 +67,10 @@ public final class StreamMetalRenderer: @unchecked Sendable {
     /// Something drawn over each frame before it's shown (the controller overlay, the statistics), in the frame's own command
     /// buffer. Drawing it here instead of in a window above keeps the stream a single opaque layer, so macOS's
     /// direct-to-display path stays on: any window over a full-screen stream makes the window server composite
-    /// every frame, which adds frames of delay with V-sync off.
-    public typealias Overlay = (_ buffer: MTLCommandBuffer, _ target: MTLTexture) -> Void
+    /// every frame, which adds frames of delay with V-sync off. Each draws into the frame's own render pass (its
+    /// encoder, still open): a pass of its own would load and store the whole frame again on Apple's tile-based GPUs,
+    /// a full-screen read and write per overlay. An overlay sets its own pipeline and viewport.
+    public typealias Overlay = (_ encoder: MTLRenderCommandEncoder, _ target: MTLTexture) -> Void
     private var overlays: [(key: String, draw: Overlay)] = []   // guarded by `lock`; drawn in key order
     /// Sets or (nil) removes one overlay: "controller" (the controller overlay), "stats" (the statistics).
     public func setOverlay(_ o: Overlay?, key: String = "controller") {
@@ -78,6 +80,14 @@ public final class StreamMetalRenderer: @unchecked Sendable {
         os_unfair_lock_unlock(&lock)
     }
     public var metalDevice: MTLDevice { device }
+
+    private var gpuSum = 0.0, gpuCount = 0, gpuMax = 0.0   // guarded by `lock`
+    /// The GPU's time per frame (drawing, colour conversion and overlays) since the last call: average and longest,
+    /// in ms. Nil before a frame has been timed.
+    public func takeGPUTime() -> (average: Double, max: Double)? {
+        os_unfair_lock_lock(&lock); defer { gpuSum = 0; gpuCount = 0; gpuMax = 0; os_unfair_lock_unlock(&lock) }
+        return gpuCount > 0 ? (gpuSum / Double(gpuCount), gpuMax) : nil
+    }
 
     private struct Config: Equatable {
         var pixelFormat: OSType, matrix: String?, transfer: String?, primaries: String?, chroma: String?, hdrVersion: Int
@@ -288,9 +298,10 @@ public final class StreamMetalRenderer: @unchecked Sendable {
         }
         failures = 0
         guard let drawable = given ?? layer.nextDrawable(), let buffer = commandQueue.makeCommandBuffer() else { return }
-        guard encode(image, luma: luma, chroma: chroma, pipeline: pipeline, into: drawable.texture, buffer: buffer) else { return }
+        guard let encoder = encode(image, luma: luma, chroma: chroma, pipeline: pipeline, into: drawable.texture, buffer: buffer) else { return }
         os_unfair_lock_lock(&lock); let over = overlays; os_unfair_lock_unlock(&lock)
-        for o in over { o.draw(buffer, drawable.texture) }
+        for o in over { o.draw(encoder, drawable.texture) }
+        encoder.endEncoding()
         let frame = f, counted = given == nil, handedOver = CACurrentMediaTime()
         if counted { os_unfair_lock_lock(&lock); unpresented += 1; lastHandedOver = handedOver; os_unfair_lock_unlock(&lock) }
         drawable.addPresentedHandler { [weak self] d in
@@ -305,8 +316,13 @@ public final class StreamMetalRenderer: @unchecked Sendable {
             os_unfair_lock_unlock(&self.lock)
             if kick { self.renderQueue.async { [weak self] in self?.drain() } }
         }
-        // The CVMetalTextures must live until the GPU has read them.
-        buffer.addCompletedHandler { _ in withExtendedLifetime(textures) {} }
+        // The CVMetalTextures must live until the GPU has read them; the GPU's time for the frame is noted then.
+        buffer.addCompletedHandler { [weak self] b in
+            withExtendedLifetime(textures) {}
+            let ms = (b.gpuEndTime - b.gpuStartTime) * 1000
+            guard let self, ms > 0, ms < 1000 else { return }
+            os_unfair_lock_lock(&self.lock); self.gpuSum += ms; self.gpuCount += 1; self.gpuMax = max(self.gpuMax, ms); os_unfair_lock_unlock(&self.lock)
+        }
         buffer.present(drawable)
         buffer.commit()
         onDrawn?(f)
@@ -345,14 +361,15 @@ public final class StreamMetalRenderer: @unchecked Sendable {
 
     /// Draws the picture into `target`: its visible area (the clean aperture: a stream coded at 1088 lines shows
     /// 1080) fitted inside, keeping its shape, on black.
+    /// Draws the frame and returns its render pass's encoder, still open for the overlays (the caller ends it).
     private func encode(_ image: CVPixelBuffer, luma: MTLTexture, chroma: MTLTexture, pipeline: MTLRenderPipelineState,
-                        into target: MTLTexture, buffer: MTLCommandBuffer) -> Bool {
+                        into target: MTLTexture, buffer: MTLCommandBuffer) -> MTLRenderCommandEncoder? {
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = target
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
         pass.colorAttachments[0].storeAction = .store
-        guard let encoder = buffer.makeRenderCommandEncoder(descriptor: pass) else { return false }
+        guard let encoder = buffer.makeRenderCommandEncoder(descriptor: pass) else { return nil }
         let size = CGSize(width: CVPixelBufferGetWidth(image), height: CVPixelBufferGetHeight(image))
         var clean = CVImageBufferGetCleanRect(image)
         if clean.width <= 0 || clean.height <= 0 { clean = CGRect(origin: .zero, size: size) }
@@ -376,8 +393,7 @@ public final class StreamMetalRenderer: @unchecked Sendable {
         encoder.setFragmentTexture(luma, index: 0)
         encoder.setFragmentTexture(chroma, index: 1)
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-        encoder.endEncoding()
-        return true
+        return encoder
     }
 
     /// For tests: draws one frame exactly as a stream would, into an offscreen 8-bit BGRA picture of this size,
@@ -391,8 +407,9 @@ public final class StreamMetalRenderer: @unchecked Sendable {
             d.usage = [.renderTarget, .shaderRead]
             d.storageMode = .managed
             guard let target = device.makeTexture(descriptor: d), let buffer = commandQueue.makeCommandBuffer(),
-                  encode(image, luma: planes.0, chroma: planes.1, pipeline: pipeline, into: target, buffer: buffer),
-                  let blit = buffer.makeBlitCommandEncoder() else { return nil }
+                  let drawn = encode(image, luma: planes.0, chroma: planes.1, pipeline: pipeline, into: target, buffer: buffer) else { return nil }
+            drawn.endEncoding()
+            guard let blit = buffer.makeBlitCommandEncoder() else { return nil }
             blit.synchronize(resource: target)
             blit.endEncoding()
             buffer.commit()

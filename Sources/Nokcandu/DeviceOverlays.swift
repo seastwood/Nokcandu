@@ -307,13 +307,9 @@ final class StreamImageDrawer: @unchecked Sendable {
     }
 
     /// Render queue.
-    func draw(_ buffer: MTLCommandBuffer, _ target: MTLTexture) {
+    func draw(_ enc: MTLRenderCommandEncoder, _ target: MTLTexture) {
         os_unfair_lock_lock(&lock); let t = texture, r = rect, w = screenWidth, o = opacity; os_unfair_lock_unlock(&lock)
-        guard let t, r.width > 0, let sampler, let pipeline = pipeline(target.pixelFormat),
-              let enc = buffer.makeRenderCommandEncoder(descriptor: {
-                  let p = MTLRenderPassDescriptor()
-                  p.colorAttachments[0].texture = target; p.colorAttachments[0].loadAction = .load; p.colorAttachments[0].storeAction = .store
-                  return p }()) else { return }
+        guard let t, r.width > 0, let sampler, let pipeline = pipeline(target.pixelFormat) else { return }
         let s = CGFloat(target.width) / w
         enc.setRenderPipelineState(pipeline)
         enc.setViewport(MTLViewport(originX: Double(r.minX * s), originY: Double(r.minY * s), width: Double(r.width * s), height: Double(r.height * s), znear: 0, zfar: 1))
@@ -322,7 +318,6 @@ final class StreamImageDrawer: @unchecked Sendable {
         var opacity = o
         enc.setFragmentBytes(&opacity, length: MemoryLayout<Float>.size, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-        enc.endEncoding()
     }
 
     private func pipeline(_ format: MTLPixelFormat) -> MTLRenderPipelineState? {

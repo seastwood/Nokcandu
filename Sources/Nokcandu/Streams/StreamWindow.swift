@@ -403,6 +403,9 @@ import Metal
             lines.append(String(format: "Video payload %.1f Mbps · peak %.1f · buffered %.1f frames", v.bitrateMbps, v.peakBitrateMbps, v.bufferedFrames))
             lines.append("Host min/avg/max \(Self.ms(v.hostMinMs))/\(Self.ms(v.hostMs))/\(Self.ms(v.hostMaxMs)) ms")
             lines.append("Decode min/avg/max \(Self.ms(v.decodeMinMs))/\(Self.ms(v.decodeMs))/\(Self.ms(v.decodeMaxMs)) ms")
+            if let g = connection.video.metalRenderer?.takeGPUTime() {
+                lines.append(String(format: "Metal GPU per frame %.2f ms (longest %.2f)", g.average, g.max))
+            }
             lines.append("Pacing \(profile.video.pacing.title) · display \(window?.screen?.maximumFramesPerSecond ?? 0) Hz · decode → screen max \(Self.ms(v.screenMaxMs)) · this Mac max \(Self.ms(v.clientMaxMs)) ms")
             if let host = v.hostMs, let rtt = v.networkMs, let client = v.clientMs {
                 lines.append(String(format: "Estimated total (host + half the RTT + this Mac) %.1f ms", host + rtt / 2 + client))
@@ -435,7 +438,7 @@ import Metal
         let layer: StreamStatsLayer
         if let l = statsLayer { layer = l } else {
             let l = StreamStatsLayer(device: m.metalDevice)
-            m.setOverlay({ buffer, target in l.draw(buffer, target) }, key: "stats")
+            m.setOverlay({ enc, target in l.draw(enc, target) }, key: "stats")
             statsLayer = l; statsRenderer = m; layer = l
         }
         let scale = window?.backingScaleFactor ?? 2
@@ -1139,15 +1142,10 @@ final class StreamStatsLayer: @unchecked Sendable {
     }
 
     /// Render queue.
-    func draw(_ buffer: MTLCommandBuffer, _ target: MTLTexture) {
+    func draw(_ enc: MTLRenderCommandEncoder, _ target: MTLTexture) {
         os_unfair_lock_lock(&lock); let t = texture, r = rect, w = viewWidth; os_unfair_lock_unlock(&lock)
         guard let t, r.width > 0, let pipeline = pipeline(target.pixelFormat), let sampler else { return }
         let s = CGFloat(target.width) / w
-        let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture = target
-        pass.colorAttachments[0].loadAction = .load
-        pass.colorAttachments[0].storeAction = .store
-        guard let enc = buffer.makeRenderCommandEncoder(descriptor: pass) else { return }
         enc.setRenderPipelineState(pipeline)
         enc.setViewport(MTLViewport(originX: Double(r.minX * s), originY: Double(r.minY * s), width: Double(r.width * s), height: Double(r.height * s), znear: 0, zfar: 1))
         enc.setFragmentTexture(t, index: 0)
@@ -1155,7 +1153,6 @@ final class StreamStatsLayer: @unchecked Sendable {
         var opacity: Float = 1
         enc.setFragmentBytes(&opacity, length: MemoryLayout<Float>.size, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-        enc.endEncoding()
     }
 }
 
