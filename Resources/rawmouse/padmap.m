@@ -162,11 +162,14 @@ static const char *(*id_path)(void *), *(*id_serial)(void *);
 static uint16_t (*id_vendor)(void *), (*id_product)(void *);
 #define PAD_IDS 16
 static struct { int32_t which; unsigned long long registry; int vid, pid, nth; char serial[64]; char key[96]; int seat; char *text; bool text_known; } pad_ids[PAD_IDS];
+static int32_t pad_virtual_which = -1;   // the Steam Controller stand-in (pad_virtual_attach)
 static int pad_ids_n;
 static char pad_players_text[16384];
 static time_t pad_players_mtime; static long pad_players_ns;
 
 static bool pad_changed(const char *path, time_t *mt, long *ns);
+static void pad_identity_refresh(void);
+static bool pad_map_feeds(const char *path);
 static void pad_report_players(void);
 static bool pad_is_fed_device(int32_t which);
 static void pad_norm_serial(const char *in, char *out, size_t n) {
@@ -185,6 +188,11 @@ static void pad_match(int i) {
     for (const char *line = pad_players_text; line && *line; line = strchr(line, '\n') ? strchr(line, '\n') + 1 : NULL) {
         unsigned long long reg; int vid, pid, nth, seat; char serial[64];
         if (sscanf(line, "c %llu %d %d %63s %d %d %95s", &reg, &vid, &pid, serial, &nth, &seat, key) != 7) continue;
+        // The stand-in is the Steam Controller Nokcandu reads: whichever Steam Controller Nokcandu lists.
+        if (pad_ids[i].which == pad_virtual_which && pad_virtual_which >= 0) {
+            if (vid == 0x28de && best < 1) { best = 1; strlcpy(pad_ids[i].key, key, sizeof pad_ids[i].key); pad_ids[i].seat = seat < 0 ? 0 : seat > 8 ? 8 : seat; }
+            continue;
+        }
         int score = reg && reg == pad_ids[i].registry ? 3
             : vid == pad_ids[i].vid && pid == pad_ids[i].pid && pad_ids[i].serial[0] && !strcmp(serial, pad_ids[i].serial) ? 2
             : vid == pad_ids[i].vid && pid == pad_ids[i].pid && nth == pad_ids[i].nth ? 1 : 0;
@@ -235,7 +243,6 @@ static int pad_seat_of(int32_t which) { int i = pad_id_index(which); return i >=
 /// The player a controller is (1 first). One set to a player in Nokcandu is that player; the rest take the lowest
 /// players nobody chose, in the order they were first seen (with nothing set: their place in that order).
 static int (*real_is_gc)(int);
-static int32_t pad_virtual_which = -1;   // the Steam Controller stand-in (pad_virtual_attach)
 static void pad_see(int32_t which) {
     for (int i = 0; i < pad_seen_n; i++) if (pad_seen[i] == which) return;
     if (pad_seen_n < PAD_MAX) pad_seen[pad_seen_n++] = which;
@@ -519,6 +526,7 @@ static void pad_check(void) {
         pad_has_devices = strstr(pad_profile_text, "\ndevice ") != NULL;
         pad_feed_open(strstr(pad_profile_text, "\nsource steam\n") != NULL);
         if (pad_feed_on) pad_virtual_attach();
+        pad_identity_refresh();
         fprintf(stderr, "nokcandu: controller profile %s\n", pad_profile_text[0] ? pad_profile_path : "off");
     }
 }
@@ -724,6 +732,8 @@ static bool pad_presents(void *j) {
 static void pad_load_identity(void) {
     if (pad_identity.known) return;
     pad_identity.known = true;
+    pad_identity.on = false; pad_identity.kind = 0;
+    for (int k = 0; k < 9; k++) pad_identity_player[k] = true;
     char path[PATH_MAX], line[256];
     struct stat st;
     snprintf(path, sizeof path, "%s/pad-driver-off", pad_state_dir);
@@ -736,13 +746,30 @@ static void pad_load_identity(void) {
     // The map that applies: a profile used everywhere (as the game half chooses, pad_activate), else this
     // environment's, else the game in front's (a shared launcher's games have maps of their own). Reading only the
     // environment's left a profile used everywhere unpresented.
+    // What applies now (the game in front's profile, pad-active), else the profile used everywhere, else this
+    // environment's own, else, for a shared launcher before any game runs, a game's that reads the Steam Controller
+    // itself (its stand-in is made then and should already look like what that game asks for).
     path[0] = 0;
-    if (home) {
+    if (pad_profile_path[0] && stat(pad_profile_path, &st) == 0) strlcpy(path, pad_profile_path, sizeof path);
+    if (!path[0] && home) {
         char flag[PATH_MAX]; snprintf(flag, sizeof flag, "%s/Library/Application Support/Nokcandu/controller-profiles-everywhere", home);
         if (stat(flag, &st) == 0) snprintf(path, sizeof path, "%s.map", flag);
     }
     if (!path[0] || stat(path, &st) != 0) snprintf(path, sizeof path, "%s/pad-map", pad_state_dir);
-    if (stat(path, &st) != 0 && pad_profile_path[0]) strlcpy(path, pad_profile_path, sizeof path);
+    if (stat(path, &st) != 0) {
+        path[0] = 0;
+        char tsv[PATH_MAX]; snprintf(tsv, sizeof tsv, "%s/pad-map.tsv", pad_state_dir);
+        FILE *t = fopen(tsv, "r");
+        char row[PATH_MAX + 128];
+        while (t && !path[0] && fgets(row, sizeof row, t)) {
+            char *tab = strchr(row, '\t');
+            if (!tab) continue;
+            tab[1 + strcspn(tab + 1, "\r\n")] = 0;
+            if (pad_map_feeds(tab + 1)) strlcpy(path, tab + 1, sizeof path);
+        }
+        if (t) fclose(t);
+        if (!path[0]) return;
+    }
     FILE *f = fopen(path, "r");
     if (!f) return;
     bool players = false, presented = false;
@@ -778,6 +805,27 @@ static void pad_load_identity(void) {
     }
     fclose(f);
     if (pad_identity.on) fprintf(stderr, "nokcandu: controllers are presented as %s (%04x:%04x), from %s\n", pad_identity.name, pad_identity.vid, pad_identity.pid, path);
+}
+static int (*real_detach_virtual)(int);
+/// The profile in front changed: read the presentation again. A Windows device keeps the identity it was made
+/// with, so the Steam Controller's stand-in is made again to take a new one (the game sees it unplugged and
+/// plugged back in); real controllers take it when they next connect.
+static void pad_identity_refresh(void) {
+    bool on = pad_identity.on; int kind = pad_identity.kind;
+    bool players[9]; memcpy(players, pad_identity_player, sizeof players);
+    pad_identity.known = false;
+    pad_load_identity();
+    if (on == pad_identity.on && kind == pad_identity.kind && !memcmp(players, pad_identity_player, sizeof players)) return;
+    if (pad_virtual_which < 0 || !real_detach_virtual || !real_num_joysticks || !real_device_instance) return;
+    int n = real_num_joysticks();
+    for (int i = 0; i < n; i++) if (real_device_instance(i) == pad_virtual_which) {
+        if (real_detach_virtual(i) == 0) {
+            fprintf(stderr, "nokcandu: the Steam Controller's stand-in is made again for the profile in front\n");
+            pad_virtual_which = -1; pad_feed_which = -1;
+            pad_virtual_attach();
+        }
+        break;
+    }
 }
 /// Asked by Nokcandu's controller driver (Engine/controller-hid) for each game controller it creates: 0 as it is,
 /// 1 Xbox, 2 DualShock 4, 3 Switch Pro Controller.
@@ -864,6 +912,7 @@ static void *nok_dlsym(void *handle, const char *name) {
         id_product = (uint16_t (*)(void *))dlsym(handle, "SDL_JoystickGetProduct");
         real_is_gc = (int (*)(int))dlsym(handle, "SDL_IsGameController");
         real_attach_virtual = (int (*)(const nok_virtual_desc *))dlsym(handle, "SDL_JoystickAttachVirtualEx");
+        real_detach_virtual = (int (*)(int))dlsym(handle, "SDL_JoystickDetachVirtual");
         fprintf(stderr, "nokcandu: controller remapping ready\n");
         return (void *)nok_wait;
     }

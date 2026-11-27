@@ -18,7 +18,9 @@ static J js[4] = { { 3, 0x057e, 0x2009, "", "DevSrvsID:111" }, { 7, 0x28de, 0x11
 static int count = -1;
 static int n(void) { if (count < 0) { const char *e = getenv("FIXTURE_JOYSTICKS"); count = e ? atoi(e) : 2; } return count; }
 typedef struct { uint16_t version, type, naxes, nbuttons, nhats, vendor_id, product_id, padding; uint32_t bm, am; const char *name; } D;
-int SDL_JoystickAttachVirtualEx(const D *d) { n(); if (d->version != 1 || count >= 4) return -1; J v = { 9, d->vendor_id, d->product_id, 0, 0 }; js[count] = v; return count++; }
+static int32_t next_virtual = 9;
+int SDL_JoystickAttachVirtualEx(const D *d) { n(); if (d->version != 1 || count >= 4) return -1; J v = { next_virtual++, d->vendor_id, d->product_id, 0, 0 }; js[count] = v; return count++; }
+int SDL_JoystickDetachVirtual(int i) { n(); if (i < 0 || i >= count) return -1; memmove(&js[i], &js[i + 1], (size_t)(count - i - 1) * sizeof js[0]); count--; return 0; }
 int SDL_WaitEventTimeout(void *ev, int t) { (void)ev; (void)t; return 0; }
 int SDL_NumJoysticks(void) { return n(); }
 int32_t SDL_JoystickGetDeviceInstanceID(int i) { return js[i].inst; }
@@ -52,7 +54,7 @@ MAIN = r'''#include <dlfcn.h>
 int main(int argc, char **argv) {
  (void)argc; const char *state = argv[2], *map = argv[3];
  char p[1024]; snprintf(p, sizeof p, "%s/pad-active", state);
- FILE *f = fopen(p, "w"); fprintf(f, "%d\n%s\n", getpid(), map); fclose(f);
+ FILE *f = fopen(p, "w"); if (getenv("FIXTURE_NO_GAME")) fprintf(f, "0\n\n"); else fprintf(f, "%d\n%s\n", getpid(), map); fclose(f);
  void *sdl = dlopen("./libSDL-fixture.dylib", RTLD_NOW|RTLD_LOCAL), *bus = dlopen("./winebus.so", RTLD_NOW|RTLD_LOCAL);
  if (!sdl || !bus) return 1;
  void *(*lookup)(void *, const char *) = (void *(*)(void *, const char *))dlsym(bus, "lookup");
@@ -105,7 +107,7 @@ class PadPlayersTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.tmp.cleanup()
 
-    def run_driver(self, name, map_text, players=None, everywhere=False, extra_env=None):
+    def run_driver(self, name, map_text, players=None, everywhere=False, extra_env=None, launcher_map=None):
         case = self.work / name
         state, home = case / "state", case / "home"
         support = home / "Library/Application Support/Nokcandu"
@@ -115,6 +117,12 @@ class PadPlayersTests(unittest.TestCase):
             (support / "controller-profiles-everywhere").write_text("p\n")
             (support / "controller-profiles-everywhere.map").write_text(map_text)
             active = support / "controller-profiles-everywhere.map"
+        elif launcher_map is not None:
+            # A shared launcher: no map of its own, its games' maps listed in pad-map.tsv.
+            game = case / "Broforce.app"; game.mkdir()
+            (game / "pad-map").write_text(launcher_map)
+            (state / "pad-map.tsv").write_text(f"broforce_beta.exe\t{game / 'pad-map'}\n")
+            active = case / "active-map"; active.write_text(map_text)
         else:
             (state / "pad-map").write_text(map_text)
             active = state / "pad-map"
@@ -172,6 +180,22 @@ class PadPlayersTests(unittest.TestCase):
         self.assertEqual(lines[0], "pro 057e steam 045e joysticks 2", err)
         self.assertEqual(lines[1], "fed to 7", err)
         self.assertNotIn("stand-in", err)
+
+    def test_a_shared_launchers_stand_in_looks_like_its_game_asks_before_the_game_runs(self):
+        players = "nokplayers 1\nc 111 1406 8201 - 0 2 057e:2009:n:0\nc 0 10462 4418 - 0 1 28de:1142:n:0\n"
+        out, seen, err = self.run_driver("launcher", self.STEAM_PROFILE, players, launcher_map=self.STEAM_PROFILE,
+                                         extra_env={"FIXTURE_JOYSTICKS": "1", "FIXTURE_NO_GAME": "1"})
+        self.assertEqual(out, "pro 057e steam 045e joysticks 2", err)
+        self.assertIn("stand-in controller", err)
+        lines = set(seen.split("\n")[1:]) - {""}
+        self.assertEqual(lines, {"28de:1142:n:0 1", "057e:2009:n:0 2"}, "the stand-in is Nokcandu's Steam Controller")
+
+    def test_a_game_presenting_differently_gets_the_stand_in_made_again(self):
+        ds4 = "nokpad 1\npresent ds4\nsource steam\nplayer 2 asis\n"
+        out, _, err = self.run_driver("remade", ds4, None, launcher_map=self.STEAM_PROFILE,
+                                      extra_env={"FIXTURE_JOYSTICKS": "1", "FIXTURE_FEED": "1"})
+        self.assertIn("made again", err)
+        self.assertEqual(out.split("\n")[1], "fed to 10", err)
 
     def test_a_map_without_player_lines_presents_everyone(self):
         out, _, err = self.run_driver("old", "nokpad 1\npresent xbox\n", None)
