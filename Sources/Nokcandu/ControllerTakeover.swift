@@ -19,7 +19,7 @@ final class ControllerTakeover {
     }
 
     private var manager: IOHIDManager?
-    private struct Pad { let device: IOHIDDevice; var decoder: TakeoverPadDecoder; let buffer: UnsafeMutablePointer<UInt8> }
+    private struct Pad { let device: IOHIDDevice; var decoder: TakeoverPadDecoder; let buffer: UnsafeMutablePointer<UInt8>; var reports = 0 }
     private var pads: [UInt64: Pad] = [:]
     /// Devices taken over, by macOS's id: the rest of Nokcandu leaves them (and their GameController copies) alone.
     private(set) var owned: Set<UInt64> = []
@@ -110,6 +110,20 @@ final class ControllerTakeover {
             }
         }
         pads[id]?.decoder = decoder
+        // A controller that sends nothing after its start-up gets it once more, and the log says so either way.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self, var p = self.pads[id], p.reports == 0 else { return }
+            ControllerLog.add("Controller takeover: \(kind.name) sent nothing for 2 s after being taken; starting it again")
+            nonisolated(unsafe) let device = p.device
+            for (n, out) in p.decoder.start().enumerated() {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.06 * Double(n)) { HIDOutput.send(out, to: device) }
+            }
+            self.pads[id] = p
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                guard let p = self?.pads[id] else { return }
+                ControllerLog.add("Controller takeover: \(kind.name) " + (p.reports == 0 ? "still sends nothing; unplug and reconnect it, or turn off taking controllers in Controller Settings" : "is sending again"))
+            }
+        }
         owned.insert(id)
         ownedKinds.formUnion(kind.gameControllerCategories)
         ControllerLog.add("Controller takeover: \(kind.name) (\(bluetooth ? "Bluetooth" : "USB")) taken from macOS")
@@ -138,6 +152,7 @@ final class ControllerTakeover {
 
     private func report(_ bytes: [UInt8], id: UInt64) {
         guard var pad = pads[id] else { return }
+        pad.reports += 1
         let s = pad.decoder.decode(bytes)
         let repairs = pad.decoder.repairs(after: bytes, at: ProcessInfo.processInfo.systemUptime)
         pads[id] = pad
