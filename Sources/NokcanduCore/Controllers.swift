@@ -207,7 +207,7 @@ public enum Controllers {
     static let logitechWheels: Set<Int> = [0xC294, 0xC295, 0xC298, 0xC299, 0xC29A, 0xC29B, 0xC24F, 0xC260, 0xC261, 0xC262, 0xC266, 0xC267, 0xC26D, 0xC26E, 0xC268, 0xC272]
     static let logitechFlight: Set<Int> = [0xC215, 0xC21A, 0xC21C, 0xC287, 0xC286, 0x0A38, 0xC2AB, 0xC2A8, 0xC2A9]
 
-    static func kind(vendorID v: Int, productID p: Int, usagePage: Int, usage: Int) -> Kind {
+    public static func kind(vendorID v: Int, productID p: Int, usagePage: Int, usage: Int) -> Kind {
         if wheelMakers.contains(v) { return .wheel }
         if flightMakers.contains(v) { return .flight }
         if v == 0x046D { if logitechWheels.contains(p) { return .wheel }; if logitechFlight.contains(p) { return .flight } }
