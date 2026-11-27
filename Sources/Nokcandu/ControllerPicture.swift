@@ -963,7 +963,7 @@ struct ControllerPictureLayout {
     @MainActor static func of(_ family: Controllers.Family?) -> ControllerPictureLayout {
         let model: ControllerOverlaySettings.Model = family == .playstation ? .dualShock4 : family == .nintendo ? .switchPro : .xbox
         if let c = cache[model.rawValue] { return c }
-        let c = ControllerPictureLayout(OverlayLayout.make(model), letters: family == .nintendo)
+        let c = ControllerPictureLayout(OverlayLayout.make(model))
         cache[model.rawValue] = c
         return c
     }
@@ -973,7 +973,7 @@ struct ControllerPictureLayout {
         CGPoint(x: (CGFloat(x) - bounds.minX) / bounds.width, y: (bounds.maxY + CGFloat(z)) / bounds.height)
     }
 
-    init(_ l: OverlayLayout, letters: Bool) {
+    init(_ l: OverlayLayout) {
         layout = l; bounds = l.outline.bounds
         var sideSticks: [Int: CGPoint] = [:]
         for part in l.parts {
@@ -999,10 +999,6 @@ struct ControllerPictureLayout {
             }
         }
         sticks = [sideSticks[0], sideSticks[1]].compactMap { $0 }
-        // Nintendo controllers report buttons by the letter printed on them: A right, B bottom, X top, Y left.
-        if letters, let top = places[.y], let bottom = places[.a], let left = places[.x], let right = places[.b] {
-            places[.a] = right; places[.b] = bottom; places[.x] = top; places[.y] = left
-        }
     }
 
     func place(_ i: PadProfiles.Input) -> CGPoint? { places[i] }

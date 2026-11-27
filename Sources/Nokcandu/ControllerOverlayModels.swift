@@ -502,9 +502,10 @@ struct OverlayLayout {
         parts: [
             .stick(0, [-1.119, -0.178], radius: 0.23), .stick(1, [0.517, 0.383], radius: 0.23),
             .dpad([-0.629, 0.395], size: 0.6),
-            // Positions, not letters: top, bottom, left, right as the remapper names them.
-            .button(.y, .round(0.145), [1.066, -0.427]), .button(.a, .round(0.145), [1.066, 0.125]),
-            .button(.x, .round(0.145), [0.754, -0.153]), .button(.b, .round(0.145), [1.381, -0.153]),
+            // By the letters printed on them, as macOS (and Nokcandu, for a controller it reads itself) reports Nintendo
+            // controllers: X top, B bottom, Y left, A right.
+            .button(.x, .round(0.145), [1.066, -0.427]), .button(.b, .round(0.145), [1.066, 0.125]),
+            .button(.y, .round(0.145), [0.754, -0.153]), .button(.a, .round(0.145), [1.381, -0.153]),
             .button(.back, .pill(0.16, 0.07), [-0.496, -0.456]), .button(.start, .round(0.09), [0.496, -0.456]),
             .button(.misc, .square(0.15), [-0.288, -0.165]), .button(.guide, .round(0.1), [0.272, -0.165]),
             .bumper(.lb, [-1.11, -1.04], width: 0.95), .bumper(.rb, [1.11, -1.04], width: 0.95),
