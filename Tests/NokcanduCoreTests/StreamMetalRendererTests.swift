@@ -102,6 +102,44 @@ final class StreamMetalRendererTests: XCTestCase {
         XCTAssertGreaterThan(rgb(px, width: 128, x: 64, y: 32)[0], 250, "picture")
     }
 
+    /// Overlays draw into the frame's own render pass, over the picture, each where it sets its viewport.
+    func testOverlaysDrawInTheFramesPass() throws {
+        let device = renderer.metalDevice
+        let source = """
+        #include <metal_stdlib>
+        using namespace metal;
+        vertex float4 v(uint id [[vertex_id]]) { float2 p = float2((id << 1) & 2, id & 2); return float4(p * 2 - 1, 0, 1); }
+        fragment float4 red() { return float4(1, 0, 0, 1); }
+        fragment float4 blue() { return float4(0, 0, 1, 1); }
+        """
+        let library = try device.makeLibrary(source: source, options: nil)
+        func pipeline(_ fragment: String) throws -> MTLRenderPipelineState {
+            let d = MTLRenderPipelineDescriptor()
+            d.vertexFunction = library.makeFunction(name: "v"); d.fragmentFunction = library.makeFunction(name: fragment)
+            d.colorAttachments[0].pixelFormat = .bgra8Unorm
+            return try device.makeRenderPipelineState(descriptor: d)
+        }
+        let redPipeline = try pipeline("red"), bluePipeline = try pipeline("blue")
+        // Two overlays, as the controller overlay and the statistics are: each its own corner.
+        renderer.setOverlay({ enc, _ in
+            enc.setRenderPipelineState(redPipeline)
+            enc.setViewport(MTLViewport(originX: 0, originY: 0, width: 16, height: 16, znear: 0, zfar: 1))
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        }, key: "controller")
+        renderer.setOverlay({ enc, _ in
+            enc.setRenderPipelineState(bluePipeline)
+            enc.setViewport(MTLViewport(originX: 48, originY: 48, width: 16, height: 16, znear: 0, zfar: 1))
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        }, key: "stats")
+        defer { renderer.setOverlay(nil, key: "controller"); renderer.setOverlay(nil, key: "stats") }
+        let b = try buffer(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, y: 235, cb: 128, cr: 128)
+        let px = try XCTUnwrap(renderer.renderForTesting(b, width: 64, height: 64, overlays: true))
+        XCTAssertEqual(rgb(px, width: 64, x: 4, y: 4), [255, 0, 0], "the first overlay, top left")
+        XCTAssertEqual(rgb(px, width: 64, x: 59, y: 59), [0, 0, 255], "the second overlay, bottom right")
+        XCTAssertGreaterThan(rgb(px, width: 64, x: 32, y: 32)[1], 250, "the picture itself, under neither")
+        XCTAssertEqual(rgb(px, width: 64, x: 32, y: 32), rgb(try XCTUnwrap(renderer.renderForTesting(b, width: 64, height: 64)), width: 64, x: 32, y: 32))
+    }
+
     /// Handing over frames never waits for the GPU or a drawable.
     func testSubmitDoesNotBlock() throws {
         renderer.resize(CGRect(x: 0, y: 0, width: 1280, height: 800), scale: 2)

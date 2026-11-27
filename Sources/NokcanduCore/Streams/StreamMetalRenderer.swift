@@ -398,7 +398,7 @@ public final class StreamMetalRenderer: @unchecked Sendable {
 
     /// For tests: draws one frame exactly as a stream would, into an offscreen 8-bit BGRA picture of this size,
     /// and returns its pixels (B, G, R, A, rows top to bottom). Nil if it can't be drawn.
-    public func renderForTesting(_ image: CVPixelBuffer, width: Int, height: Int) -> [UInt8]? {
+    public func renderForTesting(_ image: CVPixelBuffer, width: Int, height: Int, overlays drawOverlays: Bool = false) -> [UInt8]? {
         renderQueue.sync {
             guard let pipelineForLayer = prepare(image), let planes = planeTextures(image) else { return nil }
             _ = pipelineForLayer
@@ -408,6 +408,7 @@ public final class StreamMetalRenderer: @unchecked Sendable {
             d.storageMode = .managed
             guard let target = device.makeTexture(descriptor: d), let buffer = commandQueue.makeCommandBuffer(),
                   let drawn = encode(image, luma: planes.0, chroma: planes.1, pipeline: pipeline, into: target, buffer: buffer) else { return nil }
+            if drawOverlays { os_unfair_lock_lock(&lock); let over = overlays; os_unfair_lock_unlock(&lock); for o in over { o.draw(drawn, target) } }
             drawn.endEncoding()
             guard let blit = buffer.makeBlitCommandEncoder() else { return nil }
             blit.synchronize(resource: target)
