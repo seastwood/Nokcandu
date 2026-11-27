@@ -105,7 +105,7 @@ private struct ControllerRow: View {
                 }
                 .help("Used in apps and games with no profile of their own choosing (on the Mac, with “Use a controller profile on the Mac” on).")
             }
-            if remembered?.byOrder == true && connected.vendorID != 0 {
+            if remembered?.byOrder == true && connected.vendorID != 0 && hasTwin {
                 Text("It has no serial number Nokcandu can read, so two of this model are told apart by the order they connected; reconnected the other way round, they trade places.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
@@ -118,6 +118,10 @@ private struct ControllerRow: View {
         .onChange(of: name) { _, n in if n != (remembered?.customName ?? "") { devices.rename(connected.key, n) } }
     }
 
+    /// Another controller of the same model is remembered: only then can the order matter.
+    var hasTwin: Bool {
+        devices.roster.controllers.contains { $0.key != connected.key && $0.vendorID == connected.vendorID && $0.productID == connected.productID }
+    }
     var subtitle: String {
         var parts: [String] = []
         if remembered?.customName != nil { parts.append(connected.name) }

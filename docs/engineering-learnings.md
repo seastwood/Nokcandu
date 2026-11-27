@@ -1024,3 +1024,7 @@ Quiet tracking (5 s whose half-second averages agree within 1.2 °/s, within 8 �
 ## Untrusted input is fuzzed (November 26, 2026)
 
 `UntrustedInputFuzzTests` runs random and truncated data through every controller report reader, both VDF readers, shared-profile parsing and links. It found unbounded recursion in both VDF parsers (a deeply nested file overflowed the stack); they now refuse nesting past 64 / 128 levels. Add new readers of outside data to that test.
+
+## Telling identical controllers apart (November 27, 2026)
+
+GameController has no public link to the HID device behind a controller, and identical controllers have identical names. Match by name when there's one; with twins, the HID device that sent a value within 80 ms of the GameController change is that controller. SDL (in Wine) names macOS HIDAPI devices `DevSrvsID:<IORegistry entry id>`, the same id `IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(d))` gives Nokcandu, so a connection can be matched exactly across processes; serials need normalising (macOS "a4-ae-…", SDL "a4ae…") and some controllers report placeholders ("000000000001") that must not count as serials.
