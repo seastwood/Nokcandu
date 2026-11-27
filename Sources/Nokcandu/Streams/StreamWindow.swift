@@ -22,6 +22,9 @@ import Metal
     /// The part of `statsText` with this Mac's total, drawn in colour so it's easy to glance at.
     @Published var totalText = ""
     @Published var totalMs: Double?
+    /// The network's part in the short readout ("Network 3 ms"), coloured like this Mac's.
+    @Published var networkText = ""
+    @Published var networkMs: Double?
     @Published var statsHistory = StreamTelemetryHistory()
     /// The statistics are drawn into the picture (Metal), not over it.
     @Published var statsInPicture = false
@@ -380,10 +383,14 @@ import Metal
         guard state.statistics != .off else { state.statsText = ""; state.totalText = ""; return }
         let v = latestStats, video = connection.video
         state.totalMs = v.clientMs
+        state.networkMs = nil; state.networkText = ""
         if state.statistics == .minimal {
-            // Just "frames shown per second/this Mac's total in ms", the total coloured.
+            // "frames shown per second/this Mac's part in ms/the network's round trip in ms", no labels: each
+            // latency coloured on its own, so a hitch can be told apart at a glance (the setting says which is which).
             state.totalText = v.clientMs.map { String(format: "%.1f", $0) } ?? "–"
-            state.statsText = "\(Int(v.shownFPS.rounded()))/\(state.totalText)"
+            state.networkMs = v.networkMs
+            state.networkText = v.networkMs.map { String(format: "%.0f", $0) } ?? "–"
+            state.statsText = "\(Int(v.shownFPS.rounded()))/\(state.totalText)/\(state.networkText)"
             return
         }
         state.totalText = "this Mac total \(Self.ms(v.clientMs)) ms"
@@ -433,6 +440,7 @@ import Metal
         }
         let scale = window?.backingScaleFactor ?? 2
         let renderer = ImageRenderer(content: StreamStatsBlock(statsText: state.statsText, totalText: state.totalText, totalMs: state.totalMs,
+                                                   networkText: state.networkText, networkMs: state.networkMs,
                                                                graphs: state.graphs, samples: state.statsHistory.samples))
         renderer.scale = scale
         guard let image = renderer.cgImage else { return }
@@ -1033,6 +1041,7 @@ struct StreamOverlay: View {
                 HStack(alignment: .top) {
                     if state.connected && !state.statsInPicture && (!state.statsText.isEmpty || state.graphs) {
                         StreamStatsBlock(statsText: state.statsText, totalText: state.totalText, totalMs: state.totalMs,
+                                                   networkText: state.networkText, networkMs: state.networkMs,
                                          graphs: state.graphs, samples: state.statsHistory.samples)
                     }
                     Spacer()
@@ -1066,12 +1075,13 @@ struct StreamOverlay: View {
 /// The statistics text and graphs, over the picture or drawn into it.
 struct StreamStatsBlock: View {
     let statsText: String, totalText: String, totalMs: Double?
+    var networkText = "", networkMs: Double? = nil
     let graphs: Bool
     let samples: [StreamTelemetry.Sample]
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             if !statsText.isEmpty {
-                Text(StreamTotalLatency.highlight(statsText, totalText, ms: totalMs)).font(.system(size: 9, design: .monospaced)).lineSpacing(0).foregroundStyle(.white)
+                Text(StreamTotalLatency.highlight(statsText, totalText, ms: totalMs, network: networkText, networkMs: networkMs)).font(.system(size: 9, design: .monospaced)).lineSpacing(0).foregroundStyle(.white)
             }
             if graphs { StreamStatsGraphs(samples: samples) }
         }
@@ -1205,10 +1215,20 @@ final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
 
 /// This Mac's total in the statistics text, coloured by how good it is: green under 12 ms, yellow under 20, orange above.
 enum StreamTotalLatency {
-    static func highlight(_ text: String, _ total: String, ms: Double?) -> AttributedString {
+    static func highlight(_ text: String, _ total: String, ms: Double?, network: String = "", networkMs: Double? = nil) -> AttributedString {
+        func macColor(_ ms: Double) -> Color { ms < 12 ? .green : ms < 20 ? .yellow : .orange }
+        // The round trip: a wired home network stays in single figures, Wi-Fi in the teens; more is a slow path.
+        func networkColor(_ ms: Double) -> Color { ms < 10 ? .green : ms < 25 ? .yellow : .orange }
+        // The short readout ("fps/Mac/network"): coloured by position, as its bare numbers could also appear in another.
+        if !network.isEmpty, text == "\(text.split(separator: "/").first ?? "")/\(total)/\(network)" {
+            var a = AttributedString((text.split(separator: "/").first.map(String.init) ?? "") + "/")
+            var mac = AttributedString(total); if let ms { mac.foregroundColor = macColor(ms) }
+            var net = AttributedString(network); if let networkMs { net.foregroundColor = networkColor(networkMs) }
+            a.append(mac); a.append(AttributedString("/")); a.append(net)
+            return a
+        }
         var a = AttributedString(text)
-        guard !total.isEmpty, let ms, let r = a.range(of: total) else { return a }
-        a[r].foregroundColor = ms < 12 ? .green : ms < 20 ? .yellow : .orange
+        if !total.isEmpty, let ms, let r = a.range(of: total) { a[r].foregroundColor = macColor(ms) }
         return a
     }
 }

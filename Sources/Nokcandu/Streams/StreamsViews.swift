@@ -467,9 +467,9 @@ struct StreamProfileEditor: View {
             SettingRow(title: "Full screen", info: "In full screen, macOS turns on Game Mode for the stream: the Mac puts the stream first and halves Bluetooth latency for controllers and AirPods. You can turn it off from the Game Mode icon in the menu bar while streaming.") {
                 Toggle("Full screen", isOn: $profile.window.fullScreen).labelsHidden().toggleStyle(.switch)
             }
-            SettingRow(title: "Statistics", info: "Text shown over the picture. ⌃⌥⇧S cycles through the text modes during a stream. Performance graphs are controlled separately.") {
+            SettingRow(title: "Statistics", info: "Text shown over the picture. FPS / Mac / Network latency shows three numbers, like 120/4.2/3: frames shown per second, this Mac's part in ms (a frame arriving to it on screen: assembling, decoding, waiting for the display) and the network's round trip in ms. Each latency is green, yellow or orange on its own, so a hitch shows where it came from. ⌃⌥⇧S cycles through the text modes during a stream. Performance graphs are controlled separately.") {
                 Picker("Statistics", selection: $profile.window.statistics) { ForEach(StreamProfile.Window.Statistics.allCases, id: \.self) { Text($0.title).tag($0) } }
-                    .labelsHidden().frame(maxWidth: 200)
+                    .labelsHidden().frame(maxWidth: 230)
             }
             SettingToggle(title: "Performance graphs", info: "Two minutes of network RTT/variation, decoding, presentation wait and frame-gap history. Independent of text statistics: show either, both, or neither.", isOn: $profile.window.graphs)
         }

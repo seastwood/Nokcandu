@@ -289,7 +289,7 @@ public struct StreamProfile: Codable, Hashable, Identifiable, Sendable {
         public enum Statistics: String, Codable, CaseIterable, Sendable {
             /// `minimal`: just the frame rate and this Mac's total latency, "90/7.8".
             case off, minimal, basic, detailed
-            public var title: String { switch self { case .off: "Off"; case .minimal: "FPS and latency"; case .basic: "Standard"; case .detailed: "Detailed" } }
+            public var title: String { switch self { case .off: "Off"; case .minimal: "FPS / Mac / Network latency"; case .basic: "Standard"; case .detailed: "Detailed" } }
         }
     }
 
