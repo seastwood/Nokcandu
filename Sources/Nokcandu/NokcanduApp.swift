@@ -202,7 +202,8 @@ struct LibraryView: View {
                     if model.features.visible.count > 1 {
                         Picker("Show", selection: $model.sidebarTab) {
                             ForEach(model.features.visible) { feature in
-                                Text(feature == .profiles ? "Controls" : feature == .streams ? "Streams" : "Games").tag(feature)
+                                // The icon inline in the text: a segment given a Label shows its icon alone.
+                                Text("\(Image(systemName: feature.symbol)) \(feature == .profiles ? "Controls" : feature == .streams ? "Streams" : "Games")").tag(feature)
                             }
                         }
                         .pickerStyle(.segmented).labelsHidden()

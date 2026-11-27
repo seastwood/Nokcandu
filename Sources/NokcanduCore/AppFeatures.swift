@@ -10,7 +10,7 @@ public enum AppFeature: String, CaseIterable, Identifiable, Codable {
         switch self { case .games: return "Games"; case .profiles: return "Remapping"; case .streams: return "Streaming" }
     }
     public var symbol: String {
-        switch self { case .games: return "square.stack.3d.up"; case .profiles: return "gamecontroller"; case .streams: return "tv" }
+        switch self { case .games: return "square.stack.3d.up"; case .profiles: return "gamecontroller"; case .streams: return "moon.fill" }
     }
     public var detail: String {
         switch self {
