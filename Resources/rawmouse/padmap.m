@@ -720,13 +720,20 @@ static const char *(*real_gc_name)(void *), *(*real_js_name)(void *);
 static int (*real_js_type)(void *);
 static void pad_load_identity(void);
 /// Only gamepads take the identity (SDL_JOYSTICK_TYPE_GAMECONTROLLER); wheels, sticks and others stay as they are.
+/// The presentation a controller gets now (0: as it is).
+static int pad_presentation_for(void *j) {
+    pad_load_identity();
+    if (!pad_identity.on || !j || (real_js_type && real_js_type(j) != 1)) return 0;
+    if (!real_instance) return pad_identity.kind;
+    int player = pad_player_of(real_instance(j));
+    return pad_identity_player[player > 8 ? 8 : player] ? pad_identity.kind : 0;
+}
+static int pad_virtual_presented = -1;   // what the stand-in was made as when Wine asked (-1: not asked yet)
 static bool pad_presents(void *j) {
     pad_identify_joystick(j);
-    pad_load_identity();
-    if (!pad_identity.on || !j || (real_js_type && real_js_type(j) != 1)) return false;
-    if (!real_instance) return true;
-    int player = pad_player_of(real_instance(j));
-    return pad_identity_player[player > 8 ? 8 : player];
+    int kind = pad_presentation_for(j);
+    if (j && real_instance && pad_virtual_which >= 0 && real_instance(j) == pad_virtual_which) pad_virtual_presented = kind;
+    return kind != 0;
 }
 
 static void pad_load_identity(void) {
@@ -811,17 +818,20 @@ static int (*real_detach_virtual)(int);
 /// with, so the Steam Controller's stand-in is made again to take a new one (the game sees it unplugged and
 /// plugged back in); real controllers take it when they next connect.
 static void pad_identity_refresh(void) {
-    bool on = pad_identity.on; int kind = pad_identity.kind;
-    bool players[9]; memcpy(players, pad_identity_player, sizeof players);
     pad_identity.known = false;
     pad_load_identity();
-    if (on == pad_identity.on && kind == pad_identity.kind && !memcmp(players, pad_identity_player, sizeof players)) return;
-    if (pad_virtual_which < 0 || !real_detach_virtual || !real_num_joysticks || !real_device_instance) return;
+    // Only a stand-in Wine has already made, as something else than the profile in front asks for.
+    if (pad_virtual_which < 0 || pad_virtual_presented < 0 || !real_detach_virtual || !real_num_joysticks || !real_device_instance) return;
     int n = real_num_joysticks();
     for (int i = 0; i < n; i++) if (real_device_instance(i) == pad_virtual_which) {
+        // The stand-in's presentation by the profile in front: its player's, as pad_presents works it out.
+        bool on = pad_identity.on;
+        int player = pad_player_of(pad_virtual_which);
+        int want = on && pad_identity_player[player > 8 ? 8 : player] ? pad_identity.kind : 0;
+        if (want == pad_virtual_presented) break;
         if (real_detach_virtual(i) == 0) {
             fprintf(stderr, "nokcandu: the Steam Controller's stand-in is made again for the profile in front\n");
-            pad_virtual_which = -1; pad_feed_which = -1;
+            pad_virtual_which = -1; pad_feed_which = -1; pad_virtual_presented = -1;
             pad_virtual_attach();
         }
         break;

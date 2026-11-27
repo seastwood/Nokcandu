@@ -54,7 +54,7 @@ MAIN = r'''#include <dlfcn.h>
 int main(int argc, char **argv) {
  (void)argc; const char *state = argv[2], *map = argv[3];
  char p[1024]; snprintf(p, sizeof p, "%s/pad-active", state);
- FILE *f = fopen(p, "w"); if (getenv("FIXTURE_NO_GAME")) fprintf(f, "0\n\n"); else fprintf(f, "%d\n%s\n", getpid(), map); fclose(f);
+ FILE *f = fopen(p, "w"); if (getenv("FIXTURE_NO_GAME") || getenv("FIXTURE_GAME_LATER")) fprintf(f, "0\n\n"); else fprintf(f, "%d\n%s\n", getpid(), map); fclose(f);
  void *sdl = dlopen("./libSDL-fixture.dylib", RTLD_NOW|RTLD_LOCAL), *bus = dlopen("./winebus.so", RTLD_NOW|RTLD_LOCAL);
  if (!sdl || !bus) return 1;
  void *(*lookup)(void *, const char *) = (void *(*)(void *, const char *))dlsym(bus, "lookup");
@@ -62,6 +62,12 @@ int main(int argc, char **argv) {
  uint16_t (*vendor)(void *) = (uint16_t (*)(void *))lookup(sdl, "SDL_JoystickGetVendor");
  void *(*joystick)(int) = (void *(*)(int))dlsym(sdl, "fixture_joystick");
  unsigned char ev[56]; memset(ev, 0, 56); wait(ev, 1);          /* reads the profile */
+ if (getenv("FIXTURE_GAME_LATER")) {   /* Wine makes its devices first; the game (and its profile) comes later */
+  vendor(joystick(0)); vendor(joystick(1));
+  usleep(300000);
+  f = fopen(p, "w"); fprintf(f, "%d\n%s\n", getpid(), map); fclose(f);
+  memset(ev, 0, 56); wait(ev, 1);
+ }
  /* Wine asks about the Pro first, as it found it first. */
  uint16_t pro = vendor(joystick(0)), steam = vendor(joystick(1));
  int (*count)(void) = (int (*)(void))dlsym(sdl, "fixture_count");
@@ -191,11 +197,18 @@ class PadPlayersTests(unittest.TestCase):
         self.assertEqual(lines, {"28de:1142:n:0 1", "057e:2009:n:0 2"}, "the stand-in is Nokcandu's Steam Controller")
 
     def test_a_game_presenting_differently_gets_the_stand_in_made_again(self):
+        # Steam starts (the stand-in made as the launcher game asks: Xbox), then a game presenting as a DualShock 4.
         ds4 = "nokpad 1\npresent ds4\nsource steam\nplayer 2 asis\n"
         out, _, err = self.run_driver("remade", ds4, None, launcher_map=self.STEAM_PROFILE,
-                                      extra_env={"FIXTURE_JOYSTICKS": "1", "FIXTURE_FEED": "1"})
+                                      extra_env={"FIXTURE_JOYSTICKS": "1", "FIXTURE_FEED": "1", "FIXTURE_GAME_LATER": "1"})
         self.assertIn("made again", err)
         self.assertEqual(out.split("\n")[1], "fed to 10", err)
+
+    def test_the_same_presentation_keeps_the_stand_in(self):
+        out, _, err = self.run_driver("kept", self.STEAM_PROFILE, None, launcher_map=self.STEAM_PROFILE,
+                                      extra_env={"FIXTURE_JOYSTICKS": "1", "FIXTURE_FEED": "1", "FIXTURE_GAME_LATER": "1"})
+        self.assertNotIn("made again", err)
+        self.assertEqual(out.split("\n")[1], "fed to 9", err)
 
     def test_a_map_without_player_lines_presents_everyone(self):
         out, _, err = self.run_driver("old", "nokpad 1\npresent xbox\n", None)
