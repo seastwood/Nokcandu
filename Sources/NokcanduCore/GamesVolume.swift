@@ -63,6 +63,31 @@ public enum GamesVolume {
         return out
     }
 
+    /// Volume kinds a games volume holds (APFS volume, Mac OS Extended), as `hdiutil info` names them.
+    static let volumeHints = ["41504653-0000-11AA-AA11-00306543ECAC", "48465300-0000-11AA-AA11-00306543ECAC"]
+
+    /// image path → its volumes (device paths) that aren't mounted. macOS can attach an image and then unmount its
+    /// volume again (seen after a restart, when the volume needed checking first): the image then counts as open
+    /// while its games stay unreachable.
+    public static func unmountedVolumes() -> [String: [String]] {
+        guard let r = try? Shell.run("/usr/bin/hdiutil", ["info", "-plist"], timeout: 20), r.ok else { return [:] }
+        return unmountedVolumes(plist: r.stdout)
+    }
+
+    static func unmountedVolumes(plist: String) -> [String: [String]] {
+        guard let dict = try? PropertyListSerialization.propertyList(from: Data(plist.utf8), format: nil) as? [String: Any],
+              let images = dict["images"] as? [[String: Any]] else { return [:] }
+        var out: [String: [String]] = [:]
+        for image in images {
+            guard let path = image["image-path"] as? String else { continue }
+            let devs = (image["system-entities"] as? [[String: Any]] ?? []).filter {
+                volumeHints.contains($0["content-hint"] as? String ?? "") && $0["mount-point"] == nil
+            }.compactMap { $0["dev-entry"] as? String }
+            if !devs.isEmpty { out[URL(fileURLWithPath: path).standardizedFileURL.path] = devs }
+        }
+        return out
+    }
+
     public static func validName(_ name: String) -> String? {
         let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !n.isEmpty, n.count <= 60, !n.contains("/"), !n.contains(":"), !n.hasPrefix(".") else { return nil }
@@ -123,9 +148,20 @@ public enum GamesVolume {
     /// appears; the login helper does it while Nokcandu is closed). Returns the ones it opened.
     @discardableResult
     public static func attachRegistered() -> [URL] {
+        let registered = AutoMount.images()
+        if !registered.isEmpty { try? AutoMount.installAgent() }   // keeps the login helper's script current
+        // Attached but its volume unmounted again: mount the volume (attaching once more doesn't always bring it back).
+        let unmounted = unmountedVolumes()
+        for image in registered {
+            for dev in unmounted[image.standardizedFileURL.path] ?? [] {
+                _ = try? Shell.run("/usr/sbin/diskutil", ["mount", dev], timeout: 120)
+            }
+        }
         let attached = attachedImages()
-        for image in AutoMount.images() { if let m = attached[image.standardizedFileURL.path] { enableIndexing(m) } }
-        return AutoMount.images().filter { FileManager.default.fileExists(atPath: $0.path) && attached[$0.standardizedFileURL.path] == nil }
+        for image in registered { if let m = attached[image.standardizedFileURL.path] { enableIndexing(m) } }
+        let attachedAtAll = Set(unmounted.keys)
+        return registered.filter { FileManager.default.fileExists(atPath: $0.path) && attached[$0.standardizedFileURL.path] == nil
+                                   && !attachedAtAll.contains($0.standardizedFileURL.path) }
             .compactMap { try? attach($0) }
     }
 
@@ -198,16 +234,38 @@ public enum AutoMount {
     }
 
     static func script() -> String {
-        // Reads the list each time; attaches only images that exist (their drive is connected) and aren't open.
+        // Reads the list each time. An image that isn't attached is attached (only if it exists: its drive is
+        // connected). An attached image whose volume macOS unmounted again (seen after a restart, when the volume
+        // needed checking first) has the volume mounted. Then it checks again for two minutes, since that unmount
+        // can come late; later rounds only remount, so an image someone ejected stays ejected.
         """
         LIST="$HOME/Library/Application Support/Nokcandu/games-volumes.txt"
         [ -f "$LIST" ] || exit 0
-        INFO="$(/usr/bin/hdiutil info 2>/dev/null)"
-        while IFS= read -r IMG; do
-          [ -n "$IMG" ] && [ -d "$IMG" ] || continue
-          printf '%s\\n' "$INFO" | /usr/bin/grep -Fq "$IMG" && continue
-          /usr/bin/hdiutil attach "$IMG" -noautoopen >/dev/null 2>&1
-        done < "$LIST"
+        TAB="$(printf '\t')"
+        pass() {
+          INFO="$(/usr/bin/hdiutil info 2>/dev/null)"
+          while IFS= read -r IMG; do
+            [ -n "$IMG" ] && [ -d "$IMG" ] || continue
+            FOUND="$(printf '%s\n' "$INFO" | /usr/bin/awk -v img="$IMG" -F "$TAB" '
+              /^=====/ { s = 0 }
+              index($0, "image-path") == 1 { s = (substr($0, index($0, ": ") + 2) == img); if (s) print "attached" }
+              s && ($2 == "41504653-0000-11AA-AA11-00306543ECAC" || $2 == "48465300-0000-11AA-AA11-00306543ECAC") && $3 == "" { print $1 }')"
+            if [ -z "$FOUND" ]; then
+              [ "$1" = first ] && /usr/bin/hdiutil attach "$IMG" -noautoopen >/dev/null 2>&1
+              continue
+            fi
+            for DEV in $(printf '%s\n' "$FOUND" | /usr/bin/grep '^/dev/'); do
+              /usr/sbin/diskutil mount "$DEV" >/dev/null 2>&1
+            done
+          done < "$LIST"
+        }
+        pass first
+        i=0
+        while [ $i -lt 12 ]; do
+          /bin/sleep 10
+          pass later
+          i=$((i + 1))
+        done
         exit 0
         """
     }

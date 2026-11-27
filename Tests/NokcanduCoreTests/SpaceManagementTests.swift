@@ -191,4 +191,31 @@ final class SpaceManagementTests: XCTestCase {
         XCTAssertEqual(GamesVolume.dissenter("Unmount was dissented by PID 9 (/usr/bin/vim)"), "vim")
         XCTAssertNil(GamesVolume.dissenter("Volume failed to eject"))
     }
+
+    func testGamesVolumeUnmountedVolumesFindsAnAttachedImageWithoutItsMount() {
+        func entity(_ dev: String, _ hint: String, _ mount: String? = nil) -> String {
+            "<dict><key>content-hint</key><string>\(hint)</string><key>dev-entry</key><string>\(dev)</string>"
+                + (mount.map { "<key>mount-point</key><string>\($0)</string>" } ?? "") + "</dict>"
+        }
+        func image(_ path: String, _ entities: [String]) -> String {
+            "<dict><key>image-path</key><string>\(path)</string><key>system-entities</key><array>\(entities.joined())</array></dict>"
+        }
+        let apfs = "41504653-0000-11AA-AA11-00306543ECAC"
+        let plist = """
+        <?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>images</key><array>
+        \(image("/Volumes/Elements/Games.sparsebundle", [entity("/dev/disk5", "GUID_partition_scheme"), entity("/dev/disk5s2", "7C3457EF-0000-11AA-AA11-00306543ECAC"), entity("/dev/disk6s1", apfs)]))
+        \(image("/Volumes/Other/Open.sparsebundle", [entity("/dev/disk8s1", apfs, "/Volumes/Open")]))
+        \(image("/Volumes/Other/Disc.iso", [entity("/dev/disk9", "CD_partition_scheme")]))
+        </array></dict></plist>
+        """
+        XCTAssertEqual(GamesVolume.unmountedVolumes(plist: plist), ["/Volumes/Elements/Games.sparsebundle": ["/dev/disk6s1"]])
+        XCTAssertEqual(GamesVolume.unmountedVolumes(plist: "not a plist"), [:])
+    }
+
+    func testGamesVolumeLoginHelperRemountsAndNeverReattachesLater() {
+        let script = AutoMount.script()
+        XCTAssertTrue(script.contains("/usr/sbin/diskutil mount \"$DEV\""))
+        XCTAssertTrue(script.contains("[ \"$1\" = first ] && /usr/bin/hdiutil attach"))
+        XCTAssertTrue(script.contains("pass later"))
+    }
 }
