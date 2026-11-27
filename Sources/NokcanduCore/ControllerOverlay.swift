@@ -42,8 +42,18 @@ public struct ControllerOverlaySettings: Codable, Equatable, Sendable {
         case transparent, color
         public var title: String { switch self { case .transparent: "Transparent"; case .color: "Colour (for chroma key)" } }
     }
+    /// Whose controller the overlay shows when several are connected.
+    public enum Follow: String, Codable, CaseIterable, Sendable {
+        /// Player 1's (what a running Windows game reports, else the Controllers panel's Player, else the Auto order),
+        /// so other players' presses don't take it over.
+        case playerOne
+        /// Whichever was used last.
+        case lastUsed
+        public var title: String { switch self { case .playerOne: "Player 1's controller"; case .lastUsed: "The controller used last" } }
+    }
     public var mode: Mode = .off
     public var model: Model = .automatic
+    public var follow: Follow = .playerOne
     /// Width in points; the height follows the controller's shape.
     public var size: Double = 320
     public var opacity: Double = 1
@@ -115,6 +125,7 @@ public struct ControllerOverlaySettings: Codable, Equatable, Sendable {
         mode = (try? c.decode(Mode.self, forKey: .mode)) ?? base.mode
         // "steam2015" was the only choice at first (November 19), not a choice: the controller in use instead.
         model = (try? c.decode(Model.self, forKey: .model)) ?? base.model
+        follow = (try? c.decode(Follow.self, forKey: .follow)) ?? base.follow
         size = (try? c.decode(Double.self, forKey: .size)) ?? base.size
         opacity = (try? c.decode(Double.self, forKey: .opacity)) ?? base.opacity
         bodyColor = (try? c.decode(String.self, forKey: .bodyColor)) ?? base.bodyColor

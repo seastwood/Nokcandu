@@ -132,6 +132,9 @@ final class ControllerOverlayTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(ControllerOverlaySettings.self, from: Data("{}".utf8)), ControllerOverlaySettings())
         XCTAssertEqual(ControllerOverlaySettings().mode, .off)
         XCTAssertTrue(s.hideWithoutController, "hidden without a controller unless turned off")
+        XCTAssertEqual(s.follow, .playerOne, "settings from before follow player 1, so other players don't take it over")
+        var last = ControllerOverlaySettings(); last.follow = .lastUsed
+        XCTAssertEqual(try JSONDecoder().decode(ControllerOverlaySettings.self, from: JSONEncoder().encode(last)).follow, .lastUsed)
     }
 
     func testColours() {

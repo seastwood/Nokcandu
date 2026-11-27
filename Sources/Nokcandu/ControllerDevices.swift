@@ -352,10 +352,21 @@ final class ControllerDevices: ObservableObject {
         if seen != windowsPlayers { windowsPlayers = seen; invalidate() }
     }
 
-    /// The player a controller is in Windows games: what a running game reported, or else what it would be.
+    /// The player a controller is in Windows games: what a running game reported, or else what it would be (the
+    /// Steam Controller a profile reads first under Auto, as the game's driver does).
     func windowsPlayer(_ key: String) -> (player: Int, reported: Bool) {
         if let n = windowsPlayers[key] { return (n, true) }
-        let gamepads = connected.filter { $0.kind == .gamepad && $0.vendorID != 0 }.map(\.key)
-        return (roster.players(connected: gamepads)[key] ?? 1, false)
+        var gamepads = connected.filter { $0.kind == .gamepad && $0.vendorID != 0 }
+        if DesktopPad.shared.readsSteamController {
+            gamepads = gamepads.filter { $0.vendorID == Controllers.Family.valve.vendorID } + gamepads.filter { $0.vendorID != Controllers.Family.valve.vendorID }
+        }
+        return (roster.players(connected: gamepads.map(\.key))[key] ?? 1, false)
+    }
+    /// The player one of the profile's input sources is (nil: not a controller Nokcandu lists).
+    func player(forSource source: String) -> Int? {
+        guard let key = cachedKey(forSource: source) else { return nil }
+        if let n = windowsPlayers[key] { return n }
+        if let n = roster.controller(key)?.seat.explicit { return n }
+        return windowsPlayer(key).player
     }
 }

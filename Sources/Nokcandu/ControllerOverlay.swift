@@ -356,7 +356,7 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
         sources[key] = s
         let used = !input.buttons.isEmpty || input.leftTouch || input.rightTouch || simd_length(input.leftStick) > 0.35
             || simd_length(input.rightStick) > 0.35 || input.leftTrigger > 0.3 || input.rightTrigger > 0.3
-        if active == nil || (used && active != key) {
+        if active == nil || (used && active != key && mayShow(key)) {
             active = key; motion.reset()
             if showing != name { showing = name }
             if settings.model == .automatic { useModel(kind) }
@@ -364,6 +364,19 @@ final class ControllerOverlay: NSObject, ObservableObject, NSWindowDelegate {
         }
         if active == key { watchRecenterCombo(input) }
         if changed && active == key { scheduleDraw() }
+    }
+
+    /// With "Player 1's controller", another player's controller takes the overlay only while no controller here is
+    /// player 1 (then it's the one used last, as with "The controller used last").
+    private func mayShow(_ key: String) -> Bool {
+        guard settings.follow == .playerOne else { return true }
+        if isPlayerOne(key) { return true }
+        return !sources.keys.contains { isPlayerOne($0) }
+    }
+    private func isPlayerOne(_ key: String) -> Bool {
+        // The overlay names macOS's controllers by its own key; the Controllers panel by the profile's source name.
+        let source = gcPads.first { $0.key == key }.map { String(describing: ObjectIdentifier($0.controller)) } ?? key
+        return ControllerDevices.shared.player(forSource: source) == 1
     }
 
     /// Back and Start held together for a second: the way the controller is held becomes level and the front.
@@ -777,7 +790,11 @@ struct ControllerOverlaySettingsView: View {
                 Picker("Controller", selection: $overlay.settings.model) {
                     ForEach(ControllerOverlaySettings.Model.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
-                Text(overlay.showing.isEmpty ? "No controller connected." : "Showing: \(overlay.showing)").font(.caption).foregroundStyle(.secondary)
+                Picker("With several controllers", selection: $overlay.settings.follow) {
+                    ForEach(ControllerOverlaySettings.Follow.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                Text(overlay.showing.isEmpty ? "No controller connected." : "Showing: \(overlay.showing)\(overlay.settings.follow == .playerOne ? ". Player 1 is set in Profiles → Controllers (Auto: the order they connected, the Steam Controller a profile reads first)." : "")")
+                    .font(.caption).foregroundStyle(.secondary)
                 LabeledContent("Size") {
                     HStack {
                         Slider(value: $overlay.settings.size, in: ControllerOverlaySettings.sizes, step: 10).frame(width: 180)

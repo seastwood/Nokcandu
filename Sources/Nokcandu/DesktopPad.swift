@@ -199,6 +199,8 @@ final class DesktopPad: ObservableObject {
 
     /// Picks the profile for the app in front (or none) and (re)builds the engine when it changes.
     private var steamSource = false
+    /// The profile in use reads the Steam Controller itself.
+    var readsSteamController: Bool { steamSource }
     /// The profile in use's Game rumble strength (0…1).
     /// The profile's own game rumble, nil for the default (which depends on the controller).
     private var gameRumbleSetting: Double?
