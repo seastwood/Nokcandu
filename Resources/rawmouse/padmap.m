@@ -235,6 +235,7 @@ static int pad_seat_of(int32_t which) { int i = pad_id_index(which); return i >=
 /// The player a controller is (1 first). One set to a player in Nokcandu is that player; the rest take the lowest
 /// players nobody chose, in the order they were first seen (with nothing set: their place in that order).
 static int (*real_is_gc)(int);
+static int32_t pad_virtual_which = -1;   // the Steam Controller stand-in (pad_virtual_attach)
 static void pad_see(int32_t which) {
     for (int i = 0; i < pad_seen_n; i++) if (pad_seen[i] == which) return;
     if (pad_seen_n < PAD_MAX) pad_seen[pad_seen_n++] = which;
@@ -244,7 +245,12 @@ static int pad_player_of(int32_t which) {
     // creates one device at a time, and the first must not take player 1 from the Steam Controller a profile reads.
     if (real_num_joysticks && real_device_instance && real_is_gc) {
         int n = real_num_joysticks();
-        for (int i = 0; i < n; i++) if (real_is_gc(i)) pad_see(real_device_instance(i));
+        for (int i = 0; i < n; i++) {
+            if (!real_is_gc(i)) continue;
+            int32_t inst = real_device_instance(i);
+            if (pad_virtual_which >= 0 && inst != pad_virtual_which && real_device_vendor && real_device_vendor(i) == 0x28de) continue;   // kept out
+            pad_see(inst);
+        }
     }
     pad_see(which);
     int seat = pad_seat_of(which);
@@ -421,6 +427,27 @@ static void pad_feed_open(bool on) {
     static bool cleanup; if (!cleanup) { cleanup = true; atexit_b(^{ pad_feed_open(false); }); }
     fprintf(stderr, "nokcandu: controller fed by Nokcandu (%s)\n", path);
 }
+// The controller fed into: the Steam Controller as Wine sees it, or, when Nokcandu reads it exclusively (Controller
+// Settings, on by default since November 17, 2026) and Wine can't see it at all, a controller of the driver's own
+// making (an SDL virtual joystick with the Steam Controller's IDs), so the game still gets the profile's controller.
+typedef struct {
+    uint16_t version, type, naxes, nbuttons, nhats, vendor_id, product_id, padding;
+    uint32_t button_mask, axis_mask;
+    const char *name;
+    void *userdata, *update, *set_player_index, *rumble, *rumble_triggers, *set_led, *send_effect;
+} nok_virtual_desc;   // SDL_VirtualJoystickDesc, version 1 (SDL 2.24+, sdl2-compat)
+static int (*real_attach_virtual)(const nok_virtual_desc *);
+static void pad_virtual_attach(void) {
+    if (pad_virtual_which >= 0 || !real_attach_virtual || !real_num_joysticks || !real_device_instance || !real_device_vendor) return;
+    int n = real_num_joysticks();
+    for (int i = 0; i < n; i++) if (real_device_vendor(i) == 0x28de) return;   // Wine sees the real one: fed as before
+    nok_virtual_desc d = { .version = 1, .type = 1 /* game controller */, .naxes = 6, .nbuttons = 15,
+                           .vendor_id = 0x28de, .product_id = 0x1102, .name = "Steam Controller" };
+    int index = real_attach_virtual(&d);
+    if (index < 0) { fprintf(stderr, "nokcandu: couldn't make the Steam Controller's stand-in (SDL said no)\n"); return; }
+    pad_virtual_which = real_device_instance(index);
+    fprintf(stderr, "nokcandu: the Steam Controller Nokcandu reads is a stand-in controller here (instance %d)\n", (int)pad_virtual_which);
+}
 static bool pad_is_fed_device(int32_t which) {
     if (!pad_feed_on || !real_num_joysticks || !real_device_instance || !real_device_vendor) return false;
     int n = real_num_joysticks();
@@ -431,6 +458,7 @@ static void pad_feed_drain(void) {
     if (pad_feed_fd < 0) return;
     padfeed m;
     while (recv(pad_feed_fd, &m, sizeof m, 0) == (ssize_t)sizeof m) {
+        if (pad_feed_which < 0) pad_feed_which = pad_virtual_which;
         if (pad_feed_which < 0 && real_num_joysticks && real_device_instance && real_device_vendor) {
             int n = real_num_joysticks();
             for (int i = 0; i < n; i++) if (real_device_vendor(i) == 0x28de) { pad_feed_which = real_device_instance(i); break; }
@@ -490,6 +518,7 @@ static void pad_check(void) {
         if (!live) pad_drop_engines();
         pad_has_devices = strstr(pad_profile_text, "\ndevice ") != NULL;
         pad_feed_open(strstr(pad_profile_text, "\nsource steam\n") != NULL);
+        if (pad_feed_on) pad_virtual_attach();
         fprintf(stderr, "nokcandu: controller profile %s\n", pad_profile_text[0] ? pad_profile_path : "off");
     }
 }
@@ -508,7 +537,43 @@ static int pad_next_wait_ms(double now, int timeout) {
     return ms;
 }
 
+/// Whether a profile that could apply here reads the Steam Controller itself: the one used everywhere, this
+/// environment's, or any of its games' (a shared launcher's).
+static bool pad_map_feeds(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) return false;
+    char line[256]; bool feeds = false;
+    while (!feeds && fgets(line, sizeof line, f)) feeds = !strcmp(line, "source steam\n");
+    fclose(f);
+    return feeds;
+}
+static bool pad_any_map_feeds(void) {
+    char path[PATH_MAX]; struct stat st;
+    const char *home = getenv("HOME");
+    if (home) {
+        snprintf(path, sizeof path, "%s/Library/Application Support/Nokcandu/controller-profiles-everywhere", home);
+        if (stat(path, &st) == 0) { strlcat(path, ".map", sizeof path); return pad_map_feeds(path); }
+    }
+    snprintf(path, sizeof path, "%s/pad-map", pad_state_dir);
+    if (pad_map_feeds(path)) return true;
+    snprintf(path, sizeof path, "%s/pad-map.tsv", pad_state_dir);
+    FILE *f = fopen(path, "r");
+    if (!f) return false;
+    char line[PATH_MAX + 128]; bool feeds = false;
+    while (!feeds && fgets(line, sizeof line, f)) {
+        char *tab = strchr(line, '\t');
+        if (!tab) continue;
+        tab[1 + strcspn(tab + 1, "\r\n")] = 0;
+        feeds = pad_map_feeds(tab + 1);
+    }
+    fclose(f);
+    return feeds;
+}
 static int nok_wait(nok_sdl_event *ev, int timeout) {
+    {   // The stand-in, from the start: some games look for controllers only as they start.
+        static bool looked;
+        if (!looked && real_attach_virtual) { looked = true; if (pad_any_map_feeds()) pad_virtual_attach(); }
+    }
     pad_check();
     pad_feed_drain();
     { double t = pad_now(); if (st_last_wait > 0 && t - st_last_wait > st_max_gap) st_max_gap = t - st_last_wait; st_last_wait = t; st_ticks++; pad_status(t); }
@@ -520,6 +585,11 @@ static int nok_wait(nok_sdl_event *ev, int timeout) {
     if (pad_feed_fd >= 0 && wait_ms > 4) wait_ms = 4;     // pick up Nokcandu's input promptly
     int r = real_wait(ev, wait_ms);
     now = pad_now();
+    // With the stand-in there, a real Steam Controller appearing later (exclusive access turned off) is never added:
+    // the game gets one Steam Controller, the profile's.
+    if (r && (ev->type == NOK_SDL_JADDED || ev->type == NOK_SDL_CADDED) && pad_virtual_which >= 0 && real_device_vendor && real_device_instance
+        && real_device_vendor(ev->cbutton.which) == 0x28de && real_device_instance(ev->cbutton.which) != pad_virtual_which)
+        return pad_pop(ev) ? 1 : 0;
     if (r && (ev->type == NOK_SDL_CADDED || ev->type == NOK_SDL_CREMOVED || ev->type == NOK_SDL_JADDED || ev->type == NOK_SDL_JREMOVED)) pad_feed_which = -1;
     if (r && pad_feed_on) {
         switch (ev->type) {
@@ -793,6 +863,7 @@ static void *nok_dlsym(void *handle, const char *name) {
         id_vendor = (uint16_t (*)(void *))dlsym(handle, "SDL_JoystickGetVendor");
         id_product = (uint16_t (*)(void *))dlsym(handle, "SDL_JoystickGetProduct");
         real_is_gc = (int (*)(int))dlsym(handle, "SDL_IsGameController");
+        real_attach_virtual = (int (*)(const nok_virtual_desc *))dlsym(handle, "SDL_JoystickAttachVirtualEx");
         fprintf(stderr, "nokcandu: controller remapping ready\n");
         return (void *)nok_wait;
     }

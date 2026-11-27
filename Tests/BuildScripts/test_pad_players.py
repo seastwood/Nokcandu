@@ -11,11 +11,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 SDL = r'''#include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 typedef struct { int32_t inst; uint16_t vid, pid; const char *serial, *path; } J;
-static J js[2] = { { 3, 0x057e, 0x2009, "", "DevSrvsID:111" }, { 7, 0x28de, 0x1142, 0, "DevSrvsID:222" } };
+static J js[4] = { { 3, 0x057e, 0x2009, "", "DevSrvsID:111" }, { 7, 0x28de, 0x1142, 0, "DevSrvsID:222" } };
+static int count = -1;
+static int n(void) { if (count < 0) { const char *e = getenv("FIXTURE_JOYSTICKS"); count = e ? atoi(e) : 2; } return count; }
+typedef struct { uint16_t version, type, naxes, nbuttons, nhats, vendor_id, product_id, padding; uint32_t bm, am; const char *name; } D;
+int SDL_JoystickAttachVirtualEx(const D *d) { n(); if (d->version != 1 || count >= 4) return -1; J v = { 9, d->vendor_id, d->product_id, 0, 0 }; js[count] = v; return count++; }
 int SDL_WaitEventTimeout(void *ev, int t) { (void)ev; (void)t; return 0; }
-int SDL_NumJoysticks(void) { return 2; }
+int SDL_NumJoysticks(void) { return n(); }
 int32_t SDL_JoystickGetDeviceInstanceID(int i) { return js[i].inst; }
 uint16_t SDL_JoystickGetDeviceVendor(int i) { return js[i].vid; }
 uint16_t SDL_JoystickGetDeviceProduct(int i) { return js[i].pid; }
@@ -29,6 +34,7 @@ const char *SDL_JoystickPath(void *j) { return ((J *)j)->path; }
 int SDL_JoystickGetType(void *j) { (void)j; return 1; }
 int SDL_IsGameController(int i) { (void)i; return 1; }
 void *fixture_joystick(int i) { return &js[i]; }
+int fixture_count(void) { return n(); }
 '''
 
 DRIVER = r'''#include <dlfcn.h>
@@ -38,8 +44,11 @@ __attribute__((noinline)) void *lookup(void *h,const char *n) { void *p=dlsym(h,
 MAIN = r'''#include <dlfcn.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 int main(int argc, char **argv) {
  (void)argc; const char *state = argv[2], *map = argv[3];
  char p[1024]; snprintf(p, sizeof p, "%s/pad-active", state);
@@ -53,7 +62,18 @@ int main(int argc, char **argv) {
  unsigned char ev[56]; memset(ev, 0, 56); wait(ev, 1);          /* reads the profile */
  /* Wine asks about the Pro first, as it found it first. */
  uint16_t pro = vendor(joystick(0)), steam = vendor(joystick(1));
- printf("pro %04x steam %04x\n", pro, steam);
+ int (*count)(void) = (int (*)(void))dlsym(sdl, "fixture_count");
+ printf("pro %04x steam %04x joysticks %d\n", pro, steam, count());
+ if (getenv("FIXTURE_FEED")) {   /* a button from Nokcandu reaches the game on the Steam Controller (or its stand-in) */
+  snprintf(p, sizeof p, "%s/pad-feed", state); f = fopen(p, "r"); if (!f) { printf("no feed\n"); return 0; }
+  char sock[200] = ""; if (!fgets(sock, sizeof sock, f)) return 4; fclose(f); sock[strcspn(sock, "\n")] = 0;
+  int s = socket(AF_UNIX, SOCK_DGRAM, 0); struct sockaddr_un a = { .sun_family = AF_UNIX }; strlcpy(a.sun_path, sock, sizeof a.sun_path);
+  uint8_t msg[4] = { 1, 1, 1, 0 };
+  if (sendto(s, msg, 4, 0, (struct sockaddr *)&a, sizeof a) != 4) return 5;
+  int which = -1;
+  for (int i = 0; i < 5 && which < 0; i++) { memset(ev, 0, 56); if (wait(ev, 1)) { int32_t w; uint32_t type; memcpy(&type, ev, 4); memcpy(&w, ev + 8, 4); if (type == 0x651 && ev[12] == 1) which = w; } }
+  printf("fed to %d\n", which);
+ }
  return 0;
 }
 '''
@@ -85,7 +105,7 @@ class PadPlayersTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.tmp.cleanup()
 
-    def run_driver(self, name, map_text, players=None, everywhere=False):
+    def run_driver(self, name, map_text, players=None, everywhere=False, extra_env=None):
         case = self.work / name
         state, home = case / "state", case / "home"
         support = home / "Library/Application Support/Nokcandu"
@@ -100,7 +120,7 @@ class PadPlayersTests(unittest.TestCase):
             active = state / "pad-map"
         if players is not None:
             (support / "controller-players").write_text(players)
-        env = dict(os.environ, DYLD_INSERT_LIBRARIES=str(state / "nokcandu-rawmouse.dylib"), NOKCANDU_NO_GAME_APP="1", HOME=str(home))
+        env = dict(os.environ, DYLD_INSERT_LIBRARIES=str(state / "nokcandu-rawmouse.dylib"), NOKCANDU_NO_GAME_APP="1", HOME=str(home), **(extra_env or {}))
         r = subprocess.run([str(self.work / "probe"), "winedevice.exe", str(state), str(active)], cwd=self.work, env=env,
                            capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -113,7 +133,7 @@ class PadPlayersTests(unittest.TestCase):
 
     def test_a_profile_used_everywhere_presents_the_steam_controller_it_reads_as_player_one(self):
         out, seen, err = self.run_driver("everywhere", self.STEAM_PROFILE, self.BOTH_AUTO, everywhere=True)
-        self.assertEqual(out, "pro 057e steam 045e", err)
+        self.assertEqual(out, "pro 057e steam 045e joysticks 2", err)
         self.assertIn("presented as Xbox Wireless Controller", err)
         lines = set(seen.split("\n")[1:]) - {""}
         self.assertEqual(lines, {"28de:1142:n:0 1", "057e:2009:n:0 2"}, seen)
@@ -123,23 +143,39 @@ class PadPlayersTests(unittest.TestCase):
                    "c 222 10462 4418 - 0 0 28de:1142:n:0\n")
         profile = "nokpad 1\npresent xbox\nplayer 2 asis\n"
         out, seen, err = self.run_driver("seat", profile, players)
-        self.assertEqual(out, "pro 045e steam 28de", err)
+        self.assertEqual(out, "pro 045e steam 28de joysticks 2", err)
         lines = set(seen.split("\n")[1:]) - {""}
         self.assertEqual(lines, {"057e:2009:n:0 1", "28de:1142:n:0 2"}, seen)
 
     def test_players_given_the_same_profile_are_presented_too(self):
         profile = "nokpad 1\npresent xbox\nplayer 2 same\n"
         out, _, err = self.run_driver("same", profile, None)
-        self.assertEqual(out, "pro 045e steam 045e", err)
+        self.assertEqual(out, "pro 045e steam 045e joysticks 2", err)
 
     def test_without_nokcandus_players_the_order_wine_found_them_in(self):
         out, seen, err = self.run_driver("order", "nokpad 1\npresent xbox\nplayer 2 asis\n", None)
-        self.assertEqual(out, "pro 045e steam 28de", err)
+        self.assertEqual(out, "pro 045e steam 28de joysticks 2", err)
         self.assertTrue(seen.startswith("pid "), seen)
+
+    def test_a_steam_controller_wine_cant_see_gets_a_stand_in_the_profile_feeds(self):
+        # Nokcandu reads the Steam Controller exclusively, so Wine's SDL has only the Pro.
+        out, seen, err = self.run_driver("stand-in", self.STEAM_PROFILE, None, everywhere=True,
+                                         extra_env={"FIXTURE_JOYSTICKS": "1", "FIXTURE_FEED": "1"})
+        lines = out.split("\n")
+        self.assertEqual(lines[0], "pro 057e steam 045e joysticks 2", err)
+        self.assertEqual(lines[1], "fed to 9", err)
+        self.assertIn("stand-in controller", err)
+
+    def test_a_steam_controller_wine_sees_is_fed_itself(self):
+        out, _, err = self.run_driver("real", self.STEAM_PROFILE, None, everywhere=True, extra_env={"FIXTURE_FEED": "1"})
+        lines = out.split("\n")
+        self.assertEqual(lines[0], "pro 057e steam 045e joysticks 2", err)
+        self.assertEqual(lines[1], "fed to 7", err)
+        self.assertNotIn("stand-in", err)
 
     def test_a_map_without_player_lines_presents_everyone(self):
         out, _, err = self.run_driver("old", "nokpad 1\npresent xbox\n", None)
-        self.assertEqual(out, "pro 045e steam 045e", err)
+        self.assertEqual(out, "pro 045e steam 045e joysticks 2", err)
 
 
 if __name__ == "__main__":
