@@ -125,7 +125,7 @@ struct StreamsSidebar: View {
         if h.isPaired { Button("Add Stream Profile") { m.addProfile(to: h.id) } }
         Button(h.isPaired ? "Pair Again…" : "Pair…") { m.pairAgain(h) }
         if h.macAddress != nil { Button("Wake Up") { m.wake(h) } }
-        if (m.status[h.id]?.currentGame ?? 0) != 0 { Button("Quit App on Host") { m.quitApp(on: h) } }
+        if (m.status[h.id]?.currentGame ?? 0) != 0 { Button("End App on Host") { m.quitApp(on: h) } }
         Button("Check Again") { m.refresh() }
         Divider()
         Button("Rename…") { renameText = h.name; renaming = h }
@@ -188,7 +188,7 @@ struct StreamHostSummary: View {
                     if host.isPaired { Button("Add Stream Profile") { m.addProfile(to: host.id) }.buttonStyle(.borderedProminent) }
                     else { Button("Pair…") { m.pairAgain(host) }.buttonStyle(.borderedProminent) }
                     if host.macAddress != nil, s?.online != true || m.waking[host.id] != nil { WakeUpButton(host: host) }
-                    if (s?.currentGame ?? 0) != 0 { Button("Quit App on Host", role: .destructive) { m.quitApp(on: host) } }
+                    if (s?.currentGame ?? 0) != 0 { Button("End App", role: .destructive) { m.quitApp(on: host) }.help("Closes the app running on the host. A stream of it ends too.") }
                     Spacer()
                     Button("Remove Host…", role: .destructive) { confirmRemove = true }
                         .disabled(m.running?.hostID == host.id)
@@ -292,9 +292,11 @@ struct StreamProfileEditor: View {
                         .disabled(!host.isPaired || profile.appID == nil || (m.running != nil && !running))
                     if running {
                         Button("End Stream") { m.endStream(quitApp: false) }.controlSize(.large)
-                        Button("End and Quit App…", role: .destructive) { m.endStream(quitApp: true) }.controlSize(.large)
+                        Button("End App", role: .destructive) { m.endStream(quitApp: true) }.controlSize(.large)
+                            .help("Closes the app running on the host. A stream of it ends too.")
                     } else if (status?.currentGame ?? 0) != 0 {
-                        Button("Quit App on Host", role: .destructive) { m.quitApp(on: host) }.controlSize(.large)
+                        Button("End App", role: .destructive) { m.quitApp(on: host) }.controlSize(.large)
+                            .help("Closes the app running on the host. A stream of it ends too.")
                     }
                     if host.macAddress != nil, status?.online != true || m.waking[host.id] != nil { WakeUpButton(host: host).controlSize(.large) }
                     if !host.isPaired || status?.needsPairing == true { Button("Pair…") { m.pairAgain(host) }.controlSize(.large) }
@@ -781,7 +783,7 @@ struct StreamCommands: View {
         Divider()
         Button("End Stream") { m.endStream(quitApp: false) }.disabled(m.running == nil)
             .keyboardShortcut("q", modifiers: [.control, .option, .shift])
-        Button("End Stream and Quit the App on the Host") { m.endStream(quitApp: true) }.disabled(m.running == nil)
+        Button("End App on Host") { m.endStream(quitApp: true) }.disabled(m.running == nil)
     }
 }
 
@@ -793,7 +795,7 @@ struct StreamMenuBarSection: View {
             Section("Streaming \(m.streamName ?? "")") {
                 Button("Show Stream") { m.showStream() }
                 Button("End Stream") { m.endStream(quitApp: false) }
-                Button("End Stream and Quit the App on the Host") { m.endStream(quitApp: true) }
+                Button("End App on Host") { m.endStream(quitApp: true) }
             }
         }
     }

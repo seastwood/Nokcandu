@@ -656,7 +656,7 @@ struct RunningStrip: View {
                         } }
                         Divider()
                         Button("End Stream") { streams.endStream(quitApp: false) }
-                        Button("End Stream and Quit the App on the Host") { streams.endStream(quitApp: true) }
+                        Button("End App on Host") { streams.endStream(quitApp: true) }
                     }
                 }
                 ForEach(running.prefix(limit)) { g in

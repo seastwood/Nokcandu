@@ -2,7 +2,7 @@
 import Foundation
 
 /// The settings a host fixes when it starts an app for a stream. Resuming an app that is still running keeps
-/// them as they were (seen November 19: a session started in limited range stayed limited until End and Quit App).
+/// them as they were (seen November 19: a session started in limited range stayed limited until End App).
 public struct StreamLaunchSignature: Codable, Equatable, Sendable {
     public var width: Int?, height: Int?, fps: Int
     public var hdr: Bool, yuv444: Bool, fullRange: Bool
