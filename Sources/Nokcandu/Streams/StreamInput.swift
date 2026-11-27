@@ -59,6 +59,7 @@ import NokcanduStreamCore
 
     func start() {
         active = true
+        lastSent = [:]
         if settings.sendAs == .profileOnly { return }
         if usesProfile {
             let first = Self.profileController(steam: profileReadsSteam)
@@ -93,6 +94,7 @@ import NokcanduStreamCore
     func stop() {
         // Tell the host these controllers are gone (it removes a controller whose bit leaves the mask).
         if active { for n in pads.keys { LiSendMultiControllerEvent(Int16(n), 0, 0, 0, 0, 0, 0, 0, 0) } }
+        lastSent = [:]
         active = false
         observers.forEach(NotificationCenter.default.removeObserver); observers = []
         MappedGamepads.shared.stopListening(mappedToken); mappedToken = nil; mappedNumbers = [:]
@@ -148,7 +150,7 @@ import NokcanduStreamCore
         guard active else { return }
         if usesProfile, mappedNumbers[source] == 0 { return }       // player one: the profile sends it
         guard let held else {
-            if let n = mappedNumbers.removeValue(forKey: source) { pads[n] = nil; LiSendMultiControllerEvent(Int16(n), activeMask, 0, 0, 0, 0, 0, 0, 0) }
+            if let n = mappedNumbers.removeValue(forKey: source) { pads[n] = nil; lastSent[n] = nil; LiSendMultiControllerEvent(Int16(n), activeMask, 0, 0, 0, 0, 0, 0, 0) }
             return
         }
         let n: Int
@@ -212,7 +214,7 @@ import NokcanduStreamCore
 
     private func disconnect(_ c: GCController) {
         guard let n = numbers.removeValue(forKey: ObjectIdentifier(c)) else { return }
-        pads[n] = nil
+        pads[n] = nil; lastSent[n] = nil
         LiSendMultiControllerEvent(Int16(n), activeMask, 0, 0, 0, 0, 0, 0, 0)
     }
 
@@ -253,14 +255,23 @@ import NokcanduStreamCore
         send(0)
     }
 
+    /// What each player's controller last told the host. A state is sent only when it differs: an idle controller's
+    /// noise reaching the host keeps games that follow the last-used device (controller or mouse) in controller mode,
+    /// so the mouse seemed to stop working in a game until a layer switch made the game look at it again.
+    private var lastSent: [Int: Pad] = [:]
     private func send(_ n: Int) {
         guard active, let p = pads[n] else { return }
+        guard lastSent[n] != p else { return }
+        lastSent[n] = p
         LiSendMultiControllerEvent(Int16(n), activeMask, p.buttons, p.lt, p.rt, p.lx, p.ly, p.rx, p.ry)
     }
 
     static func stick(_ v: Double) -> Int16 { Int16(max(-32768, min(32767, (v * 32767).rounded()))) }
 
-    static func apply(axis: Int, value v: Double, to p: inout Pad) {
+    /// A controller sent as itself: its resting drift and noise read as centred (a stick within 6% of the middle, a
+    /// trigger under 3%), as the game would treat them anyway, so an idle controller sends nothing.
+    static func apply(axis: Int, value raw: Double, to p: inout Pad) {
+        let v = axis < 4 ? (abs(raw) < 0.06 ? 0 : raw) : (raw < 0.03 ? 0 : raw)
         switch axis {
         case 0: p.lx = stick(v)
         case 1: p.ly = stick(-v)          // PadGC reports y down
