@@ -166,6 +166,27 @@ struct ControllerProfileEditor: View {
                     }
                 }
             }
+            DisclosureGroup("Local co-op: other players") {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(2...4, id: \.self) { n in
+                        sourceRow("Player \(n)") {
+                            Picker("Player \(n)", selection: Binding(get: { PadProfiles.player(n, of: profile, all: everything) }, set: { choice in
+                                var list = PadProfiles.top(profile, all: everything, \.players) ?? []
+                                while list.count < n - 1 { list.append(list.last ?? .asIs) }
+                                list[n - 2] = choice
+                                while let last = list.last, last == .asIs, list.count > 0 { list.removeLast() }
+                                profile.players = list.isEmpty ? nil : list
+                            })) {
+                                Text("Their controller as it is").tag(PadProfiles.PlayerChoice.asIs)
+                                Text("This profile too").tag(PadProfiles.PlayerChoice.same)
+                                ForEach(everything.filter { $0.id != profile.id }, id: \.id) { q in Text(q.name).tag(PadProfiles.PlayerChoice.profile(q.id)) }
+                            }
+                        }
+                    }
+                    Text("Each controller is its own player, in the order they connect: the first uses this profile. “As it is” leaves a player's controller alone, as its own type. Players after 4 follow player 4. Applies to Windows games in Nokcandu now; streams send other players as they are, and Mac apps get separate players with the Mac virtual controller.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }.padding(.top, 4)
+            }
             layerBar
             if layerIndex > 0, profile.layers.indices.contains(layerIndex) {
                 sourceRow("\(layerName) routing", info: "What the game receives while this layer is on, so a layer can switch the game's own controller controls on or off: for example the base layer on “Only what this profile maps” (your keys and mouse) and a layer on “The controller itself” (the game's controller controls), switched with a button set to hold or toggle that layer. Buttons that change layers keep doing that in every layer, so there's always a way back.\n\nWindows games in Nokcandu and streams switch instantly. Mac apps and CrossOver games: Nokcandu gives the controller back to macOS while a layer passes it on and hides it again after; the game may take a moment to notice it. With the Emulated controller as a Mac virtual controller (once Apple allows it), the switch is instant there too.") {

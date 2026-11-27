@@ -739,6 +739,9 @@ public enum PadProfiles {
         /// How strongly games' own rumble plays when Nokcandu plays it (controllers SDL can't rumble, like the original
         /// Steam Controller's trackpads): 0 off … 1 as the game asks. nil: `defaultGameRumble(originalSteamController:)`.
         public var gameRumble: Double?
+        /// Local co-op: what players 2, 3 and 4 get (later players follow player 4). nil or missing: the controller
+        /// as it is (its own type, no profile), as this profile's player 1 has it.
+        public var players: [PlayerChoice]?
         /// Unset game rumble: 7% on the original Steam Controller, whose trackpad haptics are harsh at full strength;
         /// as the game asks on every other controller (the 2026 Steam Controller has real rumble motors).
         public static func defaultGameRumble(originalSteamController: Bool) -> Double { originalSteamController ? 0.07 : 1 }
@@ -855,7 +858,37 @@ public enum PadProfiles {
         set { UserDefaults.standard.set(newValue, forKey: "padAutomaticCalibration") }
     }
 
+    /// What another player's controller gets.
+    public enum PlayerChoice: Hashable, Codable, Sendable {
+        case asIs, same, profile(String)
+    }
+    public static let coopPlayers = 2...8
+    /// Player n's choice (n ≥ 2): its own, else the last one set, else as it is.
+    public static func player(_ n: Int, of p: Profile, all: [Profile]) -> PlayerChoice {
+        let list = top(p, all: all, \.players) ?? []
+        guard n >= 2, !list.isEmpty else { return .asIs }
+        return list[min(n - 2, list.count - 1)]
+    }
+
+    /// The compiled profile with its players: "player N asis", "player N same", or that player's profile compiled
+    /// between "player N begin" and "player N end". Nokcandu's Wine controller driver gives each controller its
+    /// player's engine (the first is player 1).
     public static func compile(_ p: Profile, all: [Profile], automaticCalibration: Bool = PadProfiles.automaticCalibration) -> String {
+        var text = compileOne(p, all: all, automaticCalibration: automaticCalibration)
+        for n in coopPlayers {
+            switch player(n, of: p, all: all) {
+            case .asIs: text += "player \(n) asis\n"
+            case .same: text += "player \(n) same\n"
+            case .profile(let id):
+                if id == p.id { text += "player \(n) same\n" }
+                else if let q = all.first(where: { $0.id == id }) {
+                    text += "player \(n) begin\n" + compileOne(q, all: all, automaticCalibration: automaticCalibration) + "player \(n) end\n"
+                } else { text += "player \(n) asis\n" }
+            }
+        }
+        return text
+    }
+    static func compileOne(_ p: Profile, all: [Profile], automaticCalibration: Bool = PadProfiles.automaticCalibration) -> String {
         let routing = top(p, all: all, \.routingMode) ?? .legacy
         // "source steam": Nokcandu reads the controller itself and feeds Wine's driver the result (padmap.m).
         let source = top(p, all: all, \.controllerSource) == .steamUSB ? "source steam\n" : ""

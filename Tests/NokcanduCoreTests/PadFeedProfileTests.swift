@@ -17,7 +17,7 @@ final class PadFeedProfileTests: XCTestCase {
         p.controllerSource = .automatic
         XCTAssertFalse(PadProfiles.compile(p, all: [p]).contains("source steam"))
         p.controllerSource = .steamUSB; p.routingMode = .native
-        XCTAssertEqual(PadProfiles.compile(p, all: [p]), "nokpad 1\npresent xbox\nsource steam\n")
+        XCTAssertEqual(PadProfiles.compileOne(p, all: [p]), "nokpad 1\npresent xbox\nsource steam\n")
     }
 
     func testGameRumbleDefaultsGentlerAndIsSavedPerProfile() throws {

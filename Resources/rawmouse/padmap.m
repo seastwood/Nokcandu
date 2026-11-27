@@ -68,7 +68,12 @@ static uint16_t (*real_device_vendor)(int), (*real_device_product)(int);
 // One engine per controller. With a profile that combines devices, one of them is the main controller (main):
 // the devices' inputs go into its engine, and what they do comes out as that controller. Until a controller is
 // there the main engine waits with which = -1 (keys and mouse still work; controller outputs go nowhere).
-static struct { int32_t which; pe_engine *e; bool used, main; } pads[PAD_MAX];
+static struct { int32_t which; pe_engine *e; bool used, main; int player; } pads[PAD_MAX];
+// Local co-op: controllers in the order they were first seen (player 1 first), and what each later player gets from
+// the compiled map ("player N asis | same | begin … end"): 0 the controller as it is (no engine), 1 player 1's
+// profile, 2 a profile of its own (pad_player_text). Maps from before co-op have no player lines: everyone had it.
+static int32_t pad_seen[PAD_MAX]; static int pad_seen_n;
+static int pad_player_kind[9]; static char *pad_player_text[9];
 static bool pad_has_devices;
 static int32_t slot_sources[PE_MAX_DEVICES + 1];
 static bool slot_source_valid[PE_MAX_DEVICES + 1];
@@ -135,12 +140,46 @@ static void pad_status(double now) {
 }
 static void sink_wheel(void *ctx, int n) { (void)ctx; (void)n; }
 
+static void pad_parse_players(void) {
+    for (int n = 0; n < 9; n++) { free(pad_player_text[n]); pad_player_text[n] = NULL; pad_player_kind[n] = 0; }
+    const char *t = pad_profile_text;
+    if (!strstr(t, "\nplayer ")) { for (int n = 2; n < 9; n++) pad_player_kind[n] = 1; return; }
+    for (int n = 2; n < 9; n++) {
+        char key[40], end[40];
+        snprintf(key, sizeof key, "\nplayer %d same\n", n);
+        if (strstr(t, key)) { pad_player_kind[n] = 1; continue; }
+        snprintf(key, sizeof key, "\nplayer %d begin\n", n); snprintf(end, sizeof end, "\nplayer %d end\n", n);
+        const char *b = strstr(t, key);
+        const char *e = b ? strstr(b + strlen(key), end + 1) : NULL;
+        if (b && e) { b += strlen(key); pad_player_text[n] = strndup(b, (size_t)(e - b)); pad_player_kind[n] = 2; }
+    }
+}
+/// The player a controller is (1 first): its place among the controllers in the order they were first seen.
+static int pad_player_of(int32_t which) {
+    for (int i = 0; i < pad_seen_n; i++) if (pad_seen[i] == which) return i + 1;
+    if (pad_seen_n < PAD_MAX) { pad_seen[pad_seen_n++] = which; return pad_seen_n; }
+    return PAD_MAX;
+}
+static void pad_forget_player(int32_t which) {
+    for (int i = 0; i < pad_seen_n; i++) if (pad_seen[i] == which) {
+        memmove(&pad_seen[i], &pad_seen[i + 1], (size_t)(pad_seen_n - i - 1) * sizeof pad_seen[0]); pad_seen_n--; return;
+    }
+}
+/// The compiled profile a player's engine runs (NULL: the controller as it is).
+static const char *pad_text_for_player(int player) {
+    if (player <= 1) return pad_profile_text;
+    int n = player > 8 ? 8 : player;
+    return pad_player_kind[n] == 1 ? pad_profile_text : pad_player_kind[n] == 2 ? pad_player_text[n] : NULL;
+}
 static pe_engine *pad_new_engine(int32_t which, bool main) {
+    int player = which >= 0 ? pad_player_of(which) : 1;
+    const char *text = pad_text_for_player(player);
+    if (!text) return NULL;
     for (int i = 0; i < PAD_MAX; i++) if (!pads[i].used) {
         pe_sink s = { (void *)(intptr_t)i, sink_pad_button, sink_pad_axis, sink_key, sink_mouse_button, sink_mouse_move, sink_wheel, NULL };
-        pads[i].e = pe_create(pad_profile_text, s);
+        pads[i].e = pe_create(text, s);
         if (!pads[i].e) return NULL;
-        pads[i].which = which; pads[i].used = true; pads[i].main = main;
+        pads[i].which = which; pads[i].used = true; pads[i].main = main; pads[i].player = player;
         return pads[i].e;
     }
     return NULL;
@@ -148,8 +187,11 @@ static pe_engine *pad_new_engine(int32_t which, bool main) {
 static pe_engine *pad_engine_for(int32_t which, bool create) {
     for (int i = 0; i < PAD_MAX; i++) if (pads[i].used && pads[i].which == which) return pads[i].e;
     if (!create || !pad_profile_text[0]) return NULL;
+    // A later player whose controller stays as it is: no engine, its events pass through.
+    if (pad_player_of(which) > 1 && !pad_text_for_player(pad_player_of(which))) return NULL;
     // The devices' engine was waiting for a controller: this one becomes the main controller.
-    for (int i = 0; i < PAD_MAX; i++) if (pads[i].used && pads[i].main && pads[i].which < 0) { pads[i].which = which; return pads[i].e; }
+    if (pad_player_of(which) == 1)
+        for (int i = 0; i < PAD_MAX; i++) if (pads[i].used && pads[i].main && pads[i].which < 0) { pads[i].which = which; return pads[i].e; }
     bool main = pad_has_devices;
     for (int i = 0; i < PAD_MAX; i++) if (pads[i].used && pads[i].main) main = false;
     return pad_new_engine(which, main);
@@ -291,9 +333,13 @@ static void pad_check(void) {
         FILE *f = fopen(pad_profile_path, "r");
         if (f) { size_t n = fread(pad_profile_text, 1, sizeof pad_profile_text - 1, f); pad_profile_text[n] = 0; fclose(f); }
         if (strncmp(pad_profile_text, "nokpad ", 7)) pad_profile_text[0] = 0;
-        bool live = pad_profile_text[0] != 0;
-        for (int i = 0; i < PAD_MAX && live; i++) if (pads[i].used)
-            live = pe_update_profile(pads[i].e, pad_profile_text);
+        int kinds[9]; memcpy(kinds, pad_player_kind, sizeof kinds);
+        pad_parse_players();
+        bool live = pad_profile_text[0] != 0 && !memcmp(kinds, pad_player_kind, sizeof kinds);
+        for (int i = 0; i < PAD_MAX && live; i++) if (pads[i].used) {
+            const char *text = pad_text_for_player(pads[i].player);
+            live = text && pe_update_profile(pads[i].e, text);
+        }
         if (!live) pad_drop_engines();
         pad_has_devices = strstr(pad_profile_text, "\ndevice ") != NULL;
         pad_feed_open(strstr(pad_profile_text, "\nsource steam\n") != NULL);
@@ -409,6 +455,7 @@ static int nok_wait(nok_sdl_event *ev, int timeout) {
             break; }
         case NOK_SDL_CREMOVED:
             slot_cached = 0;
+            pad_forget_player(ev->cbutton.which);
             for (int i = 0; i < PAD_MAX; i++) if (pads[i].used && pads[i].which == ev->cbutton.which) {
                 if (pads[i].main && pad_has_devices) { pe_release_main(pads[i].e, now); pads[i].which = -1; }
                 else { pe_release_all(pads[i].e, now); pe_destroy(pads[i].e); pads[i].used = false; pads[i].main = false; }
@@ -422,6 +469,7 @@ static int nok_wait(nok_sdl_event *ev, int timeout) {
 
 static void *nok_open(int index) {
     void *c = real_open(index);
+    if (c && real_device_instance) pad_player_of(real_device_instance(index));   // players in the order controllers open
     if (c && real_sensor) { st_sensor_ok = real_sensor(c, NOK_SDL_SENSOR_GYRO, 1) == 0; real_sensor(c, NOK_SDL_SENSOR_ACCEL, 1); }   // gyro (and tilt) on, for profiles that use them
     fprintf(stderr, "nokcandu: controller %d opened; gyro %s\n", index, st_sensor_ok ? "on" : real_sensor ? "not available" : "unknown");
     return c;
@@ -434,6 +482,9 @@ static void *nok_open(int index) {
 // games see. Only Xbox is presented today: Wine's own gamepad reports already have the Xbox layout. Read once,
 // when Wine first asks (the environment's pad-map is written before it starts); a change applies from the next start.
 static struct { bool known, on; int kind; uint16_t vid, pid, version; const char *name; } pad_identity;
+// Which later players take the identity too: those with a profile (same or their own); a player whose controller
+// stays as it is keeps its own type. Maps from before co-op: everyone.
+static bool pad_identity_player[9] = { true, true, true, true, true, true, true, true, true };
 static uint16_t (*real_js_vendor)(void *), (*real_js_product)(void *), (*real_js_version)(void *);
 static const char *(*real_gc_name)(void *), *(*real_js_name)(void *);
 static int (*real_js_type)(void *);
@@ -441,7 +492,10 @@ static void pad_load_identity(void);
 /// Only gamepads take the identity (SDL_JOYSTICK_TYPE_GAMECONTROLLER); wheels, sticks and others stay as they are.
 static bool pad_presents(void *j) {
     pad_load_identity();
-    return pad_identity.on && j && (!real_js_type || real_js_type(j) == 1);
+    if (!pad_identity.on || !j || (real_js_type && real_js_type(j) != 1)) return false;
+    if (!real_instance) return true;
+    int player = pad_player_of(real_instance(j));
+    return pad_identity_player[player > 8 ? 8 : player];
 }
 
 static void pad_load_identity(void) {
@@ -459,8 +513,18 @@ static void pad_load_identity(void) {
     snprintf(path, sizeof path, "%s/pad-map", pad_state_dir);
     FILE *f = fopen(path, "r");
     if (!f) return;
+    bool players = false;
     while (fgets(line, sizeof line, f)) {
-        if (strncmp(line, "present ", 8)) continue;
+        // Player lines come after player 1's profile; another player's own profile (begin … end) may name a
+        // controller too, but the identity is player 1's.
+        int n; char word[16];
+        if (sscanf(line, "player %d %15s", &n, word) == 2) {
+            if (!players) { players = true; for (int k = 2; k < 9; k++) pad_identity_player[k] = false; }
+            if (n >= 2 && n <= 8) pad_identity_player[n] = strcmp(word, "asis") != 0 && strcmp(word, "end") != 0;
+            if (!strcmp(word, "begin")) { while (fgets(line, sizeof line, f)) if (sscanf(line, "player %d %15s", &n, word) == 2 && !strcmp(word, "end")) break; }
+            continue;
+        }
+        if (players || strncmp(line, "present ", 8)) continue;
         if (!strncmp(line + 8, "xbox", 4)) {
             pad_identity.on = true; pad_identity.kind = 1; pad_identity.vid = 0x045E; pad_identity.pid = 0x02EA; pad_identity.version = 0x0408;
             pad_identity.name = "Xbox Wireless Controller";
@@ -555,6 +619,7 @@ static void *nok_dlsym(void *handle, const char *name) {
         real_device_instance = (int32_t (*)(int))dlsym(handle, "SDL_JoystickGetDeviceInstanceID");
         real_device_vendor = (uint16_t (*)(int))dlsym(handle, "SDL_JoystickGetDeviceVendor");
         real_device_product = (uint16_t (*)(int))dlsym(handle, "SDL_JoystickGetDeviceProduct");
+        real_instance = (int32_t (*)(void *))dlsym(handle, "SDL_JoystickInstanceID");
         fprintf(stderr, "nokcandu: controller remapping ready\n");
         return (void *)nok_wait;
     }

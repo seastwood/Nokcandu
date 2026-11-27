@@ -769,13 +769,13 @@ final class PresentedControllerTests: XCTestCase {
         XCTAssertFalse(PadProfiles.compile(p, all: [p]).contains("present"), "as it is by default")
         p.presentAs = .xbox
         let text = PadProfiles.compile(p, all: [p])
-        XCTAssertTrue(text.hasSuffix("present xbox\n"))
+        XCTAssertTrue(text.contains("\npresent xbox\nplayer 2 "), "player 1's identity, before the players")
         // The mapping engine skips the line and still reads the profile.
         let e = text.withCString { pe_create($0, pe_sink()) }
         XCTAssertNotNil(e); if let e { pe_destroy(e) }
         // Inherited from the profile it builds on, and kept with native routing.
         var child = PadProfiles.Profile(name: "Child", buildsOn: [p.id]); child.routingMode = .native
-        XCTAssertEqual(PadProfiles.compile(child, all: [p, child]), "nokpad 1\npresent xbox\n")
+        XCTAssertEqual(PadProfiles.compileOne(child, all: [p, child]), "nokpad 1\npresent xbox\n")
     }
 
     func testIdentities() {

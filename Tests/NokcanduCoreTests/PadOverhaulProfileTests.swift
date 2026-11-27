@@ -19,7 +19,7 @@ final class PadOverhaulProfileTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file.appendingPathExtension("pre-controller-v2")), original)
         XCTAssertTrue(PadProfiles.compile(p, all: [p]).contains("route a both"))
         p.routingMode = .native
-        XCTAssertEqual(PadProfiles.compile(p, all: [p]), "nokpad 1\n")
+        XCTAssertEqual(PadProfiles.compileOne(p, all: [p]), "nokpad 1\n")
     }
     func testLegacyMacroTimingStaysUnchangedAndNewSequencesCancelCleanly() throws {
         let old = Data(#"{"id":"old","name":"Old","steps":[{"kind":"down","output":"key:12"},{"kind":"up","output":"key:12"}]}"#.utf8)

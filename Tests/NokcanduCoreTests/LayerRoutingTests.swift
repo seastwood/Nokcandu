@@ -62,7 +62,7 @@ final class LayerRoutingTests: XCTestCase {
         p.layers[0][.lb] = PadProfiles.Binding(press: [.layerHold("Keys")])
         p.layers[1][.a] = PadProfiles.Binding(press: [.key(12)])
         var plain = PadProfiles.Profile(id: "q", name: "Q"); plain.routingMode = .native
-        XCTAssertEqual(PadProfiles.compile(plain, all: [plain]), "nokpad 1\n")
+        XCTAssertFalse(PadProfiles.compile(plain, all: [plain]).contains("route"), "the controller itself: nothing compiled but its players")
         p.layers[1].routingMode = .remappingAll
         let text = PadProfiles.compile(p, all: [p])
         XCTAssertTrue(text.contains("route a native\n")); XCTAssertTrue(text.contains("route lb standard\n"))
@@ -96,5 +96,29 @@ final class AntiDeadzoneTests: XCTestCase {
         XCTAssertFalse(PadProfiles.compile(p, all: [p]).contains("anti="))
         p.leftStick?.antiDeadzone = 0.2
         XCTAssertTrue(PadProfiles.compile(p, all: [p]).contains(" anti=0.2"))
+    }
+}
+
+final class CoopPlayersTests: XCTestCase {
+    func testCompiledPlayersAndTheEngineIgnoresOtherPlayersBlocks() {
+        var p = PadProfiles.Profile(id: "p", name: "P"), q = PadProfiles.Profile(id: "q", name: "Q")
+        p.layers[0][.a] = PadProfiles.Binding(press: [.key(12)])
+        q.layers[0][.a] = PadProfiles.Binding(press: [.key(13)])
+        let plain = PadProfiles.compile(p, all: [p, q])
+        XCTAssertTrue(plain.contains("player 2 asis\n")); XCTAssertTrue(plain.contains("player 8 asis\n"), "unset: as it is")
+        p.players = [.same, .profile("q")]
+        let text = PadProfiles.compile(p, all: [p, q])
+        XCTAssertTrue(text.contains("player 2 same\n"))
+        XCTAssertTrue(text.contains("player 3 begin\nnokpad 1\n")); XCTAssertTrue(text.contains("player 3 end\n"))
+        XCTAssertTrue(text.contains("player 4 begin\n"), "later players follow the last one set")
+        XCTAssertFalse(text.contains("player 3 begin\nnokpad 1\nplayer"), "the other profile's own players aren't nested")
+        // Player 1's engine runs only its own lines: a stays key 12, not the embedded profile's 13.
+        let r = PadRecorder(String(text.dropFirst("nokpad 1\n".count)))
+        r.press("a", true, 1); r.press("a", false, 1.1)
+        XCTAssertEqual(r.take(), ["key 12 down", "key 12 up"])
+        p.players = [.profile("p")]
+        XCTAssertTrue(PadProfiles.compile(p, all: [p]).contains("player 2 same\n"), "itself: the same profile")
+        p.players = [.profile("gone")]
+        XCTAssertTrue(PadProfiles.compile(p, all: [p]).contains("player 2 asis\n"), "a deleted profile: as it is")
     }
 }
