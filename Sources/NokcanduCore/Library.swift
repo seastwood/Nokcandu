@@ -20,6 +20,9 @@ public struct InstalledGame: Identifiable, Hashable {
     /// A Mac game (no Wine): Nokcandu just opens it.
     public var native: NativeGame? = nil
 
+    /// A game that exists only for layout checks (`--ui-check`): nothing on disk.
+    public static func layoutSample(name: String, at app: URL) -> InstalledGame { InstalledGame(appURL: app, name: name) }
+
     public var contents: URL { appURL.appendingPathComponent("Contents", isDirectory: true) }
     public var support: URL { contents.appendingPathComponent("SharedSupport", isDirectory: true) }
     public var prefix: URL { support.appendingPathComponent("prefix", isDirectory: true) }

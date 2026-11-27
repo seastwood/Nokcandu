@@ -304,6 +304,9 @@ public struct GamesVolumeConflict: Identifiable, Hashable, Sendable {
     public var images: [String]
     /// In the user's own LaunchAgents folder: Nokcandu can turn it off without administrator rights.
     public var canTurnOff: Bool
+    public init(label: String, file: URL, images: [String], canTurnOff: Bool) {
+        self.label = label; self.file = file; self.images = images; self.canTurnOff = canTurnOff
+    }
     public var imageNames: String {
         images.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent }.joined(separator: ", ")
     }

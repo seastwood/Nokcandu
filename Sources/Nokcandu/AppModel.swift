@@ -74,7 +74,7 @@ final class AppModel: ObservableObject {
     @Published var sidebarTab: SidebarTab = SidebarTab(rawValue: UserDefaults.standard.string(forKey: "sidebarTab") ?? "") ?? .profiles {
         didSet {
             if let visible = features.selection(sidebarTab), visible != sidebarTab { sidebarTab = visible }
-            UserDefaults.standard.set(sidebarTab.rawValue, forKey: "sidebarTab")
+            if !Self.inert { UserDefaults.standard.set(sidebarTab.rawValue, forKey: "sidebarTab") }
         }
     }
     /// Selected in the Profiles tab: "pad:<id>", "keys:<id>" or "mac".
@@ -134,7 +134,11 @@ final class AppModel: ObservableObject {
     private var lastStoreDiscovery = Date.distantPast
     private var lastStoreDiscoveryErrors: [String] = []
 
+    /// Layout checks (`--ui-check`) make a model that starts nothing, reads nothing and saves nothing.
+    static var inert = false
+
     init() {
+        if Self.inert { return }
         if featureServicesReady { ControllerOwnershipCoordinator.shared.start() }
         if let visible = features.selection(sidebarTab) { sidebarTab = visible }
         if gamesEnabled { SharedSteam.refreshHostScriptsIfNeeded() }
@@ -1223,6 +1227,17 @@ final class AppModel: ObservableObject {
     }
 
     func say(_ text: String) { say(text, game: nil) }
+
+    // MARK: Layout checks
+
+    /// Worst-case state for `--ui-check`: every feature, many games with long names, warnings showing.
+    func fillForLayoutCheck(games sample: [InstalledGame], conflicts: [GamesVolumeConflict]) {
+        featureServicesReady = true
+        features = AppFeatures(enabled: Set(AppFeature.allCases))
+        games = sample
+        volumeConflicts = conflicts
+        libraryLoaded = true
+    }
 
     // MARK: Login items that also open a games volume
 

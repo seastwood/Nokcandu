@@ -9,7 +9,11 @@ struct NokcanduApp: App {
     @ObservedObject private var streams = StreamsModel.shared
     @Environment(\.openWindow) private var openWindow
     @AppStorage(MenuBarSetting.key) private var menuBarMenu = true
-    init() { ListCache.installImageCache() }      // store artwork loads once, not on every visit
+    init() {
+        // `--ui-check <report>`: lay out the main window in worst cases and exit (build-app.sh --test runs it).
+        if let report = UICheck.reportPath { MainActor.assumeIsolated { UICheck.runAndExit(report) } }
+        ListCache.installImageCache()      // store artwork loads once, not on every visit
+    }
 
     var body: some Scene {
         WindowGroup("Nokcandu", id: "library") {
@@ -74,6 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Built as a plain SwiftPM executable: make sure it behaves like a normal foreground app.
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        OwnPadKeys.install()      // a live profile's keys don't drive Nokcandu's own lists and buttons
         // `kill` (and tools that end apps with it) quits Nokcandu like the Quit command does, so a running
         // stream is ended properly instead of vanishing from the host. A forced kill can't be caught.
         for number in [SIGTERM, SIGINT] {

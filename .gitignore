@@ -21,3 +21,4 @@ commit-msg.txt
 __pycache__/
 .swiftpm/
 .quit-for-install
+ui-check.log

@@ -38,7 +38,8 @@ AGENT
   launchctl bootstrap "gui/$(id -u)" "$PL" && echo "Installed login watcher: $PL"
 fi
 
-if [ "${1:-}" = --test ]; then swift test ${SWIFT_OPTIONS[@]+"${SWIFT_OPTIONS[@]}"}; shift || true; fi
+RAN_TESTS=""
+if [ "${1:-}" = --test ]; then swift test ${SWIFT_OPTIONS[@]+"${SWIFT_OPTIONS[@]}"}; RAN_TESTS=1; shift || true; fi
 # Development only: `touch .e2e` to also run the end-to-end install test (creates and removes a test app).
 if [ -e .e2e-engine ]; then rm -f .e2e-engine; NOKCANDU_E2E=1 /usr/bin/perl -e "alarm 900; exec @ARGV" swift test --filter "$(cat .e2e-filter 2>/dev/null || echo EngineUpdateE2ETests)" 2>&1 | tee e2e-engine.log || true; /usr/bin/pkill -f "xctest.*E2ETests" || true; fi
 if [ -e .e2e ]; then rm -f .e2e; NOKCANDU_E2E=1 /usr/bin/perl -e "alarm 900; exec @ARGV" swift test --filter E2ETests 2>&1 | tee e2e.log || true; /usr/bin/pkill -f "xctest.*E2ETests" || true; fi
@@ -51,6 +52,16 @@ swift build ${SWIFT_OPTIONS[@]+"${SWIFT_OPTIONS[@]}"} -c release --product Nokca
 swift build ${SWIFT_OPTIONS[@]+"${SWIFT_OPTIONS[@]}"} -c release --product nokcandu-screen-size
 swift build ${SWIFT_OPTIONS[@]+"${SWIFT_OPTIONS[@]}"} -c release --product nokcandu-settings
 BIN="$(swift build ${SWIFT_OPTIONS[@]+"${SWIFT_OPTIONS[@]}"} -c release --show-bin-path)"
+
+# Screen check: the main window laid out at its smallest size with worst-case content must fit (see UICheck.swift).
+# Runs the bare executable (its settings domain is separate from the installed app's) with an inert model.
+if [ -n "$RAN_TESTS" ]; then
+  if /usr/bin/perl -e "alarm 180; exec @ARGV" "$BIN/Nokcandu" --ui-check "$(pwd)/ui-check.log"; then
+    tail -1 ui-check.log
+  else
+    cat ui-check.log 2>/dev/null; echo "UI check failed: not building or installing this version."; exit 1
+  fi
+fi
 
 APP="build/Nokcandu.app"
 rm -rf "$APP"
