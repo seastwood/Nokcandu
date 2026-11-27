@@ -179,8 +179,11 @@ struct LibraryView: View {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(model.volumeConflicts) { c in
                     Button { model.reviewVolumeConflict(c) } label: {
-                        Label("Another login item opens \(c.imageNames)…", systemImage: "exclamationmark.triangle.fill")
+                        // One short line: a long label here made the footer, and with it the window's layout, too tall.
+                        Label { Text("Login item conflict…").lineLimit(1).truncationMode(.tail) }
+                              icon: { Image(systemName: "exclamationmark.triangle.fill") }
                             .foregroundStyle(.orange)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .help("\(c.label) also opens this games volume at login, which can leave it closed after a restart. Click to review or turn it off.")
                 }
