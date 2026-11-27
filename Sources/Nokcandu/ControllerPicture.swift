@@ -216,7 +216,8 @@ struct ControllerPicture: View {
         let dpadArm = [.up, .down, .left, .right].contains(i)
         let outwardLabel = (steamLayout && [.y, .a, .x, .b].contains(i)) || (picture != nil && dpadArm)
         // Steam Controller (2015): Back's and Start's captions go above them, leaving room for Y's above Y.
-        let captionAbove = steamLayout && [.back, .start].contains(i)
+        // Nintendo: − and + sit above C and H, whose captions would meet theirs below.
+        let captionAbove = (steamLayout || family == .nintendo) && [.back, .start].contains(i)
         let captionOffset: CGSize = i == .up ? CGSize(width: 0, height: -14 * k - 8) : i == .down ? CGSize(width: 0, height: 14 * k + 8)
             : i == .left ? CGSize(width: -12 * k - 32, height: 0) : i == .right ? CGSize(width: 12 * k + 32, height: 0) : i == .y ? CGSize(width: 0, height: -14 * k - 8) : i == .a ? CGSize(width: 0, height: 14 * k + 8) : CGSize(width: i == .x ? -12 * k - 32 : 12 * k + 32, height: 0)
         let short: String = {
