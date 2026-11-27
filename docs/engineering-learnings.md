@@ -1016,3 +1016,11 @@ A layer change caused by a button press runs inside that controller's input-repo
 ## Motion axes between decoders and the pad engine (November 26, 2026)
 
 Decoders that read reports themselves publish motion in Nokcandu's axes (the original Steam Controller's own: SDL's x, z, y). The pad engine and the overlay take SDL's axes (x pitch, y yaw, z roll). `MappedGamepads.publishMotion` converts once (`MotionAxes.sdl`) for every listener; before that, every report-read controller's gyro had yaw and roll swapped. The stream and the Mac virtual controller convert SDL's axes to GameController's. Nintendo controllers' face buttons are read by printed letter everywhere (macOS, Nokcandu's own readers, the editor and the overlay).
+
+## Gyro quiet tracking and slow flat turns (November 26, 2026)
+
+Quiet tracking (5 s whose half-second averages agree within 1.2 °/s, within 8 °/s of the current bias, gravity not tipped 2°) also passes a slow steady turn about the vertical axis, which doesn't move gravity in the controller's frame: it was learned as drift ("it recalibrates when it doesn't need to"). A correction of `QUIET_BIG` (0.75 °/s) or more now needs the next stretch, with no movement between, to agree within `QUIET_AGREE` (0.5 °/s). Tests: `GyroQuietCalibrationTests.testASlowSteadyFlatTurnIsNotTakenForDrift`. A taken-over Switch Pro applies its flash motion calibration (factory 0x6020, user 0x8026 behind B2 A1) so its bias matches macOS's reading.
+
+## Untrusted input is fuzzed (November 26, 2026)
+
+`UntrustedInputFuzzTests` runs random and truncated data through every controller report reader, both VDF readers, shared-profile parsing and links. It found unbounded recursion in both VDF parsers (a deeply nested file overflowed the stack); they now refuse nesting past 64 / 128 levels. Add new readers of outside data to that test.
