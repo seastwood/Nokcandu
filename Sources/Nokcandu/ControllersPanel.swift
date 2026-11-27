@@ -73,6 +73,8 @@ struct ControllerArt: View {
     let kind: Controllers.Kind
     var width: CGFloat
     var color: Color
+    var buttons = false
+    var lit: Set<PadProfiles.Input> = []
 
     /// Xbox, PlayStation, Nintendo and Steam controllers have outlines (Xbox's is also the one for no family).
     var outline: Controllers.Family?? {
@@ -82,7 +84,7 @@ struct ControllerArt: View {
         return nil
     }
     var body: some View {
-        if let f = outline { ControllerIcon(family: f, width: width, color: color) }
+        if let f = outline { ControllerIcon(family: f, width: width, color: color, buttons: buttons, lit: lit) }
         else { Image(systemName: kind.symbol).font(.system(size: width * 0.55, weight: .regular)).foregroundStyle(color) }
     }
 }
@@ -110,10 +112,10 @@ private struct ControllerCard: View {
                         .fill(active ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.05))
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .strokeBorder(active ? Color.accentColor.opacity(0.7) : Color.primary.opacity(0.08), lineWidth: 1)
-                    ControllerArt(family: connected.family, vendorID: connected.vendorID, kind: connected.kind, width: 46,
-                                  color: active ? .accentColor : .secondary)
+                    ControllerArt(family: connected.family, vendorID: connected.vendorID, kind: connected.kind, width: 70,
+                                  color: active ? Color.accentColor.opacity(0.85) : .secondary, buttons: true, lit: devices.heldInputs[connected.key] ?? [])
                 }
-                .frame(width: 68, height: 52)
+                .frame(width: 92, height: 68)
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
                         Text(remembered?.name ?? connected.name).font(.title3.weight(.semibold)).lineLimit(1)
@@ -264,7 +266,9 @@ extension ControllerDevices {
         let pad = DesktopPad.shared
         guard pad.enabled else { return ("Controller profiles are off", nil) }
         if let n = roster.controller(key)?.seat.explicit, n > 1 { return ("Player \(n)", "Mac games get it as it is") }
-        guard let ctx = pad.lastContext else { return ("Player 1", nil) }
+        // Nothing used outside Nokcandu yet since it started: the Mac's settings.
+        let ctx = pad.lastContext ?? DesktopPad.PadContext(game: nil, appName: nil, appRule: nil, everywhere: pad.everywhereID,
+                                                           macDefault: pad.on ? pad.profileID : nil, macOn: pad.on, enabled: pad.enabled)
         let choice = ctx.game?.contents.flatMap { PadProfiles.controllerChoices(contents: $0)[key] }
         let own = connected.first { $0.key == key }.flatMap { ownProfile($0) }
         let r = ControllerRoster.resolve(everywhere: ctx.everywhere, game: ctx.game?.name, gameForController: choice, gameProfile: ctx.game?.profileID,

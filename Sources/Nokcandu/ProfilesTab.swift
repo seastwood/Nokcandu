@@ -588,6 +588,9 @@ struct ControllerIcon: View {
     /// Its width (the height follows); 30 in lists.
     var width: CGFloat = 30
     var color: Color = .accentColor
+    /// Bigger pictures (the Controllers panel) also show the buttons, and light the ones held.
+    var buttons = false
+    var lit: Set<PadProfiles.Input> = []
     var body: some View {
         let body: AnyShape = {
             switch family {
@@ -602,12 +605,22 @@ struct ControllerIcon: View {
             body.stroke(color, lineWidth: max(1.2, width / 25))
             // What tells them apart at this size: the pads, the touchpad, where the sticks sit.
             ForEach(Array(marks.enumerated()), id: \.offset) { _, m in
+                let on = m.input.map { lit.contains($0) } ?? false
                 Group {
-                    if m.square { RoundedRectangle(cornerRadius: max(1, width / 30)).fill(color) }
-                    else { Circle().fill(color) }
+                    if m.square { RoundedRectangle(cornerRadius: max(1, width / 30)).fill(on ? Color.accentColor : color.opacity(buttons ? 0.7 : 1)) }
+                    else { Circle().fill(on ? Color.accentColor : color.opacity(buttons ? 0.7 : 1)) }
                 }
-                .frame(width: m.rect.width * w, height: m.rect.height * h)
+                .frame(width: m.rect.width * w * (on ? 1.15 : 1), height: m.rect.height * h * (on ? 1.15 : 1))
                 .position(x: m.rect.midX * w, y: m.rect.midY * h)
+            }
+            if buttons {
+                ForEach(Array(buttonMarks.enumerated()), id: \.offset) { _, b in
+                    let on = lit.contains(b.0)
+                    Circle().fill(on ? Color.accentColor : color.opacity(0.45))
+                        .frame(width: w * (on ? 0.085 : 0.06), height: w * (on ? 0.085 : 0.06))
+                        .shadow(color: on ? Color.accentColor.opacity(0.8) : .clear, radius: on ? 3 : 0)
+                        .position(x: b.1.x * w, y: b.1.y * h)
+                }
             }
         }
         .frame(width: w, height: h)
@@ -625,20 +638,28 @@ extension ControllerIcon {
         return .some(f)
     }
 
-    struct Mark { var rect: CGRect; var square = false }
+    struct Mark { var rect: CGRect; var square = false; var input: PadProfiles.Input? = nil }
+    /// The face buttons, D-pad, shoulders and menu buttons where the overlay's layout has them (fractions, y down).
+    var buttonMarks: [(PadProfiles.Input, CGPoint)] {
+        guard family != .valve, family != .steam2026 else { return [] }
+        let l = ControllerPictureLayout.of(family)
+        let inputs: [PadProfiles.Input] = [.a, .b, .x, .y, .up, .down, .left, .right, .back, .start, .guide, .misc]
+        return inputs.compactMap { i in l.place(i).map { (i, $0) } }
+    }
     /// Fractions of the icon's box (y down).
     var marks: [Mark] {
         func dot(_ c: CGPoint, _ d: CGFloat) -> Mark { Mark(rect: CGRect(x: c.x - d / 2, y: c.y - d * 0.72, width: d, height: d * 1.43)) }
+        func with(_ m: Mark, _ i: PadProfiles.Input) -> Mark { var m = m; m.input = i; return m }
         switch family {
         case .valve:
-            return [dot(Steam2015Outline.place(-1.117, 0.242), 0.2), dot(Steam2015Outline.place(1.117, 0.242), 0.2)]
+            return [with(dot(Steam2015Outline.place(-1.117, 0.242), 0.2), .touchpad), with(dot(Steam2015Outline.place(1.117, 0.242), 0.2), .rs)]
         case .steam2026:
-            return [Mark(rect: CGRect(x: 0.23, y: 0.47, width: 0.15, height: 0.2), square: true), Mark(rect: CGRect(x: 0.62, y: 0.47, width: 0.15, height: 0.2), square: true),
-                    dot(CGPoint(x: 0.35, y: 0.27), 0.1), dot(CGPoint(x: 0.65, y: 0.27), 0.1)]
+            return [Mark(rect: CGRect(x: 0.23, y: 0.47, width: 0.15, height: 0.2), square: true, input: .touchpad), Mark(rect: CGRect(x: 0.62, y: 0.47, width: 0.15, height: 0.2), square: true, input: .rpclick),
+                    with(dot(CGPoint(x: 0.35, y: 0.27), 0.1), .ls), with(dot(CGPoint(x: 0.65, y: 0.27), 0.1), .rs)]
         default:
             let l = ControllerPictureLayout.of(family)
-            var m = l.sticks.map { dot($0, 0.13) }
-            if let t = l.touchpad { m.append(Mark(rect: t.insetBy(dx: 0.03, dy: 0.04), square: true)) }
+            var m = l.sticks.enumerated().map { with(dot($0.element, 0.13), $0.offset == 0 ? .ls : .rs) }
+            if let t = l.touchpad { m.append(Mark(rect: t.insetBy(dx: 0.03, dy: 0.04), square: true, input: .touchpad)) }
             return m
         }
     }

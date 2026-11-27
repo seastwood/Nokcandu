@@ -257,14 +257,14 @@ final class ControllerDevices: ObservableObject {
     private func startWatching() {
         start()
         mappedToken = MappedGamepads.shared.listen { source, buttons, axes in
-            MainActor.assumeIsolated { ControllerDevices.shared.sourceChanged(source, buttons.map { Self.labels($0, axes: axes, family: nil) } ?? []) }
+            MainActor.assumeIsolated { ControllerDevices.shared.sourceChanged(source, buttons.map { Self.shown($0, axes: axes, family: nil) } ?? ([], [])) }
         }
         hidToken = HIDDevices.shared.listen { info, ev in MainActor.assumeIsolated { ControllerDevices.shared.hidEvent(info, ev) } }
         steamListening = SteamControllerUSB.shared.isReading
         if steamListening { SteamControllerUSB.shared.listen(steamID) { state in
             MainActor.assumeIsolated {
-                guard let state else { ControllerDevices.shared.sourceChanged("steam", []); return }
-                ControllerDevices.shared.sourceChanged("steam", Self.labels(state.buttons, axes: state.axes, family: state.kind == .steam2026 ? .steam2026 : .valve))
+                guard let state else { ControllerDevices.shared.sourceChanged("steam", ([], [])); return }
+                ControllerDevices.shared.sourceChanged("steam", Self.shown(state.buttons, axes: state.axes, family: state.kind == .steam2026 ? .steam2026 : .valve))
             }
         } }
         let t = Timer(timeInterval: 0.05, repeats: true) { _ in MainActor.assumeIsolated { ControllerDevices.shared.pollGameControllers() } }
@@ -276,7 +276,7 @@ final class ControllerDevices: ObservableObject {
         HIDDevices.shared.stopListening(hidToken); hidToken = nil
         if steamListening { SteamControllerUSB.shared.remove(steamID); steamListening = false }
         poll?.invalidate(); poll = nil
-        held = [:]; gcState = [:]; hidHeld = [:]
+        held = [:]; heldInputs = [:]; gcState = [:]; hidHeld = [:]
     }
     private func pollGameControllers() {
         for c in GCController.controllers() {
@@ -286,16 +286,16 @@ final class ControllerDevices: ObservableObject {
             let values = Dictionary(uniqueKeysWithValues: axes.map { (Int($0.0), Int(max(-32768, min(32767, $0.1 * 32767)))) })
             let id = ObjectIdentifier(c)
             let entry = hidID(for: c).flatMap { reg in connected.first { $0.registryID == reg } }
-            let labels = Self.labels(pressed, axes: values, family: entry?.family)
-            guard gcState[id] != labels else { continue }
-            gcState[id] = labels
+            let shown = Self.shown(pressed, axes: values, family: entry?.family)
+            guard gcState[id] != shown.labels else { continue }
+            gcState[id] = shown.labels
             gameControllerMoved(c)
-            if let key = (entry ?? hidID(for: c).flatMap { reg in connected.first { $0.registryID == reg } })?.key { show(key, labels) }
+            if let key = (entry ?? hidID(for: c).flatMap { reg in connected.first { $0.registryID == reg } })?.key { show(key, shown) }
         }
     }
-    private func sourceChanged(_ source: String, _ labels: [String]) {
+    private func sourceChanged(_ source: String, _ shown: Shown) {
         guard let key = key(forSource: source) else { return }
-        show(key, labels)
+        show(key, shown)
     }
     private func hidEvent(_ info: HIDDevices.Info, _ ev: HIDDevices.Event) {
         // Devices read some other way show what that way makes of them.
@@ -309,22 +309,29 @@ final class ControllerDevices: ObservableObject {
             if abs(v) > 20000 { set.insert(name) } else { set.remove(name) }
         }
         hidHeld[info.id] = set
-        show(c.key, set.sorted())
+        show(c.key, (set.sorted(), []))
     }
-    private func show(_ key: String, _ labels: [String]) {
+    private func show(_ key: String, _ shown: Shown) {
+        let (labels, inputs) = shown
+        if heldInputs[key] != inputs { heldInputs[key] = inputs }
         if held[key] != labels { held[key] = labels }
         if !labels.isEmpty { lastInput[key] = Date() }
     }
+    /// The inputs held (by key), for the panel's picture: buttons, and a stick that's moved as its click.
+    @Published private(set) var heldInputs: [String: Set<PadProfiles.Input>] = [:]
+    typealias Shown = (labels: [String], inputs: Set<PadProfiles.Input>)
+
     /// What a controller is doing, in its own buttons' names: "A", "RT", "Left stick".
-    static func labels(_ buttons: Set<PadProfiles.Input>, axes: [Int: Int], family: Controllers.Family?) -> [String] {
-        var l = PadProfiles.Input.allCases.filter { buttons.contains($0) && $0 != .ltfull && $0 != .rtfull }.map { $0.title(family) }
+    static func shown(_ buttons: Set<PadProfiles.Input>, axes: [Int: Int], family: Controllers.Family?) -> Shown {
+        var lit = buttons.subtracting([.ltfull, .rtfull])
+        var l = PadProfiles.Input.allCases.filter { lit.contains($0) }.map { $0.title(family) }
         func far(_ x: Int, _ y: Int) -> Bool { let a = Double(axes[x] ?? 0) / 32767, b = Double(axes[y] ?? 0) / 32767; return a * a + b * b > 0.25 }
-        if far(0, 1) { l.append("Left stick") }
-        if far(2, 3) { l.append("Right stick") }
+        if far(0, 1) { l.append("Left stick"); lit.insert(.ls) }
+        if far(2, 3) { l.append("Right stick"); lit.insert(.rs) }
         let lt = PadProfiles.Input.lt.title(family), rt = PadProfiles.Input.rt.title(family)
-        if (axes[4] ?? 0) > 6000, !l.contains(lt) { l.append(lt) }
-        if (axes[5] ?? 0) > 6000, !l.contains(rt) { l.append(rt) }
-        return l
+        if (axes[4] ?? 0) > 6000, !l.contains(lt) { l.append(lt); lit.insert(.lt) }
+        if (axes[5] ?? 0) > 6000, !l.contains(rt) { l.append(rt); lit.insert(.rt) }
+        return (l, lit)
     }
 
     // MARK: Windows games
