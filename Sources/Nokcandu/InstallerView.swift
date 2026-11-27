@@ -880,8 +880,11 @@ struct GraphicsPicker: View {
                           change: .custom(c, force: false, changeProgram: false), completion: { saved in if saved { moltenVKChoice = on; onChange() } })
     }
     func apply(_ p: GraphicsPreset) {
-        guard game.custom != nil, p != game.custom?.graphics else { return }
-        app.changeSetting(for: game, title: "Graphics", success: "Graphics: \(p.title).", change: .graphics(p), completion: { saved in if saved { current = p; onChange() } })
+        guard game.custom != nil, p != current else { return }
+        // Shown at once while it saves; back to what it was if saving fails.
+        let before = current
+        current = p
+        app.changeSetting(for: game, title: "Graphics", success: "Graphics: \(p.title).", change: .graphics(p), completion: { saved in if saved { onChange() } else { current = before } })
     }
 }
 

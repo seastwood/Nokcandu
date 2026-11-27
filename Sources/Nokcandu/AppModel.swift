@@ -249,7 +249,6 @@ final class AppModel: ObservableObject {
     /// never freeze the window); calls that arrive meanwhile are merged into one more scan.
     func refresh(automatic: Bool = false) {
         guard gamesEnabled else { return }
-        if !automatic { libraryRevision += 1 }
         if scanningLibrary { rescanRequested = true; return }
         scanningLibrary = true
         lastLibraryScan = ProcessInfo.processInfo.systemUptime
@@ -265,13 +264,16 @@ final class AppModel: ObservableObject {
             // An automatic check that found the same library changes nothing on screen.
             if automatic, scanned.0.map(\.appURL) == games.map(\.appURL), scanned.0.map(\.name) == games.map(\.name),
                scanned.1.drives == gameDrives, scanned.1.offline.map(\.name) == libraryExtras.offline.map(\.name) { return }
-            if automatic { libraryRevision += 1 }
             libraryExtras = scanned.1
             if gameDrives != scanned.1.drives { gameDrives = scanned.1.drives }
             LibraryOrganizer.remember(scanned.0)
             let iconGames = scanned.0
             Task.detached(priority: .background) { AppModel.cacheIcons(iconGames) }
             games = scanned.0
+            // Settings views rebuild on this: only now, with the library just read. Bumped when the scan began,
+            // they rebuilt from the settings before the change and then kept them: a graphics or display choice
+            // seemed not to take.
+            libraryRevision += 1
             let firstLoad = !libraryLoaded
             // Windows games that can't run until Rosetta or the engine is back (a reinstalled macOS, a removed
             // engine): open the setup checklist. Someone using only Controls or Streams never needs them.
