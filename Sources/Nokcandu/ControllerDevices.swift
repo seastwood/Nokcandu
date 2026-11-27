@@ -175,8 +175,7 @@ final class ControllerDevices: ObservableObject {
     /// key(forSource:), remembered until what's connected, the links or the players change: the input path asks on
     /// every event, so this must cost no more than a dictionary lookup.
     private var keyCache: [String: String?] = [:]
-    private var playerCache: [String: Int] = [:]
-    private func invalidate() { keyCache = [:]; playerCache = [:] }
+    private func invalidate() { keyCache = [:] }
     func cachedKey(forSource source: String) -> String? {
         if let k = keyCache[source] { return k }
         let k = key(forSource: source)
@@ -184,14 +183,6 @@ final class ControllerDevices: ObservableObject {
         if k != nil { keyCache[source] = k }
         return k
     }
-    /// The player a controller is in the Windows game in front (cached; see windowsPlayer).
-    func windowsPlayerCached(_ key: String) -> Int {
-        if let n = playerCache[key] { return n }
-        let n = windowsPlayer(key).player
-        playerCache[key] = n
-        return n
-    }
-
     /// The remembered controller behind one of the profile's input sources.
     func key(forSource source: String) -> String? {
         if source == "steam" { return connected.first { $0.sources.contains("steam") }?.key }

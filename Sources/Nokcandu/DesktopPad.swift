@@ -747,7 +747,8 @@ final class DesktopPad: ObservableObject {
         let devices = ControllerDevices.shared
         guard let key = devices.cachedKey(forSource: source) else { return true }
         if let n = devices.roster.controller(key)?.seat.explicit { return n == 1 }
-        if gamePID != 0 { return devices.windowsPlayerCached(key) == 1 }
+        // Only what the game's driver reported: a guess could silence player 1's own controller.
+        if gamePID != 0, let n = devices.windowsPlayers[key] { return n == 1 }
         return true
     }
     /// A controller's player or profile changed in the Controllers panel.

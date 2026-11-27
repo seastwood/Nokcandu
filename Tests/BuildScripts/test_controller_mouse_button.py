@@ -10,6 +10,8 @@ class ControllerMouseButtonTests(unittest.TestCase):
   for version,folder in [('10.0','patches'),('11.0','patches-11.0')]:
    with self.subTest(version=version), tempfile.TemporaryDirectory() as tmp:
     temp=Path(tmp)
+    if not (ROOT/'build/winemac-work'/('wine-'+version+'.tar.xz')).exists():
+     self.skipTest('Wine '+version+' source is fetched by the engine build (build/winemac-work)')
     with tarfile.open(ROOT/'build/winemac-work'/('wine-'+version+'.tar.xz')) as archive:
      original=archive.extractfile('wine-'+version+'/dlls/winemac.drv/mouse.c').read().decode()
     file=temp/'mouse.c';file.write_text(original)
