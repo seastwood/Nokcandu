@@ -35,10 +35,19 @@ final class ControllerTakeover {
         apply()
     }
 
+    /// Opening or closing happens on the next turn of the run loop, never right away: a layer change that asks for
+    /// it arrives from inside one of these controllers' own report callbacks, and closing a device while macOS is
+    /// delivering its report aborts the app (IOHIDDeviceClass unlocks a lock the close already released).
     private func apply() {
-        let on = wanted && Self.preference
-        if on, manager == nil { open() } else if !on, manager != nil { close() }
+        guard !applyQueued else { return }
+        applyQueued = true
+        DispatchQueue.main.async { [self] in
+            applyQueued = false
+            let on = wanted && Self.preference
+            if on, manager == nil { open() } else if !on, manager != nil { close() }
+        }
     }
+    private var applyQueued = false
 
     private func open() {
         let m = IOHIDManagerCreate(kCFAllocatorDefault, 0)
