@@ -18,4 +18,9 @@ public enum MotionAxes {
     public static func sdl(gyro g: [Float], acceleration a: [Float]) -> ([Float], [Float]) {
         (g.count == 3 ? [g[0], g[2], g[1]] : g, a.count == 3 ? [a[0], a[2], a[1]] : a)
     }
+    /// SDL's axes to GameController's (the inverse of `GameControllerMotion`), for what takes macOS's own
+    /// controllers' raw motion: streams, the DSU server and the Mac virtual controller.
+    public static func gameController(sdlGyro g: [Float], sdlAcceleration a: [Float]) -> ([Float], [Float]) {
+        (g.count == 3 ? [g[0], -g[2], g[1]] : g, a.count == 3 ? [-a[0], a[2], -a[1]] : a)
+    }
 }

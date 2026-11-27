@@ -36,9 +36,11 @@ final class MappedGamepads {
     /// own: SDL's x, z, y). Listeners get it in SDL's axes (x pitch, y yaw, z roll), which the pad engine and the overlay
     /// use, as the Steam Controller's `sdlGyro` is. Passing Nokcandu's axes straight on made turning read as rolling.
     func publishMotion(_ source: String, gyro: [Float], acceleration: [Float]) {
-        PadDSUBridge.shared.publish(source:source,gyro:gyro,acceleration:acceleration)
-        motionSources.insert(source)
         let (g, a) = MotionAxes.sdl(gyro: gyro, acceleration: acceleration)
+        // The DSU server takes GameController's axes, as it gets them from macOS's own controllers.
+        let (dg, da) = MotionAxes.gameController(sdlGyro: g, sdlAcceleration: a)
+        PadDSUBridge.shared.publish(source:source,gyro:dg,acceleration:da)
+        motionSources.insert(source)
         for f in motionListeners.values { f(source, g, a) }
     }
     /// Controllers that have sent motion (drivers publish it before a report's buttons, so it's known at once).

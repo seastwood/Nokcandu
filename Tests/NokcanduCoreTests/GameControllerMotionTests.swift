@@ -48,5 +48,9 @@ final class GameControllerMotionTests: XCTestCase {
         // A Switch Pro lying still and turned left: Nokcandu's axes (SDL's x, z, y) to SDL's (yaw on y, gravity up on y).
         let (g, a) = MotionAxes.sdl(gyro: [0, 0, 2], acceleration: [0, 0, 1])
         XCTAssertEqual(g, [0, 2, 0]); XCTAssertEqual(a, [0, 1, 0])
+        // And back to GameController's, which GameControllerMotion turns into SDL's again.
+        let (gg, ga) = MotionAxes.gameController(sdlGyro: [1, 2, 3], sdlAcceleration: [4, 5, 6])
+        XCTAssertEqual(GameControllerMotion.gyro(Double(gg[0]), Double(gg[1]), Double(gg[2])), [1, 2, 3])
+        XCTAssertEqual(GameControllerMotion.acceleration(Double(ga[0]), Double(ga[1]), Double(ga[2])), [4, 5, 6])
     }
 }
