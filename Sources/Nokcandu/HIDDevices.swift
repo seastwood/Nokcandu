@@ -24,6 +24,10 @@ final class HIDDevices: ObservableObject {
         let hasHat: Bool
         /// It calls itself a gamepad (rather than a joystick or other controller).
         var isGamepadUsage = false
+        /// Its serial number (a Bluetooth controller's is its address), as macOS gives it.
+        var serial: String? = nil
+        var bluetooth = false
+        var location = 0
         func matches(_ d: PadProfiles.Device) -> Bool { vendorID == d.vendorID && productID == d.productID && nth == (d.nth ?? 0) }
         var device: PadProfiles.Device {
             PadProfiles.Device(name: name, productName: name, vendorID: vendorID, productID: productID, nth: nth == 0 ? nil : nth,
@@ -92,7 +96,10 @@ final class HIDDevices: ObservableObject {
         let info = Info(id: id, name: name, vendorID: Self.int(d, kIOHIDVendorIDKey), productID: Self.int(d, kIOHIDProductIDKey), nth: 0,
                         gamepad: false, buttonCount: min(l.buttons.count, PadProfiles.Device.maxButtons),
                         axisNames: Array(l.axes.map(\.name).prefix(PadProfiles.Device.maxAxes)), hasHat: l.hat != nil,
-                        isGamepadUsage: Self.int(d, kIOHIDPrimaryUsagePageKey) == kHIDPage_GenericDesktop && Self.int(d, kIOHIDPrimaryUsageKey) == kHIDUsage_GD_GamePad)
+                        isGamepadUsage: Self.int(d, kIOHIDPrimaryUsagePageKey) == kHIDPage_GenericDesktop && Self.int(d, kIOHIDPrimaryUsageKey) == kHIDUsage_GD_GamePad,
+                        serial: IOHIDDeviceGetProperty(d, kIOHIDSerialNumberKey as CFString) as? String,
+                        bluetooth: ((IOHIDDeviceGetProperty(d, kIOHIDTransportKey as CFString) as? String) ?? "").localizedCaseInsensitiveContains("bluetooth"),
+                        location: Self.int(d, kIOHIDLocationIDKey))
         connected.removeAll { $0.id == id }
         connected.append(info)
         renumber()
@@ -124,10 +131,15 @@ final class HIDDevices: ObservableObject {
         NotificationCenter.default.post(name: .hidDevicesChanged, object: nil)
     }
 
+    /// When each device last sent anything (macOS's own controllers included), for telling identical controllers
+    /// apart: the one that moved when a GameController controller did is that controller.
+    private(set) var lastActivity: [UInt64: Double] = [:]
+
     private func value(_ v: IOHIDValue) {
         let el = IOHIDValueGetElement(v)
         let d = IOHIDElementGetDevice(el)
         let id = Self.registryID(d)
+        lastActivity[id] = ProcessInfo.processInfo.systemUptime
         guard let e = elements[id]?[UInt32(IOHIDElementGetCookie(el))], let info = connected.first(where: { $0.id == id }), !info.gamepad else { return }
         ControllerReportDiagnostics.shared.record("hidvalue:\(id)", label: "\(info.name) · HID value changes")
         let raw = IOHIDValueGetIntegerValue(v)

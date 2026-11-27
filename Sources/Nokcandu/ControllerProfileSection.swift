@@ -13,6 +13,9 @@ struct ControllerProfileSection: View {
     @State private var naming: Naming?
     @State private var name = ""
     @ObservedObject private var pad = DesktopPad.shared
+    @ObservedObject private var devices = ControllerDevices.shared
+    @State private var controllerChoices: [String: String] = [:]
+    @State private var showPerController = false
 
     enum Naming: Identifiable { case new, rename, duplicate; var id: Int { hashValue } }
 
@@ -85,6 +88,7 @@ struct ControllerProfileSection: View {
                     Menu("Start From") { starters }.fixedSize()
                 }
             }
+            perController
         }
         .onAppear(perform: load)
         .onReceive(NotificationCenter.default.publisher(for: .padProfilesChanged)) { _ in load() }
@@ -95,6 +99,37 @@ struct ControllerProfileSection: View {
         } message: {
             Text(naming == .rename ? "Games using it keep using it." : naming == .duplicate ? "A copy you can change without changing the original." : "Any game can then choose it.")
         }
+    }
+
+    /// The game's choice for particular controllers: that controller uses another profile in this game.
+    @ViewBuilder var perController: some View {
+        let devices = ControllerDevices.shared
+        let list = devices.roster.controllers.filter { r in devices.connected.contains { $0.key == r.key && $0.kind == .gamepad } }
+            + devices.roster.controllers.filter { r in controllerChoices[r.key] != nil && !devices.connected.contains { $0.key == r.key } }
+        if !list.isEmpty {
+            DisclosureGroup(isExpanded: $showPerController) {
+                ForEach(list) { r in
+                    SettingRow(title: r.name) {
+                        Picker(r.name, selection: Binding(get: { controllerChoices[r.key] ?? "" }, set: { setChoice($0.isEmpty ? nil : $0, for: r.key) })) {
+                            Text("This game's profile").tag("")
+                            Divider()
+                            ForEach(profiles) { p in Text(p.name).tag(p.id) }
+                        }.labelsHidden().frame(width: 240)
+                    }
+                }
+                SettingNote("A controller given a profile here uses it in \(game.name) instead of the game's profile; press a button on another controller to switch to its profile. Players and names are in Profiles → Controllers.")
+            } label: {
+                Text("Per controller" + (controllerChoices.isEmpty ? "" : " (\(controllerChoices.count) set)")).font(.callout)
+            }
+        }
+    }
+    func setChoice(_ id: String?, for key: String) {
+        guard let c = contents else { return }
+        do {
+            try PadProfiles.setControllerChoice(id, controller: key, contents: c, shared: shared)
+            controllerChoices = PadProfiles.controllerChoices(contents: c)
+            NotificationCenter.default.post(name: .padProfilesChanged, object: nil)
+        } catch { model.fail(error) }
     }
 
     @ViewBuilder var starters: some View {
@@ -138,6 +173,8 @@ struct ControllerProfileSection: View {
 
     func load() {
         guard let c = contents else { return }
+        controllerChoices = PadProfiles.controllerChoices(contents: c)
+        if !controllerChoices.isEmpty { showPerController = true }
         profiles = PadProfiles.profiles()
         defaultID = PadProfiles.defaultID()
         choice = PadProfiles.choice(contents: c, shared: shared)

@@ -325,12 +325,13 @@ pe_engine *pe_create(const char *text, pe_sink sink) {
     e->tilt_angle = 30; e->menu_open = -1; e->menu_sel = -1;
     e->source_text = strdup(text);
     char *copy = strdup(text), *lsave;
-    bool other_player = false;   // inside "player N begin" … "player N end": another player's profile, not this one's
+    bool other_player = false;   // inside "player N begin" … "player N end" (or a controller's block): another profile
     for (char *line = strtok_r(copy, "\n", &lsave); line; line = strtok_r(NULL, "\n", &lsave)) {
         char *words[64]; int nw = 0; char *wsave;
         for (char *w = strtok_r(line, " \t\r", &wsave); w && nw < 64; w = strtok_r(NULL, " \t\r", &wsave)) words[nw++] = w;
         if (!nw) continue;
-        if (!strcmp(words[0], "player")) {
+        // "controller <key> begin" … "end": a particular controller's own profile, read by Windows games' driver.
+        if (!strcmp(words[0], "player") || !strcmp(words[0], "controller")) {
             if (nw >= 3 && !strcmp(words[2], "begin")) other_player = true;
             else if (nw >= 3 && !strcmp(words[2], "end")) other_player = false;
             continue;

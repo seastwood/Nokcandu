@@ -7,6 +7,7 @@ import NokcanduCore
 struct ProfilesSidebar: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject var pad = DesktopPad.shared
+    @ObservedObject var devices = ControllerDevices.shared
     @State private var pads: [PadProfiles.Profile] = []
     @State private var layouts: [KeyRemap.Layout] = []
     @State private var padDefault: String?
@@ -27,6 +28,8 @@ struct ProfilesSidebar: View {
             .selectionDisabled()
             .padding(.vertical, 2)
             Section("Settings") {
+                row(title: "Controllers", subtitle: controllersSubtitle, symbol: "gamecontroller.fill")
+                    .tag("controllers")
                 row(title: "Controller on the Mac", subtitle: pad.everywhereID != nil || pad.on ? pad.status : "Off — profiles apply only in games", symbol: "desktopcomputer")
                     .tag("mac")
                 row(title: "Controller Settings", subtitle: "Gyro, notes, capture, headphones", symbol: "slider.horizontal.3")
@@ -98,6 +101,10 @@ struct ProfilesSidebar: View {
         .onChange(of: model.libraryRevision) { _, _ in load() }
     }
 
+    var controllersSubtitle: String {
+        let n = devices.connected.count
+        return n == 0 ? "None connected" : n == 1 ? "1 connected" : "\(n) connected"
+    }
     func row(title: String, subtitle: String, symbol: String, active: Bool = false, icon: AnyView? = nil) -> some View {
         HStack(spacing: 10) {
             Group {
@@ -407,6 +414,8 @@ struct ProfilesTabDetail: View {
                 PadProfilePage(profile: p).id(p.id + p.name)          // a rename from the sidebar reloads the editor
             } else if sel.hasPrefix("keys:"), let l = KeyRemap.layouts().first(where: { $0.id == String(sel.dropFirst(5)) }) {
                 KeyLayoutPage(layout: l).id(l.id + l.name)
+            } else if sel == "controllers" {
+                ControllersPanel()
             } else if sel == "settings" {
                 // Everything about controllers that isn't one profile: in games, on the Mac and in streams.
                 Form {
@@ -416,7 +425,6 @@ struct ProfilesTabDetail: View {
                     ControllerOverlaySettingsView()
                     PadCaptureSettings()
                     PadHeadTrackingSettings()
-                    ControllersSection()
                     PadDiagnosticsSettings()
                 }.formStyle(.grouped)
             } else {

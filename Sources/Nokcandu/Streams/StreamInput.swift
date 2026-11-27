@@ -36,7 +36,12 @@ import NokcanduStreamCore
     /// A profile reading the Steam Controller itself has that as player one, and every other controller is free.
     static func profileController(steam: Bool = false) -> (gc: GCController?, mapped: String?) {
         if steam { return (nil, nil) }
-        if let c = GCController.controllers().first(where: { $0.extendedGamepad != nil }) { return (c, nil) }
+        // A controller set to Player 1 in the Controllers panel is player one here too.
+        let devices = ControllerDevices.shared
+        let pads = GCController.controllers().filter { $0.extendedGamepad != nil }
+        if let c = pads.first(where: { devices.seat(forSource: String(describing: ObjectIdentifier($0))) == .player(1) }) { return (c, nil) }
+        if let m = MappedGamepads.shared.sources.sorted().first(where: { devices.seat(forSource: $0) == .player(1) }) { return (nil, m) }
+        if let c = pads.first { return (c, nil) }
         return (nil, MappedGamepads.shared.sources.sorted().first)
     }
     var profileReadsSteam: Bool {

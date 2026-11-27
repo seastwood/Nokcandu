@@ -12,6 +12,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/stat.h>
+#include <ctype.h>
 
 // MARK: Minimal SDL2 types (only what Wine's driver loop uses)
 typedef struct { uint32_t type, timestamp; int32_t which; uint8_t button, state, p1, p2; } nok_sdl_cbutton;
@@ -58,7 +59,6 @@ static int (*real_wait)(nok_sdl_event *, int);
 static void *(*real_open)(int);
 static int (*real_sensor)(void *, int, int);
 static int32_t (*real_instance)(void *);
-static void *(*real_joystick)(void *);
 
 static int (*real_num_joysticks)(void);
 static int32_t (*real_device_instance)(int);
@@ -154,10 +154,95 @@ static void pad_parse_players(void) {
         if (b && e) { b += strlen(key); pad_player_text[n] = strndup(b, (size_t)(e - b)); pad_player_kind[n] = 2; }
     }
 }
-/// The player a controller is (1 first): its place among the controllers in the order they were first seen.
+// Which controller is which (Nokcandu's Controllers panel): each opened controller's key and the player it was set
+// to (0: Auto), matched against controller-players, which Nokcandu writes. Matched by the connection itself (the
+// registry id in SDL's device path), then the serial, then the model and its place among identical ones.
+static void *(*real_joystick)(void *);
+static const char *(*id_path)(void *), *(*id_serial)(void *);
+static uint16_t (*id_vendor)(void *), (*id_product)(void *);
+#define PAD_IDS 16
+static struct { int32_t which; unsigned long long registry; int vid, pid, nth; char serial[64]; char key[96]; int seat; char *text; bool text_known; } pad_ids[PAD_IDS];
+static int pad_ids_n;
+static char pad_players_text[16384];
+static time_t pad_players_mtime; static long pad_players_ns;
+
+static bool pad_changed(const char *path, time_t *mt, long *ns);
+static void pad_norm_serial(const char *in, char *out, size_t n) {
+    size_t k = 0;
+    for (const char *c = in ? in : ""; *c && k + 1 < n; c++) if (isalnum((unsigned char)*c) && (unsigned char)*c < 128) out[k++] = (char)tolower((unsigned char)*c);
+    out[k] = 0;
+    bool same = true, zeros = true;
+    for (size_t i = 1; i < k; i++) if (out[i] != out[0]) same = false;
+    for (size_t i = 0; i + 1 < k; i++) if (out[i] != '0') zeros = false;
+    if (k < 6 || same || zeros) out[0] = 0;
+}
+static int pad_id_index(int32_t which) { for (int i = 0; i < pad_ids_n; i++) if (pad_ids[i].which == which) return i; return -1; }
+static void pad_match(int i) {
+    pad_ids[i].key[0] = 0; pad_ids[i].seat = 0;
+    char key[96]; int best = 0;
+    for (const char *line = pad_players_text; line && *line; line = strchr(line, '\n') ? strchr(line, '\n') + 1 : NULL) {
+        unsigned long long reg; int vid, pid, nth, seat; char serial[64];
+        if (sscanf(line, "c %llu %d %d %63s %d %d %95s", &reg, &vid, &pid, serial, &nth, &seat, key) != 7) continue;
+        int score = reg && reg == pad_ids[i].registry ? 3
+            : vid == pad_ids[i].vid && pid == pad_ids[i].pid && pad_ids[i].serial[0] && !strcmp(serial, pad_ids[i].serial) ? 2
+            : vid == pad_ids[i].vid && pid == pad_ids[i].pid && nth == pad_ids[i].nth ? 1 : 0;
+        if (score > best) { best = score; strlcpy(pad_ids[i].key, key, sizeof pad_ids[i].key); pad_ids[i].seat = seat < 0 ? 0 : seat > 8 ? 8 : seat; }
+    }
+}
+static void pad_read_players(bool force) {
+    const char *home = getenv("HOME");
+    if (!home) return;
+    char path[PATH_MAX]; snprintf(path, sizeof path, "%s/Library/Application Support/Nokcandu/controller-players", home);
+    if (!pad_changed(path, &pad_players_mtime, &pad_players_ns) && !force) return;
+    pad_players_text[0] = 0;
+    FILE *f = fopen(path, "r");
+    if (f) { size_t n = fread(pad_players_text, 1, sizeof pad_players_text - 1, f); pad_players_text[n] = 0; fclose(f); }
+    if (strncmp(pad_players_text, "nokplayers ", 11)) pad_players_text[0] = 0;
+    for (int i = 0; i < pad_ids_n; i++) pad_match(i);
+}
+/// Notes an opened controller: who it is, from SDL.
+static void pad_identify(void *controller) {
+    if (!controller || !real_joystick || !real_instance) return;
+    void *j = real_joystick(controller);
+    if (!j) return;
+    int32_t which = real_instance(j);
+    int i = pad_id_index(which);
+    if (i < 0) { if (pad_ids_n >= PAD_IDS) return; i = pad_ids_n++; memset(&pad_ids[i], 0, sizeof pad_ids[i]); pad_ids[i].which = which; }
+    const char *p = id_path ? id_path(j) : NULL;
+    const char *dev = p ? strstr(p, "DevSrvsID:") : NULL;
+    pad_ids[i].registry = dev ? strtoull(dev + 10, NULL, 10) : 0;
+    pad_ids[i].vid = id_vendor ? id_vendor(j) : 0; pad_ids[i].pid = id_product ? id_product(j) : 0;
+    pad_norm_serial(id_serial ? id_serial(j) : NULL, pad_ids[i].serial, sizeof pad_ids[i].serial);
+    pad_ids[i].nth = 0;
+    for (int k = 0; k < pad_ids_n; k++) if (k != i && pad_ids[k].vid == pad_ids[i].vid && pad_ids[k].pid == pad_ids[i].pid && pad_ids[k].which < which) pad_ids[i].nth++;
+    pad_read_players(true);
+    fprintf(stderr, "nokcandu: controller %04x:%04x (registry %llu, serial %s) is %s, %s\n", pad_ids[i].vid, pad_ids[i].pid, pad_ids[i].registry,
+            pad_ids[i].serial[0] ? "known" : "none", pad_ids[i].key[0] ? pad_ids[i].key : "not in Nokcandu's list", pad_ids[i].seat ? "set to a player" : "Auto");
+}
+static void pad_forget_identity(int32_t which) {
+    int i = pad_id_index(which);
+    if (i < 0) return;
+    free(pad_ids[i].text);
+    pad_ids[i] = pad_ids[--pad_ids_n];
+}
+static int pad_seat_of(int32_t which) { int i = pad_id_index(which); return i >= 0 ? pad_ids[i].seat : 0; }
+/// The player a controller is (1 first). One set to a player in Nokcandu is that player; the rest take the lowest
+/// players nobody chose, in the order they were first seen (with nothing set: their place in that order).
 static int pad_player_of(int32_t which) {
-    for (int i = 0; i < pad_seen_n; i++) if (pad_seen[i] == which) return i + 1;
-    if (pad_seen_n < PAD_MAX) { pad_seen[pad_seen_n++] = which; return pad_seen_n; }
+    bool known = false;
+    for (int i = 0; i < pad_seen_n; i++) if (pad_seen[i] == which) known = true;
+    if (!known && pad_seen_n < PAD_MAX) pad_seen[pad_seen_n++] = which;
+    int seat = pad_seat_of(which);
+    if (seat > 0) return seat;
+    bool taken[PAD_MAX + 2] = { false };
+    for (int i = 0; i < pad_seen_n; i++) { int s = pad_seat_of(pad_seen[i]); if (s > 0 && s <= PAD_MAX) taken[s] = true; }
+    int next = 1;
+    for (int i = 0; i < pad_seen_n; i++) {
+        if (pad_seat_of(pad_seen[i]) > 0) continue;
+        while (next <= PAD_MAX && taken[next]) next++;
+        if (pad_seen[i] == which) return next > PAD_MAX ? PAD_MAX : next;
+        taken[next < PAD_MAX + 2 ? next : PAD_MAX + 1] = true;
+    }
     return PAD_MAX;
 }
 static void pad_forget_player(int32_t which) {
@@ -165,15 +250,45 @@ static void pad_forget_player(int32_t which) {
         memmove(&pad_seen[i], &pad_seen[i + 1], (size_t)(pad_seen_n - i - 1) * sizeof pad_seen[0]); pad_seen_n--; return;
     }
 }
+/// Tells Nokcandu which player each controller became (pad-players-seen: "<key> <player>" lines).
+static void pad_report_players(void) {
+    if (!pad_bus || !pad_state_dir[0]) return;
+    char path[PATH_MAX], tmp[PATH_MAX];
+    snprintf(path, sizeof path, "%s/pad-players-seen", pad_state_dir); snprintf(tmp, sizeof tmp, "%s.%d", path, (int)getpid());
+    FILE *f = fopen(tmp, "w");
+    if (!f) return;
+    fprintf(f, "pid %d\n", (int)getpid());
+    for (int i = 0; i < pad_ids_n; i++) if (pad_ids[i].key[0]) fprintf(f, "%s %d\n", pad_ids[i].key, pad_player_of(pad_ids[i].which));
+    fclose(f); rename(tmp, path);
+}
+/// A controller's own profile in this game ("controller <key> begin" … "end"), or NULL.
+static const char *pad_own_text(int32_t which) {
+    int i = pad_id_index(which);
+    if (i < 0 || !pad_ids[i].key[0] || !pad_profile_text[0]) return NULL;
+    if (!pad_ids[i].text_known) {
+        pad_ids[i].text_known = true;
+        char b[128], e[128];
+        snprintf(b, sizeof b, "\ncontroller %s begin\n", pad_ids[i].key); snprintf(e, sizeof e, "\ncontroller %s end\n", pad_ids[i].key);
+        const char *s = strstr(pad_profile_text, b), *t = s ? strstr(s + strlen(b) - 1, e) : NULL;
+        if (s && t) pad_ids[i].text = strndup(s + strlen(b), (size_t)(t + 1 - (s + strlen(b))));
+    }
+    return pad_ids[i].text;
+}
+static void pad_forget_own_texts(void) { for (int i = 0; i < pad_ids_n; i++) { free(pad_ids[i].text); pad_ids[i].text = NULL; pad_ids[i].text_known = false; } }
 /// The compiled profile a player's engine runs (NULL: the controller as it is).
 static const char *pad_text_for_player(int player) {
     if (player <= 1) return pad_profile_text;
     int n = player > 8 ? 8 : player;
     return pad_player_kind[n] == 1 ? pad_profile_text : pad_player_kind[n] == 2 ? pad_player_text[n] : NULL;
 }
+/// What a controller's engine runs: its own profile in this game, or its player's.
+static const char *pad_text_for(int32_t which, int player) {
+    const char *own = which >= 0 ? pad_own_text(which) : NULL;
+    return own ? own : pad_text_for_player(player);
+}
 static pe_engine *pad_new_engine(int32_t which, bool main) {
     int player = which >= 0 ? pad_player_of(which) : 1;
-    const char *text = pad_text_for_player(player);
+    const char *text = pad_text_for(which, player);
     if (!text) return NULL;
     for (int i = 0; i < PAD_MAX; i++) if (!pads[i].used) {
         pe_sink s = { (void *)(intptr_t)i, sink_pad_button, sink_pad_axis, sink_key, sink_mouse_button, sink_mouse_move, sink_wheel, NULL };
@@ -188,7 +303,12 @@ static pe_engine *pad_engine_for(int32_t which, bool create) {
     for (int i = 0; i < PAD_MAX; i++) if (pads[i].used && pads[i].which == which) return pads[i].e;
     if (!create || !pad_profile_text[0]) return NULL;
     // A later player whose controller stays as it is: no engine, its events pass through.
-    if (pad_player_of(which) > 1 && !pad_text_for_player(pad_player_of(which))) return NULL;
+    if (pad_player_of(which) > 1 && !pad_text_for(which, pad_player_of(which))) return NULL;
+    // Controllers set to the same player in Nokcandu drive it together: one engine, the first controller's output.
+    if (pad_seat_of(which) > 0 && !pad_own_text(which))
+        for (int i = 0; i < PAD_MAX; i++)
+            if (pads[i].used && pads[i].which >= 0 && pads[i].player == pad_player_of(which) && pad_seat_of(pads[i].which) > 0 && !pad_own_text(pads[i].which))
+                return pads[i].e;
     // The devices' engine was waiting for a controller: this one becomes the main controller.
     if (pad_player_of(which) == 1)
         for (int i = 0; i < PAD_MAX; i++) if (pads[i].used && pads[i].main && pads[i].which < 0) { pads[i].which = which; return pads[i].e; }
@@ -312,6 +432,14 @@ static void pad_check(void) {
     if (now - pad_last_check < 0.2) return;
     pad_last_check = now;
     pad_check_calibrate(now);
+    {   // Players set in Nokcandu changed: controllers start again as their new players.
+        int seats[PAD_IDS]; for (int i = 0; i < pad_ids_n; i++) seats[i] = pad_ids[i].seat;
+        int n = pad_ids_n;
+        pad_read_players(false);
+        bool moved = n != pad_ids_n;
+        for (int i = 0; i < pad_ids_n && i < n; i++) if (seats[i] != pad_ids[i].seat) moved = true;
+        if (moved) { pad_drop_engines(); pad_report_players(); }
+    }
     char active[PATH_MAX]; snprintf(active, sizeof active, "%s/pad-active", pad_state_dir);
     bool changed = pad_changed(active, &pad_active_mtime, &pad_active_ns);
     if (changed) {
@@ -335,9 +463,10 @@ static void pad_check(void) {
         if (strncmp(pad_profile_text, "nokpad ", 7)) pad_profile_text[0] = 0;
         int kinds[9]; memcpy(kinds, pad_player_kind, sizeof kinds);
         pad_parse_players();
+        pad_forget_own_texts();
         bool live = pad_profile_text[0] != 0 && !memcmp(kinds, pad_player_kind, sizeof kinds);
         for (int i = 0; i < PAD_MAX && live; i++) if (pads[i].used) {
-            const char *text = pad_text_for_player(pads[i].player);
+            const char *text = pad_text_for(pads[i].which, pads[i].player);
             live = text && pe_update_profile(pads[i].e, text);
         }
         if (!live) pad_drop_engines();
@@ -456,6 +585,8 @@ static int nok_wait(nok_sdl_event *ev, int timeout) {
         case NOK_SDL_CREMOVED:
             slot_cached = 0;
             pad_forget_player(ev->cbutton.which);
+            pad_forget_identity(ev->cbutton.which);
+            pad_report_players();
             for (int i = 0; i < PAD_MAX; i++) if (pads[i].used && pads[i].which == ev->cbutton.which) {
                 if (pads[i].main && pad_has_devices) { pe_release_main(pads[i].e, now); pads[i].which = -1; }
                 else { pe_release_all(pads[i].e, now); pe_destroy(pads[i].e); pads[i].used = false; pads[i].main = false; }
@@ -469,7 +600,9 @@ static int nok_wait(nok_sdl_event *ev, int timeout) {
 
 static void *nok_open(int index) {
     void *c = real_open(index);
+    pad_identify(c);
     if (c && real_device_instance) pad_player_of(real_device_instance(index));   // players in the order controllers open
+    pad_report_players();
     if (c && real_sensor) { st_sensor_ok = real_sensor(c, NOK_SDL_SENSOR_GYRO, 1) == 0; real_sensor(c, NOK_SDL_SENSOR_ACCEL, 1); }   // gyro (and tilt) on, for profiles that use them
     fprintf(stderr, "nokcandu: controller %d opened; gyro %s\n", index, st_sensor_ok ? "on" : real_sensor ? "not available" : "unknown");
     return c;
@@ -620,6 +753,11 @@ static void *nok_dlsym(void *handle, const char *name) {
         real_device_vendor = (uint16_t (*)(int))dlsym(handle, "SDL_JoystickGetDeviceVendor");
         real_device_product = (uint16_t (*)(int))dlsym(handle, "SDL_JoystickGetDeviceProduct");
         real_instance = (int32_t (*)(void *))dlsym(handle, "SDL_JoystickInstanceID");
+        real_joystick = (void *(*)(void *))dlsym(handle, "SDL_GameControllerGetJoystick");
+        id_path = (const char *(*)(void *))dlsym(handle, "SDL_JoystickPath");
+        id_serial = (const char *(*)(void *))dlsym(handle, "SDL_JoystickGetSerial");
+        id_vendor = (uint16_t (*)(void *))dlsym(handle, "SDL_JoystickGetVendor");
+        id_product = (uint16_t (*)(void *))dlsym(handle, "SDL_JoystickGetProduct");
         fprintf(stderr, "nokcandu: controller remapping ready\n");
         return (void *)nok_wait;
     }

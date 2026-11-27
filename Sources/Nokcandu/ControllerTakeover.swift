@@ -45,15 +45,40 @@ final class ControllerTakeover {
         DispatchQueue.main.async { [self] in
             applyQueued = false
             let on = wanted && Self.preference
-            if on, manager == nil { open() } else if !on, manager != nil { close() }
+            let plan = on ? matching() : []
+            if manager != nil, !on || plan != opened { close() }
+            if on, manager == nil, !plan.isEmpty { open(plan) }
         }
     }
     private var applyQueued = false
 
-    private func open() {
+    /// Controllers set to a player other than 1 (by connection location): never taken, so Mac games get them as
+    /// they are. Set by the Controllers panel's choices.
+    private(set) var excluded: Set<Int> = []
+    func exclude(_ locations: Set<Int>) {
+        guard locations != excluded || (!locations.isEmpty && manager != nil) else { return }
+        excluded = locations
+        apply()
+    }
+    private var opened: [[String: Int]] = []
+    /// What to take: every controller of the kinds taken, or with some left out, each of the others by location.
+    private func matching() -> [[String: Int]] {
+        let all = TakeoverPad.matching.map { [kIOHIDVendorIDKey: $0.vendor, kIOHIDProductIDKey: $0.product] }
+        guard !excluded.isEmpty else { return all }
         let m = IOHIDManagerCreate(kCFAllocatorDefault, 0)
-        IOHIDManagerSetDeviceMatchingMultiple(m, TakeoverPad.matching.map {
-            [kIOHIDVendorIDKey: $0.vendor, kIOHIDProductIDKey: $0.product] as CFDictionary } as CFArray)
+        IOHIDManagerSetDeviceMatchingMultiple(m, all as CFArray)
+        let devices = (IOHIDManagerCopyDevices(m) as? Set<IOHIDDevice>) ?? []
+        return devices.compactMap { d -> [String: Int]? in
+            let location = Self.int(d, kIOHIDLocationIDKey)
+            guard !excluded.contains(location) else { return nil }
+            return [kIOHIDVendorIDKey: Self.int(d, kIOHIDVendorIDKey), kIOHIDProductIDKey: Self.int(d, kIOHIDProductIDKey), kIOHIDLocationIDKey: location]
+        }.sorted { ($0[kIOHIDLocationIDKey] ?? 0) < ($1[kIOHIDLocationIDKey] ?? 0) }
+    }
+
+    private func open(_ plan: [[String: Int]]) {
+        let m = IOHIDManagerCreate(kCFAllocatorDefault, 0)
+        opened = plan
+        IOHIDManagerSetDeviceMatchingMultiple(m, plan as CFArray)
         IOHIDManagerRegisterDeviceMatchingCallback(m, { _, _, _, d in MainActor.assumeIsolated { ControllerTakeover.shared.added(d) } }, nil)
         IOHIDManagerRegisterDeviceRemovalCallback(m, { _, _, _, d in MainActor.assumeIsolated { ControllerTakeover.shared.removed(d) } }, nil)
         IOHIDManagerScheduleWithRunLoop(m, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
@@ -71,6 +96,7 @@ final class ControllerTakeover {
             IOHIDManagerClose(m, IOOptionBits(kIOHIDOptionsTypeSeizeDevice))
         }
         manager = nil
+        opened = []
         status = "Off"
         ControllerLog.add("Controller takeover: controllers given back to macOS")
         MappedGamepads.shared.refresh()

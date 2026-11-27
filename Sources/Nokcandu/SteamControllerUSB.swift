@@ -57,6 +57,18 @@ final class SteamControllerUSB: ObservableObject {
     var controllerName: String? { active.map { "Steam Controller (\($0.model == .steam2026 ? "2026" : "2015") · \($0.transport.title))" } }
     /// The Steam Controller being read, if any.
     var model: SteamControllerModel? { active?.model }
+    /// Nokcandu is reading a Steam Controller already (a profile, the editor, or kept in the background).
+    var isReading: Bool { manager != nil }
+    struct Identity { let vendorID: Int, productID: Int; let serial: String?; let registryID: UInt64; let name: String; let bluetooth: Bool; let steam2026: Bool }
+    /// The controller being read, for the Controllers panel.
+    var identity: Identity? {
+        guard let a = active else { return nil }
+        let d = a.device
+        func int(_ k: String) -> Int { (IOHIDDeviceGetProperty(d, k as CFString) as? NSNumber)?.intValue ?? 0 }
+        return Identity(vendorID: int(kIOHIDVendorIDKey), productID: int(kIOHIDProductIDKey),
+                        serial: IOHIDDeviceGetProperty(d, kIOHIDSerialNumberKey as CFString) as? String, registryID: HIDRegistryID.of(d),
+                        name: controllerName ?? "Steam Controller", bluetooth: a.transport == .bluetooth, steam2026: a.model == .steam2026)
+    }
     /// Taken over: the original under a verified mode lease; the 2026 controller once its reports come in (it
     /// needs no lease: it goes back to its own mode by itself when the keep-alives stop).
     private var captured: Bool { modeLease != nil || active?.model == .steam2026 }

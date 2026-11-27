@@ -139,6 +139,7 @@ final class DesktopPad: ObservableObject {
         started = true
         Task.detached(priority: .background) { PadSocketLeftovers.removeAll() }
         GCController.shouldMonitorBackgroundEvents = true
+        ControllerDevices.shared.start()
         let nc = NotificationCenter.default
         observers.append(nc.addObserver(forName: .GCControllerDidConnect, object: nil, queue: .main) { _ in MainActor.assumeIsolated { DesktopPad.shared.attach(); DesktopPad.shared.evaluate() } })
         observers.append(nc.addObserver(forName: .GCControllerDidDisconnect, object: nil, queue: .main) { _ in MainActor.assumeIsolated { DesktopPad.shared.attach(); DesktopPad.shared.evaluate() } })
@@ -362,10 +363,18 @@ final class DesktopPad: ObservableObject {
         runtimePID = nextPID
         let id = front?.bundleIdentifier ?? ""
         var chosen: PadProfiles.Profile?
+        // Profiles particular controllers get here (the game's choices, or elsewhere the controllers' own); the
+        // controller in use decides which, and pressing another switches (controllerUsed).
+        var nextControllerProfiles: [String: String] = [:]
+
         let all = PadProfileEdits.shared.profiles(PadProfiles.profiles())
         let routingChanged = stream?.refreshControllerProfile(profiles: all) ?? false
         let force = force || routingChanged
         let g = game(for: front)
+        if front?.processIdentifier != getpid() {
+            lastContext = PadContext(game: g.map { ($0.name, KeyRemap.gameContents(for: $0), Self.profile(for: $0, all: all)?.id) }, appName: front?.localizedName,
+                                     appRule: rules[id], everywhere: everywhereID, macDefault: on ? profileID : nil, macOn: on, enabled: enabled)
+        }
         if gameInFront != (g != nil) { gameInFront = g != nil }
         if !playing { Notifier.shared.playingEnded() }
         FocusWhilePlaying.shared.playing(playing)
@@ -380,16 +389,24 @@ final class DesktopPad: ObservableObject {
         else if let id = everywhereID, let p = all.first(where: { $0.id == id }) {
             chosen = p; status = "Everywhere: \(p.name)"
         } else if let g {
-            chosen = Self.profile(for: g, all: all)
-            status = chosen.map { "\(g.name): \($0.name)" } ?? "\(g.name): controller as it is"
+            // The game's choice for the controller in use comes first, then the game's profile.
+            let choices = KeyRemap.gameContents(for: g).map { PadProfiles.controllerChoices(contents: $0) } ?? [:]
+            nextControllerProfiles = choices
+            if let k = controllerInUse(choices), let pid = choices[k], let p = all.first(where: { $0.id == pid }) {
+                chosen = p; status = "\(g.name): \(p.name) (for \(ControllerDevices.shared.remembered(k)?.name ?? "this controller"))"
+            } else {
+                chosen = Self.profile(for: g, all: all)
+                status = chosen.map { "\(g.name): \($0.name)" } ?? "\(g.name): controller as it is"
+            }
         } else if let rule = rules[id] {
             if rule == "off" { status = "Off for \(front?.localizedName ?? "this app")" }
             else if let p = all.first(where: { $0.id == rule }) { chosen = p; status = "\(front?.localizedName ?? "This app"): \(p.name)" }
-        } else if on, let linked = linkedProfile(all) {
+        } else if on, let linked = linkedProfile(all, profiles: &nextControllerProfiles) {
             chosen = linked.1; status = "\(linked.0): \(linked.1.name)"
         } else if on, let p = profileID.flatMap({ pid in all.first { $0.id == pid } }) {
             chosen = p; status = "Mac: \(p.name)"
         } else { status = on ? "Mac: no profile chosen" : "Waiting for a game" }
+        controllerProfiles = nextControllerProfiles
         if chosen != nil && !trusted && !streaming { status = "Needs Accessibility permission" }
         let wherePlaying: String = everywhereID != nil && chosen?.id == everywhereID ? "Everywhere" : g?.name ?? (rules[id] != nil ? (front?.localizedName ?? "") : "On the Mac")
         if activeID != chosen?.id { activeID = chosen?.id }
@@ -683,12 +700,62 @@ final class DesktopPad: ObservableObject {
         if let l = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { e in check(e) ? nil : e }) { shortcutMonitors.append(l) }
     }
     /// A profile linked to a connected controller.
-    func linkedProfile(_ all: [PadProfiles.Profile]) -> (String, PadProfiles.Profile)? {
-        for c in GCController.controllers() {
-            guard let n = c.vendorName, let id = controllerRules[n], let p = all.first(where: { $0.id == id }) else { continue }
-            return (n, p)
-        }
-        return nil
+    /// The profile of the controller in use, its own (the Controllers panel's choice, or a rule by its name from
+    /// before), for apps with no profile of their own choosing.
+    func linkedProfile(_ all: [PadProfiles.Profile], profiles: inout [String: String]) -> (String, PadProfiles.Profile)? {
+        let devices = ControllerDevices.shared
+        for c in devices.connected { if let id = devices.ownProfile(c) { profiles[c.key] = id } }
+        guard let k = controllerInUse(profiles), let id = profiles[k], let p = all.first(where: { $0.id == id }) else { return nil }
+        return (devices.remembered(k)?.name ?? "This controller", p)
+    }
+
+    // MARK: Which controller
+
+    /// Profiles particular controllers get in the context in front (empty: none).
+    private var controllerProfiles: [String: String] = [:]
+    /// The controller last pressed (a remembered controller's key).
+    private var currentController: String?
+    /// Where the controllers were last used (not Nokcandu itself): the Controllers panel says what each gets there.
+    struct PadContext {
+        var game: (name: String, contents: URL?, profileID: String?)?
+        var appName: String?, appRule: String?, everywhere: String?, macDefault: String?
+        var macOn: Bool, enabled: Bool
+    }
+    private(set) var lastContext: PadContext?
+
+    /// The controller whose profile applies: the one last pressed while it's connected and drives player 1, else
+    /// the first connected that does.
+    private func controllerInUse(_ profiles: [String: String]) -> String? {
+        let devices = ControllerDevices.shared
+        let drivers = devices.connected.filter { c in c.kind == .gamepad && (devices.roster.controller(c.key)?.seat.explicit ?? 1) == 1 }
+        if let k = currentController, drivers.contains(where: { $0.key == k }) { return k }
+        return drivers.first?.key
+    }
+    /// A controller was pressed: with another profile for it here, that profile takes over.
+    private func controllerUsed(_ source: String) {
+        guard !controllerProfiles.isEmpty, !streaming, everywhereID == nil,
+              let key = ControllerDevices.shared.cachedKey(forSource: source), key != currentController else { return }
+        let before = controllerProfiles[controllerInUse(controllerProfiles) ?? ""]
+        currentController = key
+        if controllerProfiles[key] != before { evaluate(force: true) }
+    }
+    /// Whether a source's input goes into the profile: player 1's controllers. On the Mac that's every controller
+    /// not set to another player; in a Windows game, the ones that are player 1 there (the others are players of
+    /// their own, whose Windows driver applies their profile, so their presses mustn't also type player 1's keys).
+    private func drivesProfile(_ source: String) -> Bool {
+        if streaming { return true }
+        let devices = ControllerDevices.shared
+        guard let key = devices.cachedKey(forSource: source) else { return true }
+        if let n = devices.roster.controller(key)?.seat.explicit { return n == 1 }
+        if gamePID != 0 { return devices.windowsPlayerCached(key) == 1 }
+        return true
+    }
+    /// A controller's player or profile changed in the Controllers panel.
+    func controllersChanged() {
+        sourceState = PadSourceState(); lastButtons = [:]; lastAxes = [:]
+        if let e = engine { pe_release_all(e, Self.now()) }
+        attach()
+        evaluate(force: true)
     }
     nonisolated static func now() -> Double { ProcessInfo.processInfo.systemUptime }
 
@@ -726,9 +793,20 @@ final class DesktopPad: ObservableObject {
         feed.attachGamepads()
         if steamSource {
             SteamControllerUSB.shared.listen(steamReaderID) { [weak self] state in self?.readSteam(state) }
+            // Another controller with a profile of its own here: a press on it switches to that profile.
+            if !controllerProfiles.isEmpty {
+                for c in feed.mainControllers() {
+                    let sourceID = String(describing: ObjectIdentifier(c))
+                    c.extendedGamepad?.valueChangedHandler = { pad, _ in MainActor.assumeIsolated { DesktopPad.shared.read(pad, source: sourceID) } }
+                }
+            }
             return
         }
         SteamControllerUSB.shared.remove(steamReaderID)
+        // The Steam Controller has a profile of its own here: it's read, so a press on it switches to that profile.
+        if let k = ControllerDevices.shared.connected.first(where: { $0.vendorID == Controllers.Family.valve.vendorID })?.key, controllerProfiles[k] != nil {
+            SteamControllerUSB.shared.listen(steamWakeID) { [weak self] state in self?.readSteam(state) }
+        } else { SteamControllerUSB.shared.remove(steamWakeID) }
         let hasMain = !feed.mainControllers().isEmpty || !MappedGamepads.shared.isEmpty
         if hadMainController && !hasMain, let e = engine {
             pe_release_main(e, Self.now()); sourceState = PadSourceState(); lastButtons = [:]; lastAxes = [:]
@@ -780,8 +858,11 @@ final class DesktopPad: ObservableObject {
     }
 
     private var mappedToken: UUID?
+    private let steamWakeID = UUID()
     /// A controller macOS doesn't know, read with its community mapping (MappedGamepads): like any other.
     private func readMapped(_ source: String, _ held: Set<PadProfiles.Input>?, _ axes: [Int: Int]) {
+        guard held == nil || drivesProfile(source) else { dropSource(source); return }
+        if let held, !held.isEmpty { controllerUsed(source) }
         guard engine != nil, !steamSource else { return }
         if streaming, stream?.otherControllersAsPlayers == true, StreamGamepads.profileController().mapped != source { return }
         guard let held else { consume(sourceState.retain(sourceState.sourceNames.subtracting([source]))); return }
@@ -795,6 +876,9 @@ final class DesktopPad: ObservableObject {
         let timingStart = diagnosticsEnabled ? Self.now() : nil
         defer { finishTiming("Controller handling", started: timingStart) }
         diagnostic("controller callbacks")
+        if let c = g.controller { ControllerDevices.shared.gameControllerMoved(c) }
+        guard drivesProfile(source) else { dropSource(source); return }
+        if !controllerProfiles.isEmpty, PadGC.state(g).buttons.contains(where: \.1) { controllerUsed(source) }
         guard engine != nil, !steamSource else { return }
         let (buttons, axes) = PadGC.state(g)
         if OnScreenKeyboard.shared.isOpen {
@@ -805,7 +889,13 @@ final class DesktopPad: ObservableObject {
         let values = Dictionary(uniqueKeysWithValues: axes.map { (Int($0.0), Int(max(-32768, min(32767, $0.1 * 32767)))) })
         consume(sourceState.update(source: source, buttons: held, axes: values))
     }
+    /// A controller that isn't player 1's: whatever it held in the profile is let go.
+    private func dropSource(_ source: String) {
+        guard sourceState.sourceNames.contains(source) else { return }
+        consume(sourceState.retain(sourceState.sourceNames.subtracting([source])))
+    }
     private func readSteam(_ report: SteamControllerReport.State?) {
+        if let r = report, !r.buttons.isEmpty { controllerUsed("steam") }
         guard steamSource, let e = engine else { return }
         let state = report?.labeled(as: steamLabels)
         guard gestureRecorder == nil else { return }

@@ -1163,6 +1163,43 @@ public enum PadProfiles {
     static func folder(_ contents: URL) -> URL { contents.appendingPathComponent("SharedSupport/nokcandu", isDirectory: true) }
     public static func mapFile(_ contents: URL) -> URL { folder(contents).appendingPathComponent("pad-map") }
     static func choiceFile(_ contents: URL) -> URL { folder(contents).appendingPathComponent("pad-profile") }
+    static func controllerChoicesFile(_ contents: URL) -> URL { folder(contents).appendingPathComponent("pad-profile-controllers") }
+
+    /// The game's choice of profile for particular controllers ("<controller key> <profile id>" lines): a controller
+    /// listed here uses that profile in this game instead of the game's profile.
+    public static func controllerChoices(contents: URL) -> [String: String] {
+        guard let t = try? String(contentsOf: controllerChoicesFile(contents), encoding: .utf8) else { return [:] }
+        var r: [String: String] = [:]
+        for line in t.split(separator: "\n") {
+            let w = line.split(separator: " ", maxSplits: 1)
+            if w.count == 2 { r[String(w[0])] = String(w[1]).trimmingCharacters(in: .whitespaces) }
+        }
+        return r
+    }
+    /// Sets (nil: clears) the game's profile for one controller and writes its pad-map again.
+    public static func setControllerChoice(_ id: String?, controller key: String, contents: URL, shared: Bool = false,
+                                           file lf: URL = profilesFile, defaultFile df: URL = defaultFile) throws {
+        guard !key.contains(" "), !key.contains("\n"), id.map({ !$0.contains("\n") }) ?? true else { throw NokError("Not a controller key.") }
+        var c = controllerChoices(contents: contents)
+        c[key] = id
+        let f = controllerChoicesFile(contents)
+        if c.isEmpty { try? FileManager.default.removeItem(at: f) }
+        else {
+            try NokPaths.ensure(folder(contents))
+            try Data(c.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)\n" }.joined().utf8).write(to: f, options: .atomic)
+        }
+        _ = try writeChecked(contents: contents, shared: shared, file: lf, defaultFile: df)
+    }
+    /// The profile text plus each per-controller profile in a block of its own ("controller <key> begin" … "end"),
+    /// which the engine skips and Windows games' driver hands to that controller.
+    static func compile(_ base: Profile?, controllers: [String: String], all: [Profile]) -> String? {
+        let blocks = controllers.sorted { $0.key < $1.key }.compactMap { key, id -> String? in
+            guard let q = all.first(where: { $0.id == id }) else { return nil }
+            return "controller \(key) begin\n" + compileOne(q, all: all) + "controller \(key) end\n"
+        }.joined()
+        guard let base else { return blocks.isEmpty ? nil : "nokpad 1\n" + blocks }
+        return compile(base, all: all) + blocks
+    }
     static func ownFile(_ contents: URL) -> URL { folder(contents).appendingPathComponent("pad-own.json") }
 
     public static func profiles(file: URL = profilesFile) -> [Profile] {
@@ -1303,11 +1340,11 @@ public enum PadProfiles {
         if fm.fileExists(atPath: f.path), try fm.attributesOfItem(atPath: f.path)[.type] as? FileAttributeType != .typeRegular {
             throw NokError("The controller map path is not a regular file. It was preserved.")
         }
-        guard let p = effective(contents: contents, shared: shared, all: list, defaultFile: df, file: lf) else {
+        guard let text = compile(effective(contents: contents, shared: shared, all: list, defaultFile: df, file: lf),
+                                 controllers: controllerChoices(contents: contents), all: list) else {
             if fm.fileExists(atPath: f.path) { try fm.removeItem(at: f); return true }
             return false
         }
-        let text = compile(p, all: list)
         if (try? String(contentsOf: f, encoding: .utf8)) == text { return false }
         try NokPaths.ensure(folder(contents))
         try Data(text.utf8).write(to: f, options: .atomic)

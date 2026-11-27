@@ -256,34 +256,6 @@ struct AdvancedSettings: View {
 
 
 
-/// Game controllers macOS sees right now (Wine's games see the same ones).
-struct ControllersSection: View {
-    @State private var pads: [String] = []
-    var body: some View {
-        Section {
-            if pads.isEmpty {
-                Text("No controller connected. Pair one in System Settings → Bluetooth, or plug it in.").foregroundStyle(.secondary)
-            }
-            ForEach(pads, id: \.self) { p in Label(p, systemImage: "gamecontroller.fill") }
-        } header: { Text("Controllers") } footer: {
-            Text("Xbox, PlayStation, Switch and other controllers work in Windows games that support controllers. Whether a game sees a controller as itself (gyro, touchpad, every button) or as an Xbox controller is chosen per game in its Controls tab.")
-                .font(.caption).foregroundStyle(.secondary)
-        }
-        .onAppear(perform: reload)
-        .onReceive(NotificationCenter.default.publisher(for: .GCControllerDidConnect)) { _ in reload() }
-        .onReceive(NotificationCenter.default.publisher(for: .GCControllerDidDisconnect)) { _ in reload() }
-    }
-    func reload() {
-        GCController.startWirelessControllerDiscovery {}
-        pads = GCController.controllers().map { c in
-            let kind = c.extendedGamepad != nil ? "full gamepad" : c.microGamepad != nil ? "simple gamepad" : "controller"
-            let battery = c.battery.map { " · battery \(Int($0.batteryLevel * 100))%" } ?? ""
-            return "\(c.vendorName ?? "Controller") (\(kind))\(battery)"
-        }
-    }
-}
-
-
 /// Settings → General: steadier Wi-Fi while playing (a small system helper switches AWDL off during games).
 struct NetworkSteadySetting: View {
     @State private var installed = NetworkSteady.installed
@@ -388,7 +360,10 @@ struct DesktopPadSettings: View {
                         Button("Pointer and Clicks") { adopt(PadProfiles.desktopStarter()) }
                     }.fixedSize()
                 }
-                ControllerLinks(pad: pad, profiles: profiles)
+                LabeledContent("Particular controllers") {
+                    Button("Controllers…") { model.sidebarTab = .profiles; model.profileSelection = "controllers" }
+                }
+                .help("A controller can have a profile of its own, used here instead of the one above while it's the one you're using.")
             }
         }
         Section("Profiles for Mac Apps") {
@@ -456,26 +431,6 @@ struct DesktopPadSettings: View {
     }
 }
 
-
-/// "When this controller is connected, the Mac uses …": one row per controller connected or remembered.
-struct ControllerLinks: View {
-    @ObservedObject var pad: DesktopPad
-    let profiles: [PadProfiles.Profile]
-    var names: [String] {
-        Set(GCController.controllers().filter { $0.extendedGamepad != nil }.compactMap(\.vendorName)).union(pad.controllerRules.keys).sorted()
-    }
-    var body: some View {
-        ForEach(names, id: \.self) { n in
-            LabeledContent("With \(n)") {
-                Picker("", selection: Binding(get: { pad.controllerRules[n] ?? "" }, set: { pad.controllerRules[n] = $0.isEmpty ? nil : $0 })) {
-                    Text("The profile above").tag("")
-                    ForEach(profiles) { p in Text(p.name).tag(p.id) }
-                }.labelsHidden().frame(width: 200)
-            }
-            .help("While this controller is connected, the Mac uses this profile instead.")
-        }
-    }
-}
 
 /// Records a keyboard shortcut (a key with at least one of ⌘ ⌥ ⌃ ⇧).
 struct ShortcutRecorder: View {
