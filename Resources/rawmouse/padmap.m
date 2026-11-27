@@ -456,6 +456,7 @@ static void pad_virtual_attach(void) {
     fprintf(stderr, "nokcandu: the Steam Controller Nokcandu reads is a stand-in controller here (instance %d)\n", (int)pad_virtual_which);
 }
 static bool pad_is_fed_device(int32_t which) {
+    if (which >= 0 && which == pad_virtual_which) return true;   // the stand-in is only ever the profile's
     if (!pad_feed_on || !real_num_joysticks || !real_device_instance || !real_device_vendor) return false;
     int n = real_num_joysticks();
     for (int i = 0; i < n; i++) if (real_device_instance(i) == which) return real_device_vendor(i) == 0x28de;
