@@ -139,6 +139,11 @@ final class AppModel: ObservableObject {
         if featureServicesReady { DesktopPad.shared.start(); PadDSUBridge.shared.configure(); ControllerOverlay.shared.start() }
         Notifier.shared.start { [weak self] id in self?.selection = id }
         showWhatsNew = !showWelcome && WhatsNew.shouldShow()
+        if let crash = NokcanduCrashReports.checkAtLaunch() {
+            let when = crash.date.formatted(date: .abbreviated, time: .shortened)
+            let more = crash.count > 1 ? " (\(crash.count) times since the last launch)" : ""
+            remember("Nokcandu quit unexpectedly on \(when)\(more). macOS kept a report: ~/Library/Logs/DiagnosticReports/\(crash.url.lastPathComponent). Attach it when you report the problem.", isError: true)
+        }
         refresh()
         installer.onLibraryReady = { [weak self] in self?.refresh() }
         interruptedDownloads = StoreJobs.all()

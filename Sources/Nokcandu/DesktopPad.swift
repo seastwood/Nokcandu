@@ -159,6 +159,11 @@ final class DesktopPad: ObservableObject {
         lifecycleObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { if let e = DesktopPad.shared.engine { pe_release_all(e, Self.now()) } }
         })
+        // Waking up: anything still held from before sleep is let go (a button the controller lost while asleep).
+        lifecycleObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { if let e = DesktopPad.shared.engine { pe_release_all(e, Self.now()) } }
+        })
+        releaseLeftHeld()
         evaluate()
     }
 
@@ -929,6 +934,36 @@ final class DesktopPad: ObservableObject {
         ev.flags = flags.union(PadKeyboardState.keyFlags(k))
         PadEventSource.mark(ev)
         ev.post(tap: .cghidEventTap)
+        if held.key(k, down: down) { saveHeld() }
+    }
+
+    // MARK: Released after a crash
+
+    /// What's held down in macOS right now, saved as it changes (after the event is posted, off the main thread) so
+    /// the next launch can release it if Nokcandu stops without doing so.
+    private var held = HeldOutputsJournal()
+    private let heldQueue = DispatchQueue(label: "nokcandu.held-outputs", qos: .utility)
+    private func saveHeld() {
+        let data = held.data()
+        heldQueue.async { try? data.write(to: HeldOutputsJournal.file, options: .atomic) }
+    }
+    /// At launch: release what the last run left held, and say so.
+    private func releaseLeftHeld() {
+        let left = HeldOutputsJournal.read(try? Data(contentsOf: HeldOutputsJournal.file))
+        try? FileManager.default.removeItem(at: HeldOutputsJournal.file)
+        guard !left.isEmpty else { return }
+        for k in left.keys {
+            guard let ev = CGEvent(keyboardEventSource: PadEventSource.source(), virtualKey: CGKeyCode(k), keyDown: false) else { continue }
+            if !PadKeyboardState.modifier(k).isEmpty { ev.type = .flagsChanged; ev.flags = [] }
+            PadEventSource.mark(ev); ev.post(tap: .cghidEventTap)
+        }
+        for b in left.mouseButtons {
+            let type: CGEventType = b == 0 ? .leftMouseUp : b == 1 ? .rightMouseUp : .otherMouseUp
+            guard let ev = CGEvent(mouseEventSource: PadEventSource.source(), mouseType: type, mouseCursorPosition: cursor,
+                                   mouseButton: CGMouseButton(rawValue: UInt32(b)) ?? .center) else { continue }
+            PadEventSource.mark(ev); ev.post(tap: .cghidEventTap)
+        }
+        ControllerLog.add("Released \(left.keys.count) key(s) and \(left.mouseButtons.count) mouse button(s) the last run left held (it stopped without releasing them)")
     }
     private var cursor: CGPoint { CGEvent(source: nil)?.location ?? .zero }
     private func mouse(_ b: Int, _ down: Bool) {
@@ -948,6 +983,7 @@ final class DesktopPad: ObservableObject {
         diagnostic(down ? "mouse button down" : "mouse button up")
         if output.target > 0 { output.event.postToPid(output.target) }
         else { output.event.post(tap: .cghidEventTap) }
+        if held.mouse(b, down: down) { saveHeld() }
     }
     /// The real mouse or trackpad moved this recently (seconds of uptime): it takes priority over the controller.
     private var lastRealMouse: TimeInterval = 0
