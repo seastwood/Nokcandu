@@ -654,13 +654,23 @@ static void pad_load_identity(void) {
         snprintf(path, sizeof path, "%s/Library/Application Support/Nokcandu/controller-profiles-off", home);
         if (stat(path, &st) == 0) return;
     }
-    snprintf(path, sizeof path, "%s/pad-map", pad_state_dir);
+    // The map that applies: a profile used everywhere (as the game half chooses, pad_activate), else this
+    // environment's, else the game in front's (a shared launcher's games have maps of their own). Reading only the
+    // environment's left a profile used everywhere unpresented.
+    path[0] = 0;
+    if (home) {
+        char flag[PATH_MAX]; snprintf(flag, sizeof flag, "%s/Library/Application Support/Nokcandu/controller-profiles-everywhere", home);
+        if (stat(flag, &st) == 0) snprintf(path, sizeof path, "%s.map", flag);
+    }
+    if (!path[0] || stat(path, &st) != 0) snprintf(path, sizeof path, "%s/pad-map", pad_state_dir);
+    if (stat(path, &st) != 0 && pad_profile_path[0]) strlcpy(path, pad_profile_path, sizeof path);
     FILE *f = fopen(path, "r");
     if (!f) return;
-    bool players = false;
+    bool players = false, presented = false;
     while (fgets(line, sizeof line, f)) {
-        // Player lines come after player 1's profile; another player's own profile (begin … end) may name a
-        // controller too, but the identity is player 1's.
+        // The presentation is player 1's (the first "present" line, before any player's or controller's block);
+        // the player lines after it say which later players take it. Stopping at "present" (as before November 27,
+        // 2026) never read them, so players left as they are were presented too.
         int n; char word[16];
         if (sscanf(line, "player %d %15s", &n, word) == 2) {
             if (!players) { players = true; for (int k = 2; k < 9; k++) pad_identity_player[k] = false; }
@@ -668,7 +678,12 @@ static void pad_load_identity(void) {
             if (!strcmp(word, "begin")) { while (fgets(line, sizeof line, f)) if (sscanf(line, "player %d %15s", &n, word) == 2 && !strcmp(word, "end")) break; }
             continue;
         }
-        if (players || strncmp(line, "present ", 8)) continue;
+        if (!strncmp(line, "controller ", 11) && strstr(line, " begin")) {
+            while (fgets(line, sizeof line, f)) if (!strncmp(line, "controller ", 11) && strstr(line, " end")) break;
+            continue;
+        }
+        if (presented || players || strncmp(line, "present ", 8)) continue;
+        presented = true;
         if (!strncmp(line + 8, "xbox", 4)) {
             pad_identity.on = true; pad_identity.kind = 1; pad_identity.vid = 0x045E; pad_identity.pid = 0x02EA; pad_identity.version = 0x0408;
             pad_identity.name = "Xbox Wireless Controller";
@@ -681,10 +696,9 @@ static void pad_load_identity(void) {
             pad_identity.on = true; pad_identity.kind = 3; pad_identity.vid = 0x057E; pad_identity.pid = 0x2009; pad_identity.version = 0x0200;
             pad_identity.name = "Pro Controller";
         }
-        break;
     }
     fclose(f);
-    if (pad_identity.on) fprintf(stderr, "nokcandu: controllers are presented as %s (%04x:%04x)\n", pad_identity.name, pad_identity.vid, pad_identity.pid);
+    if (pad_identity.on) fprintf(stderr, "nokcandu: controllers are presented as %s (%04x:%04x), from %s\n", pad_identity.name, pad_identity.vid, pad_identity.pid, path);
 }
 /// Asked by Nokcandu's controller driver (Engine/controller-hid) for each game controller it creates: 0 as it is,
 /// 1 Xbox, 2 DualShock 4, 3 Switch Pro Controller.
