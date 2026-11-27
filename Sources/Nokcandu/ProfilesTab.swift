@@ -585,6 +585,9 @@ struct KeyLayoutPage: View {
 /// overlay and the editor), with its sticks or trackpads as dots.
 struct ControllerIcon: View {
     let family: Controllers.Family?
+    /// Its width (the height follows); 30 in lists.
+    var width: CGFloat = 30
+    var color: Color = .accentColor
     var body: some View {
         let body: AnyShape = {
             switch family {
@@ -593,15 +596,15 @@ struct ControllerIcon: View {
             default: return AnyShape(LayoutOutlineShape(layout: ControllerPictureLayout.of(family)))
             }
         }()
-        let w: CGFloat = 30, h: CGFloat = 21
+        let w: CGFloat = width, h: CGFloat = width * 0.7
         ZStack {
-            body.fill(Color.accentColor.opacity(0.22))
-            body.stroke(Color.accentColor, lineWidth: 1.2)
+            body.fill(color.opacity(0.22))
+            body.stroke(color, lineWidth: max(1.2, width / 25))
             // What tells them apart at this size: the pads, the touchpad, where the sticks sit.
             ForEach(Array(marks.enumerated()), id: \.offset) { _, m in
                 Group {
-                    if m.square { RoundedRectangle(cornerRadius: 1).fill(Color.accentColor) }
-                    else { Circle().fill(Color.accentColor) }
+                    if m.square { RoundedRectangle(cornerRadius: max(1, width / 30)).fill(color) }
+                    else { Circle().fill(color) }
                 }
                 .frame(width: m.rect.width * w, height: m.rect.height * h)
                 .position(x: m.rect.midX * w, y: m.rect.midY * h)
