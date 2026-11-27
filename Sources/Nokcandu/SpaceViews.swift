@@ -145,6 +145,15 @@ struct GamesVolumesBox: View {
                                 }
                             }
                         }
+                        ForEach(model.volumeConflicts.filter { c in d.images.contains { c.images.contains($0.url.path) } }) { c in
+                            HStack(alignment: .firstTextBaseline) {
+                                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange).padding(.leading, 26)
+                                Text("\(c.label) also opens \(c.imageNames) at login. Two helpers opening it can leave it closed after a restart.")
+                                    .font(.caption).fixedSize(horizontal: false, vertical: true)
+                                Spacer()
+                                Button(c.canTurnOff ? "Turn Off…" : "Details…") { model.reviewVolumeConflict(c) }
+                            }
+                        }
                         if !d.holdsApps && d.images.isEmpty {
                             Text("\(d.name) is \(d.format): it can hold game files, but not whole games, and it stores small files in large blocks. A games volume on it holds whole games (and launchers like Steam or Battle.net) without wasted space, and leaves everything else on the drive as it is.")
                                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)

@@ -218,4 +218,27 @@ final class SpaceManagementTests: XCTestCase {
         XCTAssertTrue(script.contains("[ \"$1\" = first ] && /usr/bin/hdiutil attach"))
         XCTAssertTrue(script.contains("pass later"))
     }
+
+    func testGamesVolumeConflictsFindOtherLoginItemsThatOpenTheSameImage() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("conflicts-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let image = "/Volumes/Elements/Games APFS.sparsebundle"
+        func write(_ name: String, _ plist: [String: Any]) throws {
+            try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0).write(to: dir.appendingPathComponent(name))
+        }
+        try write("com.example.mount.plist", ["Label": "com.example.mount", "ProgramArguments": ["/bin/zsh", "-c", "IMAGE=\"\(image)\"; hdiutil attach \"$IMAGE\""]])
+        let script = dir.appendingPathComponent("open.sh")
+        try "hdiutil attach '\(image)'".write(to: script, atomically: true, encoding: .utf8)
+        try write("com.example.script.plist", ["Label": "com.example.script", "ProgramArguments": ["/bin/sh", script.path]])
+        try write("\(AutoMount.label).plist", ["Label": AutoMount.label, "ProgramArguments": ["/bin/sh", "-c", image]])
+        try write("com.example.other.plist", ["Label": "com.example.other", "Program": "/usr/bin/true"])
+        try write("com.example.off.plist\(AutoMount.turnedOffSuffix)", ["Label": "com.example.off", "ProgramArguments": [image]])
+
+        let found = AutoMount.conflicts(in: dir, images: [image], ownFolder: true)
+        XCTAssertEqual(found.map(\.label), ["com.example.mount", "com.example.script"])
+        XCTAssertEqual(found.first?.imageNames, "Games APFS")
+        XCTAssertTrue(found.allSatisfy(\.canTurnOff))
+        XCTAssertEqual(AutoMount.conflicts(in: dir, images: [], ownFolder: true), [])
+    }
 }

@@ -53,6 +53,8 @@ final class AppModel: ObservableObject {
     @Published var quitting: InstalledGame?
     @Published var banner: Banner?
     @Published var activity: [Activity] = []
+    /// Other login items that also open a games volume (shown in the sidebar and in Storage → External Drives).
+    @Published private(set) var volumeConflicts: [GamesVolumeConflict] = []
     @Published var unseenErrors = 0
     /// What a game that is starting is doing ("Starting Windows…"), shown under Play.
     @Published var launchStages: [String: String] = [:]
@@ -174,13 +176,13 @@ final class AppModel: ObservableObject {
                     self?.refresh()
                     // A drive holding a games volume was connected: open the volume too.
                     if self?.gamesEnabled == true, n.name == NSWorkspace.didMountNotification {
-                        Task.detached(priority: .utility) { GamesVolume.attachRegistered() }
+                        Task.detached(priority: .utility) { GamesVolume.attachRegistered(); await self?.checkVolumeConflicts() }
                         self?.discoverLibraries()
                     }
                 }
             }
         }
-        if gamesEnabled { Task.detached(priority: .utility) { GamesVolume.attachRegistered() } }
+        if gamesEnabled { Task.detached(priority: .utility) { [weak self] in GamesVolume.attachRegistered(); await self?.checkVolumeConflicts() } }
         // Games start and quit as Mac apps: notice right away instead of polling quickly.
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
             ws.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
@@ -1221,6 +1223,37 @@ final class AppModel: ObservableObject {
     }
 
     func say(_ text: String) { say(text, game: nil) }
+
+    // MARK: Login items that also open a games volume
+
+    func checkVolumeConflicts() async {
+        let found = await Task.detached(priority: .utility) { AutoMount.conflicts() }.value
+        let new = found.filter { !volumeConflicts.contains($0) }
+        volumeConflicts = found
+        for c in new {
+            remember("Another login item, \(c.label), also opens \(c.imageNames). Two helpers opening a games volume at once can leave it closed after a restart. Turn it off in the sidebar or Storage → External Drives.", isError: true, game: nil)
+        }
+    }
+
+    /// Asks, then turns the login item off (it's renamed, so it can be restored).
+    func reviewVolumeConflict(_ c: GamesVolumeConflict) {
+        let alert = NSAlert()
+        alert.messageText = "Another login item also opens \(c.imageNames)"
+        alert.informativeText = "\(c.label) (\(c.file.path.replacingOccurrences(of: NokPaths.home.path, with: "~"))) opens the same games volume Nokcandu opens. When both run at login, the volume can end up closed and its games show “Connect … to play”.\n\n"
+            + (c.canTurnOff ? "Turn Off stops it and renames its file to end in “\(AutoMount.turnedOffSuffix)”. Rename it back to restore it. Nokcandu keeps opening the volume by itself."
+                            : "It's installed for all users, so removing it needs an administrator: delete that file, then restart.")
+        if c.canTurnOff { alert.addButton(withTitle: "Turn Off") }
+        alert.addButton(withTitle: c.canTurnOff ? "Keep It" : "OK")
+        alert.addButton(withTitle: "Show in Finder")
+        let answer = alert.runModal()
+        if c.canTurnOff && answer == .alertFirstButtonReturn {
+            do { try AutoMount.turnOff(c); say("Turned off \(c.label). Nokcandu opens \(c.imageNames) by itself.") }
+            catch { banner = Banner(text: error.localizedDescription, isError: true); remember(error.localizedDescription, isError: true) }
+            Task { await checkVolumeConflicts() }
+        } else if answer == (c.canTurnOff ? .alertThirdButtonReturn : .alertSecondButtonReturn) {
+            NSWorkspace.shared.activateFileViewerSelecting([c.file])
+        }
+    }
     /// A message about one game: its line in Recent Activity gets a Show button.
     func say(_ text: String, game: String?) { banner = Banner(text: text, isError: false); remember(text, isError: false, game: game) }
     func fail(_ error: Error) { banner = Banner(text: error.localizedDescription, isError: true); remember(error.localizedDescription, isError: true) }

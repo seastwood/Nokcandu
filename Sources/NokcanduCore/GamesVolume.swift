@@ -293,3 +293,63 @@ public enum AutoMount {
     }
     public static var isInstalled: Bool { FileManager.default.fileExists(atPath: agentFile.path) }
 }
+
+/// Another login item (launchd agent or daemon) that also opens a games volume. Two helpers attaching the same image
+/// at once can leave it attached with its volume unmounted, so Nokcandu points these out and can turn them off.
+public struct GamesVolumeConflict: Identifiable, Hashable, Sendable {
+    public var id: String { file.path }
+    public var label: String
+    public var file: URL
+    /// The registered games volumes it opens (image paths).
+    public var images: [String]
+    /// In the user's own LaunchAgents folder: Nokcandu can turn it off without administrator rights.
+    public var canTurnOff: Bool
+    public var imageNames: String {
+        images.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent }.joined(separator: ", ")
+    }
+}
+
+extension AutoMount {
+    /// Suffix a turned-off login item gets (launchd ignores files that don't end in .plist): renaming it back undoes it.
+    public static let turnedOffSuffix = ".turned-off-by-nokcandu"
+
+    public static func conflicts() -> [GamesVolumeConflict] {
+        let registered = images().map(\.path)
+        guard !registered.isEmpty else { return [] }
+        return conflicts(in: NokPaths.home.appendingPathComponent("Library/LaunchAgents"), images: registered, ownFolder: true)
+            + conflicts(in: URL(fileURLWithPath: "/Library/LaunchAgents"), images: registered, ownFolder: false)
+            + conflicts(in: URL(fileURLWithPath: "/Library/LaunchDaemons"), images: registered, ownFolder: false)
+    }
+
+    static func conflicts(in folder: URL, images registered: [String], ownFolder: Bool) -> [GamesVolumeConflict] {
+        let files = ((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension == "plist" }.sorted { $0.path < $1.path }
+        return files.compactMap { file in
+            guard let data = try? Data(contentsOf: file),
+                  let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else { return nil }
+            let itemLabel = plist["Label"] as? String ?? file.deletingPathExtension().lastPathComponent
+            guard itemLabel != label else { return nil }
+            var words = (plist["ProgramArguments"] as? [String] ?? []) + [plist["Program"] as? String].compactMap { $0 }
+            // A login item that runs a small script file: read the script too.
+            for w in words where w.hasPrefix("/") {
+                let u = URL(fileURLWithPath: w)
+                if let size = (try? u.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])), size.isRegularFile == true,
+                   (size.fileSize ?? .max) < 65_536, let text = try? String(contentsOf: u, encoding: .utf8) { words.append(text) }
+            }
+            let text = words.joined(separator: "\n")
+            let opened = registered.filter { text.contains($0) }
+            guard !opened.isEmpty else { return nil }
+            return GamesVolumeConflict(label: itemLabel, file: file, images: opened, canTurnOff: ownFolder)
+        }
+    }
+
+    /// Stops the login item and renames its file so it no longer runs at login (rename it back to undo).
+    public static func turnOff(_ conflict: GamesVolumeConflict) throws {
+        guard conflict.canTurnOff else { throw NokError("\(conflict.label) is installed for all users; removing it needs an administrator.") }
+        _ = try? Shell.run("/bin/launchctl", ["bootout", "gui/\(getuid())/\(conflict.label)"], timeout: 20)
+        let off = conflict.file.deletingLastPathComponent().appendingPathComponent(conflict.file.lastPathComponent + turnedOffSuffix)
+        try? FileManager.default.removeItem(at: off)
+        do { try FileManager.default.moveItem(at: conflict.file, to: off) }
+        catch { throw NokError("Nokcandu couldn't turn off \(conflict.label): \(error.localizedDescription)") }
+    }
+}

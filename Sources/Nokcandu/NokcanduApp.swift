@@ -177,6 +177,13 @@ struct LibraryView: View {
         }
         .modifier(SidebarFooter {
             VStack(alignment: .leading, spacing: 8) {
+                ForEach(model.volumeConflicts) { c in
+                    Button { model.reviewVolumeConflict(c) } label: {
+                        Label("Another login item opens \(c.imageNames)…", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
+                    .help("\(c.label) also opens this games volume at login, which can leave it closed after a restart. Click to review or turn it off.")
+                }
                 Button { model.openStores() } label: {
                     Label("Game Stores…", systemImage: "bag")
                 }
