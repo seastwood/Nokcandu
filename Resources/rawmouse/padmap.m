@@ -1159,10 +1159,11 @@ static void install_pad_game(const char *folder) {
     { const char *home = getenv("HOME"); if (home) snprintf(pad_off_flag, sizeof pad_off_flag, "%s/Library/Application Support/Nokcandu/controller-profiles-off", home); }
     // A game inside a shared launcher may have a profile of its own: pad-map.tsv routes its programs to it.
     int argc = *_NSGetArgc(); char **argv = *_NSGetArgv();
-    if (argc > 1) {
+    const char *program = nokcandu_program_argument(argc, argv);
+    if (program) {
         char routes[PATH_MAX], own[PATH_MAX];
         snprintf(routes, sizeof routes, "%s/pad-map.tsv", folder);
-        if (nokcandu_program_input(routes, argv[1], own, sizeof own)) strlcpy(pad_map_path, own, sizeof pad_map_path);
+        if (nokcandu_program_input(routes, program, own, sizeof own)) strlcpy(pad_map_path, own, sizeof pad_map_path);
     }
     NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
     [nc addObserverForName:NSApplicationDidBecomeActiveNotification object:nil queue:NSOperationQueue.mainQueue

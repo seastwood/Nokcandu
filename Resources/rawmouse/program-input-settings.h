@@ -13,6 +13,19 @@ static bool nokcandu_same_program_path(const char *a, const char *b) {
     }
     return !*a && !*b;
 }
+/// The Windows program this process runs, from its arguments. Wine starts a program as `wine <program> …`, then
+/// rewrites the arguments once it runs so the program comes first: code that reads them after Cocoa starts (a
+/// game's own controller profile and keys inside a shared launcher) sees `<program> …`. Reading only the second
+/// argument then took a launcher game's first command-line option, or nothing, and its own profile was skipped.
+__attribute__((unused)) static const char *nokcandu_program_argument(int argc, char *const argv[]) {
+    if (!argv || argc < 1) return NULL;
+    const char *first = argv[0];
+    if (first && first[0] && first[0] != '/') {
+        size_t n = strlen(first);
+        if (n >= 4 && !strcasecmp(first + n - 4, ".exe")) return first;
+    }
+    return argc > 1 && argv[1] && argv[1][0] != '-' ? argv[1] : NULL;
+}
 // Exact program paths take priority; a basename entry is emitted only when unambiguous.
 static bool nokcandu_program_input(const char *list, const char *program, char *out, size_t size) {
     if (!list || !program || !out || size<2) return false;

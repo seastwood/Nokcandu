@@ -41,6 +41,16 @@ final class WindowsProcessRoleTests: XCTestCase {
             if(!nokcandu_program_input(argv[1],"game.exe",out,sizeof out)||strcmp(out,"/fallback/raw-mouse"))return 3;
             if(nokcandu_program_input(argv[1],"unrelated.exe",out,sizeof out))return 4;
             if(nokcandu_program_input(argv[1],"game.exe",out,4))return 5;
+            // The program, as Wine leaves the arguments: first once it runs, second as it starts.
+            char *running[]={"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Broforce\\Broforce_beta.exe",NULL};
+            const char *p=nokcandu_program_argument(1,running);
+            if(!p||strcmp(p,running[0]))return 6;
+            char *starting[]={"/wine/bin/wine","C:\\Games\\First\\Game.exe",NULL};
+            if(strcmp(nokcandu_program_argument(2,starting),starting[1]))return 7;
+            char *launcher[]={"C:\\Steam\\steam.exe","-no-cef-sandbox",NULL};
+            if(strcmp(nokcandu_program_argument(2,launcher),launcher[0]))return 8;
+            char *option[]={"/wine/bin/wine","-x",NULL};
+            if(nokcandu_program_argument(2,option))return 9;
             return 0;
         }
         """#.write(to: source, atomically: true, encoding: .utf8)

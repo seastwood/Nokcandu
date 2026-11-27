@@ -111,10 +111,11 @@ static void install_key_remap(const char *folder) {
     // A game inside a shared launcher (Steam, Battle.net…) may have keys of its own: key-remap.tsv routes its
     // programs to them.
     int argc = *_NSGetArgc(); char **argv = *_NSGetArgv();
-    if (argc > 1) {
+    const char *program = nokcandu_program_argument(argc, argv);
+    if (program) {
         char routes[PATH_MAX], own[PATH_MAX];
         snprintf(routes, sizeof routes, "%s/key-remap.tsv", folder);
-        if (nokcandu_program_input(routes, argv[1], own, sizeof own)) strlcpy(key_remap_path, own, sizeof key_remap_path);
+        if (nokcandu_program_input(routes, program, own, sizeof own)) strlcpy(key_remap_path, own, sizeof key_remap_path);
     }
     snprintf(key_marker_path, sizeof key_marker_path, "%s/Library/Application Support/Nokcandu/key-remap-active", home);
     key_q = dispatch_queue_create("nokcandu.keyremap", DISPATCH_QUEUE_SERIAL);
