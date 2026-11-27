@@ -200,13 +200,7 @@ struct LibraryView: View {
             VStack(spacing: 0) {
                 VStack(spacing: 8) {
                     if model.features.visible.count > 1 {
-                        Picker("Show", selection: $model.sidebarTab) {
-                            ForEach(model.features.visible) { feature in
-                                // The icon inline in the text: a segment given a Label shows its icon alone.
-                                Text("\(Image(systemName: feature.symbol)) \(feature == .profiles ? "Controls" : feature == .streams ? "Streams" : "Games")").tag(feature)
-                            }
-                        }
-                        .pickerStyle(.segmented).labelsHidden()
+                        SidebarTabs(selection: $model.sidebarTab, features: model.features.visible)
                     } else if let feature = model.features.visible.first {
                         Label(feature.title, systemImage: feature.symbol).font(.headline)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -732,5 +726,51 @@ struct OfflineGameRow: View {
         .padding(.vertical, 2)
         .selectionDisabled()
         .help("\(game.name) is on \(game.drive), which isn't connected.")
+    }
+}
+
+
+/// Controls, Streams and Games, each with its icon before its name. SwiftUI's segmented picker shows a segment's
+/// icon or its text, never both, so this is AppKit's own segmented control, which can.
+struct SidebarTabs: NSViewRepresentable {
+    @Binding var selection: AppFeature
+    let features: [AppFeature]
+
+    static func title(_ f: AppFeature) -> String { f == .profiles ? "Controls" : f == .streams ? "Streams" : "Games" }
+
+    func makeNSView(context: Context) -> NSSegmentedControl {
+        let c = NSSegmentedControl()
+        c.trackingMode = .selectOne
+        c.segmentDistribution = .fillEqually
+        c.target = context.coordinator
+        c.action = #selector(Coordinator.changed(_:))
+        c.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        c.setAccessibilityLabel("Show")
+        return c
+    }
+
+    func updateNSView(_ c: NSSegmentedControl, context: Context) {
+        context.coordinator.parent = self
+        if c.segmentCount != features.count || (0..<c.segmentCount).contains(where: { c.label(forSegment: $0) != Self.title(features[$0]) }) {
+            c.segmentCount = features.count
+            for (i, f) in features.enumerated() {
+                c.setLabel(Self.title(f), forSegment: i)
+                let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
+                c.setImage(NSImage(systemSymbolName: f.symbol, accessibilityDescription: nil)?.withSymbolConfiguration(config), forSegment: i)
+                c.setImageScaling(.scaleProportionallyDown, forSegment: i)
+                c.setToolTip(f.detail, forSegment: i)
+            }
+        }
+        if let i = features.firstIndex(of: selection), c.selectedSegment != i { c.selectedSegment = i }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    final class Coordinator: NSObject {
+        var parent: SidebarTabs
+        init(_ p: SidebarTabs) { parent = p }
+        @MainActor @objc func changed(_ c: NSSegmentedControl) {
+            guard parent.features.indices.contains(c.selectedSegment) else { return }
+            parent.selection = parent.features[c.selectedSegment]
+        }
     }
 }
