@@ -1008,3 +1008,11 @@ further. Applies wherever the profile's axes go (Wine games, streams, Mac). Need
 ## Taking controllers from macOS for Mac games (November 26, 2026)
 
 macOS has no way to hide a controller from other apps except opening it exclusively (`kIOHIDOptionsTypeSeizeDevice`), which also stops GameController's copy in Nokcandu itself, so a taken controller must be read from its raw reports. `ControllerTakeover` does that only while a Mac app has a profile whose output fully replaces the controller (mappings only, or the emulated controller), and never for Nokcandu's Windows games, whose Wine driver reads the controller. Decoders are checked against the virtual controller's own report builder (`virtualpad.c`), so the two directions can't drift. Hardware acceptance is pending: see [Controller capabilities](controller-capabilities.md#taking-controllers-from-macos-november-26-2026).
+
+## Never close a HID device from inside its own callback (November 26, 2026)
+
+A layer change caused by a button press runs inside that controller's input-report callback. Closing the controller there (`IOHIDManagerClose` / `IOHIDDeviceClose`) aborts the app in `-[IOHIDDeviceClass valueAvailableCallback:]` ("Unlock of an os_unfair_lock not owned by current thread"). Every path that closes controller devices in response to profile or layer state (`ControllerTakeover.apply`, `SteamControllerUSB.remove`) now does it on the next run-loop turn. New code that releases a device because of something a report caused must do the same.
+
+## Motion axes between decoders and the pad engine (November 26, 2026)
+
+Decoders that read reports themselves publish motion in Nokcandu's axes (the original Steam Controller's own: SDL's x, z, y). The pad engine and the overlay take SDL's axes (x pitch, y yaw, z roll). `MappedGamepads.publishMotion` converts once (`MotionAxes.sdl`) for every listener; before that, every report-read controller's gyro had yaw and roll swapped. The stream and the Mac virtual controller convert SDL's axes to GameController's. Nintendo controllers' face buttons are read by printed letter everywhere (macOS, Nokcandu's own readers, the editor and the overlay).

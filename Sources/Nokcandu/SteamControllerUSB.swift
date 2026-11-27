@@ -107,7 +107,11 @@ final class SteamControllerUSB: ObservableObject {
     }
     func remove(_ id: UUID) {
         listeners[id] = nil
-        if listeners.isEmpty { stop() }
+        // Stopping closes the controller's devices, so never from inside one of their report callbacks (a profile
+        // or layer change a button press caused can land here): macOS aborts the app when a device is closed while
+        // it's delivering that device's report. Stop on the next run-loop turn if nobody listens again by then.
+        guard listeners.isEmpty else { return }
+        DispatchQueue.main.async { [self] in if listeners.isEmpty, manager != nil { stop() } }
     }
     private func start() {
         try? NokPaths.ensure(NokPaths.support)
