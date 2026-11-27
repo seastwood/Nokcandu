@@ -269,10 +269,13 @@ enum ProfileActions {
         }
         let alert = NSAlert()
         alert.messageText = "Add the controller profile “\(first.name)”?"
-        alert.informativeText = list.count > 1 ? "It comes with \(list.count - 1) profile\(list.count == 2 ? "" : "s") it builds on. They're added as new profiles; nothing here is changed." : "It's added as a new profile; nothing here is changed."
+        let notes = PadProfileImportReview.notes(list)
+        alert.informativeText = (list.count > 1 ? "It comes with \(list.count - 1) profile\(list.count == 2 ? "" : "s") it builds on. They're added as new profiles; nothing here is changed." : "It's added as a new profile; nothing here is changed.")
+            + (notes.isEmpty ? "" : "\n\nAdd it only if you trust where the link came from. It:\n• " + notes.joined(separator: "\n• "))
+        if !notes.isEmpty { alert.alertStyle = .warning }
         alert.addButton(withTitle: "Add Profile"); alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        importText(text, model: model)
+        importText(text, model: model, reviewed: true)
     }
     @MainActor static func export(_ p: PadProfiles.Profile, model: AppModel) {
         PadProfileEdits.shared.flushAll()
@@ -312,12 +315,23 @@ enum ProfileActions {
         do { finishImport(try PadProfiles.importFiles(urls, existing: PadProfiles.profiles()), model: model) }
         catch { model.fail(error) }
     }
-    @MainActor static func importText(_ text: String, model: AppModel) {
+    @MainActor static func importText(_ text: String, model: AppModel, reviewed: Bool = false) {
         PadProfileEdits.shared.flushAll()
         do {
             let merged = PadProfiles.merge([try PadProfiles.parseShared(text)], existing: PadProfiles.profiles(), skipIdentical: true)
-            finishImport(PadProfiles.Imported(added: merged.added, alreadyHere: merged.alreadyHere), model: model)
+            finishImport(PadProfiles.Imported(added: merged.added, alreadyHere: merged.alreadyHere), model: model, reviewed: reviewed)
         } catch { model.fail(error) }
+    }
+    /// Before adding profiles from a file or link: what they'd type or press that's worth a second look.
+    @MainActor static func confirmReview(_ profiles: [PadProfiles.Profile]) -> Bool {
+        let notes = PadProfileImportReview.notes(profiles)
+        guard !notes.isEmpty else { return true }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = profiles.count == 1 ? "Add “\(profiles[0].name)”?" : "Add \(profiles.count) controller profiles?"
+        alert.informativeText = "Add only profiles you trust. They:\n• " + notes.joined(separator: "\n• ")
+        alert.addButton(withTitle: "Add"); alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
     /// A Steam Input layout (.vdf) as a new profile: Steam keeps each game's in Steam Controller Configs, and
     /// community layouts too. What couldn't come across is listed afterwards.
@@ -345,7 +359,8 @@ enum ProfileActions {
             }
         } catch { model.fail(error) }
     }
-    @MainActor private static func finishImport(_ result: PadProfiles.Imported, model: AppModel) {
+    @MainActor private static func finishImport(_ result: PadProfiles.Imported, model: AppModel, reviewed: Bool = false) {
+        if !reviewed, !result.added.isEmpty, !confirmReview(result.added) { return }
         do {
             for p in result.added { try PadProfiles.store(p, environments: []) }
         } catch { model.fail(error); return }
