@@ -54,8 +54,11 @@ public enum VDF {
             }
             kinds.append("s"); tokens.append(s)
         }
-        var pos = 0
+        var pos = 0, depth = 0
+        // A file nested thousands deep would overflow the stack (games' install scripts come from their downloads).
         func object(top: Bool) throws -> VDFNode {
+            depth += 1; defer { depth -= 1 }
+            guard depth <= 128 else { throw NokError("VDF nested too deeply") }
             var items: [(String, VDFNode)] = []
             while pos < kinds.count {
                 if kinds[pos] == "}" {

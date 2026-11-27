@@ -46,8 +46,12 @@ public enum SteamInputImport {
             // Conditions ([$WIN32]) apply to the key before them; this reads them as nothing.
             if !(t.hasPrefix("[") && t.hasSuffix("]")) { tokens.append(t); braces.append(false) }
         }
-        var k = 0
+        var k = 0, depth = 0
+        // Real layouts nest about ten deep; a file nested thousands deep would overflow the stack (found by
+        // UntrustedInputFuzzTests), so it's refused.
         func list() throws -> [(String, Node)] {
+            depth += 1; defer { depth -= 1 }
+            guard depth <= 64 else { throw NokError("That Steam Input layout couldn't be read.") }
             var out: [(String, Node)] = []
             while k < tokens.count {
                 if braces[k] && tokens[k] == "}" { k += 1; return out }
