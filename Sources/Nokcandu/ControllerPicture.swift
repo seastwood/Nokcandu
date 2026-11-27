@@ -242,9 +242,13 @@ struct ControllerPicture: View {
                     .overlay(Capsule().stroke(selected ? tint : Color.secondary.opacity(0.35), lineWidth: selected ? 2 : 0.5))
                     .shadow(color: .black.opacity(0.12), radius: 1, y: 0.5)
                     .overlay(alignment: .topTrailing) { if changed(i) { ChangeDot(color: self.tint) } }
-                if !outwardLabel, !captionAbove, let l = label(i), l != "—" { Text(l).font(.system(size: 10, weight: .medium)).foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.7).frame(maxWidth: 64).help(l) }
             }
             .overlay {
+                // Floated below, so a caption never pushes its button off its place.
+                if !outwardLabel, !captionAbove, let l = label(i), l != "—" {
+                    Text(l).font(.system(size: 10, weight: .medium)).foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.7)
+                        .frame(width: 64).help(l).offset(y: 14 * k + 9).allowsHitTesting(false)
+                }
                 // Floated above, so the button keeps its place.
                 if captionAbove, let l = label(i), l != "—" {
                     Text(l).font(.system(size: 10, weight: .medium)).foregroundStyle(tint).lineLimit(1).minimumScaleFactor(0.7)
@@ -979,7 +983,9 @@ struct ControllerPictureLayout {
         for part in l.parts {
             switch part {
             case let .button(i, _, at, _): places[i] = frac(at.x, at.y)
-            case let .dpad(at, size):
+            case let .dpad(at, drawn):
+                // The picture's D-pad keeps one size across controllers; the overlay draws the Pro's bigger.
+                let size = min(drawn, 0.62)
                 // Out at the arm tips: the picture's buttons are bigger than the drawing's arms.
                 let off = size * 0.42
                 let c = frac(at.x, at.y)
