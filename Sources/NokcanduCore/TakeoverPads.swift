@@ -226,3 +226,22 @@ extension PlayStationPad {
         return ~c
     }
 }
+
+/// Which of these controllers the Mac Steam client's Steam Input reads (Steam → Settings → Controller), from
+/// Steam's config.vdf. Steam reads them itself and gives Steam games its own copy; once Nokcandu takes one, Steam
+/// loses it and doesn't pick it back up when Nokcandu hands it back, so a layer that passes the controller on does
+/// nothing in those games. Unset keys follow Steam's defaults (PlayStation and Switch on, Xbox off).
+public enum SteamInputSupport {
+    public static func readsItself(configVDF text: String) -> Set<TakeoverPad> {
+        func value(_ key: String) -> String? {
+            guard let r = text.range(of: "\"\(key)\"\\s+\"([^\"]*)\"", options: [.regularExpression, .caseInsensitive]) else { return nil }
+            let line = String(text[r])
+            return line.split(separator: "\"").last.map(String.init)
+        }
+        var out: Set<TakeoverPad> = []
+        if (value("SteamController_PSSupport") ?? "1") != "0" { out.formUnion([.ps4, .ps5]) }
+        if (value("SteamController_SwitchSupport") ?? "1") != "0" { out.insert(.switchPro) }
+        if (value("SteamController_XBoxSupport") ?? "0") != "0" { out.insert(.xbox) }
+        return out
+    }
+}

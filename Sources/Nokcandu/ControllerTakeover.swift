@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 import IOKit.hid
+import AppKit
 import NokcanduCore
 
 /// Takes DualShock 4, DualSense, Xbox Wireless (Bluetooth) and Switch Pro controllers from macOS while a profile
@@ -127,6 +128,7 @@ final class ControllerTakeover {
         owned.insert(id)
         ownedKinds.formUnion(kind.gameControllerCategories)
         ControllerLog.add("Controller takeover: \(kind.name) (\(bluetooth ? "Bluetooth" : "USB")) taken from macOS")
+        if let note = Self.steamInputNote(for: [kind]), !steamNoteLogged { steamNoteLogged = true; ControllerLog.add("Controller takeover: \(note)") }
         MappedGamepads.shared.refresh()
         DesktopPad.shared.attach()
     }
@@ -190,6 +192,19 @@ final class ControllerTakeover {
         pads[id] = p
         HIDOutput.send(r, to: p.device)
     }
+
+    private var steamNoteLogged = false
+    /// When Steam is running and its Steam Input reads one of these controllers: what to change, else nil.
+    static func steamInputNote(for kinds: Set<TakeoverPad>) -> String? {
+        guard NSWorkspace.shared.runningApplications.contains(where: { $0.bundleIdentifier == "com.valvesoftware.steam" }) else { return nil }
+        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Steam/config/config.vdf")
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        let both = SteamInputSupport.readsItself(configVDF: text).intersection(kinds)
+        guard !both.isEmpty else { return nil }
+        let names = both.map(\.name).sorted().joined(separator: ", ")
+        return "Steam Input is set to read the \(names). If a Steam game doesn't see the controller in a layer that hands it over, that's why: Steam loses the controller when Nokcandu takes it and doesn't pick it back up. Turn Steam Input off for that game (Properties → Controller → Disable Steam Input) or for these controllers (Steam → Settings → Controller)."
+    }
+    var ownedKindsSet: Set<TakeoverPad> { Set(pads.values.map(\.decoder.kind)) }
 
     /// Whether a GameController controller is a copy of one taken over (ignored while it is).
     func isTakenOver(category: String?) -> Bool { category.map { ownedKinds.contains($0) } ?? false }

@@ -41,6 +41,9 @@ struct ControllerOwnershipSettings: View {
                     Text(steam.status)
                     ForEach(steam.accessSummary, id: \.self) { Text($0) }
                     ForEach(ControllerTakeover.shared.summary, id: \.self) { Text($0) }
+                    if let note = ControllerTakeover.steamInputNote(for: ControllerTakeover.shared.ownedKindsSet) {
+                        Label(note, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+                    }
                     ForEach(GCController.controllers().filter { $0.extendedGamepad != nil }, id: \.self) { controller in
                         Text("\(controller.vendorName ?? "Controller"): shared macOS controller path")
                     }

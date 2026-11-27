@@ -114,3 +114,12 @@ final class TakeoverPadTests: XCTestCase {
         XCTAssertEqual(pro.rumble(low: 0, high: 0).suffix(4), [0x00, 0x01, 0x40, 0x40])
     }
 }
+
+final class SteamInputSupportTests: XCTestCase {
+    func testSettingsAndDefaults() {
+        let set = "\"InstallConfigStore\"\n{\n\t\"SteamController_SwitchSupport\"\t\t\"1\"\n\t\"SteamController_PSSupport\"\t\t\"0\"\n\t\"SteamController_XBoxSupport\"\t\t\"1\"\n}"
+        XCTAssertEqual(SteamInputSupport.readsItself(configVDF: set), [.switchPro, .xbox])
+        XCTAssertEqual(SteamInputSupport.readsItself(configVDF: "{}"), [.ps4, .ps5, .switchPro], "Steam's defaults")
+        XCTAssertEqual(SteamInputSupport.readsItself(configVDF: "\"SteamController_PSSupport\" \"2\"\n\"SteamController_SwitchSupport\" \"0\""), [.ps4, .ps5])
+    }
+}
