@@ -27,6 +27,7 @@ uint16_t SDL_JoystickGetProduct(void *j) { return ((J *)j)->pid; }
 const char *SDL_JoystickGetSerial(void *j) { return ((J *)j)->serial; }
 const char *SDL_JoystickPath(void *j) { return ((J *)j)->path; }
 int SDL_JoystickGetType(void *j) { (void)j; return 1; }
+int SDL_IsGameController(int i) { (void)i; return 1; }
 void *fixture_joystick(int i) { return &js[i]; }
 '''
 

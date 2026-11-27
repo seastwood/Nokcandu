@@ -234,10 +234,19 @@ static void pad_forget_identity(int32_t which) {
 static int pad_seat_of(int32_t which) { int i = pad_id_index(which); return i >= 0 ? pad_ids[i].seat : 0; }
 /// The player a controller is (1 first). One set to a player in Nokcandu is that player; the rest take the lowest
 /// players nobody chose, in the order they were first seen (with nothing set: their place in that order).
+static int (*real_is_gc)(int);
+static void pad_see(int32_t which) {
+    for (int i = 0; i < pad_seen_n; i++) if (pad_seen[i] == which) return;
+    if (pad_seen_n < PAD_MAX) pad_seen[pad_seen_n++] = which;
+}
 static int pad_player_of(int32_t which) {
-    bool known = false;
-    for (int i = 0; i < pad_seen_n; i++) if (pad_seen[i] == which) known = true;
-    if (!known && pad_seen_n < PAD_MAX) pad_seen[pad_seen_n++] = which;
+    // Every game controller connected counts, in SDL's order, not only those Wine has asked about yet: Wine
+    // creates one device at a time, and the first must not take player 1 from the Steam Controller a profile reads.
+    if (real_num_joysticks && real_device_instance && real_is_gc) {
+        int n = real_num_joysticks();
+        for (int i = 0; i < n; i++) if (real_is_gc(i)) pad_see(real_device_instance(i));
+    }
+    pad_see(which);
     int seat = pad_seat_of(which);
     if (seat > 0) return seat;
     bool taken[PAD_MAX + 2] = { false };
@@ -783,6 +792,7 @@ static void *nok_dlsym(void *handle, const char *name) {
         id_serial = (const char *(*)(void *))dlsym(handle, "SDL_JoystickGetSerial");
         id_vendor = (uint16_t (*)(void *))dlsym(handle, "SDL_JoystickGetVendor");
         id_product = (uint16_t (*)(void *))dlsym(handle, "SDL_JoystickGetProduct");
+        real_is_gc = (int (*)(int))dlsym(handle, "SDL_IsGameController");
         fprintf(stderr, "nokcandu: controller remapping ready\n");
         return (void *)nok_wait;
     }
