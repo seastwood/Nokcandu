@@ -190,6 +190,7 @@ struct pe_engine {
     // quiet tracking: a stretch without movement (in the hand or put down), its sum, and its half-second averages
     double q_start, q_last, q_sum[3], q_block_start, q_block[3], q_lo[3], q_hi[3]; int q_n, q_block_n;
     double acc_up[3], acc_at, q_up[3], cal_up[3]; bool acc_init, q_has_up, cal_has_up;
+    double q_pending[3]; bool q_pending_set;   // a large quiet-tracking correction waiting for a second stretch to agree
 };
 static void apply_layers(pe_engine *e);
 static void run_macro(pe_engine *e, int n, double now);
@@ -1118,6 +1119,12 @@ void pe_gyro_touch(pe_engine *e, bool required, bool touched) {
 #define QUIET_OFF 8.0         // drift is never this large: a steady reading beyond it is a turn
 #define QUIET_TIP 0.99939     // cos 2°: gravity moved this much across the controller, so it was turned
 #define CAL_NOTICE 1.0
+// A slow steady turn that doesn't tip the controller (panning flat, at a few degrees a second) passes every quiet
+// test, so a correction this large or more (degrees/s) is only taken when the next stretch, with no movement in
+// between, agrees within QUIET_AGREE: 10 s at one steady speed, which aiming rarely is ("it recalibrates when it
+// doesn't need to", November 26, 2026). Smaller ones (warming up) still take one stretch.
+#define QUIET_BIG 0.75
+#define QUIET_AGREE 0.5
 #define TABLE_RANGE 1.0       // degrees/s between the lowest and highest reading of a quick measurement
 static void cal_report(pe_engine *e, float p) {
     if (p >= 0 && p < 1 && p - e->cal_shown < 0.05 && p >= e->cal_shown) return;
@@ -1126,7 +1133,7 @@ static void cal_report(pe_engine *e, float p) {
 }
 void pe_calibrate(pe_engine *e, double now) {
     if (!e) return;
-    e->cal_manual = true;
+    e->cal_manual = true; e->q_pending_set = false;
     e->cal_mode = 2; e->cal_start = now; e->cal_n = 0; e->cal_sum[0] = e->cal_sum[1] = e->cal_sum[2] = 0;
     e->cal_shown = -1; cal_report(e, 0);
 }
@@ -1144,7 +1151,7 @@ static void quiet_sample(pe_engine *e, double x, double y, double z, double d, d
         if (ok && e->q_has_up && up_now)
             ok = e->q_up[0] * e->acc_up[0] + e->q_up[1] * e->acc_up[1] + e->q_up[2] * e->acc_up[2] >= QUIET_TIP;
     }
-    if (!ok) { quiet_restart(e); return; }
+    if (!ok) { e->q_pending_set = false; quiet_restart(e); return; }
     if (e->q_start <= 0) {
         e->q_start = e->q_block_start = now; e->q_n = e->q_block_n = 0;
         for (int k = 0; k < 3; k++) { e->q_sum[k] = e->q_block[k] = 0; e->q_lo[k] = 1e9; e->q_hi[k] = -1e9; e->q_up[k] = e->acc_up[k]; }
@@ -1168,6 +1175,14 @@ static void quiet_sample(pe_engine *e, double x, double y, double z, double d, d
         double n[3] = { e->q_sum[0] / e->q_n, e->q_sum[1] / e->q_n, e->q_sum[2] / e->q_n };
         double change = sqrt((n[0] - cal[0]) * (n[0] - cal[0]) + (n[1] - cal[1]) * (n[1] - cal[1]) + (n[2] - cal[2]) * (n[2] - cal[2]));
         bool first = !e->cal_have;
+        if (!first && change >= QUIET_BIG) {
+            double p[3] = { n[0] - e->q_pending[0], n[1] - e->q_pending[1], n[2] - e->q_pending[2] };
+            if (!e->q_pending_set || sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]) >= QUIET_AGREE) {
+                e->q_pending[0] = n[0]; e->q_pending[1] = n[1]; e->q_pending[2] = n[2]; e->q_pending_set = true;
+                quiet_restart(e); return;
+            }
+        }
+        e->q_pending_set = false;
         e->cal_x = n[0]; e->cal_y = n[1]; e->cal_z = n[2]; e->cal_have = true; e->cal_last = now;
         e->cal_manual = false;
         if (change >= CAL_NOTICE || first) { e->cal_shown = -1; cal_report(e, 1); }
@@ -1873,7 +1888,7 @@ bool pe_calibration_get(const pe_engine *e, double bias[3]) {
 }
 void pe_calibration_set(pe_engine *e, const double bias[3]) {
     if (!e || !isfinite(bias[0]) || !isfinite(bias[1]) || !isfinite(bias[2])) return;
-    e->cal_x = bias[0]; e->cal_y = bias[1]; e->cal_z = bias[2]; e->cal_have = true; e->cal_done = true;
+    e->cal_x = bias[0]; e->cal_y = bias[1]; e->cal_z = bias[2]; e->cal_have = true; e->cal_done = true; e->q_pending_set = false;
 }
 
 bool pe_motion_paused(const pe_engine *e) { return e && e->gyro_off_holds > 0; }

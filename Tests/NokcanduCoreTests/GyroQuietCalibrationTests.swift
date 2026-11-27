@@ -36,18 +36,20 @@ final class GyroQuietCalibrationTests: XCTestCase {
         let r = Rig()
         pe_calibration_set(r.engine, [0, 0, 0])                    // calibrated earlier; the drift has since changed
         r.hold(from: 10, seconds: 5.3, drift: (1.5, -0.8, 0.3))
+        XCTAssertEqual(try XCTUnwrap(r.bias), [0, 0, 0], "a large change waits for a second quiet stretch")
+        r.hold(from: 15.31, seconds: 5.3, drift: (1.5, -0.8, 0.3))
         let b = try! XCTUnwrap(r.bias)
         XCTAssertEqual(b[0], 1.5, accuracy: 0.25); XCTAssertEqual(b[1], -0.8, accuracy: 0.25); XCTAssertEqual(b[2], 0.3, accuracy: 0.25)
         XCTAssertEqual(r.shown.filter { $0 != 1 }, [], "no progress bar and no 'keep it still'")
         XCTAssertEqual(r.shown, [1], "a drift this large (1.7 degrees/s) is announced once")
         // A small correction is not announced at all.
         r.shown = []
-        r.hold(from: 15.31, seconds: 5.3, drift: (1.8, -0.8, 0.3))
+        r.hold(from: 20.62, seconds: 5.3, drift: (1.8, -0.8, 0.3))
         XCTAssertEqual(try XCTUnwrap(r.bias)[0], 1.8, accuracy: 0.25)
         XCTAssertEqual(r.shown, [])
         // And the pointer no longer drifts.
         r.mouse = (0, 0)
-        r.hold(from: 20.62, seconds: 2, drift: (1.8, -0.8, 0.3), tremor: 0)
+        r.hold(from: 25.93, seconds: 2, drift: (1.8, -0.8, 0.3), tremor: 0)
         XCTAssertLessThan(abs(r.mouse.x) + abs(r.mouse.y), 12)
     }
 
@@ -118,6 +120,16 @@ final class GyroQuietCalibrationTests: XCTestCase {
         r.hold(from: 10, seconds: 12, drift: (1.5, 0, 0))
         XCTAssertNil(r.bias)
     }
+    func testASlowSteadyFlatTurnIsNotTakenForDrift() {
+        let r = Rig()
+        pe_calibration_set(r.engine, [0.4, -0.6, 0.2])
+        // Panning flat at 3 degrees/s for 6 s, as steady as a hand holds still: passed every quiet test before.
+        r.hold(from: 10, seconds: 6, drift: (0.4, -0.6, 0.2), turn: 3)
+        XCTAssertEqual(try XCTUnwrap(r.bias), [0.4, -0.6, 0.2])
+        // Then a different turn speed: the two stretches don't agree, so still nothing.
+        r.hold(from: 16.01, seconds: 5.5, drift: (0.4, -0.6, 0.2), turn: 1.8)
+        XCTAssertEqual(try XCTUnwrap(r.bias), [0.4, -0.6, 0.2])
+    }
 }
 
 /// November 13, 2026: "why does my controller's layer change when I switch windows?" A change of the app in
@@ -145,4 +157,5 @@ final class PadFocusKeepsLayerTests: XCTestCase {
         pe_release_all(r.engine, 5)
         XCTAssertEqual(pe_active_layer(r.engine), 0)
     }
+
 }

@@ -70,14 +70,41 @@ final class TakeoverPadTests: XCTestCase {
         _ = decoder.decode(r); XCTAssertEqual(decoder.proSticks, c)
     }
 
+    func testSwitchProMotionCalibration() throws {
+        func le(_ v: Int) -> [UInt8] { [UInt8(UInt16(bitPattern: Int16(v)) & 0xFF), UInt8(UInt16(bitPattern: Int16(v)) >> 8)] }
+        func reply(_ address: UInt16, _ data: [UInt8]) -> [UInt8] {
+            var r = [UInt8](repeating: 0, count: 64); r[0] = 0x21; r[14] = 0x10
+            r[15] = UInt8(address & 0xFF); r[16] = UInt8(address >> 8); r[19] = UInt8(data.count)
+            r.replaceSubrange(20..<(20 + data.count), with: data); return r
+        }
+        let cal = [10, -20, 30, 16394, 16364, 16414, 50, -40, 25, 13421, 13331, 13396].flatMap(le)
+        let factory = try XCTUnwrap(SwitchProPad.motionCalibration(fromReply: reply(0x6020, cal)))
+        XCTAssertFalse(factory.user); XCTAssertEqual(factory.0.gyroOrigin, [50, -40, 25])
+        let user = try XCTUnwrap(SwitchProPad.motionCalibration(fromReply: reply(0x8026, [0xB2, 0xA1] + cal)))
+        XCTAssertTrue(user.user)
+        XCTAssertNil(SwitchProPad.motionCalibration(fromReply: reply(0x8026, [0xFF, 0xFF] + cal)), "no user calibration")
+        XCTAssertNil(SwitchProPad.motionCalibration(fromReply: reply(0x6020, [UInt8](repeating: 0xFF, count: 24))), "erased")
+        // A controller lying still reads its gyro origin: with the calibration, no rotation.
+        var still = [UInt8](repeating: 0, count: 49); still[0] = 0x30
+        let sample = [10, -20, 30 + 4096, 50, -40, 25].flatMap(le)
+        still.replaceSubrange(37..<49, with: sample)
+        let s = try XCTUnwrap(SwitchProPad.decode(still, motion: factory.0))
+        XCTAssertEqual(try XCTUnwrap(s.gyro), [0, 0, 0])
+        XCTAssertEqual(Double(try XCTUnwrap(s.acceleration)[2]), 1, accuracy: 0.01)
+        var d = TakeoverPadDecoder(.switchPro, bluetooth: false)
+        _ = d.decode(reply(0x8026, [0xB2, 0xA1] + cal)); _ = d.decode(reply(0x6020, [UInt8](repeating: 0, count: 0) + [10, -20, 30, 16394, 16364, 16414, 0, 0, 0, 13421, 13331, 13396].flatMap(le)))
+        XCTAssertEqual(d.proMotion.gyroOrigin, [50, -40, 25], "the user's calibration wins over the factory one")
+    }
+
     func testSwitchProStartUp() {
         var bt = TakeoverPadDecoder(.switchPro, bluetooth: true), usb = TakeoverPadDecoder(.switchPro, bluetooth: false)
         let b = bt.start(), u = usb.start()
-        XCTAssertEqual(b.map { $0[10] }, [0x03, 0x40, 0x48, 0x10]); XCTAssertEqual(b[0][11], 0x30)
+        XCTAssertEqual(b.map { $0[10] }, [0x03, 0x40, 0x48, 0x10, 0x10, 0x10]); XCTAssertEqual(b[0][11], 0x30)
+        XCTAssertEqual(b[4].prefix(16).suffix(5), [0x20, 0x60, 0, 0, 24]); XCTAssertEqual(b[5].prefix(16).suffix(5), [0x26, 0x80, 0, 0, 26])
         XCTAssertTrue(b.allSatisfy { $0.count == 49 && $0[0] == 0x01 })
         XCTAssertEqual(Array(u.prefix(4)), [[0x80, 0x02], [0x80, 0x03], [0x80, 0x02], [0x80, 0x04]])
         XCTAssertTrue(u.dropFirst(4).allSatisfy { $0.count == 64 })
-        XCTAssertEqual(Set(b.map { $0[1] }).count, 4, "each command its own counter")
+        XCTAssertEqual(Set(b.map { $0[1] }).count, 6, "each command its own counter")
     }
 
     func testSwitchProMotionTurnedBackOnWhenSomethingElseTurnsItOff() {

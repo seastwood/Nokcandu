@@ -47,6 +47,9 @@ public struct TakeoverPadDecoder: Sendable {
     private var counter: UInt8 = 0
     /// Switch Pro stick calibration (factory, from its flash): centre and reach on each side, per axis (lx, ly, rx, ry).
     public private(set) var proSticks = SwitchProPad.Calibration.default
+    /// Switch Pro motion calibration: the factory one, replaced by the user's (from Switch's System Settings) if any.
+    public private(set) var proMotion = SwitchProPad.MotionCalibration.default
+    private var userMotion = false
 
     public init(_ kind: TakeoverPad, bluetooth: Bool) { self.kind = kind; self.bluetooth = bluetooth }
 
@@ -80,6 +83,10 @@ public struct TakeoverPadDecoder: Sendable {
         out.append(proSubcommand(0x40, [0x01]))              // motion on
         out.append(proSubcommand(0x48, [0x01]))              // rumble on
         out.append(proSubcommand(0x10, [0x3D, 0x60, 0x00, 0x00, 18]))   // factory stick calibration
+        // Motion calibration, as macOS applies it: without it the gyro reads a different bias here than when macOS
+        // reads the controller, so each takeover or hand-back undoes the profile's gyro calibration.
+        out.append(proSubcommand(0x10, [0x20, 0x60, 0x00, 0x00, 24]))   // factory
+        out.append(proSubcommand(0x10, [0x26, 0x80, 0x00, 0x00, 26]))   // user (magic B2 A1, then the same 24 bytes)
         return out
     }
 
@@ -90,7 +97,8 @@ public struct TakeoverPadDecoder: Sendable {
         case .xbox: return XboxBluetoothPad.decode(r)
         case .switchPro:
             if let c = SwitchProPad.calibration(fromReply: r) { proSticks = c }
-            return SwitchProPad.decode(r, calibration: proSticks)
+            if let (m, user) = SwitchProPad.motionCalibration(fromReply: r), user || !userMotion { proMotion = m; userMotion = userMotion || user }
+            return SwitchProPad.decode(r, calibration: proSticks, motion: proMotion)
         }
     }
 
@@ -176,7 +184,37 @@ public enum SwitchProPad {
         return max(-32767, min(32767, v))
     }
 
-    public static func decode(_ d: [UInt8], calibration c: Calibration = .default) -> ReportPadState? {
+    /// Per axis (x, y, z, report axes): accelerometer and gyro origin and sensitivity, raw units.
+    public struct MotionCalibration: Equatable, Sendable {
+        public var accelOrigin: [Int], accelSensitivity: [Int], gyroOrigin: [Int], gyroSensitivity: [Int]
+        public static let `default` = MotionCalibration(accelOrigin: [0, 0, 0], accelSensitivity: [16384, 16384, 16384],
+                                                        gyroOrigin: [0, 0, 0], gyroSensitivity: [13371, 13371, 13371])
+    }
+    /// The factory (0x6020) or user (0x8026, behind the B2 A1 magic) motion calibration from a flash-read reply,
+    /// and whether it's the user's. 4 g at the accelerometer's sensitivity, 936 °/s at the gyro's (dekuNukem's notes).
+    public static func motionCalibration(fromReply r: [UInt8]) -> (MotionCalibration, user: Bool)? {
+        guard r.count >= 20, r[0] == 0x21, r[14] == 0x10 else { return nil }
+        let address = Int(r[15]) | Int(r[16]) << 8
+        var start = 20
+        let user: Bool
+        switch (address, Int(r[19])) {
+        case (0x6020, 24): user = false
+        case (0x8026, 26):
+            guard r.count >= 46, r[20] == 0xB2, r[21] == 0xA1 else { return nil }
+            user = true; start = 22
+        default: return nil
+        }
+        guard r.count >= start + 24 else { return nil }
+        func s16(_ i: Int) -> Int { Int(Int16(bitPattern: UInt16(r[start + i]) | UInt16(r[start + i + 1]) << 8)) }
+        let c = MotionCalibration(accelOrigin: [s16(0), s16(2), s16(4)], accelSensitivity: [s16(6), s16(8), s16(10)],
+                                  gyroOrigin: [s16(12), s16(14), s16(16)], gyroSensitivity: [s16(18), s16(20), s16(22)])
+        // An erased flash (all 0xFF) or nonsense: keep what there was.
+        let sane = (0..<3).allSatisfy { abs(c.accelSensitivity[$0] - c.accelOrigin[$0]) > 1000 && abs(c.gyroSensitivity[$0] - c.gyroOrigin[$0]) > 1000 }
+            && c.gyroOrigin.allSatisfy { abs($0) < 2000 }
+        return sane ? (c, user) : nil
+    }
+
+    public static func decode(_ d: [UInt8], calibration c: Calibration = .default, motion m: MotionCalibration = .default) -> ReportPadState? {
         guard d.count >= 13, d[0] == 0x30 || d[0] == 0x21 else { return nil }
         var held = ReportPadDecoder.bits(d[3], [(0x01, .y), (0x02, .x), (0x04, .b), (0x08, .a), (0x40, .rb)])
         held.formUnion(ReportPadDecoder.bits(d[4], [(0x01, .back), (0x02, .start), (0x04, .rs), (0x08, .ls), (0x10, .guide), (0x20, .misc)]))
@@ -185,13 +223,18 @@ public enum SwitchProPad {
         let l = unpack(d, 6), r = unpack(d, 9)
         var gyro: [Float]?, accel: [Float]?
         if d[0] == 0x30, d.count >= 49 {
-            // The newest of the report's three motion samples. Report axes to SDL's: (−y, z, −x); Nokcandu's are SDL's
-            // (x, z, y). Accelerometer 4096 a g, gyro 14.2857 a degree per second (SDL's defaults for this controller).
-            func s16(_ i: Int) -> Float { Float(Int16(bitPattern: UInt16(d[i]) | UInt16(d[i + 1]) << 8)) }
-            let o = 13 + 24, a = Float(1.0 / 4096), g = Float(Double.pi / 180 / 14.2857)
-            let ax = s16(o) * a, ay = s16(o + 2) * a, az = s16(o + 4) * a
-            let gx = s16(o + 6) * g, gy = s16(o + 8) * g, gz = s16(o + 10) * g
-            if [ax, ay, az, gx, gy, gz].contains(where: { $0 != 0 }) {
+            // The newest of the report's three motion samples, less the controller's calibrated origin: 4 g at the
+            // accelerometer's sensitivity, 936 °/s at the gyro's (uncalibrated: 4096 a g, 14.2857 a °/s, as SDL).
+            // Report axes to SDL's: (−y, z, −x); Nokcandu's are SDL's (x, z, y).
+            func s16(_ i: Int) -> Int { Int(Int16(bitPattern: UInt16(d[i]) | UInt16(d[i + 1]) << 8)) }
+            let o = 13 + 24
+            let raw = (0..<6).map { s16(o + 2 * $0) }
+            if raw.contains(where: { $0 != 0 }) {
+                func acc(_ i: Int) -> Float { Float(raw[i] - m.accelOrigin[i]) * 4 / Float(m.accelSensitivity[i] - m.accelOrigin[i]) }
+                func rot(_ i: Int) -> Float {
+                    Float(Double(raw[3 + i] - m.gyroOrigin[i]) * 936 / Double(m.gyroSensitivity[i] - m.gyroOrigin[i]) * Double.pi / 180)
+                }
+                let ax = acc(0), ay = acc(1), az = acc(2), gx = rot(0), gy = rot(1), gz = rot(2)
                 gyro = [-gy, -gx, gz]; accel = [-ay, -ax, az]
             }
         }
