@@ -20,12 +20,12 @@
     <td align="center"><em>Steam Controller 2026 profile</em></td>
   </tr>
   <tr>
+    <td width="50%"><a href="docs/gallery/streams.png"><img width="100%" src="docs/gallery/streams.png" alt="A stream profile while streaming: app, picture, codec, frame pacing and statistics settings"></a></td>
     <td width="50%"><a href="docs/gallery/windows-game.png"><img width="100%" src="docs/gallery/windows-game.png" alt="The Games tab: the library and a game's Controls page"></a></td>
-    <td width="50%"><a href="docs/gallery/streams.png"><img width="100%" src="docs/gallery/streams.png" alt="A stream profile: picture, codec, frame pacing and controller settings"></a></td>
   </tr>
   <tr>
-    <td align="center"><em>A Windows game's controls</em></td>
     <td align="center"><em>Streaming from your PC</em></td>
+    <td align="center"><em>A Windows game's controls</em></td>
   </tr>
 </table>
 
