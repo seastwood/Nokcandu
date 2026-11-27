@@ -799,6 +799,10 @@ struct ControllerProfileEditor: View {
             Section("Response") {
                 slider("Dead zone", st.deadzone, 0...0.5, "%.2f", info: "How far the stick moves before it counts. Raise it if the stick drifts.")
                 slider("Full at", st.outer, 0.5...1, "%.2f", info: "How far out the stick counts as fully pushed.")
+                if st.wrappedValue.mode == .stick || st.wrappedValue.mode == .otherStick {
+                    slider("Game's dead zone", Binding(get: { st.wrappedValue.antiDeadzone ?? 0 }, set: { var v = st.wrappedValue; v.antiDeadzone = $0 < 0.005 ? nil : $0; st.wrappedValue = v }), 0...0.5, "%.2f",
+                           info: "Anti-deadzone. Many games ignore small stick movements with a dead zone of their own, so fine aim does nothing until you push further. Set this to that dead zone and the smallest movement starts just past it. 0 is off.")
+                }
                 Toggle("Invert up and down", isOn: st.invertY)
             }
         }

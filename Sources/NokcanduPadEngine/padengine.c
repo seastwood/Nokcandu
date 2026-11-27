@@ -63,6 +63,7 @@ enum { S_PAD, S_MOUSE, S_FLICK, S_KEYS, S_NONE, S_DIRS, S_SCROLL };
 typedef struct {
     int mode, to;
     double dz, outer, sens, power, flick360, flicktime;
+    double anti;           // as a stick: the game's own dead zone to start past (anti-deadzone), 0…0.5
     int keys[4];
     bool invy;
     double xs, ys;               // left/right and up/down speed (1 = as set)
@@ -399,6 +400,7 @@ pe_engine *pe_create(const char *text, pe_sink sink) {
             if (m) k->mode = !strcmp(m, "mouse") ? S_MOUSE : !strcmp(m, "flick") ? S_FLICK : !strcmp(m, "keys") ? S_KEYS : !strcmp(m, "none") ? S_NONE : !strcmp(m, "dirs") ? S_DIRS : !strcmp(m, "scroll") ? S_SCROLL : S_PAD;
             k->to = (int)opt_d(OPT("to"), s) ? 1 : 0;
             k->dz = opt_d(OPT("dz"), k->dz); k->outer = opt_d(OPT("outer"), k->outer);
+            k->anti = fmax(0, fmin(0.5, opt_d(OPT("anti"), 0)));
             k->sens = opt_d(OPT("sens"), k->sens); k->power = opt_d(OPT("power"), k->power);
             k->flick360 = opt_d(OPT("flick360"), k->flick360); k->flicktime = opt_d(OPT("flicktime"), k->flicktime);
             k->invy = opt_d(OPT("invy"), 0) != 0;
@@ -932,6 +934,8 @@ static void update_pad_sticks(pe_engine *e) {
         stick_t *k = &e->stick[s];
         if (k->mode != S_PAD || e->control_route[s] == 1 || e->control_route[s] == 3) continue;
         double x, y, m; stick_shape(k, k->x, k->y, &x, &y, &m);
+        // Anti-deadzone: any movement past this stick's own dead zone starts beyond the game's.
+        if (k->anti > 0 && m > 0) { double r = k->anti + (1 - k->anti) * m; x *= r / m; y *= r / m; }
         sx[k->to] += x * k->xs; sy[k->to] += (k->invy ? -y : y) * k->ys;
     }
     sx[0] += e->gyro_stick_x * (e->gyro_out == G_LSTICK || e->gyro_out == G_WHEEL); sy[0] += e->gyro_stick_y * (e->gyro_out == G_LSTICK);

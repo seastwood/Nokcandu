@@ -484,6 +484,8 @@ public enum PadProfiles {
         public var mode: StickMode = .stick
         public var deadzone = 0.12
         public var outer = 0.95
+        /// As a stick: the game's own dead zone, which any movement starts beyond (anti-deadzone; nil: none).
+        public var antiDeadzone: Double?
         /// Mouse: counts per second at full tilt, and how sharply speed rises (1 straight, 2 gentle start).
         public var speed = 1500.0
         public var curve = 1.5
@@ -900,7 +902,7 @@ public enum PadProfiles {
             let k = s.keys.count == 4 ? s.keys : [13, 1, 0, 2]
             let vscroll = s.mode == .directions && s.directionsScroll == true
             let sens = s.mode == .scroll || vscroll ? (s.scrollSpeed ?? 20) : s.speed
-            return "stick \(i) mode=\(mode) to=\(to) dz=\(n(s.deadzone)) outer=\(n(s.outer)) sens=\(n(sens)) power=\(n(s.curve)) flick360=\(n(s.countsPerTurn)) flicktime=\(n(s.flickTime)) keys=\(k.map(String.init).joined(separator: ",")) invy=\(s.invertY ? 1 : 0) xs=\(n(s.xScale ?? 1)) ys=\(n(s.yScale ?? 1)) ramp=\(n(s.edgeBoost ?? 0)) ramptime=\(n(s.edgeBoostTime ?? 0.4))" + (vscroll ? " vscroll=1" : "") + (s.ring.map { " ring=\(n($0))" } ?? "") + (layer > 0 ? " layer=\(layer)" : "")
+            return "stick \(i) mode=\(mode) to=\(to) dz=\(n(s.deadzone)) outer=\(n(s.outer)) sens=\(n(sens)) power=\(n(s.curve)) flick360=\(n(s.countsPerTurn)) flicktime=\(n(s.flickTime)) keys=\(k.map(String.init).joined(separator: ",")) invy=\(s.invertY ? 1 : 0) xs=\(n(s.xScale ?? 1)) ys=\(n(s.yScale ?? 1)) ramp=\(n(s.edgeBoost ?? 0)) ramptime=\(n(s.edgeBoostTime ?? 0.4))" + (vscroll ? " vscroll=1" : "") + (s.ring.map { " ring=\(n($0))" } ?? "") + (s.antiDeadzone.map { $0 > 0 ? " anti=\(n($0))" : "" } ?? "") + (layer > 0 ? " layer=\(layer)" : "")
         }
         lines.append(gyroLine(m.gyro, layer: 0))
         for (i, s) in [m.left, m.right].enumerated() { lines.append(stickLine(i, s, layer: 0)) }

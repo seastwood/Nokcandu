@@ -75,3 +75,26 @@ final class LayerRoutingTests: XCTestCase {
         XCTAssertNil(try JSONDecoder().decode(PadProfiles.Layer.self, from: Data(#"{"id":"x","name":"X","bindings":{}}"#.utf8)).routingMode)
     }
 }
+
+final class AntiDeadzoneTests: XCTestCase {
+    func testSmallMovementStartsPastTheGamesDeadzone() {
+        let r = PadRecorder("stick 0 mode=pad to=0 dz=0.1 outer=1 anti=0.25")
+        pe_axis(r.engine, 0, 0, 1); pe_axis(r.engine, 1, 0, 1)
+        XCTAssertEqual(r.axes[0], 0, "inside its own dead zone: still nothing")
+        pe_axis(r.engine, 0, Int32(0.12 * 32767), 1.1)
+        XCTAssertGreaterThan(r.axes[0], Int(0.25 * 32767), "just past it: beyond the game's")
+        XCTAssertLessThan(r.axes[0], Int(0.28 * 32767))
+        pe_axis(r.engine, 0, 32767, 1.2)
+        XCTAssertEqual(r.axes[0], 32767, "full stays full")
+        let plain = PadRecorder("stick 0 mode=pad to=0 dz=0.1 outer=1")
+        pe_axis(plain.engine, 0, Int32(0.12 * 32767), 1)
+        XCTAssertLessThan(plain.axes[0], Int(0.05 * 32767))
+    }
+    func testCompiledOnlyWhenSet() {
+        var p = PadProfiles.Profile(id: "p", name: "P")
+        p.leftStick = PadProfiles.Stick()
+        XCTAssertFalse(PadProfiles.compile(p, all: [p]).contains("anti="))
+        p.leftStick?.antiDeadzone = 0.2
+        XCTAssertTrue(PadProfiles.compile(p, all: [p]).contains(" anti=0.2"))
+    }
+}
