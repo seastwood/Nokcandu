@@ -500,9 +500,9 @@ struct OverlayLayout {
     static let switchPro = OverlayLayout(
         outline: polygon(switchProBody), depth: 0.4, chamfer: 0.12, middle: 0.4, aspect: 0.74,
         parts: [
-            // The D-pad and right stick sit level and mirror each other, as on the controller; the D-pad as wide as a stick.
-            .stick(0, [-1.119, -0.178], radius: 0.23), .stick(1, [0.58, 0.39], radius: 0.23),
-            .dpad([-0.58, 0.39], size: 0.74),
+            // The D-pad as big as on the controller (a little wider than a stick).
+            .stick(0, [-1.119, -0.178], radius: 0.23), .stick(1, [0.517, 0.383], radius: 0.23),
+            .dpad([-0.629, 0.395], size: 0.8),
             // By the letters printed on them, as macOS (and Nokcandu, for a controller it reads itself) reports Nintendo
             // controllers: X top, B bottom, Y left, A right.
             .button(.x, .round(0.145), [1.066, -0.427]), .button(.b, .round(0.145), [1.066, 0.125]),
