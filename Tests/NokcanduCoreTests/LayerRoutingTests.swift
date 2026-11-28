@@ -122,3 +122,37 @@ final class CoopPlayersTests: XCTestCase {
         XCTAssertTrue(PadProfiles.compile(p, all: [p]).contains("player 2 asis\n"), "a deleted profile: as it is")
     }
 }
+
+final class StickTouchOnlyTests: XCTestCase {
+    func testStickMovesOnlyWhileTouchedOnceItReportsTouch() {
+        let r = PadRecorder("stick 0 mode=pad to=0 dz=0.05 outer=1 touch=1")
+        // Before the stick has ever reported a touch (a controller without sensors), it moves as usual.
+        pe_axis(r.engine, 0, 20000, 1)
+        XCTAssertGreaterThan(r.axes[0], 10000, "no touch sensor seen: never blocked")
+        // A thumb arrives, moves it, leaves: centred the moment the thumb lifts, even with drift still reported.
+        r.press("lstouch", true, 1.1)
+        pe_axis(r.engine, 0, 25000, 1.2)
+        XCTAssertGreaterThan(r.axes[0], 15000)
+        r.press("lstouch", false, 1.3)
+        XCTAssertEqual(r.axes[0], 0, "thumb off: centred straight away")
+        pe_axis(r.engine, 0, 9000, 1.4)
+        XCTAssertEqual(r.axes[0], 0, "drift without a thumb does nothing")
+        r.press("lstouch", true, 1.5)
+        XCTAssertGreaterThan(r.axes[0], 3000, "thumb back: the stick's position applies at once")
+    }
+    func testWithoutTheSettingTouchChangesNothing() {
+        let r = PadRecorder("stick 0 mode=pad to=0 dz=0.05 outer=1")
+        r.press("lstouch", true, 1); r.press("lstouch", false, 1.1)
+        pe_axis(r.engine, 0, 20000, 1.2)
+        XCTAssertGreaterThan(r.axes[0], 10000)
+    }
+    func testCompiledOnlyWhenSet() {
+        var p = PadProfiles.Profile(id: "p", name: "P")
+        p.leftStick = PadProfiles.Stick()
+        XCTAssertFalse(PadProfiles.compile(p, all: [p]).contains("touch=1"))
+        p.leftStick?.onlyWhileTouched = true
+        XCTAssertTrue(PadProfiles.compile(p, all: [p]).contains(" touch=1"))
+        XCTAssertTrue(ReportPadDriver.sensesStickTouch(vendor: 0x0F0D, product: 0x01AB))
+        XCTAssertFalse(ReportPadDriver.sensesStickTouch(vendor: 0x045E, product: 0x02EA))
+    }
+}

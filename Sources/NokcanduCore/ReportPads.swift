@@ -17,6 +17,9 @@ public struct ReportPadState: Equatable {
 public enum ReportPadDriver: Equatable {
     case eightBitDo(product: Int), stadia, lunaUSB, lunaBluetooth, sinput, zuiki(product: Int), horiSteam, gameSir, shield(product: Int), wii, ps4, ps5
 
+    /// Sticks that sense a resting thumb (reported as `lstouch` / `rstouch`).
+    public static func sensesStickTouch(vendor: Int, product: Int) -> Bool { find(vendor: vendor, product: product) == .horiSteam }
+
     public static func find(vendor: Int, product: Int) -> ReportPadDriver? {
         switch (vendor, product) {
         case (EightBitDoController.vendor, let p) where EightBitDoController.products.contains(p): return .eightBitDo(product: p)

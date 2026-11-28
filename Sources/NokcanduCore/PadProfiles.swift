@@ -505,6 +505,9 @@ public enum PadProfiles {
         public var scrollSpeed: Double?
         /// Outer ring: pushed this far (0.3…1) holds the stick's outer-ring input (nil: 0.9).
         public var ring: Double?
+        /// Sticks that sense a thumb (Steam Controller 2026, HORIPAD for Steam): the stick counts as centred while
+        /// nothing touches it, so drift does nothing (nil: always moves). Ignored until the stick reports a touch.
+        public var onlyWhileTouched: Bool?
         /// Four directions: up and down scroll (at `scrollSpeed`) while left and right stay set on their own.
         public var directionsScroll: Bool?
         public init(mode: StickMode = .stick) { self.mode = mode }
@@ -935,7 +938,7 @@ public enum PadProfiles {
             let k = s.keys.count == 4 ? s.keys : [13, 1, 0, 2]
             let vscroll = s.mode == .directions && s.directionsScroll == true
             let sens = s.mode == .scroll || vscroll ? (s.scrollSpeed ?? 20) : s.speed
-            return "stick \(i) mode=\(mode) to=\(to) dz=\(n(s.deadzone)) outer=\(n(s.outer)) sens=\(n(sens)) power=\(n(s.curve)) flick360=\(n(s.countsPerTurn)) flicktime=\(n(s.flickTime)) keys=\(k.map(String.init).joined(separator: ",")) invy=\(s.invertY ? 1 : 0) xs=\(n(s.xScale ?? 1)) ys=\(n(s.yScale ?? 1)) ramp=\(n(s.edgeBoost ?? 0)) ramptime=\(n(s.edgeBoostTime ?? 0.4))" + (vscroll ? " vscroll=1" : "") + (s.ring.map { " ring=\(n($0))" } ?? "") + (s.antiDeadzone.map { $0 > 0 ? " anti=\(n($0))" : "" } ?? "") + (layer > 0 ? " layer=\(layer)" : "")
+            return "stick \(i) mode=\(mode) to=\(to) dz=\(n(s.deadzone)) outer=\(n(s.outer)) sens=\(n(sens)) power=\(n(s.curve)) flick360=\(n(s.countsPerTurn)) flicktime=\(n(s.flickTime)) keys=\(k.map(String.init).joined(separator: ",")) invy=\(s.invertY ? 1 : 0) xs=\(n(s.xScale ?? 1)) ys=\(n(s.yScale ?? 1)) ramp=\(n(s.edgeBoost ?? 0)) ramptime=\(n(s.edgeBoostTime ?? 0.4))" + (vscroll ? " vscroll=1" : "") + (s.ring.map { " ring=\(n($0))" } ?? "") + (s.antiDeadzone.map { $0 > 0 ? " anti=\(n($0))" : "" } ?? "") + (s.onlyWhileTouched == true ? " touch=1" : "") + (layer > 0 ? " layer=\(layer)" : "")
         }
         lines.append(gyroLine(m.gyro, layer: 0))
         for (i, s) in [m.left, m.right].enumerated() { lines.append(stickLine(i, s, layer: 0)) }

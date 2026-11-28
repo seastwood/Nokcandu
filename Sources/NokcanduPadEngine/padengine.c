@@ -76,6 +76,7 @@ typedef struct {
     int keys_down[4];
     double rest_x, rest_y;
     double ring;                 // pushed this far (0…1) holds its outer-ring input
+    bool touchonly;              // moves only while the thumb is on it (sticks that sense touch), else centred
 } stick_t;
 
 enum { G_OFF, G_MOUSE, G_LSTICK, G_RSTICK, G_SCROLL, G_WHEEL };
@@ -137,6 +138,7 @@ struct pe_engine {
     press_t press[PE_ALL_INPUTS];
     unsigned char cycle_pos[PE_ALL_INPUTS];   // the next of a cycle binding's sets
     bool physical[PE_ALL_INPUTS];
+    bool stick_touch_seen[2];    // this stick has reported a thumb on it: "only while touched" can apply
     device_t dev[PE_MAX_DEVICES + 1];    // 1…4
     int ndev;
     // outputs (reference counts)
@@ -416,6 +418,7 @@ pe_engine *pe_create(const char *text, pe_sink sink) {
             k->ramp = opt_d(OPT("ramp"), 0); k->ramptime = opt_d(OPT("ramptime"), 0.4); k->edge = opt_d(OPT("edge"), 0.9);
             k->vscroll = opt_d(OPT("vscroll"), 0) != 0;
             k->ring = fmax(0.3, fmin(1, opt_d(OPT("ring"), 0.9)));
+            k->touchonly = opt_d(OPT("touch"), 0) != 0;
             const char *ks = OPT("keys");
             if (ks) sscanf(ks, "%d,%d,%d,%d", &k->keys[0], &k->keys[1], &k->keys[2], &k->keys[3]);
         } else if (!strcmp(words[0], "trigger") && nw > 1) {
@@ -834,7 +837,16 @@ bool pe_input_bound(const pe_engine *e, int input) {
 void pe_button(pe_engine *e, int button, bool down, double now) {
     // The Steam Controller (2026)'s extra click and touch sensors: inputs like any other, never sent on as a
     // controller button (the controller presented to games has none).
-    if (e && button >= PE_RPAD_CLICK && button < PE_INPUTS) { pe_tick(e, now); set_input(e, button, down, now); return; }
+    if (e && button >= PE_RPAD_CLICK && button < PE_INPUTS) {
+        pe_tick(e, now); set_input(e, button, down, now);
+        // A stick that moves only while touched: its thumb arriving or leaving moves it or centres it now.
+        if (button == PE_LS_TOUCH || button == PE_RS_TOUCH) {
+            int s = button == PE_RS_TOUCH;
+            if (down) e->stick_touch_seen[s] = true;
+            if (e->stick[s].touchonly) pe_axis(e, s ? PE_AXIS_RX : PE_AXIS_LX, e->raw_axis[s ? PE_AXIS_RX : PE_AXIS_LX], now);
+        }
+        return;
+    }
     if (!e || button < 0 || button >= PE_PAD_BUTTONS) return;
     if (e->menu_consumed[button]) { if (!down) e->menu_consumed[button] = false; return; }
     if (down && e->menu_open >= 0 && e->menus[e->menu_open].layout == 3) {
@@ -1070,6 +1082,9 @@ void pe_axis(pe_engine *e, int axis, int value, double now) {
     if (e->control_route[s] == 1 || e->control_route[s] == 3) { k->x = k->y = 0; update_pad_sticks(e); return; }
     k->x = e->raw_axis[s ? PE_AXIS_RX : PE_AXIS_LX] / 32767.0;
     k->y = -e->raw_axis[s ? PE_AXIS_RY : PE_AXIS_LY] / 32767.0;       // y up
+    // Moves only while touched: centred while the thumb is off it, so a drifting stick does nothing. Only once
+    // this stick has reported a touch, so a controller without stick sensors is never left unable to move it.
+    if (k->touchonly && e->stick_touch_seen[s] && !e->physical[s ? PE_RS_TOUCH : PE_LS_TOUCH]) k->x = k->y = 0;
     // Its outer ring: held past `ring`, let go a little inside it (so it doesn't flicker at the edge).
     {
         int ring = s ? PE_RS_RING : PE_LS_RING;

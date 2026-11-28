@@ -852,17 +852,27 @@ struct ControllerProfileEditor: View {
                 Button("Use the Settings of the Profile Underneath") { if s == 0 { profile.leftStick = nil } else { profile.rightStick = nil } }.buttonStyle(.link).font(.caption)
             }
         }
-        if family == .steam2026 {
-            // The 2026 controller's sticks feel a resting thumb: an input of its own (a layer, gyro on, a key…).
-            let touch: PadProfiles.Input = s == 0 ? .lstouch : .rstouch
+        let touch: PadProfiles.Input = s == 0 ? .lstouch : .rstouch
+        let touchOnly = Binding(get: { stickBinding(s).wrappedValue.onlyWhileTouched == true },
+                                set: { stickBinding(s).wrappedValue.onlyWhileTouched = $0 ? true : nil })
+        if sticksSenseTouch || profile.layers[layerIndex][touch] != nil || touchOnly.wrappedValue {
+            // Sticks that feel a resting thumb (Steam Controller 2026, HORIPAD for Steam): an input of its own
+            // (a layer, gyro on, a key…), and a guard against drift.
             Section {
                 BindingEditor(binding: bindingFor(touch), input: touch, family: family,
                               layers: profile.layers.dropFirst().map(\.name), inLayer: layerIndex > 0,
                               inherited: profile.layers[layerIndex][touch] == nil ? inherited(touch).map(describe) : nil)
+                Toggle("Only move while touched", isOn: touchOnly)
+                    .help("The stick counts as centred whenever your thumb is off it, so a drifting stick, or a bump while you reach for another button, does nothing.")
             } header: { Text("Stick Touch") } footer: {
-                Text("The stick senses your thumb resting on it, without moving or clicking it. Set it to Gyro on to aim with motion only while your thumb is on the stick, or to a layer.").font(.caption).foregroundStyle(.secondary)
+                Text("The stick senses your thumb resting on it, without moving or clicking it. Set it to Gyro on to aim with motion only while your thumb is on the stick, or to a layer. Only move while touched stops stick drift.").font(.caption).foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// A connected controller whose sticks sense a resting thumb.
+    var sticksSenseTouch: Bool {
+        family == .steam2026 || ControllerDevices.shared.connected.contains { ReportPadDriver.sensesStickTouch(vendor: $0.vendorID, product: $0.productID) }
     }
 
     var layerGyro: PadProfiles.Gyro? {
