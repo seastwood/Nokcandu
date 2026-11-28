@@ -339,8 +339,16 @@ final class DesktopPad: ObservableObject {
         guard down else { return }
         let onto = after.subtracting(before).isEmpty ? 0 : settings.keyEnterHaptic ?? 0
         let off = before.subtracting(after).isEmpty ? 0 : settings.keyLeaveHaptic ?? 0
-        let strength = max(onto, off)
+        let strength = max(onto, off, edgePulseDue(side, held: after.contains(.padEdge(side)), settings: settings, now: now))
         if strength > 0 { SteamControllerUSB.shared.tick(side: side, strength: strength) }
+    }
+    /// Pulses while each pad's edge is held (Pulse while held).
+    private var edgePulses = [PadEdgePulse(), PadEdgePulse()]
+    /// The strength of an edge pulse due now (0: none).
+    private func edgePulseDue(_ side: Int, held: Bool, settings: PadSteamTrackpadSettings, now: Double) -> Double {
+        guard let strength = settings.edgeHaptic, strength > 0 else { edgePulses[side].reset(); return 0 }
+        let every = (settings.edgeHapticMS ?? PadSteamTrackpadSettings.defaultEdgeHapticMS) / 1000
+        return edgePulses[side].update(held: held, at: now, every: every) ? strength : 0
     }
     private var headStickActive = false
 
@@ -594,6 +602,12 @@ final class DesktopPad: ObservableObject {
         }
         if steamSource, gestureRecorder == nil, let e = engine {
             for side in 0..<2 where steamTaps[side].tick(at: Self.now()) { releaseTap(side, engine: e, now: Self.now()) }
+            // Edge pulses keep their rhythm while the finger rests still on the edge (no new reports).
+            for side in 0..<2 {
+                let strength = edgePulseDue(side, held: steamZones[side].held.contains(.padEdge(side)),
+                                            settings: side == 0 ? steamLeftSettings : steamRightSettings, now: Self.now())
+                if strength > 0 { SteamControllerUSB.shared.tick(side: side, strength: strength) }
+            }
             let motion = steamRightMotion.tick(at: Self.now(), settings: steamRightSettings)
             if !motion.isEmpty { PadTrace.shared.add(String(format: "coast -> %.3f,%.3f (%d,%d)", motion.fx, motion.fy, motion.x, motion.y)) }
             steamPadMouse(motion, side: 1)

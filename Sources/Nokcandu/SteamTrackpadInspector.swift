@@ -65,6 +65,16 @@ extension ControllerProfileEditor {
                 slider("Touch strength", Binding(get: { settings.wrappedValue.touchFeedback ?? 0.2 }, set: { settings.wrappedValue.touchFeedback = $0 }), 0.05...1, "%.0f%%", scale: 100)
             }
             slider("Edge size", Binding(get: { PadSteamPadZones.edgeSize(settings.wrappedValue) }, set: { settings.wrappedValue.edge = $0 < 0.02 ? nil : $0 }), 0...0.5, "%.0f%%", scale: 100, info: "The outer part of the pad, shown as a ring on the picture, is an input of its own: it is held while your finger is there, whatever else the pad does. Give it Shift to sprint when you push to the rim, for example. 0 turns the edge off.")
+            if PadSteamPadZones.edgeSize(settings.wrappedValue) > 0 {
+                Toggle("Pulse while on the edge", isOn: Binding(get: { (settings.wrappedValue.edgeHaptic ?? 0) > 0 },
+                                                               set: { settings.wrappedValue.edgeHaptic = $0 ? 0.3 : nil; if !$0 { settings.wrappedValue.edgeHapticMS = nil } }))
+                    .help("Haptic pulses in this pad for as long as your finger is on the edge, so you can feel you're holding it.")
+                if (settings.wrappedValue.edgeHaptic ?? 0) > 0 {
+                    slider("Edge pulse strength", Binding(get: { settings.wrappedValue.edgeHaptic ?? 0.3 }, set: { settings.wrappedValue.edgeHaptic = $0 }), 0.05...1, "%.0f%%", scale: 100)
+                    slider("Edge pulse every", Binding(get: { settings.wrappedValue.edgeHapticMS ?? PadSteamTrackpadSettings.defaultEdgeHapticMS }, set: { settings.wrappedValue.edgeHapticMS = $0 }), 40...600, "%.0f ms",
+                           info: "How often it pulses while your finger stays on the edge. The first pulse comes as you reach it.")
+                }
+            }
             if settings.wrappedValue.mode == .dial {
                 slider("Turn per step", Binding(get: { PadSteamDial.step(settings.wrappedValue) }, set: { settings.wrappedValue.dialStep = $0 }), 5...90, "%.0f°", info: "How far round the pad your thumb circles for each scroll step. Smaller is faster scrolling.")
                 Toggle("Reverse direction", isOn: Binding(get: { settings.wrappedValue.dialReverse == true }, set: { settings.wrappedValue.dialReverse = $0 ? true : nil }))

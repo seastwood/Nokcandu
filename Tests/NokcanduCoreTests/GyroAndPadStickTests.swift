@@ -180,4 +180,23 @@ final class GyroDriftRecoveryTests: XCTestCase {
         XCTAssertNil(old.shortestTapMS)
         XCTAssertNil(old.pressureNeeded)
     }
+
+    func testEdgePulseFiresOnReachingTheEdgeThenEveryInterval() {
+        var p = PadEdgePulse()
+        XCTAssertFalse(p.update(held: false, at: 0, every: 0.1))
+        XCTAssertTrue(p.update(held: true, at: 1.0, every: 0.1))     // reaching the edge
+        XCTAssertFalse(p.update(held: true, at: 1.05, every: 0.1))
+        XCTAssertTrue(p.update(held: true, at: 1.10, every: 0.1))
+        XCTAssertFalse(p.update(held: true, at: 1.15, every: 0.1))
+        XCTAssertTrue(p.update(held: true, at: 1.21, every: 0.1))
+        // A long gap: one pulse, not a burst.
+        XCTAssertTrue(p.update(held: true, at: 2.0, every: 0.1))
+        XCTAssertFalse(p.update(held: true, at: 2.05, every: 0.1))
+        // Leaving and coming back starts over with a pulse.
+        XCTAssertFalse(p.update(held: false, at: 2.1, every: 0.1))
+        XCTAssertTrue(p.update(held: true, at: 2.12, every: 0.1))
+        // Off settings never pulse.
+        var off = PadEdgePulse()
+        XCTAssertFalse(off.update(held: true, at: 3, every: 0))
+    }
 }

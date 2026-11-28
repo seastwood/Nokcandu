@@ -100,6 +100,10 @@ public struct PadSteamTrackpadSettings: Codable, Hashable, Sendable {
     /// How much of the pad's radius, from the rim inward, counts as its edge (0: no edge). The edge is an
     /// input of its own, held while the finger is there, in every pad behavior.
     public var edge: Double?
+    /// Haptic pulses while the finger is on the edge: their strength (0…1; nil: none) and how often (ms).
+    public var edgeHaptic: Double?
+    public var edgeHapticMS: Double?
+    public static let defaultEdgeHapticMS = 120.0
     /// Four directions: how far from the centre a direction starts (part of the radius).
     public var deadzone: Double?
     public static let defaultDeadzone = 0.25
@@ -640,6 +644,22 @@ public struct PadSteamTap {
     public mutating func tick(at now: Double) -> Bool {
         guard let r = releaseAt, now >= r || now < r - 1 else { return false }
         releaseAt = nil; return true
+    }
+}
+
+/// Haptic pulses while a pad's edge is held: one as the finger reaches the edge, then one every `every` seconds
+/// until it leaves. Pure: the caller sends the pulse when this says so (on each report and between reports).
+public struct PadEdgePulse {
+    private var next: Double?
+    public init() {}
+    public mutating func reset() { next = nil }
+    public mutating func update(held: Bool, at now: Double, every: Double) -> Bool {
+        guard held, every.isFinite, every > 0 else { next = nil; return false }
+        guard let n = next else { next = now + every; return true }
+        guard now >= n else { return false }
+        // Keep the rhythm, but don't fire a burst to catch up after a gap in reports.
+        next = now - n > every ? now + every : n + every
+        return true
     }
 }
 
