@@ -105,6 +105,11 @@ public struct PadSteamTrackpadSettings: Codable, Hashable, Sendable {
     public static let defaultDeadzone = 0.25
     /// Zones for taps and clicks, independent of the pad behavior (nil: none).
     public var zoneLayout: PadSteamZoneLayout?
+    /// Taps: a touch shorter than this (milliseconds) is a brush, not a tap (nil or 0: any length counts, as before).
+    public var shortestTapMS: Double?
+    /// Trackpads that report pressure (the 2026 Steam Controller): how firmly, 0…1, a touch must press before its
+    /// taps, zones and held touches count (nil or 0: any touch, as before). Pads without pressure ignore it.
+    public var pressureNeeded: Double?
     /// Scroll wheel: degrees of circling per scroll step, the other way round, and a haptic tick per step.
     public var dialStep: Double?
     public var dialReverse: Bool?
@@ -613,7 +618,9 @@ public struct PadSteamTap {
     /// lifts (so a zone set to a key held down holds it, as a click would).
     public private(set) var holding = false
     /// `holdAfter`: whether, and after how long (seconds), a touch that stays still is held (nil: taps only).
-    public mutating func update(down: Bool, x: Double, y: Double, at now: Double, holdAfter: ((Double, Double) -> Double?)? = nil) -> Change {
+    /// `shortest`: a touch shorter than this (seconds) is a brush, not a tap.
+    public mutating func update(down: Bool, x: Double, y: Double, at now: Double, holdAfter: ((Double, Double) -> Double?)? = nil,
+                                shortest: Double = 0) -> Change {
         if let r = releaseAt, now >= r || now < r - 1 { releaseAt = nil; return .release }
         if down {
             if start == nil { start = now; startX = x; startY = y; moved = 0 }
@@ -626,13 +633,28 @@ public struct PadSteamTap {
         if holding { holding = false; start = nil; return .release }
         guard let s = start else { return .none }
         start = nil
-        if releaseAt == nil, now - s >= 0, now - s <= 0.2, moved < 0.15 { releaseAt = now + 0.05; return .press }
+        if releaseAt == nil, now - s >= 0, now - s >= shortest, now - s <= 0.2, moved < 0.15 { releaseAt = now + 0.05; return .press }
         return .none
     }
     /// Lets a held tap go once its moment has passed, between reports.
     public mutating func tick(at now: Double) -> Bool {
         guard let r = releaseAt, now >= r || now < r - 1 else { return false }
         releaseAt = nil; return true
+    }
+}
+
+/// Whether a touch counts for a pad's taps and zones once a pressure is needed. It counts from when the pressure
+/// reaches what's needed until it eases below three quarters of it (or the finger lifts), so a press that wavers
+/// around the line doesn't flicker. A pad that doesn't report pressure, or no pressure needed: every touch counts.
+public struct PadTouchPressure {
+    private var counting = false
+    public init() {}
+    public mutating func reset() { counting = false }
+    public mutating func counts(touching: Bool, pressure: Double?, needed: Double?) -> Bool {
+        guard touching else { counting = false; return false }
+        guard let needed, needed > 0, let p = pressure, p.isFinite else { counting = true; return true }
+        counting = p >= (counting ? needed * 0.75 : needed)
+        return counting
     }
 }
 

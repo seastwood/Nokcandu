@@ -140,4 +140,44 @@ final class GyroDriftRecoveryTests: XCTestCase {
         for n in 0...100 { pe_gyro(r.engine, 0, 0, 0, 50 + Double(n) * 0.01) }
         XCTAssertEqual(r.mouse.x, 0, "no drift once it has rested again")
     }
+
+    func testShortestTapIgnoresBrushesAndDefaultsToAnyLength() {
+        // Default: a 20 ms brush is a tap, as before.
+        var tap = PadSteamTap()
+        XCTAssertEqual(tap.update(down: true, x: 0, y: 0, at: 1.0), .none)
+        XCTAssertEqual(tap.update(down: false, x: 0, y: 0, at: 1.02), .press)
+        // With a 40 ms shortest tap: the brush does nothing, a 90 ms tap still presses.
+        tap = PadSteamTap()
+        _ = tap.update(down: true, x: 0, y: 0, at: 2.0, shortest: 0.04)
+        XCTAssertEqual(tap.update(down: false, x: 0, y: 0, at: 2.02, shortest: 0.04), .none)
+        _ = tap.update(down: true, x: 0, y: 0, at: 3.0, shortest: 0.04)
+        XCTAssertEqual(tap.update(down: false, x: 0, y: 0, at: 3.09, shortest: 0.04), .press)
+        // Still not a tap past 200 ms.
+        tap = PadSteamTap()
+        _ = tap.update(down: true, x: 0, y: 0, at: 4.0, shortest: 0.04)
+        XCTAssertEqual(tap.update(down: false, x: 0, y: 0, at: 4.3, shortest: 0.04), .none)
+    }
+
+    func testTouchPressureCountsFirmTouchesWithHysteresis() {
+        var p = PadTouchPressure()
+        // No pressure needed, or a pad without pressure: every touch counts, as before.
+        XCTAssertTrue(p.counts(touching: true, pressure: 0.01, needed: nil))
+        XCTAssertTrue(p.counts(touching: true, pressure: nil, needed: 0.5))
+        XCTAssertFalse(p.counts(touching: false, pressure: 1, needed: nil))
+        // Needed 0.4: a light touch doesn't count; it does once it presses 0.4; it keeps counting down to 0.3.
+        p = PadTouchPressure()
+        XCTAssertFalse(p.counts(touching: true, pressure: 0.2, needed: 0.4))
+        XCTAssertTrue(p.counts(touching: true, pressure: 0.45, needed: 0.4))
+        XCTAssertTrue(p.counts(touching: true, pressure: 0.32, needed: 0.4))
+        XCTAssertFalse(p.counts(touching: true, pressure: 0.25, needed: 0.4))
+        XCTAssertFalse(p.counts(touching: true, pressure: 0.35, needed: 0.4))
+        XCTAssertTrue(p.counts(touching: true, pressure: 0.4, needed: 0.4))
+        XCTAssertFalse(p.counts(touching: false, pressure: 0.9, needed: 0.4))
+    }
+
+    func testTrackpadTouchSettingsDecodeFromOlderProfiles() throws {
+        let old = try JSONDecoder().decode(PadSteamTrackpadSettings.self, from: Data(#"{"mode":"existing","sensitivity":1500,"halfLife":0.16,"invertY":false}"#.utf8))
+        XCTAssertNil(old.shortestTapMS)
+        XCTAssertNil(old.pressureNeeded)
+    }
 }

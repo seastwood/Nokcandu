@@ -269,6 +269,8 @@ final class DesktopPad: ObservableObject {
     private var steamLeftMotion = PadSteamTrackpad()
     private var steamZones = [PadSteamPadZones(), PadSteamPadZones()]
     private var steamTaps = [PadSteamTap(), PadSteamTap()]
+    /// Whether each pad's touch is firm enough to count (Pressure needed, on pads that report pressure).
+    private var steamPressure = [PadTouchPressure(), PadTouchPressure()]
     /// Mouse-like stick pads, and the last report's buttons and axes so the 4 ms timer can update the stick
     /// between reports (a resting finger or a coasting flick).
     private var steamVelocity = [PadVelocityStick(), PadVelocityStick()]
@@ -928,8 +930,12 @@ final class DesktopPad: ObservableObject {
         pe_touch(e,0,state.leftTouch && steamLeftSettings.mode == .existing,touch.x,touch.y,now)
         advancedTouch(0,down:state.leftTouch,pad:state.leftPad,settings:steamLeftSettings,engine:e,now:now)
         advancedTouch(1,down:state.rightTouch,pad:state.rightPad,settings:steamRightSettings,engine:e,now:now)
-        steamPadZones(0, down: state.leftTouch, pad: state.leftPad, settings: steamLeftSettings, engine: e, now: now)
-        steamPadZones(1, down: state.rightTouch, pad: state.rightPad, settings: steamRightSettings, engine: e, now: now)
+        // Taps and zones count a touch once it presses hard enough (pads that report pressure, if a pressure is needed).
+        let reportsPressure = SteamControllerUSB.shared.model == .steam2026
+        let firm = [steamPressure[0].counts(touching: state.leftTouch, pressure: reportsPressure ? Double(state.leftPressure) : nil, needed: steamLeftSettings.pressureNeeded),
+                    steamPressure[1].counts(touching: state.rightTouch, pressure: reportsPressure ? Double(state.rightPressure) : nil, needed: steamRightSettings.pressureNeeded)]
+        steamPadZones(0, down: firm[0], pad: state.leftPad, settings: steamLeftSettings, engine: e, now: now)
+        steamPadZones(1, down: firm[1], pad: state.rightPad, settings: steamRightSettings, engine: e, now: now)
         if steamLeftSettings.mode != .existing {
             let motion = steamLeftMotion.touch(down: state.leftTouch, x: Double(state.leftPad.x+1)/2, y: Double(1-state.leftPad.y)/2, at: now, settings: steamLeftSettings)
             steamPadMouse(motion, side: 0)
@@ -956,6 +962,7 @@ final class DesktopPad: ObservableObject {
             let pad = side == 0 ? state.leftPad : state.rightPad, touching = side == 0 ? state.leftTouch : state.rightTouch
             let settings = side == 0 ? steamLeftSettings : steamRightSettings
             let bound: (PadProfiles.Input) -> Bool = { pe_input_bound(e, pe_input_named($0.rawValue)) }
+            let tapTouch = firm[side]
             // A touch kept still on a zone that has something set holds that zone (a tap alone is a quick press).
             let holdZone: (Double, Double) -> Double? = { x, y in
                 guard let layout = settings.zoneLayout, let z = layout.zone(x: x, y: y, rotation: settings.rotation),
@@ -963,7 +970,8 @@ final class DesktopPad: ObservableObject {
                 return 0.2
             }
             // Buttons mode holds the zone under the finger instead (steamPadZones): no taps on top of it.
-            switch steamTaps[side].update(down: touching && settings.mode != .gestures && settings.mode != .buttons, x: Double(pad.x), y: Double(pad.y), at: now, holdAfter: holdZone) {
+            switch steamTaps[side].update(down: tapTouch && settings.mode != .gestures && settings.mode != .buttons, x: Double(pad.x), y: Double(pad.y), at: now,
+                                          holdAfter: holdZone, shortest: (settings.shortestTapMS ?? 0) / 1000) {
             case .press:
                 let input = PadSteamZoneRouter.tap(side: side, x: steamTaps[side].startX, y: steamTaps[side].startY, settings: settings, bound: bound)
                 steamTapInputs[side] = input; pe_pad_zone(e, pe_input_named(input.rawValue), true, now)

@@ -186,6 +186,31 @@ extension ControllerProfileEditor {
                 Text("A quick touch and lift without moving. Choose “Double” in its settings for a double tap. Gesture mode uses drawings instead of taps.").font(.caption).foregroundStyle(.secondary)
             }
         }
+        // How deliberate a touch must be. Both off by default: any touch counts, as it always has.
+        Section {
+            if settings.wrappedValue.mode != .gestures {
+                Toggle("Ignore brief brushes", isOn: Binding(get: { (settings.wrappedValue.shortestTapMS ?? 0) > 0 },
+                                                             set: { settings.wrappedValue.shortestTapMS = $0 ? 40 : nil }))
+                if (settings.wrappedValue.shortestTapMS ?? 0) > 0 {
+                    slider("Shortest tap", Binding(get: { settings.wrappedValue.shortestTapMS ?? 40 }, set: { settings.wrappedValue.shortestTapMS = $0 }), 10...150, "%.0f ms",
+                           info: "A touch shorter than this isn't a tap, so brushing the pad does nothing. Taps still have to be shorter than 200 ms.")
+                }
+            }
+            let reportsPressure = SteamControllerUSB.shared.model == .steam2026
+            if reportsPressure || (settings.wrappedValue.pressureNeeded ?? 0) > 0 {
+                Toggle("Need a firm press", isOn: Binding(get: { (settings.wrappedValue.pressureNeeded ?? 0) > 0 },
+                                                         set: { settings.wrappedValue.pressureNeeded = $0 ? 0.3 : nil }))
+                if (settings.wrappedValue.pressureNeeded ?? 0) > 0 {
+                    slider("Pressure needed", Binding(get: { settings.wrappedValue.pressureNeeded ?? 0.3 }, set: { settings.wrappedValue.pressureNeeded = $0 }), 0.05...0.9, "%.0f%%", scale: 100,
+                           info: "Taps, zones and held touches count only once your thumb presses at least this hard. Moving the pointer and clicking aren't affected.")
+                }
+            }
+        } header: { Text("Touch") } footer: {
+            Text(SteamControllerUSB.shared.model == .steam2026 || (settings.wrappedValue.pressureNeeded ?? 0) > 0
+                 ? "Off, any touch counts. The 2026 Steam Controller's trackpads report pressure; on a controller that doesn't, a pressure setting is ignored."
+                 : "Off, any touch counts. To act only on a firm press, set a zone's Click instead of its Tap. Trackpads that report pressure (the 2026 Steam Controller) also offer a pressure setting.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
         Section {
             let buttons = settings.wrappedValue.mode == .buttons
             Picker(buttons ? "Layout" : "Zones", selection: Binding(get: { settings.wrappedValue.zoneLayout ?? .off }, set: { settings.wrappedValue.zoneLayout = $0 == .off ? nil : $0 })) {

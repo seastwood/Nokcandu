@@ -509,6 +509,7 @@ final class PadTester: ObservableObject {
     private var steamPadMotion = [PadSteamTrackpad(), PadSteamTrackpad()]
     private var steamZones = [PadSteamPadZones(), PadSteamPadZones()]
     private var steamTaps = [PadSteamTap(), PadSteamTap()]
+    private var steamPressure = [PadTouchPressure(), PadTouchPressure()]
     private var steamDials = [PadSteamDial(), PadSteamDial()]
     private var tapsShown: Set<PadProfiles.Input> = []
     private var tapInputs: [PadProfiles.Input?] = [nil, nil]
@@ -763,9 +764,13 @@ final class PadTester: ObservableObject {
                 x: Double(pad.x+1)/2, y: Double(1-pad.y)/2, at: now, settings: steamPadSettings[side]), side: side)
         }
         var zones: Set<PadProfiles.Input> = []
+        // As the running profile does: taps and zones count a touch once it presses hard enough (Pressure needed).
+        let reportsPressure = SteamControllerUSB.shared.model == .steam2026
+        let firm = [steamPressure[0].counts(touching: state.leftTouch, pressure: reportsPressure ? Double(state.leftPressure) : nil, needed: steamPadSettings[0].pressureNeeded),
+                    steamPressure[1].counts(touching: state.rightTouch, pressure: reportsPressure ? Double(state.rightPressure) : nil, needed: steamPadSettings[1].pressureNeeded)]
         for side in 0..<2 {
             let pad = side == 0 ? state.leftPad : state.rightPad, before = steamZones[side].held
-            let after = steamZones[side].update(side: side, down: side == 0 ? state.leftTouch : state.rightTouch, x: Double(pad.x), y: Double(pad.y), settings: steamPadSettings[side])
+            let after = steamZones[side].update(side: side, down: firm[side], x: Double(pad.x), y: Double(pad.y), settings: steamPadSettings[side])
             for input in before.symmetricDifference(after) { pe_pad_zone(e, pe_input_named(input.rawValue), after.contains(input), now) }
             zones.formUnion(after)
         }
@@ -781,7 +786,7 @@ final class PadTester: ObservableObject {
         for side in 0..<2 {
             let pad = side == 0 ? state.leftPad : state.rightPad, touching = side == 0 ? state.leftTouch : state.rightTouch
             let bound: (PadProfiles.Input) -> Bool = { pe_input_bound(e, pe_input_named($0.rawValue)) }
-            switch steamTaps[side].update(down: touching, x: Double(pad.x), y: Double(pad.y), at: now) {
+            switch steamTaps[side].update(down: firm[side], x: Double(pad.x), y: Double(pad.y), at: now, shortest: (steamPadSettings[side].shortestTapMS ?? 0) / 1000) {
             case .press:
                 let tap = PadSteamZoneRouter.tap(side: side, x: steamTaps[side].startX, y: steamTaps[side].startY, settings: steamPadSettings[side], bound: bound)
                 tapInputs[side] = tap; pe_pad_zone(e, pe_input_named(tap.rawValue), true, now); tapsShown.insert(tap)

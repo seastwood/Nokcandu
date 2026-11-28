@@ -63,3 +63,9 @@ The direct reader now requests exclusive HID access for the app's lifetime when 
 ownership option is enabled (default On), reports refused access, and releases on quit/opt-out. Physical
 2026/Puck acceptance with native Steam remains pending; other controllers are not made exclusive by this
 setting. [Evidence, migration and Undo](investigations/controller-ownership-and-picture-2026-11-17.md).
+
+## Trackpad pressure (0.15.6)
+
+The pad pressures (`leftPressure`/`rightPressure`, the report's u16 / 32768, clamped to 0…1) drive the per-pad **Need a firm press** setting (`PadSteamTrackpadSettings.pressureNeeded`, nil by default). `PadTouchPressure` counts a touch for taps, zones (buttons, directions, edge) and held touches from when pressure reaches the setting until it drops below 75% of it or the finger lifts; pointer movement and physical clicks ignore it. The live profile (DesktopPad) and the editor's Test area apply it the same way. Only used while `SteamControllerUSB.model == .steam2026`; the original controller reports no pressure, so the setting is ignored there. **Unverified on hardware**: the pressure scale (what a light touch and a firm press read) needs checking on a real 2026 controller before the default slider value (30%) can be trusted.
+
+`shortestTapMS` (nil by default) works on every Steam Controller: a touch shorter than it isn't a tap (taps must still end within 200 ms).
